@@ -37,6 +37,8 @@ enum class CodeEntryKind {
 
   // Similar to monomorphic entry but with a fallthrough into unchecked entry.
   kMonomorphicUnchecked,
+
+  kLLVM,
 };
 
 }  // namespace dart

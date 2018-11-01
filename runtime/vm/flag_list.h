@@ -218,7 +218,8 @@ constexpr bool kDartPrecompiledRuntime = false;
   D(support_rr, bool, false, "Support running within RR.")                     \
   P(verify_entry_points, bool, false,                                          \
     "Throw API error on invalid member access throuh native API. See "         \
-    "entry_point_pragma.md")
+    "entry_point_pragma.md")                                                   \
+  D(llvm_mode, bool, false, "Support running LLVM generated functions.")
 
 // List of VM-global (i.e. non-isolate specific) flags.
 //

@@ -5,6 +5,7 @@
 #include "include/dart_api.h"
 #include "include/dart_native_api.h"
 
+#include "bin/extensions.h"
 #include "lib/stacktrace.h"
 #include "platform/assert.h"
 #include "vm/class_finalizer.h"
@@ -59,6 +60,7 @@ namespace dart {
 #define Z (T->zone())
 
 DECLARE_FLAG(bool, print_class_table);
+DECLARE_FLAG(bool, llvm_mode);
 DECLARE_FLAG(bool, verify_handles);
 #if defined(DART_NO_SNAPSHOT)
 DEFINE_FLAG(bool,
@@ -1110,6 +1112,79 @@ static char* BuildIsolateName(const char* script_uri, const char* main) {
   return chars;
 }
 
+class LoadLLVMExternals {
+ public:
+  static void SetFunctionPool(const intptr_t* function_pool,
+                              const intptr_t* dart_to_llvm_trampoline) {
+    GrowableObjectArray& llvm_function_order = GrowableObjectArray::Handle(
+        Isolate::Current()->object_store()->llvm_function_order());
+    Function& function = Function::Handle();
+    Code& code = Code::Handle();
+    // TODO(sarkin): No handle scope or something? or no safepoint scope?
+    for (intptr_t i = 0; i < llvm_function_order.Length(); ++i) {
+      function ^= llvm_function_order.At(i);
+      code ^= function.CurrentCode();
+      function.setup_entry_points_for_llvm(
+          StubCode::CallLLVMFunction_entry()->EntryPoint());
+      code.setup_entry_points_for_llvm(
+          StubCode::CallLLVMFunction_entry()->EntryPoint(),
+          reinterpret_cast<uword>(dart_to_llvm_trampoline),
+          static_cast<uword>(function_pool[i]), i);
+    }
+  }
+
+  static void SetConstantPool(intptr_t* constant_pool) {
+    GrowableObjectArray& llvm_object_order = GrowableObjectArray::Handle(
+        Isolate::Current()->object_store()->il_serialization_object_order());
+    for (intptr_t i = 0; i < llvm_object_order.Length(); ++i) {
+      constant_pool[i] = reinterpret_cast<intptr_t>(llvm_object_order.At(i));
+    }
+  }
+
+  template <typename T>
+  static T GetSymbol(void* library, const char* symbol) {
+    void* resolved_symbol = bin::Extensions::ResolveSymbol(library, symbol);
+    if (resolved_symbol == nullptr) {
+      FATAL1("Failed to resolve symbol '%s'\n", symbol);
+    }
+    return reinterpret_cast<T>(resolved_symbol);
+  }
+
+  static void SetLLVMCodeRange(intptr_t start, intptr_t end) {
+    Isolate::Current()->SetLLVMRange(start, end);
+  }
+
+  static void LoadFromScript(const char* script_name) {
+    const char* kFunctionPoolSymbolName = "_GlobalFunctionPool";
+    const char* kConstantPoolSymbolName = "_GlobalConstantPool";
+    const char* kDartToLLVMTrampolineSymbolName = "_DartToLLVMTrampoline";
+    const char* kLLVMStartSymbolName = "_LLVM_START";
+    const char* kLLVMEndSymbolName = "_LLVM_END";
+    void* library = bin::Extensions::LoadExtensionLibraryNow(script_name);
+    if (library == nullptr) {
+      // TODO(sarkin): ERROR HERE
+      // FATAL1("Failed to load library '%s'\n", script_name);
+      return;
+    }
+
+    auto constant_pool = GetSymbol<intptr_t*>(library, kConstantPoolSymbolName);
+    auto function_pool =
+        GetSymbol<const intptr_t*>(library, kFunctionPoolSymbolName);
+    auto dart_to_llvm_trampoline =
+        GetSymbol<const intptr_t*>(library, kDartToLLVMTrampolineSymbolName);
+    auto llvm_start = GetSymbol<intptr_t>(library, kLLVMStartSymbolName);
+    auto llvm_end = GetSymbol<intptr_t>(library, kLLVMEndSymbolName);
+
+    SetFunctionPool(function_pool, dart_to_llvm_trampoline);
+    SetConstantPool(constant_pool);
+    SetLLVMCodeRange(llvm_start, llvm_end);
+  }
+
+ private:
+  DISALLOW_ALLOCATION();
+  DISALLOW_IMPLICIT_CONSTRUCTORS(LoadLLVMExternals);
+};
+
 static Dart_Isolate CreateIsolate(const char* script_uri,
                                   const char* main,
                                   const uint8_t* snapshot_data,
@@ -1157,6 +1232,9 @@ static Dart_Isolate CreateIsolate(const char* script_uri,
         Library::CheckFunctionFingerprints();
       }
 #endif  // defined(DART_NO_SNAPSHOT) && !defined(PRODUCT).
+      if (FLAG_llvm_mode) {
+        LoadLLVMExternals::LoadFromScript(script_uri);
+      }
       // We exit the API scope entered above.
       T->ExitApiScope();
       // A Thread structure has been associated to the thread, we do the

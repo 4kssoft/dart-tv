@@ -123,6 +123,8 @@ class ObjectPointerVisitor;
   RW(Function, async_clear_thread_stack_trace)                                 \
   RW(Function, async_set_thread_stack_trace)                                   \
   RW(Function, async_star_move_next_helper)                                    \
+  RW(GrowableObjectArray, il_serialization_object_order)                       \
+  RW(GrowableObjectArray, llvm_function_order)                                 \
   RW(Function, complete_on_async_return)                                       \
   RW(Class, async_star_stream_controller)                                      \
   RW(ObjectPool, global_object_pool)                                           \
@@ -140,9 +142,12 @@ class ObjectPointerVisitor;
   R_(Function, megamorphic_miss_function)                                      \
   RW(Array, code_order_table)                                                  \
   RW(Array, obfuscation_map)                                                   \
+  RW(GrowableObjectArray, type_testing_stubs)                                  \
   RW(GrowableObjectArray, changed_in_last_reload)                              \
   RW(Class, ffi_pointer_class)                                                 \
   RW(Class, ffi_native_type_class)                                             \
+
+
 // Please remember the last entry must be referred in the 'to' function below.
 
 // The object store is a per isolate instance which stores references to

@@ -612,7 +612,7 @@ class FunctionDeserializationCluster : public DeserializationCluster {
           func.SetInstructions(StubCode::InterpretCall());
         } else if (FLAG_use_bytecode_compiler && func.HasBytecode()) {
           func.SetInstructions(StubCode::LazyCompile());
-#endif                                 // !defined(DART_PRECOMPILED_RUNTIME)
+#endif // !defined(DART_PRECOMPILED_RUNTIME)
         } else {
           func.ClearCode();  // Set code and entrypoint to lazy compile stub.
         }

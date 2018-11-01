@@ -11,6 +11,7 @@
 #include "vm/compiler/backend/constant_propagator.h"
 #include "vm/compiler/backend/flow_graph_checker.h"
 #include "vm/compiler/backend/il_printer.h"
+#include "vm/compiler/backend/il_serializer.h"
 #include "vm/compiler/backend/inliner.h"
 #include "vm/compiler/backend/linearscan.h"
 #include "vm/compiler/backend/range_analysis.h"
@@ -55,6 +56,7 @@ DEFINE_OPTION_HANDLER(CompilerPass::ParseFilters,
                       "Do --compiler-passes=help for more information.");
 DECLARE_FLAG(bool, print_flow_graph);
 DECLARE_FLAG(bool, print_flow_graph_optimized);
+DECLARE_FLAG(bool, serialize_il);
 
 static const char* kCompilerPassesUsage =
     "=== How to use --compiler-passes flag\n"
@@ -201,6 +203,12 @@ void CompilerPass::PrintGraph(CompilerPassState* state,
             : zone->PrintToString("%s %s (round %" Pd ")", when, name(), round);
 
     FlowGraphPrinter::PrintGraph(phase, flow_graph);
+  }
+
+  const auto& func = flow_graph->function();
+  if (FLAG_serialize_il && func.IsLLVMCompiled() &&
+      ((current_flags & mask) != 0)) {
+    ILSerializer::PrintSerialization(flow_graph);
   }
 }
 

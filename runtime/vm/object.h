@@ -681,9 +681,9 @@ class Object {
   static RawClass* ffi_trampoline_data_class_;  // Class of FfiTrampolineData
                                                 // vm obj.
   static RawClass* field_class_;             // Class of the Field vm object.
-  static RawClass* script_class_;        // Class of the Script vm object.
-  static RawClass* library_class_;       // Class of the Library vm object.
-  static RawClass* namespace_class_;     // Class of Namespace vm object.
+  static RawClass* script_class_;            // Class of the Script vm object.
+  static RawClass* library_class_;           // Class of the Library vm object.
+  static RawClass* namespace_class_;         // Class of Namespace vm object.
   static RawClass* kernel_program_info_class_;  // Class of KernelProgramInfo vm
                                                 // object.
   static RawClass* code_class_;                 // Class of the Code vm object.
@@ -2153,6 +2153,11 @@ class Function : public Object {
     return OFFSET_OF(RawFunction, unchecked_entry_point_);
   }
 
+  void setup_entry_points_for_llvm(uword stub_entry_point) {
+    StoreNonPointer(&raw_ptr()->entry_point_, stub_entry_point);
+    StoreNonPointer(&raw_ptr()->unchecked_entry_point_, stub_entry_point);
+  }
+
 #if !defined(DART_PRECOMPILED_RUNTIME)
   bool IsBytecodeAllowed(Zone* zone) const;
   void AttachBytecode(const Bytecode& bytecode) const;
@@ -2317,6 +2322,8 @@ class Function : public Object {
     }
   }
   bool IsInFactoryScope() const;
+
+  bool IsLLVMCompiled() const;
 
   bool NeedsArgumentTypeChecks(Isolate* I) const {
     if (!I->should_emit_strong_mode_checks()) {
@@ -4731,9 +4738,34 @@ class Code : public Object {
         return OFFSET_OF(RawCode, monomorphic_entry_point_);
       case EntryKind::kMonomorphicUnchecked:
         return OFFSET_OF(RawCode, monomorphic_unchecked_entry_point_);
+      case EntryKind::kLLVM:
+        return OFFSET_OF(RawCode, llvm_trampoline_entry_point_);
       default:
         UNREACHABLE();
     }
+  }
+
+  static intptr_t llvm_function_id_offset() {
+    return OFFSET_OF(RawCode, llvm_function_id_);
+  }
+
+  uword llvm_direct_entry_point() const {
+    return raw_ptr()->llvm_direct_entry_point_;
+  }
+
+  void setup_entry_points_for_llvm(uword stub_entry_point,
+                                   uword llvm_trampoline_entry_point,
+                                   uword llvm_direct_entry_point,
+                                   uword llvm_function_id) {
+    StoreNonPointer(&raw_ptr()->entry_point_, stub_entry_point);
+    StoreNonPointer(&raw_ptr()->unchecked_entry_point_, stub_entry_point);
+    StoreNonPointer(&raw_ptr()->monomorphic_entry_point_, stub_entry_point);
+
+    StoreNonPointer(&raw_ptr()->llvm_trampoline_entry_point_,
+                    llvm_trampoline_entry_point);
+    StoreNonPointer(&raw_ptr()->llvm_direct_entry_point_,
+                    llvm_direct_entry_point);
+    StoreNonPointer(&raw_ptr()->llvm_function_id_, llvm_function_id);
   }
 
   static intptr_t function_entry_point_offset(EntryKind kind) {
@@ -6866,6 +6898,10 @@ class Mint : public Integer {
 
   int64_t value() const { return raw_ptr()->value_; }
   static intptr_t value_offset() { return OFFSET_OF(RawMint, value_); }
+
+  static int64_t Value(const RawMint* raw_mint) {
+    return raw_mint->ptr()->value_;
+  }
 
   virtual bool IsZero() const { return value() == 0; }
   virtual bool IsNegative() const { return value() < 0; }

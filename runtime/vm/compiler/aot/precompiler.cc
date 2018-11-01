@@ -69,6 +69,7 @@ DEFINE_FLAG(
 
 DECLARE_FLAG(bool, print_flow_graph);
 DECLARE_FLAG(bool, print_flow_graph_optimized);
+DECLARE_FLAG(bool, serialize_il);
 DECLARE_FLAG(bool, trace_compiler);
 DECLARE_FLAG(bool, trace_optimizing_compiler);
 DECLARE_FLAG(bool, trace_bailout);
@@ -144,6 +145,7 @@ Precompiler::Precompiler(Thread* thread)
       changed_(false),
       retain_root_library_caches_(false),
       function_count_(0),
+      llvm_function_count_(0),
       class_count_(0),
       selector_count_(0),
       dropped_function_count_(0),
@@ -369,6 +371,24 @@ void Precompiler::DoCompileAll() {
     THR_Print(" %" Pd " classes,", dropped_class_count_);
     THR_Print(" %" Pd " libraries.\n", dropped_library_count_);
   }
+
+  if (FLAG_serialize_il) {
+    const GrowableObjectArray& object_order = GrowableObjectArray::Handle(
+        I->object_store()->il_serialization_object_order());
+    // False offset
+    THR_Print("%" Pd "\n", object_order.Length());
+    object_order.Add(Bool::False());
+    // True offset
+    THR_Print("%" Pd "\n", object_order.Length());
+    object_order.Add(Bool::True());
+    // Null offset
+    THR_Print("%" Pd "\n", object_order.Length());
+    // TODO(sarkin): Is it OK to add null_object?
+    object_order.Add(Object::null_object());
+    THR_Print("%" Pd "\n", object_order.Length());
+    THR_Print("%" Pd "\n", Thread::top_exit_frame_info_offset());
+    THR_Print("%" Pd "\n", llvm_function_count_);
+  }
 }
 
 void Precompiler::PrecompileConstructors() {
@@ -532,6 +552,16 @@ void Precompiler::ProcessFunction(const Function& function) {
     ASSERT(!function.is_abstract());
     ASSERT(!function.IsRedirectingFactory());
 
+    if (function.IsLLVMCompiled()) {
+      if (FLAG_serialize_il) {
+        THR_Print("%" Pd "\n", llvm_function_count_);
+        const GrowableObjectArray& llvm_function_order =
+            GrowableObjectArray::Handle(
+                I->object_store()->llvm_function_order());
+        llvm_function_order.Add(function);
+      }
+      llvm_function_count_++;
+    }
     error_ = CompileFunction(this, thread_, zone_, function);
     if (!error_.IsNull()) {
       Jump(error_);
@@ -2200,7 +2230,6 @@ void Precompiler::FinalizeAllClasses() {
   }
   I->set_all_classes_finalized(true);
 }
-
 
 void PrecompileParsedFunctionHelper::FinalizeCompilation(
     Assembler* assembler,

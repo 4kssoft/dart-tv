@@ -29,6 +29,7 @@ namespace dart {
   V(CallAutoScopeNative)                                                       \
   V(FixCallersTarget)                                                          \
   V(CallStaticFunction)                                                        \
+  V(CallLLVMFunction)                                                          \
   V(OptimizeFunction)                                                          \
   V(InvokeDartCode)                                                            \
   V(InvokeDartCodeFromBytecode)                                                \

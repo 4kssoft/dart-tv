@@ -115,6 +115,8 @@ class StackFrame : public ValueObject {
     ASSERT(!validate || IsValid());
     return !(IsEntryFrame() || IsExitFrame() || IsStubFrame());
   }
+
+  virtual bool IsLLVMFrame() const;
   virtual bool IsStubFrame() const;
   virtual bool IsEntryFrame() const { return false; }
   virtual bool IsExitFrame() const { return false; }
@@ -134,8 +136,7 @@ class StackFrame : public ValueObject {
 
  protected:
   explicit StackFrame(Thread* thread)
-      : fp_(0), sp_(0), pc_(0), thread_(thread), is_interpreted_(false) {
-  }
+      : fp_(0), sp_(0), pc_(0), thread_(thread), is_interpreted_(false) {}
 
   // Name of the frame, used for generic frame printing functionality.
   virtual const char* GetName() const {

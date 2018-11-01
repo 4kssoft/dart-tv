@@ -147,6 +147,14 @@ bool StackFrame::IsBareInstructionsStubFrame() const {
   return false;
 }
 
+bool StackFrame::IsLLVMFrame() const {
+  if (is_interpreted()) {
+    return false;
+  }
+  ASSERT(!(IsEntryFrame() || IsExitFrame()));
+  return Isolate::Current()->IsInLLVMRange(pc());
+}
+
 bool StackFrame::IsStubFrame() const {
   if (is_interpreted()) {
     return false;
@@ -154,6 +162,10 @@ bool StackFrame::IsStubFrame() const {
 
   if (FLAG_precompiled_mode && FLAG_use_bare_instructions) {
     return IsBareInstructionsStubFrame();
+  }
+
+  if (IsLLVMFrame()) {
+    return false;
   }
 
   ASSERT(!(IsEntryFrame() || IsExitFrame()));
@@ -436,6 +448,36 @@ RawCode* StackFrame::LookupDartCode() const {
 
 RawCode* StackFrame::GetCodeObject() const {
   ASSERT(!is_interpreted());
+  if (IsLLVMFrame()) {
+    // Assume we are in the same isolate as the function's
+    // we're doing the lookup for?
+    GrowableObjectArray llvm_function_order;
+    llvm_function_order ^= isolate()->object_store()->llvm_function_order();
+    Function function;
+    Code code;
+    auto GetLLVMEntryPoint = [&](intptr_t idx) {
+      function ^= llvm_function_order.At(idx);
+      code ^= function.CurrentCode();
+      return code.llvm_direct_entry_point();
+    };
+    intptr_t lo = 0, hi = llvm_function_order.Length();
+    ASSERT(hi > 0);
+    // ASSERT(GetLLVMEntryPoint(0) <= pc());
+    // TODO(sarkin): Temporary hack for LLVM trampoline functions
+    if (GetLLVMEntryPoint(0) <= pc()) {
+      while (lo < hi - 1) {
+        intptr_t mid = (lo + hi) / 2;
+        if (GetLLVMEntryPoint(mid) <= pc()) {
+          lo = mid;
+        } else {
+          hi = mid;
+        }
+      }
+    }
+    function ^= llvm_function_order.At(lo);
+    return function.CurrentCode();
+  }
+
   if (auto isolate = IsolateOfBareInstructionsFrame()) {
     return isolate->reverse_pc_lookup_cache()->Lookup(pc());
   } else {
@@ -579,7 +621,7 @@ TokenPosition StackFrame::GetTokenPos() const {
 }
 
 bool StackFrame::IsValid() const {
-  if (IsEntryFrame() || IsExitFrame() || IsStubFrame()) {
+  if (IsEntryFrame() || IsExitFrame() || IsLLVMFrame() || IsStubFrame()) {
     return true;
   }
   if (is_interpreted()) {

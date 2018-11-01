@@ -648,11 +648,11 @@ void FlowGraphCompiler::GenerateInstanceOf(TokenPosition token_pos,
   Label done;
   if (!test_cache.IsNull()) {
     // Generate runtime call.
-    __ PushObject(Object::null_object());       // Make room for the result.
-    __ pushq(RAX);                              // Push the instance.
-    __ PushObject(type);                        // Push the type.
-    __ pushq(RDX);                              // Instantiator type arguments.
-    __ pushq(RCX);                              // Function type arguments.
+    __ PushObject(Object::null_object());  // Make room for the result.
+    __ pushq(RAX);                         // Push the instance.
+    __ PushObject(type);                   // Push the type.
+    __ pushq(RDX);                         // Instantiator type arguments.
+    __ pushq(RCX);                         // Function type arguments.
     __ LoadUniqueObject(RAX, test_cache);
     __ pushq(RAX);
     GenerateRuntimeCall(token_pos, deopt_id, kInstanceofRuntimeEntry, 5, locs);

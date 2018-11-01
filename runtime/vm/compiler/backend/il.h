@@ -928,8 +928,8 @@ class Instruction : public ZoneAllocated {
   }
 
  private:
-  friend class BranchInstr;      // For RawSetInputAt.
-  friend class IfThenElseInstr;  // For RawSetInputAt.
+  friend class BranchInstr;          // For RawSetInputAt.
+  friend class IfThenElseInstr;      // For RawSetInputAt.
   friend class CheckConditionInstr;  // For RawSetInputAt.
 
   virtual void RawSetInputAt(intptr_t i, Value* value) = 0;
@@ -1362,8 +1362,7 @@ class BlockEntryWithInitialDefs : public BlockEntryInstr {
 
 class GraphEntryInstr : public BlockEntryWithInitialDefs {
  public:
-  GraphEntryInstr(const ParsedFunction& parsed_function,
-                  intptr_t osr_id);
+  GraphEntryInstr(const ParsedFunction& parsed_function, intptr_t osr_id);
 
   DECLARE_INSTRUCTION(GraphEntry)
 

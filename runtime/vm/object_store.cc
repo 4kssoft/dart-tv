@@ -85,6 +85,9 @@ RawError* ObjectStore::PreallocateObjects() {
   this->exit_listeners_ = GrowableObjectArray::New();
   this->error_listeners_ = GrowableObjectArray::New();
 
+  this->il_serialization_object_order_ = GrowableObjectArray::New();
+  this->llvm_function_order_ = GrowableObjectArray::New();
+
   Object& result = Object::Handle();
   const Library& library = Library::Handle(Library::CoreLibrary());
 

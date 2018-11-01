@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+# for details. All rights reserved. Use of this source code is governed by a
+# BSD-style license that can be found in the LICENSE file.
+
+set -e
+
+OPTIONS=()
+GEN_KERNEL_OPTIONS=()
+PACKAGES=
+BUILD_ELF=0
+
+ARGV=()
+for arg in "$@"; do
+  case $arg in
+    --packages=*)
+    PACKAGES="$arg"
+    ;;
+    --enable-asserts)
+    GEN_KERNEL_OPTIONS+=("$arg")
+    OPTIONS+=("$arg")
+    ;;
+    --sync-async | \
+    --no-sync-async | \
+    --tfa | \
+    --no-tfa | \
+    -D* )
+    GEN_KERNEL_OPTIONS+=("$arg")
+    ;;
+    --build-elf)
+    BUILD_ELF=1
+    ;;
+    --*)
+    OPTIONS+=("$arg")
+    ;;
+    *)
+    ARGV+=("$arg")
+    ;;
+  esac
+done
+
+if [ "${#ARGV[@]}" -ne 2 ]; then
+    echo "Usage: $0 [options] <source> <snapshot>"
+    exit 1
+fi
+
+SOURCE_FILE="${ARGV[0]}"
+SNAPSHOT_FILE="${ARGV[1]}"
+
+GEN_SNAPSHOT_OPTION=("--snapshot-kind=app-aot-assembly" "--serialize-il" "--compiler-passes=[AllocateRegisters")
+GEN_SNAPSHOT_FILENAME="--assembly=${SNAPSHOT_FILE}.S"
+
+function follow_links() {
+  file="$1"
+  while [ -h "$file" ]; do
+    # On Mac OS, readlink -f doesn't work.
+    file="$(readlink "$file")"
+  done
+  echo "$file"
+}
+
+# Unlike $0, $BASH_SOURCE points to the absolute path of this file.
+PROG_NAME="$(follow_links "$BASH_SOURCE")"
+
+# Handle the case where dart-sdk/bin has been symlinked to.
+CUR_DIR="$(cd "${PROG_NAME%/*}" ; pwd -P)"
+
+SDK_DIR="$CUR_DIR/../../.."
+LLVM_DIR="$SDK_DIR/llvm-codegen"
+LLVM_BIN_DIR="$LLVM_DIR/build/bin"
+OUT_DIR="$SDK_DIR/out"
+
+export DART_CONFIGURATION=${DART_CONFIGURATION:-DebugX64}
+BIN_DIR="$OUT_DIR/$DART_CONFIGURATION"
+
+# Step 1: Generate Kernel binary from the input Dart source.
+echo "Generating Kernel"
+"$BIN_DIR"/dart                                                                \
+     "${SDK_DIR}/pkg/vm/bin/gen_kernel.dart"                                   \
+     --platform "${BIN_DIR}/vm_platform_strong.dill"                           \
+     --aot                                                                     \
+     "${GEN_KERNEL_OPTIONS[@]}"                                                \
+     $PACKAGES                                                                 \
+     -o "$SNAPSHOT_FILE.dill"                                                  \
+     "$SOURCE_FILE"
+
+# Step 2: Generate snapshot from the Kernel binary and serialize IL.
+echo "Generating snapshot and serializing IL"
+"$BIN_DIR"/gen_snapshot                                                        \
+     "${GEN_SNAPSHOT_OPTION[@]}"                                                    \
+     "$GEN_SNAPSHOT_FILENAME"                                                  \
+     "${OPTIONS[@]}"                                                           \
+     "$SNAPSHOT_FILE.dill" 2>"$SOURCE_FILE.il"
+
+# Step 3: Assemble the assembly file into an ELF object.
+gcc -shared -o "$SNAPSHOT_FILE" "${SNAPSHOT_FILE}.S"
+
+# Step 4: Generate LLVM code
+echo "Generating LLVM code"
+"$LLVM_BIN_DIR"/main "$SOURCE_FILE.il" >"$SOURCE_FILE.llvm"
+llc -relocation-model=pic --disable-fp-elim "$SOURCE_FILE.llvm" -o "$SOURCE_FILE.s"
+
+# Step 5: Add special symbols to mark the start and end of the LLVM .text segment
+echo "Adding LLVM .text marker symbols"
+sed -i "1s/^/.text\n.globl _LLVM_START\n_LLVM_START:\n/" "$SOURCE_FILE.s"
+echo -e ".text\n.globl _LLVM_END\n_LLVM_END:\n" >>"$SOURCE_FILE.s"
+
+# Step 6: Link the assembly files
+echo "Linking..."
+gcc -shared "$SNAPSHOT_FILE.S" "$SOURCE_FILE.s" -o "$SOURCE_FILE.so"

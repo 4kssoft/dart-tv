@@ -476,6 +476,25 @@ void StubCodeCompiler::GenerateCallStaticFunctionStub(Assembler* assembler) {
   __ jmp(RBX);
 }
 
+// Input parameters:
+//   R10: arguments descriptor array.
+//   CODE_REG: code object.
+void StubCode::GenerateCallLLVMFunctionStub(Assembler* assembler) {
+  __ EnterStubFrame();
+  // Function ID
+  __ movq(CallingConventions::kArg1Reg,
+          FieldAddress(CODE_REG, Code::llvm_function_id_offset()));
+  __ movq(CallingConventions::kArg2Reg, THR);
+  // Address to args
+  __ leaq(CallingConventions::kArg3Reg,
+          Address(RBP, kParamEndSlotFromFp * kWordSize));
+  __ LeaveStubFrame();
+
+  __ movq(RBX, FieldAddress(CODE_REG,
+                            Code::entry_point_offset(Code::EntryKind::kLLVM)));
+  __ jmp(RBX);
+}
+
 // Called from a static call only when an invalid code has been entered
 // (invalid because its function was optimized or deoptimized).
 // R10: arguments descriptor array.

@@ -6203,6 +6203,11 @@ bool Function::IsInFactoryScope() const {
   return outer_function.IsFactory();
 }
 
+bool Function::IsLLVMCompiled() const {
+  Object& options = Object::Handle();
+  return FindPragma(Isolate::Current(), Symbols::vm_llvm(), &options);
+}
+
 void Function::set_name(const String& value) const {
   ASSERT(value.IsSymbol());
   StorePointer(&raw_ptr()->name_, value.raw());

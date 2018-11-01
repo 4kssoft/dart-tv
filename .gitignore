@@ -97,3 +97,9 @@ editor/util/testing/mac/Samples.suite/Results
 /outline.dill
 /generated/
 /crash_logs/
+llvm-codegen/build
+llvm-codegen/bin
+llvm-codegen/lib
+llvm-codegen/.clang-format
+llvm-codegen/compile_commands.json
+llvm-codegen/Session.vim

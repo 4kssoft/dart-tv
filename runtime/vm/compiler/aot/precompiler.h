@@ -302,6 +302,7 @@ class Precompiler : public ValueObject {
   bool changed_;
   bool retain_root_library_caches_;
   intptr_t function_count_;
+  intptr_t llvm_function_count_;
   intptr_t class_count_;
   intptr_t selector_count_;
   intptr_t dropped_function_count_;

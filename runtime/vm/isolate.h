@@ -755,7 +755,7 @@ class Isolate : public BaseIsolate {
 
 #if defined(PRODUCT)
   void set_use_osr(bool use_osr) { ASSERT(!use_osr); }
-#else  // defined(PRODUCT)
+#else   // defined(PRODUCT)
   void set_use_osr(bool use_osr) {
     isolate_flags_ = UseOsrBit::update(use_osr, isolate_flags_);
   }
@@ -792,6 +792,18 @@ class Isolate : public BaseIsolate {
   void MaybeIncreaseReloadEveryNStackOverflowChecks();
 
   static void NotifyLowMemory();
+
+  void SetLLVMRange(intptr_t start, intptr_t end) {
+    llvm_segment_start_ = start;
+    llvm_segment_end_ = end;
+  }
+
+  bool IsInLLVMRange(uword pc) const {
+    if (llvm_segment_start_ == 0 || llvm_segment_end_ == 0) {
+      return false;
+    }
+    return pc >= llvm_segment_start_ && pc <= llvm_segment_end_;
+  }
 
  private:
   friend class Dart;                  // Init, InitOnce, Shutdown.
@@ -921,23 +933,14 @@ class Isolate : public BaseIsolate {
   VMTagCounters vm_tag_counters_;
 
   // We use 6 list entries for each pending service extension calls.
-  enum {
-    kPendingHandlerIndex = 0,
-    kPendingMethodNameIndex,
-    kPendingKeysIndex,
-    kPendingValuesIndex,
-    kPendingReplyPortIndex,
-    kPendingIdIndex,
-    kPendingEntrySize
-  };
+  enum {kPendingHandlerIndex = 0, kPendingMethodNameIndex, kPendingKeysIndex,
+        kPendingValuesIndex,      kPendingReplyPortIndex,  kPendingIdIndex,
+        kPendingEntrySize};
   RawGrowableObjectArray* pending_service_extension_calls_;
 
   // We use 2 list entries for each registered extension handler.
-  enum {
-    kRegisteredNameIndex = 0,
-    kRegisteredHandlerIndex,
-    kRegisteredEntrySize
-  };
+  enum {kRegisteredNameIndex = 0, kRegisteredHandlerIndex,
+        kRegisteredEntrySize};
   RawGrowableObjectArray* registered_service_extension_handlers_;
 
   Metric* metrics_list_head_;
@@ -1026,6 +1029,8 @@ class Isolate : public BaseIsolate {
   const char** obfuscation_map_;
 
   ReversePcLookupCache* reverse_pc_lookup_cache_;
+  uword llvm_segment_start_ = 0;
+  uword llvm_segment_end_ = 0;
 
   static Dart_IsolateCreateCallback create_callback_;
   static Dart_IsolateShutdownCallback shutdown_callback_;
@@ -1049,12 +1054,12 @@ class Isolate : public BaseIsolate {
   REUSABLE_HANDLE_LIST(REUSABLE_FRIEND_DECLARATION)
 #undef REUSABLE_FRIEND_DECLARATION
 
-  friend class Become;    // VisitObjectPointers
+  friend class Become;       // VisitObjectPointers
   friend class GCCompactor;  // VisitObjectPointers
-  friend class GCMarker;  // VisitObjectPointers
+  friend class GCMarker;     // VisitObjectPointers
   friend class SafepointHandler;
-  friend class ObjectGraph;  // VisitObjectPointers
-  friend class Scavenger;    // VisitObjectPointers
+  friend class ObjectGraph;         // VisitObjectPointers
+  friend class Scavenger;           // VisitObjectPointers
   friend class HeapIterationScope;  // VisitObjectPointers
   friend class ServiceIsolate;
   friend class Thread;

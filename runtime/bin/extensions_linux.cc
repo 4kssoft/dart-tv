@@ -23,6 +23,10 @@ void* Extensions::LoadExtensionLibrary(const char* library_file) {
   return dlopen(library_file, RTLD_LAZY);
 }
 
+void* Extensions::LoadExtensionLibraryNow(const char* library_file) {
+  return dlopen(library_file, RTLD_NOW);
+}
+
 void* Extensions::ResolveSymbol(void* lib_handle, const char* symbol) {
   dlerror();
   return dlsym(lib_handle, symbol);

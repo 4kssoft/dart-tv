@@ -682,7 +682,7 @@ class RawObject {
   friend class ApiMessageReader;  // GetClassId
   friend class Serializer;        // GetClassId
   friend class Array;
-  friend class Become;  // GetClassId
+  friend class Become;         // GetClassId
   friend class CompactorTask;  // GetClassId
   friend class ByteBuffer;
   friend class CidRewriteVisitor;
@@ -743,9 +743,9 @@ class RawObject {
   friend class ObjectLocator;
   friend class InstanceMorpher;  // GetClassId
   friend class VerifyCanonicalVisitor;
-  friend class ObjectGraph::Stack;  // GetClassId
-  friend class Precompiler;         // GetClassId
-  friend class ObjectOffsetTrait;   // GetClassId
+  friend class ObjectGraph::Stack;         // GetClassId
+  friend class Precompiler;                // GetClassId
+  friend class ObjectOffsetTrait;          // GetClassId
   friend class WriteBarrierUpdateVisitor;  // CheckHeapPointerStore
   friend class OffsetsTable;
 
@@ -782,8 +782,8 @@ class RawClass : public RawObject {
   RawArray* invocation_dispatcher_cache_;  // Cache for dispatcher functions.
   RawCode* allocation_stub_;  // Stub code for allocation of instances.
   RawGrowableObjectArray* direct_implementors_;  // Array of Class.
-  RawGrowableObjectArray* direct_subclasses_;  // Array of Class.
-  RawArray* dependent_code_;                   // CHA optimized codes.
+  RawGrowableObjectArray* direct_subclasses_;    // Array of Class.
+  RawArray* dependent_code_;                     // CHA optimized codes.
   VISIT_TO(RawObject*, dependent_code_);
   RawObject** to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
@@ -901,13 +901,14 @@ class RawFunction : public RawObject {
   // So that the SkippedCodeFunctions::DetachCode can null out the code fields.
   friend class SkippedCodeFunctions;
   friend class Class;
+  friend class LoadLLVMExternals;
 
   RAW_HEAP_OBJECT_IMPLEMENTATION(Function);
 
   static bool ShouldVisitCode(RawCode* raw_code);
   static bool CheckUsageCounter(RawFunction* raw_fun);
 
-  uword entry_point_;  // Accessed from generated code.
+  uword entry_point_;            // Accessed from generated code.
   uword unchecked_entry_point_;  // Accessed from generated code.
 
   VISIT_FROM(RawObject*, name_);
@@ -950,11 +951,10 @@ class RawFunction : public RawObject {
 
   NOT_IN_PRECOMPILED(TokenPosition token_pos_);
   NOT_IN_PRECOMPILED(TokenPosition end_token_pos_);
-  uint32_t kind_tag_;                          // See Function::KindTagBits.
+  uint32_t kind_tag_;  // See Function::KindTagBits.
   uint32_t packed_fields_;
 
-  typedef BitField<uint32_t, bool, 0, 1>
-      PackedHasNamedOptionalParameters;
+  typedef BitField<uint32_t, bool, 0, 1> PackedHasNamedOptionalParameters;
   typedef BitField<uint32_t,
                    bool,
                    PackedHasNamedOptionalParameters::kNextBit,
@@ -1250,7 +1250,7 @@ class RawKernelProgramInfo : public RawObject {
 class RawCode : public RawObject {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Code);
 
-  uword entry_point_;          // Accessed from generated code.
+  uword entry_point_;  // Accessed from generated code.
 
   // In AOT this entry-point supports switchable calls. It checks the type of
   // the receiver on entry to the function and calls a stub to patch up the
@@ -1288,6 +1288,10 @@ class RawCode : public RawObject {
   //
   uword unchecked_entry_point_;  // Accessed from generated code.
   uword monomorphic_unchecked_entry_point_;  // Accessed from generated code.
+
+  uword llvm_trampoline_entry_point_;
+  uword llvm_direct_entry_point_;
+  uword llvm_function_id_;
 
   VISIT_FROM(RawObject*, object_pool_);
   RawObjectPool* object_pool_;     // Accessed from generated code.
@@ -1346,6 +1350,7 @@ class RawCode : public RawObject {
   friend class StackFrame;
   friend class Profiler;
   friend class FunctionDeserializationCluster;
+  friend class LoadLLVMExternals;
 };
 
 class RawBytecode : public RawObject {

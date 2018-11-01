@@ -174,6 +174,14 @@ DEFINE_RUNTIME_ENTRY(NullError, 0) {
     isolate->heap()->CollectAllGarbage();
   }
 
+  if (caller_frame->IsLLVMFrame()) {
+    Heap::Space space = Heap::kNew;
+    const String& str =
+        String::Handle(String::New("LLVM dummy selector", space));
+    NullErrorHelper(zone, str);
+    return;
+  }
+
   const CodeSourceMap& map =
       CodeSourceMap::Handle(zone, code.code_source_map());
   String& member_name = String::Handle(zone);
@@ -1689,10 +1697,10 @@ DEFINE_RUNTIME_ENTRY(InvokeNoSuchMethodDispatcher, 4) {
   Class& cls = Class::Handle(zone, receiver.clazz());
   Function& function = Function::Handle(zone);
 
-// Dart distinguishes getters and regular methods and allows their calls
-// to mix with conversions, and its selectors are independent of arity. So do
-// a zigzagged lookup to see if this call failed because of an arity mismatch,
-// need for conversion, or there really is no such method.
+  // Dart distinguishes getters and regular methods and allows their calls
+  // to mix with conversions, and its selectors are independent of arity. So do
+  // a zigzagged lookup to see if this call failed because of an arity mismatch,
+  // need for conversion, or there really is no such method.
 
 #define NO_SUCH_METHOD()                                                       \
   const Object& result = Object::Handle(                                       \

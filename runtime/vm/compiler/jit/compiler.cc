@@ -57,6 +57,7 @@ DEFINE_FLAG(
     "How many times we allow deoptimization before we disallow optimization.");
 DEFINE_FLAG(charp, optimization_filter, NULL, "Optimize only named function");
 DEFINE_FLAG(bool, print_flow_graph, false, "Print the IR flow graph.");
+DEFINE_FLAG(bool, serialize_il, false, "Serialize IL for LLVM CodeGen");
 DEFINE_FLAG(bool,
             print_flow_graph_optimized,
             false,
