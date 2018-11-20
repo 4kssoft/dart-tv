@@ -901,7 +901,6 @@ class RawFunction : public RawObject {
   // So that the SkippedCodeFunctions::DetachCode can null out the code fields.
   friend class SkippedCodeFunctions;
   friend class Class;
-  friend class LoadLLVMExternals;
 
   RAW_HEAP_OBJECT_IMPLEMENTATION(Function);
 
@@ -910,6 +909,8 @@ class RawFunction : public RawObject {
 
   uword entry_point_;            // Accessed from generated code.
   uword unchecked_entry_point_;  // Accessed from generated code.
+  intptr_t llvm_id_;
+  intptr_t dart_id_;
 
   VISIT_FROM(RawObject*, name_);
   RawString* name_;
@@ -1350,7 +1351,6 @@ class RawCode : public RawObject {
   friend class StackFrame;
   friend class Profiler;
   friend class FunctionDeserializationCluster;
-  friend class LoadLLVMExternals;
 };
 
 class RawBytecode : public RawObject {

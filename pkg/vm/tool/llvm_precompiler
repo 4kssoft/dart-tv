@@ -2,7 +2,6 @@
 # Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
 # for details. All rights reserved. Use of this source code is governed by a
 # BSD-style license that can be found in the LICENSE file.
-
 set -e
 
 OPTIONS=()
@@ -39,13 +38,13 @@ for arg in "$@"; do
   esac
 done
 
-if [ "${#ARGV[@]}" -ne 2 ]; then
-    echo "Usage: $0 [options] <source> <snapshot>"
+if [ "${#ARGV[@]}" -ne 1 ]; then
+    echo "Usage: $0 [options] <snapshot>"
     exit 1
 fi
 
-SOURCE_FILE="${ARGV[0]}"
-SNAPSHOT_FILE="${ARGV[1]}"
+SNAPSHOT_FILE="${ARGV[0]}"
+SOURCE_FILE="${ARGV[0]}.dart"
 
 GEN_SNAPSHOT_OPTION=("--snapshot-kind=app-aot-assembly" "--serialize-il" "--compiler-passes=[AllocateRegisters")
 GEN_SNAPSHOT_FILENAME="--assembly=${SNAPSHOT_FILE}.S"
@@ -87,24 +86,24 @@ echo "Generating Kernel"
 # Step 2: Generate snapshot from the Kernel binary and serialize IL.
 echo "Generating snapshot and serializing IL"
 "$BIN_DIR"/gen_snapshot                                                        \
-     "${GEN_SNAPSHOT_OPTION[@]}"                                                    \
+     "${GEN_SNAPSHOT_OPTION[@]}"                                               \
      "$GEN_SNAPSHOT_FILENAME"                                                  \
      "${OPTIONS[@]}"                                                           \
-     "$SNAPSHOT_FILE.dill" 2>"$SOURCE_FILE.il"
+     "$SNAPSHOT_FILE.dill" 2>"$SNAPSHOT_FILE.il"
 
 # Step 3: Assemble the assembly file into an ELF object.
 gcc -shared -o "$SNAPSHOT_FILE" "${SNAPSHOT_FILE}.S"
 
 # Step 4: Generate LLVM code
 echo "Generating LLVM code"
-"$LLVM_BIN_DIR"/main "$SOURCE_FILE.il" >"$SOURCE_FILE.llvm"
-llc -relocation-model=pic --disable-fp-elim "$SOURCE_FILE.llvm" -o "$SOURCE_FILE.s"
+"$LLVM_BIN_DIR"/main "$SNAPSHOT_FILE.il" >"$SNAPSHOT_FILE.llvm"
+llc --x86-asm-syntax=intel -relocation-model=pic --disable-fp-elim "$SNAPSHOT_FILE.llvm" -o "$SNAPSHOT_FILE.s"
 
 # Step 5: Add special symbols to mark the start and end of the LLVM .text segment
 echo "Adding LLVM .text marker symbols"
-sed -i "1s/^/.text\n.globl _LLVM_START\n_LLVM_START:\n/" "$SOURCE_FILE.s"
-echo -e ".text\n.globl _LLVM_END\n_LLVM_END:\n" >>"$SOURCE_FILE.s"
+sed -i "1s/^/.text\n.globl _LLVM_START\n_LLVM_START:\n/" "$SNAPSHOT_FILE.s"
+echo -e ".text\n.globl _LLVM_END\n_LLVM_END:\n" >>"$SNAPSHOT_FILE.s"
 
 # Step 6: Link the assembly files
 echo "Linking..."
-gcc -shared "$SNAPSHOT_FILE.S" "$SOURCE_FILE.s" -o "$SOURCE_FILE.so"
+gcc -shared "$SNAPSHOT_FILE.S" "$SNAPSHOT_FILE.s" -o "$SNAPSHOT_FILE.so"

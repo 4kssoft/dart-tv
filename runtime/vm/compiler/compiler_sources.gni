@@ -7,6 +7,8 @@
 compiler_sources = [
   "aot/aot_call_specializer.cc",
   "aot/aot_call_specializer.h",
+  "aot/llvm_serializer.cc",
+  "aot/llvm_serializer.h",
   "aot/precompiler.cc",
   "aot/precompiler.h",
   "asm_intrinsifier.cc",

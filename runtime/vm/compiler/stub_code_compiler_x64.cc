@@ -488,11 +488,65 @@ void StubCode::GenerateCallLLVMFunctionStub(Assembler* assembler) {
   // Address to args
   __ leaq(CallingConventions::kArg3Reg,
           Address(RBP, kParamEndSlotFromFp * kWordSize));
-  __ LeaveStubFrame();
 
   __ movq(RBX, FieldAddress(CODE_REG,
                             Code::entry_point_offset(Code::EntryKind::kLLVM)));
-  __ jmp(RBX);
+
+  if (OS::ActivationFrameAlignment() > 1) {
+    __ andq(RSP, Immediate(~(OS::ActivationFrameAlignment() - 1)));
+  }
+  __ call(RBX);
+
+  __ LeaveStubFrame();
+  __ ret();
+}
+
+// Input parameters:
+// CC::arg1: thread object.
+// CC::arg2: target code object.
+// CC::arg3: arguments descriptor array.
+// CC::arg4: number of arguments.
+// CC::arg5: pointer to argument array.
+void StubCode::GenerateLLVMToDartTrampolineStub(Assembler* assembler) {
+  // Save C++ ABI callee-saved registers.
+  __ PushRegisters(CallingConventions::kCalleeSaveCpuRegisters,
+                   CallingConventions::kCalleeSaveXmmRegisters);
+
+  __ movq(THR, CallingConventions::kArg1Reg);
+  __ movq(CODE_REG, CallingConventions::kArg2Reg);
+  __ movq(R10, CallingConventions::kArg3Reg);
+
+  __ EnterStubFrame();
+
+  Label loop, loop_condition;
+#if defined(DEBUG)
+  static const bool kJumpLength = Assembler::kFarJump;
+#else
+  static const bool kJumpLength = Assembler::kNearJump;
+#endif  // DEBUG
+  __ jmp(&loop_condition, kJumpLength);
+  __ Bind(&loop);
+  __ subq(RSP, Immediate(kWordSize));
+  __ movq(CallingConventions::kArg1Reg,
+          Address(CallingConventions::kArg5Reg, 0));
+  __ movq(Address(RSP, 0), CallingConventions::kArg1Reg);
+  __ addq(CallingConventions::kArg5Reg, Immediate(kWordSize));
+
+  __ Bind(&loop_condition);
+  __ decq(CallingConventions::kArg4Reg);
+  __ j(POSITIVE, &loop, Assembler::kNearJump);
+
+  __ movq(CallingConventions::kArg1Reg,
+          FieldAddress(CODE_REG, Code::entry_point_offset()));
+  __ call(CallingConventions::kArg1Reg);
+
+  __ LeaveStubFrame();
+
+  // Restore C++ ABI callee-saved registers.
+  __ PopRegisters(CallingConventions::kCalleeSaveCpuRegisters,
+                  CallingConventions::kCalleeSaveXmmRegisters);
+
+  __ ret();
 }
 
 // Called from a static call only when an invalid code has been entered

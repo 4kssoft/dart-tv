@@ -451,16 +451,17 @@ RawCode* StackFrame::GetCodeObject() const {
   if (IsLLVMFrame()) {
     // Assume we are in the same isolate as the function's
     // we're doing the lookup for?
-    GrowableObjectArray llvm_function_order;
-    llvm_function_order ^= isolate()->object_store()->llvm_function_order();
+    GrowableObjectArray llvm_compiled_functions;
+    llvm_compiled_functions ^=
+        isolate()->object_store()->llvm_compiled_functions();
     Function function;
     Code code;
     auto GetLLVMEntryPoint = [&](intptr_t idx) {
-      function ^= llvm_function_order.At(idx);
+      function ^= llvm_compiled_functions.At(idx);
       code ^= function.CurrentCode();
       return code.llvm_direct_entry_point();
     };
-    intptr_t lo = 0, hi = llvm_function_order.Length();
+    intptr_t lo = 0, hi = llvm_compiled_functions.Length();
     ASSERT(hi > 0);
     // ASSERT(GetLLVMEntryPoint(0) <= pc());
     // TODO(sarkin): Temporary hack for LLVM trampoline functions
@@ -474,7 +475,7 @@ RawCode* StackFrame::GetCodeObject() const {
         }
       }
     }
-    function ^= llvm_function_order.At(lo);
+    function ^= llvm_compiled_functions.At(lo);
     return function.CurrentCode();
   }
 

@@ -7,6 +7,7 @@
 
 #include "vm/allocation.h"
 #include "vm/compiler/assembler/assembler.h"
+#include "vm/compiler/aot/llvm_serializer.h"
 #include "vm/hash_map.h"
 #include "vm/hash_table.h"
 #include "vm/object.h"
@@ -235,6 +236,8 @@ class Precompiler : public ValueObject {
 
   static Precompiler* Instance() { return singleton_; }
 
+  LLVMSerializer& llvm_serializer() { return llvm_serializer_; }
+
  private:
   static Precompiler* singleton_;
 
@@ -302,7 +305,6 @@ class Precompiler : public ValueObject {
   bool changed_;
   bool retain_root_library_caches_;
   intptr_t function_count_;
-  intptr_t llvm_function_count_;
   intptr_t class_count_;
   intptr_t selector_count_;
   intptr_t dropped_function_count_;
@@ -324,36 +326,10 @@ class Precompiler : public ValueObject {
   AbstractTypeSet types_to_retain_;
   InstanceSet consts_to_retain_;
   Error& error_;
+  LLVMSerializer llvm_serializer_;
 
   bool get_runtime_type_is_unique_;
 };
-
-class FunctionsTraits {
- public:
-  static const char* Name() { return "FunctionsTraits"; }
-  static bool ReportStats() { return false; }
-
-  static bool IsMatch(const Object& a, const Object& b) {
-    Zone* zone = Thread::Current()->zone();
-    String& a_s = String::Handle(zone);
-    String& b_s = String::Handle(zone);
-    a_s = a.IsFunction() ? Function::Cast(a).name() : String::Cast(a).raw();
-    b_s = b.IsFunction() ? Function::Cast(b).name() : String::Cast(b).raw();
-    ASSERT(a_s.IsSymbol() && b_s.IsSymbol());
-    return a_s.raw() == b_s.raw();
-  }
-  static uword Hash(const Object& obj) {
-    if (obj.IsFunction()) {
-      return String::Handle(Function::Cast(obj).name()).Hash();
-    } else {
-      ASSERT(String::Cast(obj).IsSymbol());
-      return String::Cast(obj).Hash();
-    }
-  }
-  static RawObject* NewKey(const Function& function) { return function.raw(); }
-};
-
-typedef UnorderedHashSet<FunctionsTraits> UniqueFunctionsSet;
 
 #if defined(DART_PRECOMPILER) && !defined(TARGET_ARCH_DBC) &&                  \
     !defined(TARGET_ARCH_IA32)
@@ -370,7 +346,37 @@ class ObfuscationMapTraits {
 
   static uword Hash(const Object& key) { return String::Cast(key).Hash(); }
 };
+
 typedef UnorderedHashMap<ObfuscationMapTraits> ObfuscationMap;
+
+class FunctionsTraits {
+ public:
+  static const char* Name() { return "FunctionsTraits"; }
+  static bool ReportStats() { return false; }
+
+  static bool IsMatch(const Object& a, const Object& b) {
+    Zone* zone = Thread::Current()->zone();
+    String& a_s = String::Handle(zone);
+    String& b_s = String::Handle(zone);
+    a_s = a.IsFunction() ? Function::Cast(a).name() : String::Cast(a).raw();
+    b_s = b.IsFunction() ? Function::Cast(b).name() : String::Cast(b).raw();
+    ASSERT(a_s.IsSymbol() && b_s.IsSymbol());
+    return a_s.raw() == b_s.raw();
+  }
+
+  static uword Hash(const Object& obj) {
+    if (obj.IsFunction()) {
+      return String::Handle(Function::Cast(obj).name()).Hash();
+    } else {
+      ASSERT(String::Cast(obj).IsSymbol());
+      return String::Cast(obj).Hash();
+    }
+  }
+
+  static RawObject* NewKey(const Function& function) { return function.raw(); }
+};
+
+typedef UnorderedHashSet<FunctionsTraits> UniqueFunctionsSet;
 
 // Obfuscator is a helper class that is responsible for obfuscating
 // identifiers when obfuscation is enabled via isolate flags.

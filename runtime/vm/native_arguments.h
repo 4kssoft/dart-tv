@@ -239,6 +239,7 @@ class NativeArguments {
   friend class BootstrapNatives;
   friend class Interpreter;
   friend class Simulator;
+  friend class LLVMSerializer;
 
   // Allow simulator and interpreter to create NativeArguments in reverse order
   // on the stack.

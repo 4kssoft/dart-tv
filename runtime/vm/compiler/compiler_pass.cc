@@ -208,7 +208,8 @@ void CompilerPass::PrintGraph(CompilerPassState* state,
   const auto& func = flow_graph->function();
   if (FLAG_serialize_il && func.IsLLVMCompiled() &&
       ((current_flags & mask) != 0)) {
-    ILSerializer::PrintSerialization(flow_graph);
+    ILSerializer::PrintSerialization(flow_graph,
+                                     &state->precompiler->llvm_serializer());
   }
 }
 

@@ -1193,6 +1193,8 @@ class Class : public Object {
     NOT_IN_PRECOMPILED(StoreNonPointer(&raw_ptr()->kernel_offset_, offset));
   }
 
+  RawArray* invocation_dispatcher_cache() const;
+
   void DisableAllocationStub() const;
 
   RawArray* constants() const;
@@ -1369,6 +1371,10 @@ class Class : public Object {
   void set_state_bits(intptr_t bits) const;
 
   RawArray* invocation_dispatcher_cache() const;
+
+  void set_canonical_type(const Type& value) const;
+  RawType* canonical_type() const;
+
   void set_invocation_dispatcher_cache(const Array& cache) const;
   RawFunction* CreateInvocationDispatcher(const String& target_name,
                                           const Array& args_desc,
@@ -2836,6 +2842,18 @@ class Function : public Object {
         value, raw_ptr()->packed_fields_));
   }
 
+  intptr_t llvm_id() const { return raw_ptr()->llvm_id_; }
+
+  void set_llvm_id(intptr_t id) const {
+    StoreNonPointer(&raw_ptr()->llvm_id_, id);
+  }
+
+  intptr_t dart_id() const { return raw_ptr()->dart_id_; }
+
+  void set_dart_id(intptr_t id) const {
+    StoreNonPointer(&raw_ptr()->dart_id_, id);
+  }
+
  private:
   void set_ic_data_array(const Array& value) const;
   void SetInstructionsSafe(const Code& value) const;
@@ -3348,6 +3366,7 @@ class Field : public Object {
                             TokenPosition end_token_pos);
   friend class Interpreter;              // Access to bit field.
   friend class StoreInstanceFieldInstr;  // Generated code access to bit field.
+  friend class LLVMSerializer;
 
   enum {
     kConstBit = 0,
@@ -5942,6 +5961,7 @@ class Instance : public Object {
   friend class ClassDeserializationCluster;  // vtable
   friend class InstanceMorpher;
   friend class Obfuscator;  // RawGetFieldAtOffset, RawSetFieldAtOffset
+  friend class LLVMSerializer;
 };
 
 class LibraryPrefix : public Instance {

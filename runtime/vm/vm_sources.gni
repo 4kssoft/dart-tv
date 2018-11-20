@@ -142,8 +142,6 @@ vm_sources = [
   "kernel_isolate.h",
   "kernel_loader.cc",
   "kernel_loader.h",
-  "llvm_runtime.h",
-  "llvm_runtime.cc",
   "lockers.cc",
   "lockers.h",
   "log.cc",

@@ -22,7 +22,31 @@
   M(BoxInt64, _)                                                               \
   M(UnboxInt64, kNoGC)                                                         \
   M(CheckNull, kNoGC)                                                          \
-  M(BinaryInt64Op, kNoGC)
+  M(PushArgument, kNoGC)                                                       \
+  M(StaticCall, _)                                                             \
+  M(BinaryInt64Op, kNoGC)                                                      \
+  M(LoadIndexedUnsafe, kNoGC)                                                  \
+  M(SpecialParameter, kNoGC)                                                   \
+  M(InstanceCall, kNoGC)                                                       \
+  M(EqualityCompare, KNoGC)                                                    \
+  M(StrictCompare, KNoGC)                                                      \
+  M(PolymorphicInstanceCall, _)                                                \
+  M(LoadStaticField, kNoGC)                                                    \
+  M(LoadClassId, kNoGC)                                                        \
+  M(AssertBoolean, _)                                                          \
+  M(CheckedSmiComparison, _)                                                   \
+  M(AssertAssignable, _)                                                       \
+  M(AllocateObject, _)                                                         \
+  M(CreateArray, _)                                                            \
+  M(LoadField, kNoGC)                                                          \
+  M(StoreInstanceField, kNoGC)                                                 \
+  M(LoadIndexed, kNoGC)                                                        \
+  M(StoreIndexed, kNoGC)                                                       \
+  M(GenericCheckBound, kNoGC)                                                  \
+  M(OneByteStringFromCharCode, kNoGC)                                          \
+  M(StoreStaticField, kNoGC)                                                   \
+  M(BooleanNegate, kNoGC)                                                      \
+  M(IfThenElse, kNoGC)
 
 namespace dart_llvm {
 
@@ -210,6 +234,15 @@ enum RelationalOpCid { kInt64, kDouble };
 #define T(t, s, p, a) t,
 enum TokenKind { DART_TOKEN_LIST(T) DART_KEYWORD_LIST(T) kNumTokens };
 #undef T
+
+enum ArgcTagBits {
+  kArgcBit = 0,
+  kArgcSize = 24,
+  kFunctionBit = kArgcBit + kArgcSize,
+  kFunctionSize = 3,
+  kReverseArgOrderBit = kFunctionBit + kFunctionSize,
+  kReverseArgOrderSize = 1,
+};
 
 }  // namespace dart_llvm
 

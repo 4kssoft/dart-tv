@@ -30,6 +30,7 @@ namespace dart {
   V(FixCallersTarget)                                                          \
   V(CallStaticFunction)                                                        \
   V(CallLLVMFunction)                                                          \
+  V(LLVMToDartTrampoline)                                                      \
   V(OptimizeFunction)                                                          \
   V(InvokeDartCode)                                                            \
   V(InvokeDartCodeFromBytecode)                                                \

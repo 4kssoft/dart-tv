@@ -7,6 +7,7 @@
 #include "vm/class_finalizer.h"
 #include "vm/code_patcher.h"
 #include "vm/compiler/aot/aot_call_specializer.h"
+#include "vm/compiler/aot/llvm_serializer.h"
 #include "vm/compiler/assembler/assembler.h"
 #include "vm/compiler/assembler/disassembler.h"
 #include "vm/compiler/backend/block_scheduler.h"
@@ -15,6 +16,7 @@
 #include "vm/compiler/backend/flow_graph.h"
 #include "vm/compiler/backend/flow_graph_compiler.h"
 #include "vm/compiler/backend/il_printer.h"
+#include "vm/compiler/backend/il_serializer.h"
 #include "vm/compiler/backend/inliner.h"
 #include "vm/compiler/backend/linearscan.h"
 #include "vm/compiler/backend/range_analysis.h"
@@ -145,7 +147,6 @@ Precompiler::Precompiler(Thread* thread)
       changed_(false),
       retain_root_library_caches_(false),
       function_count_(0),
-      llvm_function_count_(0),
       class_count_(0),
       selector_count_(0),
       dropped_function_count_(0),
@@ -166,14 +167,10 @@ Precompiler::Precompiler(Thread* thread)
       types_to_retain_(),
       consts_to_retain_(),
       error_(Error::Handle()),
+      llvm_serializer_(thread),
       get_runtime_type_is_unique_(false) {
   ASSERT(Precompiler::singleton_ == NULL);
   Precompiler::singleton_ = this;
-}
-
-Precompiler::~Precompiler() {
-  ASSERT(Precompiler::singleton_ == this);
-  Precompiler::singleton_ = NULL;
 }
 
 void Precompiler::DoCompileAll() {
@@ -373,21 +370,7 @@ void Precompiler::DoCompileAll() {
   }
 
   if (FLAG_serialize_il) {
-    const GrowableObjectArray& object_order = GrowableObjectArray::Handle(
-        I->object_store()->il_serialization_object_order());
-    // False offset
-    THR_Print("%" Pd "\n", object_order.Length());
-    object_order.Add(Bool::False());
-    // True offset
-    THR_Print("%" Pd "\n", object_order.Length());
-    object_order.Add(Bool::True());
-    // Null offset
-    THR_Print("%" Pd "\n", object_order.Length());
-    // TODO(sarkin): Is it OK to add null_object?
-    object_order.Add(Object::null_object());
-    THR_Print("%" Pd "\n", object_order.Length());
-    THR_Print("%" Pd "\n", Thread::top_exit_frame_info_offset());
-    THR_Print("%" Pd "\n", llvm_function_count_);
+    llvm_serializer_.Serialize();
   }
 }
 
@@ -552,16 +535,6 @@ void Precompiler::ProcessFunction(const Function& function) {
     ASSERT(!function.is_abstract());
     ASSERT(!function.IsRedirectingFactory());
 
-    if (function.IsLLVMCompiled()) {
-      if (FLAG_serialize_il) {
-        THR_Print("%" Pd "\n", llvm_function_count_);
-        const GrowableObjectArray& llvm_function_order =
-            GrowableObjectArray::Handle(
-                I->object_store()->llvm_function_order());
-        llvm_function_order.Add(function);
-      }
-      llvm_function_count_++;
-    }
     error_ = CompileFunction(this, thread_, zone_, function);
     if (!error_.IsNull()) {
       Jump(error_);

@@ -11,6 +11,7 @@
 #include "vm/class_finalizer.h"
 #include "vm/clustered_snapshot.h"
 #include "vm/compilation_trace.h"
+#include "vm/compiler/backend/il_serializer.h"
 #include "vm/compiler/jit/compiler.h"
 #include "vm/dart.h"
 #include "vm/dart_api_impl.h"
@@ -1116,13 +1117,13 @@ class LoadLLVMExternals {
  public:
   static void SetFunctionPool(const intptr_t* function_pool,
                               const intptr_t* dart_to_llvm_trampoline) {
-    GrowableObjectArray& llvm_function_order = GrowableObjectArray::Handle(
-        Isolate::Current()->object_store()->llvm_function_order());
+    GrowableObjectArray& llvm_compiled_functions = GrowableObjectArray::Handle(
+        Isolate::Current()->object_store()->llvm_compiled_functions());
     Function& function = Function::Handle();
     Code& code = Code::Handle();
     // TODO(sarkin): No handle scope or something? or no safepoint scope?
-    for (intptr_t i = 0; i < llvm_function_order.Length(); ++i) {
-      function ^= llvm_function_order.At(i);
+    for (intptr_t i = 0; i < llvm_compiled_functions.Length(); ++i) {
+      function ^= llvm_compiled_functions.At(i);
       code ^= function.CurrentCode();
       function.setup_entry_points_for_llvm(
           StubCode::CallLLVMFunction_entry()->EntryPoint());
@@ -1134,11 +1135,35 @@ class LoadLLVMExternals {
   }
 
   static void SetConstantPool(intptr_t* constant_pool) {
-    GrowableObjectArray& llvm_object_order = GrowableObjectArray::Handle(
-        Isolate::Current()->object_store()->il_serialization_object_order());
-    for (intptr_t i = 0; i < llvm_object_order.Length(); ++i) {
-      constant_pool[i] = reinterpret_cast<intptr_t>(llvm_object_order.At(i));
+    LLVMConstantMap map(Isolate::Current()->object_store()->llvm_constants());
+    LLVMConstantMap::Iterator it(&map);
+    Object& obj = Object::Handle();
+    while (it.MoveNext()) {
+      intptr_t entry = it.Current();
+      obj = map.GetKey(entry);
+      auto val = Smi::Value(Smi::RawCast(map.GetOrDie(obj)));
+      constant_pool[val] = reinterpret_cast<intptr_t>(obj.raw());
     }
+    assert(map.Release().raw() ==
+           Isolate::Current()->object_store()->llvm_constants());
+  }
+
+  static void SetDartFunctionPool(intptr_t* dart_function_pool) {
+    LLVMDartFunctionMap map(
+        Isolate::Current()->object_store()->dart_compiled_functions());
+    LLVMDartFunctionMap::Iterator it(&map);
+    Object& obj = Object::Handle();
+    Function& fn = Function::Handle();
+    while (it.MoveNext()) {
+      intptr_t entry = it.Current();
+      auto raw_key = map.GetKey(entry);
+      obj = raw_key;
+      fn ^= raw_key;
+      auto val = Smi::Value(Smi::RawCast(map.GetOrDie(obj)));
+      dart_function_pool[val] = reinterpret_cast<intptr_t>(fn.CurrentCode());
+    }
+    assert(map.Release().raw() ==
+           Isolate::Current()->object_store()->dart_compiled_functions());
   }
 
   template <typename T>
@@ -1150,13 +1175,11 @@ class LoadLLVMExternals {
     return reinterpret_cast<T>(resolved_symbol);
   }
 
-  static void SetLLVMCodeRange(intptr_t start, intptr_t end) {
-    Isolate::Current()->SetLLVMRange(start, end);
-  }
-
   static void LoadFromScript(const char* script_name) {
     const char* kFunctionPoolSymbolName = "_GlobalFunctionPool";
     const char* kConstantPoolSymbolName = "_GlobalConstantPool";
+    const char* kDartFunctionPoolSymbolName = "_GlobalDartFunctionPool";
+    const char* kLLVMToDartTrampolineSymbolName = "_GlobalLLVMToDartTrampoline";
     const char* kDartToLLVMTrampolineSymbolName = "_DartToLLVMTrampoline";
     const char* kLLVMStartSymbolName = "_LLVM_START";
     const char* kLLVMEndSymbolName = "_LLVM_END";
@@ -1170,14 +1193,21 @@ class LoadLLVMExternals {
     auto constant_pool = GetSymbol<intptr_t*>(library, kConstantPoolSymbolName);
     auto function_pool =
         GetSymbol<const intptr_t*>(library, kFunctionPoolSymbolName);
+    auto dart_function_pool =
+        GetSymbol<intptr_t*>(library, kDartFunctionPoolSymbolName);
     auto dart_to_llvm_trampoline =
         GetSymbol<const intptr_t*>(library, kDartToLLVMTrampolineSymbolName);
     auto llvm_start = GetSymbol<intptr_t>(library, kLLVMStartSymbolName);
     auto llvm_end = GetSymbol<intptr_t>(library, kLLVMEndSymbolName);
+    auto llvm_to_dart_trampoline =
+        GetSymbol<intptr_t*>(library, kLLVMToDartTrampolineSymbolName);
 
+    *llvm_to_dart_trampoline =
+        StubCode::LLVMToDartTrampoline_entry()->EntryPoint();
     SetFunctionPool(function_pool, dart_to_llvm_trampoline);
     SetConstantPool(constant_pool);
-    SetLLVMCodeRange(llvm_start, llvm_end);
+    SetDartFunctionPool(dart_function_pool);
+    Isolate::Current()->SetLLVMRange(llvm_start, llvm_end);
   }
 
  private:

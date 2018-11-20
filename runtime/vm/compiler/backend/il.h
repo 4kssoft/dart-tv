@@ -4279,6 +4279,7 @@ class StoreInstanceFieldInstr : public TemplateInstruction<2, NoThrow> {
 
  private:
   friend class JitCallSpecializer;  // For ASSERT(initialization_).
+  friend class ILSerializer;        // For CanValueBeSmi()
 
   intptr_t OffsetInBytes() const { return slot().offset_in_bytes(); }
 
@@ -4447,6 +4448,8 @@ class StoreStaticFieldInstr : public TemplateDefinition<1, NoThrow> {
   PRINT_OPERANDS_TO_SUPPORT
 
  private:
+  friend class ILSerializer;
+
   Assembler::CanBeSmi CanValueBeSmi() const {
     const intptr_t cid = value()->Type()->ToNullableCid();
     // Write barrier is skipped for nullable and non-nullable smis.
@@ -4712,6 +4715,8 @@ class StoreIndexedInstr : public TemplateInstruction<3, NoThrow> {
   virtual bool HasUnknownSideEffects() const { return false; }
 
  private:
+  friend class ILSerializer;
+
   Assembler::CanBeSmi CanValueBeSmi() const {
     return Assembler::kValueCanBeSmi;
   }

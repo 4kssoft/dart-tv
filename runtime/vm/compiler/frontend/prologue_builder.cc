@@ -137,6 +137,19 @@ Fragment PrologueBuilder::BuildOptionalParameterHandling(
       num_fixed_params + num_opt_pos_params + num_opt_named_params;
   ASSERT(function_.NumParameters() == num_params);
 
+  if (function_.IsLLVMCompiled()) {
+    for (intptr_t param = 0; param < num_params; ++param) {
+      copy_args_prologue += IntConstant(0);
+      copy_args_prologue += LoadFpRelativeSlot(
+          kWordSize *
+          (compiler_frame_layout.param_end_from_fp + num_params - param));
+      copy_args_prologue +=
+          StoreLocalRaw(TokenPosition::kNoSource, ParameterVariable(param));
+      copy_args_prologue += Drop();
+    }
+    return copy_args_prologue;
+  }
+
   // Check that min_num_pos_args <= num_pos_args <= max_num_pos_args,
   // where num_pos_args is the number of positional arguments passed in.
   const int min_num_pos_args = num_fixed_params;
