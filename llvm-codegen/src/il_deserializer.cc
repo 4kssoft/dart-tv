@@ -32,12 +32,20 @@ const std::unordered_map<std::string, ILInstruction::Tag>
         FOR_EACH_SUPPORTED_INSTRUCTION(DECLARE_NAME_TO_TAG_ENTRY)
         {"NumInstructions", Tag::kNumInstructions}
     };
+#undef DECLARE_NAME_TO_TAG_ENTRY
+
+#define DECLARE_NAME_TO_ATTRS_ENTRY(type, attrs) {#type, #attrs},
+const std::unordered_map<std::string, std::string>
+    ILInstruction::kNameToAttrs = {
+      FOR_EACH_SUPPORTED_INSTRUCTION(DECLARE_NAME_TO_ATTRS_ENTRY)
+      {"NumInstructions", "NumInstructions"}
+    };
+#undef DECLARE_NAME_TO_ATTRS_ENTRY
 
 DartProgram::Ptr ILDeserializer::Deserialize(std::string filename) {
   ILDeserializer deserializer(filename);
   return deserializer.DeserializeProgram();
 }
-#undef DECLARE_NAME_TO_TAG_ENTRY
 
 ILInstruction::Ptr ILDeserializer::DeserializeInstruction() {
   std::string instr_str = GetNextLine();
@@ -53,11 +61,19 @@ ILInstruction::Ptr ILDeserializer::DeserializeInstruction() {
 
   assert(!inputs.empty());
 
-  auto it = ILInstruction::kNameToTag.find(inputs[0]);
-  inputs.erase(inputs.begin());
-  assert(it != ILInstruction::kNameToTag.end());
-  instr->tag_ = it->second;
+  {
+    auto it = ILInstruction::kNameToTag.find(inputs[0]);
+    assert(it != ILInstruction::kNameToTag.end());
+    instr->tag_ = it->second;
+  }
 
+  {
+    auto it = ILInstruction::kNameToAttrs.find(inputs[0]);
+    assert(it != ILInstruction::kNameToAttrs.end());
+    instr->can_trigger_gc_ = !(it->second == "kNoGC");
+  }
+
+  inputs.erase(inputs.begin());
   instr->inputs_ = std::move(inputs);
 
   instr->is_value_ = is_value;
@@ -87,6 +103,9 @@ void ILDeserializer::DeserializeFunctionDeclaration(
   decl->num_optional_named_ = ReadInt();
   assert(decl->num_optional_positional_ == 0 || decl->num_optional_named_ == 0);
 
+  auto& name = decl->name_;
+  std::replace(name.begin(), name.end(), '@', '$');
+
   if (decl->num_optional_named_) {
     for (size_t i = 0; i < decl->num_optional_named_; ++i) {
       decl->named_params_.emplace_back(GetNextLine());
@@ -105,6 +124,17 @@ DartFunction::Ptr ILDeserializer::DeserializeFunction() {
   size_t num_bbs = ReadInt();
   for (size_t i = 0; i < num_bbs; ++i) {
     func->AddBasicBlock(DeserializeBasicBlock());
+  }
+
+  for (size_t i = 0; i < num_bbs && !func->can_trigger_gc_; ++i) {
+    auto bb = func->BasicBlockAt(i);
+    for (size_t j = 0; j < bb->NumInstructions(); ++j) {
+      auto instr = bb->InstructionAt(j);
+      if (instr->can_trigger_gc()) {
+        func->can_trigger_gc_ = true;
+        break;
+      }
+    }
   }
 
   return func;
@@ -194,13 +224,6 @@ DartProgram::Ptr ILDeserializer::DeserializeProgram() {
 
   for (size_t cid = 0; cid < prog->method_table()->num_cids(); ++cid) {
     auto info = DeserializeClassAllocationInfo();
-    // if (info == nullptr) {
-      // assert(!prog->method_table()->IsValidCid(cid));
-    // }
-    // TODO(sarkin): 
-    // } else {
-      // assert(prog->method_table()->IsValidCid(cid));
-    // }
     prog->class_allocation_info_.emplace_back(std::move(info));
   }
 

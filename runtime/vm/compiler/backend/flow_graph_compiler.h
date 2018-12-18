@@ -353,6 +353,8 @@ class FlowGraphCompiler : public ValueObject {
 
   ~FlowGraphCompiler();
 
+  Instruction* current_instruction_ = nullptr;
+
   static bool SupportsUnboxedDoubles();
   static bool SupportsUnboxedInt64();
   static bool SupportsUnboxedSimd128();

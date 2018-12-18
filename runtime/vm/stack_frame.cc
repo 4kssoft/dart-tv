@@ -10,6 +10,7 @@
 #include "vm/deopt_instructions.h"
 #include "vm/heap/become.h"
 #include "vm/isolate.h"
+#include "vm/llvm_gc.h"
 #include "vm/object.h"
 #include "vm/object_store.h"
 #include "vm/os.h"
@@ -263,8 +264,16 @@ void EntryFrame::VisitObjectPointers(ObjectPointerVisitor* visitor) {
 #endif
 }
 
+void StackFrame::VisitObjectPointersLLVM(ObjectPointerVisitor* visitor) {
+  Isolate::Current()->llvm_stack_maps()->Visit(this, visitor);
+}
+
 void StackFrame::VisitObjectPointers(ObjectPointerVisitor* visitor) {
   ASSERT(visitor != NULL);
+  if (IsLLVMFrame()) {
+    VisitObjectPointersLLVM(visitor);
+    return;
+  }
   // NOTE: This code runs while GC is in progress and runs within
   // a NoHandleScope block. Hence it is not ok to use regular Zone or
   // Scope handles. We use direct stack handles, the raw pointers in
@@ -463,8 +472,9 @@ RawCode* StackFrame::GetCodeObject() const {
     };
     intptr_t lo = 0, hi = llvm_compiled_functions.Length();
     ASSERT(hi > 0);
-    // ASSERT(GetLLVMEntryPoint(0) <= pc());
-    // TODO(sarkin): Temporary hack for LLVM trampoline functions
+    if (pc() < GetLLVMEntryPoint(0)) {
+      return Code::null();
+    }
     if (GetLLVMEntryPoint(0) <= pc()) {
       while (lo < hi - 1) {
         intptr_t mid = (lo + hi) / 2;
@@ -798,6 +808,7 @@ StackFrame* StackFrameIterator::FrameSetIterator::NextFrame(bool validate) {
   StackFrame* frame;
   ASSERT(HasNext());
   frame = &stack_frame_;
+  bool is_callee_llvm = frame->IsLLVMFrame();
   frame->sp_ = sp_;
   frame->fp_ = fp_;
   frame->pc_ = pc_;
@@ -807,6 +818,16 @@ StackFrame* StackFrameIterator::FrameSetIterator::NextFrame(bool validate) {
   pc_ = frame->GetCallerPc();
   ASSERT(is_interpreted_ == frame->is_interpreted_);
   ASSERT(!validate || frame->IsValid());
+
+  if (!is_callee_llvm && frame->IsLLVMFrame()) {
+    // TODO(sarkin):
+    // This frame calls the LLVM -> Dart trampoline.
+    // Adjust the SP to account for saved registers.
+    // See LLVMToDartTrampoline stub.
+    const int kNumSavedRegisters = 6;
+    frame->sp_ += kNumSavedRegisters * kWordSize;
+  }
+
   return frame;
 }
 

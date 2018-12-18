@@ -37,6 +37,7 @@ class ILInstruction {
   Tag tag() const { return tag_; }
   bool is_value() const { return is_value_; }
   std::string value_id() const { return value_id_; }
+  bool can_trigger_gc() const { return can_trigger_gc_; }
 
   // TODO(sarkin): Currently there's a huge mess with size_t and intptr_t.
   // Use size_t whenever the value is an index in a STL container,
@@ -47,11 +48,13 @@ class ILInstruction {
 
  private:
   bool is_value_ = false;
+  bool can_trigger_gc_ = false;
   std::string value_id_;
   Tag tag_ = Tag::kInvalidTag;
   std::vector<std::string> inputs_;
 
   static const std::unordered_map<std::string, Tag> kNameToTag;
+  static const std::unordered_map<std::string, std::string> kNameToAttrs;
   friend class ILDeserializer;
 };
 
@@ -130,6 +133,8 @@ class DartFunction : public DartFunctionDeclaration {
 
   virtual bool is_llvm() const { return true; }
 
+  bool can_trigger_gc() const { return can_trigger_gc_; }
+
   size_t NumBasicBlocks() const { return basic_blocks_.size(); }
   const DartBasicBlock* BasicBlockAt(size_t i) const {
     return basic_blocks_[i].get();
@@ -142,6 +147,8 @@ class DartFunction : public DartFunctionDeclaration {
 
  private:
   void AddBasicBlock(DartBasicBlock::Ptr bb);
+
+  bool can_trigger_gc_ = false;
 
   std::vector<intptr_t> default_values_;
 
@@ -211,12 +218,28 @@ class DartClassAllocationInfo {
 #define DART_VM_CONSTANTS(M)                                                   \
   M(kWordSize, int)                                                            \
   M(kWordSizeLog2, int)                                                        \
+  M(kNewObjectBitPosition, int)                                                \
   M(kObjectAlignment, int)                                                     \
   M(kObjectAlignmentLog2, int)                                                 \
   M(kThreadTopExitFrameInfoOffset, intptr_t)                                   \
   M(kThreadTopOffset, intptr_t)                                                \
   M(kThreadEndOffset, intptr_t)                                                \
   M(kThreadPredefinedSymbolsAddressOffset, intptr_t)                           \
+  M(kThreadStoreBufferBlockOffset, intptr_t)                                   \
+  M(kThreadMarkingStackBlockOffset, intptr_t)                                  \
+  M(kThreadWriteBarrierCodeOffset, intptr_t)                                   \
+  M(kThreadWriteBarrierMaskOffset, intptr_t)                                   \
+  M(kThreadStackLimitOffset, intptr_t)                                         \
+  M(kStoreBufferBlockSize, int)                                                \
+  M(kStoreBufferBlockTopOffset, intptr_t)                                      \
+  M(kStoreBufferBlockPointersOffset, intptr_t)                                 \
+  M(kMarkingStackBlockSize, int)                                               \
+  M(kMarkingStackBlockTopOffset, intptr_t)                                     \
+  M(kMarkingStackBlockPointersOffset, intptr_t)                                \
+  M(kRawObjectOldAndNotRememberedBit, int)                                     \
+  M(kRawObjectOldAndNotMarkedBit, int)                                         \
+  M(kRawObjectBarrierOverlapShift, intptr_t)                                   \
+  M(kObjectTagsOffset, intptr_t)                                               \
   M(kInstanceTagsOffset, intptr_t)                                             \
   M(kInstanceNextFieldOffset, intptr_t)                                        \
   M(kFieldStaticValueOffset, intptr_t)                                         \
@@ -283,7 +306,10 @@ class DartProgram : public DartVMConstants {
   const DartMethodTable* method_table() const { return method_table_.get(); }
 
   size_t NumFunctions() const { return functions_.size(); }
-  const DartFunction* FunctionAt(size_t i) const { return functions_[i].get(); }
+  const DartFunction* FunctionAt(size_t i) const {
+    assert(i < functions_.size());
+    return functions_[i].get();
+  }
   const DartFunctionDeclaration* FunctionDeclarationAt(bool is_llvm,
                                                        size_t i) const {
     return (is_llvm) ? functions_[i].get() : dart_functions_[i].get();

@@ -5,6 +5,24 @@
 #ifndef RUNTIME_VM_COMPILER_BACKEND_LLVM_COMMON_DEFS_H_
 #define RUNTIME_VM_COMPILER_BACKEND_LLVM_COMMON_DEFS_H_
 
+struct InstrAttrs {
+  enum Attributes {
+    _ = 0,  // No special attributes.
+            //
+    // The instruction is guaranteed to not trigger GC on a non-exceptional
+    // path. If the conditions depend on parameters of the instruction, do not
+    // use this attribute but overload CanTriggerGC() instead.
+    kNoGC = 1
+  };
+};
+
+#define LLVM_RUNTIME_ENTRY_LIST(V)                                             \
+  V(AllocateArray)                                                             \
+  V(AllocateObject)                                                            \
+  V(NonBoolTypeError)                                                          \
+  V(NullError)                                                                 \
+  V(RangeError)
+
 #define FOR_EACH_SUPPORTED_INSTRUCTION(M)                                      \
   M(GraphEntry, kNoGC)                                                         \
   M(JoinEntry, kNoGC)                                                          \
@@ -46,7 +64,15 @@
   M(OneByteStringFromCharCode, kNoGC)                                          \
   M(StoreStaticField, kNoGC)                                                   \
   M(BooleanNegate, kNoGC)                                                      \
-  M(IfThenElse, kNoGC)
+  M(IfThenElse, kNoGC)                                                         \
+  M(BinaryUint32Op, kNoGC)                                                     \
+  M(BoxUint32, _)                                                              \
+  M(UnboxUint32, kNoGC)                                                        \
+  M(UnboxedIntConverter, _)                                                    \
+  M(ShiftInt64Op, kNoGC)                                                       \
+  M(CheckedSmiOp, _)                                                           \
+  M(CheckSmi, kNoGC)                                                           \
+  M(BinarySmiOp, kNoGC)
 
 namespace dart_llvm {
 

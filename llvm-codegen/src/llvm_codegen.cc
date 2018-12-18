@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <iostream>
 
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
@@ -19,16 +20,16 @@
 #include "llvm/Pass.h"
 #include <llvm/Transforms/InstCombine/InstCombine.h>
 #include <llvm/Transforms/IPO.h>
+#include <llvm/Transforms/IPO/PassManagerBuilder.h>
 #include <llvm/Transforms/Utils.h>
 #include <llvm/Transforms/Vectorize.h>
-#include "llvm/Transforms/IPO.h"
-#include "llvm/Transforms/Scalar.h"
-#include "llvm/Transforms/Scalar/GVN.h"
+#include <llvm/Transforms/Scalar.h>
+#include <llvm/Transforms/Scalar/GVN.h>
 
 #include "dispatch_table.h"
 #include "il_deserializer.h"
 
-using namespace dart_llvm;
+namespace dart_llvm {
 
 namespace {
 std::string MangleRuntimeName(const char* entry) {
@@ -43,11 +44,12 @@ std::string MangleRuntimeName(const char* entry) {
 
 const std::unordered_map<CodegenModule::RuntimeEntryTag, std::string>
     CodegenModule::kRuntimeEntryTagToName = {
-        RUNTIME_ENTRY_LIST(DECLARE_RUNTIME_ENTRY_TAG_TO_NAME_ENTRY)
+        LLVM_RUNTIME_ENTRY_LIST(DECLARE_RUNTIME_ENTRY_TAG_TO_NAME_ENTRY)
         {RuntimeEntryTag::kNumEntries, "NumEntries"}};
 
 #undef DECLARE_RUNTIME_ENTRY_TAG_TO_NAME_ENTRY
 
+// TODO(sarkin): Int64Ty needs to be replaced with IntTy in some places.
 CodegenModule::CodegenModule(llvm::Module& module, const DartProgram* program)
     : DartVMConstants(*program),
       module_(module),
@@ -55,10 +57,19 @@ CodegenModule::CodegenModule(llvm::Module& module, const DartProgram* program)
       program_(program) {
   dispatch_table_ =
       std::make_unique<DispatchTable>(*this, program->method_table());
+
   // Use non-integral pointers for GC-able address space
   // which inhibits incorrect optimizations.
   module_.setDataLayout("S128-ni:1");
+
+  // TODO(sarkin): Set correct target.
+#ifdef TARGET_X64
   module_.setTargetTriple("x86_64-unknown-linux-gnu");
+#endif
+
+#ifdef TARGET_WASM
+  module_.setTargetTriple("wasm32-unknown-unknown");
+#endif
 
   // Used when converting LLVM's Int1Ty to Dart bools by adding
   // the Int1 to the False object's offset in the constant pool.
@@ -69,6 +80,9 @@ CodegenModule::CodegenModule(llvm::Module& module, const DartProgram* program)
   Int16Ty = llvm::IntegerType::getInt16Ty(llvm_context_);
   Int32Ty = llvm::IntegerType::getInt32Ty(llvm_context_);
   Int64Ty = llvm::IntegerType::getInt64Ty(llvm_context_);
+
+  // TODO(sarkin): Platform dependent.
+  IntTy = Int64Ty;
 
   FloatTy = llvm::Type::getFloatTy(llvm_context_);
   DoubleTy = llvm::Type::getDoubleTy(llvm_context_);
@@ -150,6 +164,7 @@ CodegenModule::CodegenModule(llvm::Module& module, const DartProgram* program)
       llvm_context_, {Int64Ty, NonGCObjectPtrTy}, "DispatchTableEntry");
   DispatchTableTy =
       llvm::PointerType::get(DispatchTableEntryTy, kNonGCAddressSpace);
+
   // Used temporarily when generating instance calls then replaced with the "real"
   // dispatch table.
   temp_dispatch_table_ = new llvm::GlobalVariable(
@@ -165,6 +180,10 @@ llvm::Function* CodegenModule::GetFunctionByID(size_t id) const {
   auto it = function_by_id_.find(id);
   assert(it != function_by_id_.end());
   return it->second;
+}
+
+const DartFunction* CodegenModule::GetDartFunctionByID(size_t id) const {
+  return program_->FunctionAt(id);
 }
 
 size_t CodegenModule::GetFunctionIDByPatchPoint(
@@ -205,6 +224,13 @@ llvm::Function* CodegenModule::GetOrCreateHandleOptionalParamsTrampoline(
   auto trampoline = llvm::Function::Create(
       trampoline_ty, llvm::GlobalVariable::InternalLinkage, trampoline_name,
       module_);
+  auto target_fn = GetDartFunctionByID(function_id);
+  // Set GC strategy only if the target function can trigger GC, because
+  // the trampoline only forwards the arguments and does nothing that can
+  // trigger GC by itself.
+  if (target_fn->can_trigger_gc()) {
+    trampoline->setGC(kGCStrategyName);
+  }
 
   CodegenHelper helper(*this, trampoline);
   auto bb = helper.CreateBasicBlock("entry");
@@ -275,6 +301,7 @@ llvm::Function* CodegenModule::GetOrCreateDartCallTrampoline(
   auto trampoline = llvm::Function::Create(
       trampoline_ty, llvm::GlobalVariable::InternalLinkage, trampoline_name,
       module_);
+  trampoline->setGC(kGCStrategyName);
 
   CodegenHelper helper(*this, trampoline);
   auto bb = helper.CreateBasicBlock("entry");
@@ -330,9 +357,10 @@ llvm::Function* CodegenModule::GetOrCreateClassAllocationStub(size_t cid) {
   const int kTypeArgumentsOffset = 2;
   std::vector<llvm::Type*> params{ThreadObjectTy, ObjectPtrTy, ObjectPtrTy};
   auto stub_ty = llvm::FunctionType::get(ObjectPtrTy, params, false);
-  auto stub_name = "AllocationStub_" + std::to_string(cid);
+  auto stub_name = "_LLVMAllocationStub_" + std::to_string(cid);
   auto stub = llvm::Function::Create(
       stub_ty, llvm::GlobalVariable::InternalLinkage, stub_name, module_);
+  stub->setGC(kGCStrategyName);
 
   CodegenHelper helper(*this, stub);
   auto bb = helper.CreateBasicBlock("entry");
@@ -388,7 +416,6 @@ llvm::Function* CodegenModule::GetOrCreateClassAllocationStub(size_t cid) {
       builder.CreateCondBr(cmp, loop_done, loop_body);
 
       builder.SetInsertPoint(loop_body);
-      // TODO(sarkin): Addressing mode
       helper.EmitStoreField(new_obj, counter, null);
       auto next_counter = builder.CreateAdd(counter, GetConstantInt(kWordSize));
       counter->addIncoming(next_counter, loop_body);
@@ -421,6 +448,181 @@ llvm::Function* CodegenModule::GetOrCreateClassAllocationStub(size_t cid) {
   return stub;
 }
 
+// Statepoint IDs are used when traversing the stack to identify the statepoint.
+struct AddStatepointIDsToCallSites : public llvm::FunctionPass {
+  static char ID;  // Pass identification, replacement for typeid.
+  CodegenModule& cgm;
+  int64_t id = 0;
+
+  explicit AddStatepointIDsToCallSites(CodegenModule& cgm)
+      : FunctionPass(ID), cgm(cgm) {}
+
+  void addStatepoints(llvm::BasicBlock& bb, llvm::Function* func) {
+    for (llvm::Instruction& instruction : bb) {
+      if (auto call = llvm::dyn_cast<llvm::CallInst>(&instruction)) {
+        cgm.AddStatepoint(func);
+        auto attr = llvm::Attribute::get(cgm.GetLLVMContext(), "statepoint-id",
+                                         std::to_string(id));
+        id++;
+        call->addAttribute(llvm::AttributeList::FunctionIndex, attr);
+      }
+    }
+  }
+
+  bool runOnFunction(llvm::Function& func) override {
+    for (llvm::BasicBlock& bb : func) {
+      addStatepoints(bb, &func);
+    }
+    return false;
+  }
+};
+
+char AddStatepointIDsToCallSites::ID = 0;
+
+// The dart_new_object intrinsic is required when creating new GC tracked
+// pointers, e.g. in the fast path of allocation, because it's illegal
+// to have IntToPtr to the GC tracked address space, and the
+// RewriteStatepointsForGC pass will complain if it encounters such
+// casts. The intrinsic "hides" the address space cast and is lowered
+// only after the RewriteStatepointsForGC pass.
+struct RewriteGCIntrinsics : public llvm::FunctionPass {
+  static char ID;  // Pass identification, replacement for typeid.
+  CodegenModule& cgm_;
+
+  RewriteGCIntrinsics(CodegenModule& cgm) : FunctionPass(ID), cgm_(cgm) {}
+
+  bool tryRewrite(llvm::BasicBlock& bb) {
+    for (llvm::Instruction& instruction : bb) {
+      if (llvm::CallInst* call = llvm::dyn_cast<llvm::CallInst>(&instruction)) {
+        llvm::Function* fn = call->getCalledFunction();
+        if (fn && fn->isIntrinsic()) {
+          fn->recalculateIntrinsicID();
+          llvm::IRBuilder<> b(&instruction);
+          // Have to stop iteration by returning true if block structure has
+          // changed.
+          switch (fn->getIntrinsicID()) {
+            case llvm::Intrinsic::dart_new_object: {
+              auto pointer = call->getArgOperand(0);
+              pointer = b.CreateAddrSpaceCast(pointer, cgm_.ObjectPtrTy);
+              call->replaceAllUsesWith(pointer);
+              call->eraseFromParent();
+              return true;
+            }
+            default:
+              break;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  bool runOnFunction(llvm::Function& func) override {
+    for (llvm::BasicBlock& bb : func) {
+      while (tryRewrite(bb)) {
+      }
+    }
+    return false;
+  }
+};
+
+char RewriteGCIntrinsics::ID = 1;
+
+void CodegenModule::OptimizeModule() {
+  // TODO(sarkin): 
+  auto run_standard_opt = [&](int opt_level, int size_level) {
+    llvm::legacy::PassManager mpm;
+    llvm::legacy::FunctionPassManager fpm(&module_);
+    llvm::PassManagerBuilder builder;
+    builder.OptLevel = opt_level;
+    builder.SizeLevel = size_level;
+
+    builder.populateFunctionPassManager(fpm);
+    builder.populateModulePassManager(mpm);
+
+    for (auto& f : module_) {
+      fpm.run(f);
+    }
+    mpm.run(module_);
+  };
+
+  auto optimize_before = [&]() {
+    {
+      llvm::legacy::PassManager mpm;
+      mpm.add(llvm::createFunctionInliningPass());
+      mpm.add(llvm::createGlobalDCEPass());
+
+      llvm::legacy::FunctionPassManager fpm(&module_);
+      fpm.add(llvm::createPromoteMemoryToRegisterPass());
+
+      fpm.add(llvm::createCFGSimplificationPass());
+      fpm.add(llvm::createConstantPropagationPass());
+      fpm.add(llvm::createInstructionCombiningPass());
+      fpm.add(llvm::createTailCallEliminationPass());
+      fpm.add(llvm::createSpeculativeExecutionPass());
+      fpm.add(llvm::createAggressiveDCEPass());
+
+      mpm.run(module_);
+
+      for (auto& f : module_) {
+        fpm.run(f);
+      }
+    }
+  };
+
+  optimize_before();
+
+  {
+#ifdef TARGET_X64
+    llvm::legacy::FunctionPassManager fpm(&module_);
+    fpm.add(new AddStatepointIDsToCallSites(*this));
+    for (auto& f : module_) {
+      fpm.run(f);
+    }
+    llvm::legacy::PassManager mpm;
+    mpm.add(llvm::createRewriteStatepointsForGCLegacyPass());
+    mpm.run(module_);
+#endif
+  }
+
+  {
+    llvm::legacy::FunctionPassManager fpm(&module_);
+    fpm.add(new RewriteGCIntrinsics(*this));
+    for (auto& f : module_) {
+      fpm.run(f);
+    }
+  }
+
+  auto optimize_after = [&]() {
+    {
+      llvm::legacy::PassManager mpm;
+      mpm.add(llvm::createFunctionInliningPass());
+      mpm.add(llvm::createGlobalDCEPass());
+
+      llvm::legacy::FunctionPassManager fpm(&module_);
+      fpm.add(llvm::createPromoteMemoryToRegisterPass());
+      fpm.add(llvm::createCFGSimplificationPass());
+      fpm.add(llvm::createConstantPropagationPass());
+      fpm.add(llvm::createLICMPass());
+      fpm.add(llvm::createGVNPass());
+      fpm.add(llvm::createEarlyCSEPass());
+      fpm.add(llvm::createInstructionCombiningPass());
+      fpm.add(llvm::createTailCallEliminationPass());
+      fpm.add(llvm::createSpeculativeExecutionPass());
+      fpm.add(llvm::createAggressiveDCEPass());
+
+      mpm.run(module_);
+
+      for (auto& f : module_) {
+      fpm.run(f);
+      }
+    }
+  };
+  // optimize_after();
+  // TODO(sarkin): Sometimes O3 does a worse job than optimize_after.
+  run_standard_opt(3, 1);
+}
+
 void CodegenModule::GenerateProgram() {
   assert(!is_generated_);
   is_generated_ = true;
@@ -432,39 +634,11 @@ void CodegenModule::GenerateProgram() {
   GenerateSpecialFunctions();
   GenerateFunctions();
 
-  // TODO(sarkin): Testing some optimizaitons.
-  llvm::legacy::FunctionPassManager fpm(&module_);
+  OptimizeModule();
 
-  llvm::legacy::PassManager mpm;
-  // mpm.add(llvm::createFunctionInliningPass());
-  // mpm.add(llvm::createStripSymbolsPass());
-  mpm.add(llvm::createGlobalDCEPass());
-  mpm.run(module_);
-
-  fpm.add(llvm::createPromoteMemoryToRegisterPass());
-  fpm.add(llvm::createCFGSimplificationPass());
-  fpm.add(llvm::createConstantPropagationPass());
-  fpm.add(llvm::createLICMPass());
-  fpm.add(llvm::createReassociatePass());
-  fpm.add(llvm::createScalarizerPass());
-  fpm.add(llvm::createTailCallEliminationPass());
-  fpm.add(llvm::createEarlyCSEPass());
-  fpm.add(llvm::createGVNPass());
-  fpm.add(llvm::createAggressiveDCEPass());
-  fpm.add(llvm::createSinkingPass());
-  // fpm.add(llvm::createSLPVectorizerPass());
-  // fpm.add(llvm::createLoopVectorizePass());
-  fpm.add(llvm::createInstructionCombiningPass());
-
-  fpm.add(llvm::createLICMPass());
-  fpm.add(llvm::createEarlyCSEPass());
-  fpm.add(llvm::createGVNPass());
-  fpm.add(llvm::createAggressiveDCEPass());
-  fpm.add(llvm::createSinkingPass());
-
-  for (auto& f : module_) {
-    fpm.run(f);
-  }
+  // Done after optimization, since Statepoint IDs should be
+  // assigned after inlining.
+  CreateStatepointIDToFunctionTable();
 }
 
 // Signature: Object* (Thread, Object* args...)
@@ -481,9 +655,28 @@ llvm::FunctionType* CodegenModule::GetStaticFunctionType(size_t num_params) {
 llvm::Constant* CodegenModule::GetConstantInt(int64_t val,
                                               llvm::IntegerType* ty) const {
   if (ty == nullptr) {
-    ty = Int64Ty;
+    ty = IntTy;
   }
   return llvm::ConstantInt::get(ty, val);
+}
+
+void CodegenModule::AddStatepoint(llvm::Function* func) {
+  statepoint_id_to_func_.push_back(func);
+}
+
+void CodegenModule::CreateStatepointIDToFunctionTable() {
+  auto size = statepoint_id_to_func_.size();
+  auto table_ty = llvm::ArrayType::get(NonGCObjectPtrTy, size);
+  std::vector<llvm::Constant*> entries(size);
+  for (size_t i = 0; i < size; ++i) {
+    entries[i] = llvm::ConstantExpr::getBitCast(statepoint_id_to_func_[i],
+                                                NonGCObjectPtrTy);
+  }
+  auto initializer = llvm::ConstantArray::get(table_ty, entries);
+  auto table = new llvm::GlobalVariable(
+      GetModule(), table_ty, false, llvm::GlobalVariable::ExternalLinkage,
+      initializer, "_LLVMStatepointIDToFunction");
+  (void)table;
 }
 
 void CodegenModule::GenerateRuntimeFunctionDeclarations() {
@@ -506,16 +699,27 @@ void CodegenModule::GenerateRuntimeFunctionDeclarations() {
 }
 
 void CodegenModule::GenerateSpecialFunctions() {
+  // None of these are required for WASM, but generate some of them
+  // to bypass linker errors.
+#ifndef TARGET_WASM
   GenerateDartToLLVMTrampoline();
+  GenerateReadStackPointer();
+#endif
   GenerateFixedParamsTrampolines();
   GenerateLLVMToRuntimeTrampoline();
   GenerateCreateArrayStub();
+  GenerateWriteBarrier();
+#ifndef TARGET_WASM
+  GenerateGetStackMaps();
+#endif
 }
 
 void CodegenModule::GenerateDartToLLVMTrampoline() {
   llvm::Function* trampoline = llvm::Function::Create(
       FixedParamTrampolineTy, llvm::GlobalVariable::ExternalLinkage,
       kDartToLLVMTrampolineName, module_);
+
+  trampoline->setGC(kGCStrategyName);
 
   CodegenHelper helper(*this, trampoline);
   auto bb = helper.CreateBasicBlock("entry");
@@ -544,26 +748,25 @@ void CodegenModule::GenerateLLVMToRuntimeTrampoline() {
   auto trampoline = llvm::Function::Create(
       trampoline_ty, llvm::GlobalVariable::InternalLinkage,
       "_LLVMToRuntimeTrampoline", module_);
-  // NativeArguments passed by value.
-  trampoline->addParamAttr(kNativeArgumentsOffset,
-                           llvm::Attribute::AttrKind::ByVal);
-
-  // The following instructions are added as prologue data:
-  // mov r10, rsp
-  // sub r10, 8
-  // mov [rdi + rsi], r10
-  // Where rdi is the thread object and rsi is the exit_frame_info offset in the thread object.
-  auto instructions_ty = llvm::ArrayType::get(Int32Ty, 3);
-  std::array<llvm::Constant*, 3> instructions{
-      GetConstantInt(0x49e28949, Int32Ty), GetConstantInt(0x4c08ea83, Int32Ty),
-      GetConstantInt(0x90371489, Int32Ty)};
-  trampoline->setPrologueData(
-      llvm::ConstantArray::get(instructions_ty, instructions));
+  // Explicitly set calling convention, as the function is internal and
+  // the calling convention might be optimized to fastcc.
+  trampoline->setCallingConv(llvm::CallingConv::C);
+  // No inling, as inling can break the exit frame setup.
+  trampoline->addAttribute(llvm::AttributeList::FunctionIndex,
+                           llvm::Attribute::AttrKind::NoInline);
+  // Do not need to set GC strategy for this function, as it's the "exit frame"
+  // and is never visited during GC.
 
   CodegenHelper helper(*this, trampoline);
   auto bb = helper.CreateBasicBlock("entry");
   auto& builder = helper.builder();
   builder.SetInsertPoint(bb);
+
+  // Setup top exit frame.
+#ifndef TARGET_WASM
+  auto sp = builder.CreateCall(read_sp());
+  helper.EmitStoreFieldRaw(helper.GetThread(), kThreadTopExitFrameInfoOffset,
+                           sp);
 
   llvm::Value* func_id = helper.GetParam(kFunctionIDOffset);
   llvm::Value* native_args = helper.GetParam(kNativeArgumentsOffset);
@@ -573,9 +776,36 @@ void CodegenModule::GenerateLLVMToRuntimeTrampoline() {
   auto call = builder.CreateCall(callee, {native_args});
   // Pass NativeArguments by value.
   call->addParamAttr(0, llvm::Attribute::ByVal);
+#endif
   builder.CreateRetVoid();
 
   llvm_to_runtime_trampoline_ = trampoline;
+}
+
+void CodegenModule::GenerateReadStackPointer() {
+  // TODO(sarkin): Currently only works for x64. For other architectures,
+  // need to change the name of the register.
+#ifdef TARGET_X64
+  auto& func = read_sp_;
+  auto func_ty = llvm::FunctionType::get(IntTy, false);
+  func = llvm::Function::Create(func_ty, llvm::GlobalVariable::InternalLinkage,
+                                "", module_);
+  func->addAttribute(llvm::AttributeList::FunctionIndex,
+                   llvm::Attribute::AttrKind::AlwaysInline);
+
+  CodegenHelper helper(*this, func);
+  auto bb = helper.CreateBasicBlock("entry");
+  auto& builder = helper.builder();
+  builder.SetInsertPoint(bb);
+
+  llvm::MDBuilder md_builder(GetLLVMContext());
+  auto rsp_node =
+      llvm::MDNode::get(GetLLVMContext(), {md_builder.createString("rsp")});
+  auto rsp_meta = llvm::MetadataAsValue::get(GetLLVMContext(), rsp_node);
+  auto sp = builder.CreateIntrinsic(llvm::Intrinsic::read_register, {IntTy},
+                                    {rsp_meta});
+  builder.CreateRet(sp);
+#endif
 }
 
 void CodegenModule::GenerateFixedParamsTrampolines() {
@@ -596,10 +826,11 @@ void CodegenModule::GenerateCreateArrayStub() {
   const int kElementTypeOffset = 2;
   std::vector<llvm::Type*> params{ThreadObjectTy, ObjectPtrTy, ObjectPtrTy};
   auto stub_ty = llvm::FunctionType::get(ObjectPtrTy, params, false);
-  auto stub_name = "CreateArrayStub";
+  auto stub_name = "_LLVMCreateArrayStub";
   auto& stub = create_array_stub_;
   stub = llvm::Function::Create(
       stub_ty, llvm::GlobalVariable::InternalLinkage, stub_name, module_);
+  stub->setGC(kGCStrategyName);
 
   CodegenHelper helper(*this, stub);
   auto bb = helper.CreateBasicBlock("entry");
@@ -725,7 +956,6 @@ void CodegenModule::GenerateCreateArrayStub() {
         builder.CreateCondBr(cmp, loop_done, loop_body);
 
         builder.SetInsertPoint(loop_body);
-        // TODO(sarkin): Addressing mode
         helper.EmitStoreField(new_obj, counter, null);
         auto next_counter =
             builder.CreateAdd(counter, GetConstantInt(kWordSize));
@@ -748,6 +978,194 @@ void CodegenModule::GenerateCreateArrayStub() {
   builder.CreateRet(builder.CreateLoad(array));
 }
 
+void CodegenModule::GenerateWriteBarrier() {
+  // (Thread object, Object, Value)
+  const int kObjectOffset = 1;
+  const int kValueOffset = 2;
+  std::vector<llvm::Type*> params{ThreadObjectTy, ObjectPtrTy, ObjectPtrTy};
+  auto barrier_ty = llvm::FunctionType::get(VoidTy, params, false);
+  auto barrier_name = "_LLVMWriteBarrier";
+  auto& wb = write_barrier_;
+  wb = llvm::Function::Create(barrier_ty, llvm::GlobalVariable::InternalLinkage,
+                              barrier_name, module_);
+  wb->setGC(kGCStrategyName);
+  wb->addAttribute(llvm::AttributeList::FunctionIndex,
+                   llvm::Attribute::AttrKind::NoInline);
+
+  CodegenHelper helper(*this, wb);
+  auto bb = helper.CreateBasicBlock("entry");
+  auto& builder = helper.builder();
+  builder.SetInsertPoint(bb);
+
+#ifdef TARGET_WASM
+  // TODO(sarkin): Hack:
+  // For WASM we don't need a write barrier, but we still generate the
+  // definition to bypass linker errors.
+  builder.CreateRetVoid();
+  return;
+#endif
+
+  auto thread = helper.GetThread();
+  auto object = helper.GetParam(kObjectOffset);
+  auto value = helper.GetParam(kValueOffset);
+  auto untagged_object = helper.EmitUntagObject(object);
+  auto untagged_value = helper.EmitUntagObject(value);
+
+  // Assume concurrent marking.
+  auto is_val_new = helper.EmitIsNewObject(value);
+  auto add_to_mark_stack = helper.CreateBasicBlock("add_to_mark_stack");
+  auto val_is_new = helper.CreateBasicBlock("value_is_new");
+  helper.EmitBrFastSlow(is_val_new, val_is_new, add_to_mark_stack);
+
+  builder.SetInsertPoint(val_is_new);
+  {
+    auto tags =
+        helper.EmitFieldPointer(untagged_object, kObjectTagsOffset, Int32Ty);
+    // TODO(sarkin): Might be possible to use weaker ordering.
+    builder.CreateAtomicRMW(
+        llvm::AtomicRMWInst::BinOp::And, tags,
+        GetConstantInt(~(1 << kRawObjectOldAndNotRememberedBit), Int32Ty),
+        llvm::AtomicOrdering::SequentiallyConsistent);
+  }
+
+  // Load the StoreBuffer block out of the thread. Then load top_ out of the
+  // StoreBufferBlock and add the address to the pointers_.
+  auto store_buffer_block = helper.EmitLoadFieldRaw(
+      thread, kThreadStoreBufferBlockOffset, NonGCObjectPtrTy);
+  auto store_buffer_top = helper.EmitLoadFieldRaw(
+      store_buffer_block, kStoreBufferBlockTopOffset, Int32Ty);
+
+  {
+    auto offset = builder.CreateZExt(store_buffer_top, Int64Ty);
+    offset = builder.CreateShl(offset, kWordSizeLog2);
+    offset = builder.CreateAdd(offset,
+                               GetConstantInt(kStoreBufferBlockPointersOffset));
+    helper.EmitStoreFieldRaw(store_buffer_block, offset, object);
+  }
+
+  auto store_buffer_overflow = helper.CreateBasicBlock("store_buffer_overflow");
+  auto store_buffer_no_overflow =
+      helper.CreateBasicBlock("store_buffer_no_overflow");
+
+  {
+    auto inc_top =
+        builder.CreateAdd(store_buffer_top, GetConstantInt(1, Int32Ty));
+    inc_top = builder.CreateTrunc(inc_top, Int32Ty);
+    helper.EmitStoreFieldRaw(store_buffer_block, kStoreBufferBlockTopOffset,
+                             inc_top);
+    auto cmp = builder.CreateICmpEQ(
+        inc_top, GetConstantInt(kStoreBufferBlockSize, Int32Ty));
+    helper.EmitBrSlowFast(cmp, store_buffer_overflow, store_buffer_no_overflow);
+  }
+
+  builder.SetInsertPoint(store_buffer_no_overflow);
+  builder.CreateRetVoid();
+
+  builder.SetInsertPoint(store_buffer_overflow);
+  // Call to runtime.
+  {
+    auto func_ty = llvm::FunctionType::get(VoidTy, {NonGCObjectPtrTy}, false);
+    auto func = llvm::Function::Create(
+        func_ty, llvm::GlobalVariable::LinkageTypes::ExternalLinkage,
+        "StoreBufferBlockProcess", module_);
+    builder.CreateCall(func, {thread});
+  }
+  builder.CreateRetVoid();
+
+  auto already_marked = helper.CreateBasicBlock("already_marked");
+  auto try_mark = helper.CreateBasicBlock("try_mark");
+  auto mark_success = helper.CreateBasicBlock("mark_success");
+
+  builder.SetInsertPoint(already_marked);
+  builder.CreateRetVoid();
+
+  builder.SetInsertPoint(add_to_mark_stack);
+  auto old_tags = helper.EmitLoadField(value, kObjectTagsOffset, Int32Ty);
+  {
+    auto cmp = helper.EmitTestBit(old_tags, kRawObjectOldAndNotMarkedBit);
+    builder.CreateCondBr(cmp, already_marked, try_mark);
+  }
+
+  builder.SetInsertPoint(try_mark);
+  {
+    auto tags =
+        builder.CreateAnd(old_tags, ~(1 << kRawObjectOldAndNotMarkedBit));
+    auto tags_ptr =
+        helper.EmitFieldPointer(untagged_value, kObjectTagsOffset, Int32Ty);
+    // TODO(sarkin): Might be possible to use weaker ordering.
+    auto xchg = builder.CreateAtomicCmpXchg(
+        tags_ptr, old_tags, tags, llvm::AtomicOrdering::SequentiallyConsistent,
+        llvm::AtomicOrdering::SequentiallyConsistent);
+    auto success = builder.CreateExtractValue(xchg, {1});
+    builder.CreateCondBr(success, mark_success, add_to_mark_stack);
+  }
+
+  builder.SetInsertPoint(mark_success);
+  // Load the MarkingStack block out of the thread. Then load top_ out of the
+  // MarkingStackBlock and add the address to the pointers_.
+  auto marking_stack_block = helper.EmitLoadFieldRaw(
+      thread, kThreadMarkingStackBlockOffset, NonGCObjectPtrTy);
+  auto marking_stack_top = helper.EmitLoadFieldRaw(
+      marking_stack_block, kMarkingStackBlockTopOffset, Int32Ty);
+
+  {
+    auto offset = builder.CreateZExt(marking_stack_top, Int64Ty);
+    offset = builder.CreateShl(offset, kWordSizeLog2);
+    offset = builder.CreateAdd(
+        offset, GetConstantInt(kMarkingStackBlockPointersOffset));
+    helper.EmitStoreFieldRaw(marking_stack_block, offset, value);
+  }
+
+  auto marking_stack_overflow =
+      helper.CreateBasicBlock("marking_stack_overflow");
+  auto marking_stack_no_overflow =
+      helper.CreateBasicBlock("marking_stack_no_overflow");
+
+  {
+    auto inc_top =
+        builder.CreateAdd(marking_stack_top, GetConstantInt(1, Int32Ty));
+    inc_top = builder.CreateTrunc(inc_top, Int32Ty);
+    helper.EmitStoreFieldRaw(marking_stack_block, kMarkingStackBlockTopOffset,
+                             inc_top);
+    auto cmp = builder.CreateICmpEQ(
+        inc_top, GetConstantInt(kMarkingStackBlockSize, Int32Ty));
+    helper.EmitBrSlowFast(cmp, marking_stack_overflow,
+                          marking_stack_no_overflow);
+  }
+
+  builder.SetInsertPoint(marking_stack_no_overflow);
+  builder.CreateRetVoid();
+
+  builder.SetInsertPoint(marking_stack_overflow);
+  // Call to runtime.
+  {
+    auto func_ty = llvm::FunctionType::get(VoidTy, {NonGCObjectPtrTy}, false);
+    auto func = llvm::Function::Create(
+        func_ty, llvm::GlobalVariable::LinkageTypes::ExternalLinkage,
+        "MarkingStackBlockProcess", module_);
+    builder.CreateCall(func, {thread});
+  }
+  builder.CreateRetVoid();
+}
+
+void CodegenModule::GenerateGetStackMaps() {
+  // Make the __LLVM_StackMaps section external.
+  auto stack_maps = new llvm::GlobalVariable(
+      GetModule(), Int8Ty, false, llvm::GlobalVariable::ExternalLinkage,
+      nullptr, "__LLVM_StackMaps");
+
+  auto func_ty = llvm::FunctionType::get(NonGCObjectPtrTy, {}, false);
+  auto func =
+      llvm::Function::Create(func_ty, llvm::GlobalVariable::ExternalLinkage,
+                             "_LLVMGetStackMaps", module_);
+
+  CodegenHelper helper(*this, func);
+  auto bb = helper.CreateBasicBlock("entry");
+  auto& builder = helper.builder();
+  builder.SetInsertPoint(bb);
+  builder.CreateRet(stack_maps);
+}
+
 llvm::Function* CodegenModule::GetOrCreateFixedParamTrampoline(
     size_t num_params) {
   auto it = fixed_params_trampolines_.find(num_params);
@@ -757,6 +1175,8 @@ llvm::Function* CodegenModule::GetOrCreateFixedParamTrampoline(
   auto trampoline = llvm::Function::Create(
       FixedParamTrampolineTy, llvm::GlobalVariable::InternalLinkage,
       "_FixedParamTrampoline$" + std::to_string(num_params), module_);
+
+  trampoline->setGC(kGCStrategyName);
 
   CodegenHelper helper(*this, trampoline);
   auto bb = helper.CreateBasicBlock("entry");
@@ -800,9 +1220,20 @@ void CodegenModule::GenerateFunctions() {
   for (size_t i = 0; i < program_->NumFunctions(); ++i) {
     auto func = program_->FunctionAt(i);
 
-    auto llvm_func = llvm::Function::Create(
-        GetStaticFunctionType(func->num_params()),
-        llvm::GlobalVariable::InternalLinkage, func->name(), module_);
+    auto linkage = llvm::GlobalVariable::InternalLinkage;
+#ifdef TARGET_WASM
+    // TODO(sarkin): Hack:
+    // We call the functions directly on WASM.
+    // Side-note: pretty much anything with ifdef Target_WASM is a hack :)
+    linkage = llvm::GlobalVariable::ExternalLinkage;
+#endif
+
+    auto llvm_func =
+        llvm::Function::Create(GetStaticFunctionType(func->num_params()),
+                               linkage, "LLVM_" + func->name(), module_);
+    if (func->can_trigger_gc()) {
+      llvm_func->setGC(kGCStrategyName);
+    }
 
     function_pool_entries[func->id()] =
         llvm::ConstantExpr::getBitCast(llvm_func, NonGCObjectPtrTy);
@@ -822,6 +1253,7 @@ void CodegenModule::GenerateFunctions() {
     cgfs.back().GenerateCode();
   }
 
+  // TODO(sarkin): Should probably refactor this out.
   dispatch_table_->BuildTable();
   auto real_dispatch_table = llvm::ConstantExpr::getBitCast(
       dispatch_table_->dispatch_table(),
@@ -854,6 +1286,8 @@ void CodegenModule::InitializeGlobals() {
         llvm::ConstantPointerNull::get(NonGCObjectPtrTy));
   }
 }
+
+const std::string CodegenModule::kGCStrategyName = "statepoint-example";
 
 const std::string CodegenModule::kGlobalConstantPoolName =
     "_GlobalConstantPool";
@@ -904,7 +1338,7 @@ CodegenHelper::CodegenHelper(CodegenModule& cgm, llvm::Function* function)
 llvm::Constant* CodegenHelper::GetConstantInt(int64_t val,
                                               llvm::IntegerType* ty) const {
   if (ty == nullptr) {
-    ty = Int64Ty;
+    ty = IntTy;
   }
   return llvm::ConstantInt::get(ty, val);
 }
@@ -963,11 +1397,25 @@ llvm::Value* CodegenHelper::EmitNull() {
   return EmitLoadFieldFromGlobal(cgm_.constant_pool(), offset, ObjectPtrTy, true);
 }
 
+llvm::Value* CodegenHelper::EmitTestBit(llvm::Value* val, int bit_num) {
+  assert(bit_num < 30);
+  auto bit = builder_->CreateAnd(val, (1 << bit_num));
+  auto ty = val->getType();
+  assert(ty->isIntegerTy());
+  return builder_->CreateICmpNE(
+      bit, GetConstantInt(0, llvm::cast<llvm::IntegerType>(ty)));
+}
+
+llvm::Value* CodegenHelper::EmitIsNewObject(llvm::Value* val) {
+  val = EmitSmiToInt(val);
+  return EmitTestBit(val, kNewObjectBitPosition);
+}
+
 void CodegenHelper::EmitBrSlowFast(llvm::Value* cond,
                                    llvm::BasicBlock* slow_path,
                                    llvm::BasicBlock* fast_path) {
   llvm::MDBuilder md_builder(cgm_.GetLLVMContext());
-  auto assume_fast = md_builder.createBranchWeights(1, 100000);
+  auto assume_fast = md_builder.createBranchWeights(1, 100);
   builder_->CreateCondBr(cond, slow_path, fast_path, assume_fast);
 }
 
@@ -975,7 +1423,7 @@ void CodegenHelper::EmitBrFastSlow(llvm::Value* cond,
                                    llvm::BasicBlock* fast_path,
                                    llvm::BasicBlock* slow_path) {
   llvm::MDBuilder md_builder(cgm_.GetLLVMContext());
-  auto assume_fast = md_builder.createBranchWeights(100000, 1);
+  auto assume_fast = md_builder.createBranchWeights(100, 1);
   builder_->CreateCondBr(cond, fast_path, slow_path, assume_fast);
 }
 
@@ -1021,25 +1469,48 @@ llvm::Value* CodegenHelper::EmitUntagSmi(llvm::Value* val) {
 }
 
 llvm::Value* CodegenHelper::EmitUntagObject(llvm::Value* obj) {
-  return EmitField(obj, -1);
+  return EmitFieldPointer(obj, -1, Int8Ty);
 }
 
 llvm::Value* CodegenHelper::EmitTagObject(llvm::Value* obj) {
-  return EmitField(obj, 1);
+  return EmitFieldPointer(obj, 1, Int8Ty);
 }
 
-llvm::Value* CodegenHelper::EmitField(llvm::Value* obj, intptr_t offset) {
-  assert(obj->getType() == ObjectPtrTy);
-  return builder_->CreateGEP(obj, GetConstantInt(offset));
+llvm::Value* CodegenHelper::EmitFieldPointer(llvm::Value* obj,
+                                             intptr_t offset,
+                                             llvm::Type* ty) {
+  return EmitFieldPointer(obj, GetConstantInt(offset), ty);
+}
+
+llvm::Value* CodegenHelper::EmitFieldPointer(llvm::Value* obj,
+                                             llvm::Value* offset,
+                                             llvm::Type* ty) {
+  auto object_ty = llvm::cast<llvm::PointerType>(obj->getType());
+  auto field_ptr_ty = llvm::PointerType::get(ty, object_ty->getAddressSpace());
+  auto field_ptr = builder_->CreateGEP(obj, offset);
+  return builder_->CreatePointerCast(field_ptr, field_ptr_ty);
 }
 
 llvm::Value* CodegenHelper::EmitNewObject(llvm::Value* ptr) {
-  auto new_obj = builder_->CreateIntToPtr(ptr, NonGCObjectPtrTy);
-  return builder_->CreateAddrSpaceCast(new_obj, ObjectPtrTy);
+  if (ptr->getType() != NonGCObjectPtrTy) {
+    assert(ptr->getType() == Int64Ty);
+    ptr = builder_->CreateIntToPtr(ptr, NonGCObjectPtrTy);
+  }
+  // TODO(sarkin): Currently the intrinsic takes an Int64Ty, which doesn't
+  // work for 32-bit architectures. Add different intrinsics for different
+  // pointer widths in LLVM, something like the uadd_with_overflow intrinsic
+  // does.
+#ifdef TARGET_X64
+  return builder_->CreateIntrinsic(llvm::Intrinsic::dart_new_object, {}, {ptr});
+#endif 
+  return ptr;
 }
 
 llvm::Value* CodegenHelper::EmitNewObjectAndTag(llvm::Value* ptr) {
-  return EmitTagObject(EmitNewObject(ptr));
+  assert(ptr->getType() == IntTy);
+  // Tag.
+  ptr = builder_->CreateAdd(ptr, GetConstantInt(1));
+  return EmitNewObject(ptr);
 }
 
 llvm::Value* CodegenHelper::EmitBoxAllocation(size_t cid) {
@@ -1048,7 +1519,6 @@ llvm::Value* CodegenHelper::EmitBoxAllocation(size_t cid) {
   auto merge_path = CreateBasicBlock("box_merge_path");
 
   auto allocation_info = cgm_.GetClassAllocationInfo(cid);
-
   auto thread_object = GetThread();
   auto top = EmitLoadFieldRaw(thread_object, kThreadTopOffset, Int64Ty);
   auto size = GetConstantInt(allocation_info->instance_size());
@@ -1111,6 +1581,7 @@ llvm::Value* CodegenHelper::EmitNativeArguments(
     args_array = EmitStackArrayToPtr(args_array);
   }
   size_t argc_tags = args.size();
+  assert(ArgcTagBits::kReverseArgOrderBit < 64);
   argc_tags |= (1ll << ArgcTagBits::kReverseArgOrderBit);
   return EmitNativeArguments(argc_tags, args_array, ret_val);
 }
@@ -1149,10 +1620,7 @@ void CodegenHelper::EmitCallToRuntimeTrampoline(
       cgm_.llvm_to_runtime_trampoline(),
       {GetThread(), GetConstantInt(kThreadTopExitFrameInfoOffset),
        GetConstantInt(tag), native_args});
-
-  // Pass NativeArguments by value.
-  const int kNativeArgumentsOffset = 3;
-  call->addParamAttr(kNativeArgumentsOffset, llvm::Attribute::ByVal);
+  call->setCallingConv(llvm::CallingConv::C);
 }
 
 llvm::Value* CodegenHelper::EmitLoadConstant(intptr_t const_id) {
@@ -1204,43 +1672,67 @@ void CodegenHelper::EmitStoreFieldRaw(llvm::Value* object,
 llvm::Value* CodegenHelper::EmitLoadFieldRaw(llvm::Value* object,
                                              llvm::Value* offset,
                                              llvm::Type* type) {
-  auto object_ty = llvm::cast<llvm::PointerType>(object->getType());
-  auto field_ptr_ty =
-      llvm::PointerType::get(type, object_ty->getAddressSpace());
-  auto field_ptr = builder_->CreateGEP(object, offset);
-  field_ptr = builder_->CreatePointerCast(field_ptr, field_ptr_ty);
+  auto field_ptr = EmitFieldPointer(object, offset, type);
   return builder_->CreateLoad(field_ptr);
 }
 
 void CodegenHelper::EmitStoreFieldRaw(llvm::Value* object,
                                       llvm::Value* offset,
                                       llvm::Value* val) {
-  auto object_ty = llvm::cast<llvm::PointerType>(object->getType());
-  auto field_ptr_ty =
-      llvm::PointerType::get(val->getType(), object_ty->getAddressSpace());
-  auto field_ptr = builder_->CreateGEP(object, offset);
-  field_ptr = builder_->CreatePointerCast(field_ptr, field_ptr_ty);
+  auto field_ptr = EmitFieldPointer(object, offset, val->getType());
   builder_->CreateStore(val, field_ptr);
 }
 
 void CodegenHelper::EmitStoreInObject(llvm::Value* object,
                                       intptr_t offset,
-                                      llvm::Value* val) {
-  EmitStoreInObject(object, GetConstantInt(offset), val);
+                                      llvm::Value* val,
+                                      bool can_value_be_smi) {
+  EmitStoreInObject(object, GetConstantInt(offset), val, can_value_be_smi);
 }
 
-void CodegenHelper::EmitStoreInObject(
-    llvm::Value * object, llvm::Value* offset, llvm::Value* val) {
-  // TODO(sarkin): Write barriers.
+void CodegenHelper::EmitStoreInObject(llvm::Value* object,
+                                      llvm::Value* offset,
+                                      llvm::Value* val,
+                                      bool can_value_be_smi) {
   EmitStoreField(object, offset, val);
+
+  auto exit_block = CreateBasicBlock("store_in_object_exit");
+  if (can_value_be_smi) {
+    auto val_is_not_smi = CreateBasicBlock("val_is_not_smi");
+    auto cmp = EmitIsNotSmi(val);
+    builder_->CreateCondBr(cmp, val_is_not_smi, exit_block);
+
+    builder_->SetInsertPoint(val_is_not_smi);
+  }
+
+  auto object_tags = EmitLoadField(object, kObjectTagsOffset, Int8Ty);
+  object_tags =
+      builder_->CreateAShr(object_tags, kRawObjectBarrierOverlapShift);
+  auto wb_mask =
+      EmitLoadFieldRaw(GetThread(), kThreadWriteBarrierMaskOffset, Int8Ty);
+  object_tags = builder_->CreateAnd(object_tags, wb_mask);
+  auto val_tags = EmitLoadField(val, kObjectTagsOffset, Int8Ty);
+
+  auto wb_block = CreateBasicBlock("wb");
+  {
+    auto and_tags = builder_->CreateAnd(object_tags, val_tags);
+    auto cmp = builder_->CreateICmpEQ(and_tags, GetConstantInt(0, Int8Ty));
+    builder_->CreateCondBr(cmp, exit_block, wb_block);
+  }
+
+  builder_->SetInsertPoint(wb_block);
+  builder_->CreateCall(cgm_.write_barrier(), {GetThread(), object, val});
+  builder_->CreateBr(exit_block);
+
+  builder_->SetInsertPoint(exit_block);
 }
 
 llvm::Value* CodegenHelper::GetThread() const {
-  return GetParam(0);
+  // Thread is always the first parameter.
+  return GetParam(CodegenFunction::kThreadOffset);
 }
 
 llvm::Value* CodegenHelper::GetParam(size_t i) const {
-  // Thread is always the first parameter.
   assert(function_ != nullptr);
   assert(i < function_->arg_size());
 
@@ -1346,6 +1838,13 @@ llvm::Value* CodegenFunction::EmitJoinEntry(InstructionInputExtractor I) {
 }
 
 llvm::Value* CodegenFunction::EmitConstant(InstructionInputExtractor I) {
+  auto is_smi = I.NextInputAsIntPtr();
+  if (is_smi) {
+    // Should already be tagged.
+    auto val = I.NextInputAsIntPtr();
+    assert(!(val & 1));
+    return helper_.EmitNewObject(GetConstantInt(val));
+  }
   auto const_id = I.NextInputAsIntPtr();
   return helper_.EmitLoadConstant(const_id);
 }
@@ -1395,13 +1894,11 @@ llvm::Value* CodegenFunction::EmitUnboxedConstant(InstructionInputExtractor I) {
   return nullptr;
 }
 
-llvm::Value* CodegenFunction::EmitBinaryInt64Op(InstructionInputExtractor I) {
-  auto op = I.NextInputAsEnum<TokenKind>();
-  auto left = GetValueOrConstant(I.NextInput());
-  auto right = GetValueOrConstant(I.NextInput());
-
-  assert(left->getType() == Int64Ty);
-  assert(right->getType() == Int64Ty);
+llvm::Value* CodegenFunction::EmitIntegerArithmetic(TokenKind op,
+                                                    llvm::Value* left,
+                                                    llvm::Value* right) {
+  assert(left->getType() == right->getType());
+  assert(left->getType() == Int32Ty || left->getType() == Int64Ty);
 
   static const std::unordered_map<TokenKind, llvm::Instruction::BinaryOps>
       kDartOpToLLVM{{TokenKind::kADD, llvm::Instruction::BinaryOps::Add},
@@ -1410,12 +1907,25 @@ llvm::Value* CodegenFunction::EmitBinaryInt64Op(InstructionInputExtractor I) {
                     {TokenKind::kBIT_AND, llvm::Instruction::BinaryOps::And},
                     {TokenKind::kBIT_OR, llvm::Instruction::BinaryOps::Or},
                     {TokenKind::kBIT_XOR, llvm::Instruction::BinaryOps::Xor},
-                    {TokenKind::kMOD, llvm::Instruction::BinaryOps::SRem}, // TODO(sarkin): mod
-                    {TokenKind::kTRUNCDIV, llvm::Instruction::BinaryOps::SDiv}}; // TODO(sarkin): mod
+                    {TokenKind::kMOD,
+                     llvm::Instruction::BinaryOps::SRem},  // TODO(sarkin): mod
+                    {TokenKind::kTRUNCDIV,
+                     llvm::Instruction::BinaryOps::SDiv}};  // TODO(sarkin): mod
   auto llvm_op = kDartOpToLLVM.find(op);
   assert(llvm_op != kDartOpToLLVM.end());
 
   return builder_.CreateBinOp(llvm_op->second, left, right);
+}
+
+llvm::Value* CodegenFunction::EmitBinaryInt64Op(InstructionInputExtractor I) {
+  auto op = I.NextInputAsEnum<TokenKind>();
+  auto left = GetValueOrConstant(I.NextInput());
+  auto right = GetValueOrConstant(I.NextInput());
+
+  assert(left->getType() == Int64Ty);
+  assert(right->getType() == Int64Ty);
+
+  return EmitIntegerArithmetic(op, left, right);
 }
 
 llvm::Value* CodegenFunction::EmitComparisonOpInt64(TokenKind op,
@@ -1461,7 +1971,6 @@ llvm::Value* CodegenFunction::EmitComparisonOpDouble(TokenKind op,
   return builder_.CreateICmp(llvm_op->second, left, right);
 }
 
-
 llvm::Value* CodegenFunction::EmitRelationalOp(InstructionInputExtractor I) {
   auto op = I.NextInputAsEnum<TokenKind>();
   auto op_type = I.NextInputAsEnum<RelationalOpCid>();
@@ -1489,7 +1998,7 @@ llvm::Value* CodegenFunction::EmitEqualityCompare(InstructionInputExtractor I) {
 }
 
 llvm::Value* CodegenFunction::EmitStrictCompare(InstructionInputExtractor I) {
-  // TODO(sarkin): Write strict compare
+  // TODO(sarkin): Num checks.
   auto op = I.NextInputAsEnum<TokenKind>();
   bool needs_num_check = I.NextInputAsInt64();
   auto left = GetValue(I.NextInput());
@@ -1581,7 +2090,22 @@ llvm::Value* CodegenFunction::EmitUnboxInt64(InstructionInputExtractor I) {
 
 llvm::Value* CodegenFunction::EmitCheckStackOverflow(
     InstructionInputExtractor I) {
+  // TODO(sarkin):  Implement the full semantics of CheckStackOverflow.
+  auto error_bb = helper_.CreateBasicBlock("stack_error");
+  auto cont_bb = helper_.CreateBasicBlock("stack_cont");
+
+  auto sp = builder_.CreateCall(cgm_.read_sp());
+  auto stack_limit = helper_.EmitLoadFieldRaw(helper_.GetThread(),
+                                              kThreadStackLimitOffset, Int64Ty);
+  auto cmp = builder_.CreateICmpULT(sp, stack_limit);
+  helper_.EmitBrSlowFast(cmp, error_bb, cont_bb);
+
+  builder_.SetInsertPoint(error_bb);
   // TODO(sarkin):
+  EmitNullError();
+
+  builder_.SetInsertPoint(cont_bb);
+
   return nullptr;
 }
 
@@ -1589,6 +2113,7 @@ void CodegenFunction::EmitNullError() {
   auto native_args = helper_.EmitNativeArguments(nullptr, {});
   helper_.EmitCallToRuntimeTrampoline(
       CodegenModule::RuntimeEntryTag::kNullError, native_args);
+  builder_.CreateUnreachable();
 }
 
 llvm::Value* CodegenFunction::EmitCheckNull(InstructionInputExtractor I) {
@@ -1603,7 +2128,6 @@ llvm::Value* CodegenFunction::EmitCheckNull(InstructionInputExtractor I) {
 
   builder_.SetInsertPoint(error_bb);
   EmitNullError();
-  builder_.CreateBr(cont_bb);
 
   builder_.SetInsertPoint(cont_bb);
 
@@ -1640,7 +2164,7 @@ llvm::Value* CodegenFunction::EmitDartStaticCall(
 llvm::Value* CodegenFunction::EmitSpecialParameter(
     InstructionInputExtractor I) {
   // TODO(sarkin): return null for now.
-  return helper_.EmitLoadConstant(0);
+  return helper_.EmitNull();
 }
 
 namespace {
@@ -1676,7 +2200,6 @@ llvm::Value* CodegenFunction::EmitStaticCall(InstructionInputExtractor I) {
     return EmitDartStaticCall(dart_function_id, selector, args);
   }
   auto llvm_function_id = cgm_.GetFunctionIDByPatchPoint(patch_point);
-  // TODO(sarkin): Add the function name.
   return EmitLLVMStaticCall(llvm_function_id, selector, args);
 }
 
@@ -1693,10 +2216,11 @@ llvm::Value* CodegenFunction::EmitInstanceCall(InstructionInputExtractor I) {
   if (name.substr(0, 4) == "dyn:") {
     name = name.substr(4);
   }
+  std::replace(name.begin(), name.end(), '@', '$');
 
   Selector selector(name, args.size(), std::move(named_args),
                     arg_descriptor_id);
-  dispatch_table_->AddSelector(selector);
+  auto selector_id = dispatch_table_->AddSelector(selector);
 
   // We don't know the offset yet, because the dispatch table is still
   // being constructed. Return a dummy value and store it to be replaced
@@ -1711,8 +2235,9 @@ llvm::Value* CodegenFunction::EmitInstanceCall(InstructionInputExtractor I) {
                  [&](auto arg) { return GetValue(arg); });
 
   const int kReceiverIndex = 1;
-  auto entry_offset = builder_.CreateAdd(
-      dummy_offset, EmitCid(vargs[kReceiverIndex], check_smi));
+  auto receiver = vargs[kReceiverIndex];
+  auto receiver_cid = EmitCid(receiver, check_smi);
+  auto entry_offset = builder_.CreateAdd(dummy_offset, receiver_cid);
 
   auto layout = cgm_.GetDataLayout().getStructLayout(DispatchTableEntryTy);
   auto struct_size = GetConstantInt(layout->getSizeInBytes());
@@ -1732,10 +2257,27 @@ llvm::Value* CodegenFunction::EmitInstanceCall(InstructionInputExtractor I) {
 
   auto fpty = helper_.GetNonGCPointer(cgm_.GetStaticFunctionType(args.size()));
   auto target = get_element(target_offset, fpty);
-  // TODO(sarkin): No such method check
-  // auto selector_id = get_element(selector_id_offset, Int64Ty);
+  auto nsm_block = helper_.CreateBasicBlock("instance_call_nsm");
+  auto smi_safe = helper_.CreateBasicBlock("smi_safe");
+  auto selector_safe = helper_.CreateBasicBlock("selector_safe");
+  if (check_smi) {
+    auto cmp = helper_.EmitIsNotSmi(receiver);
+    helper_.EmitBrFastSlow(cmp, smi_safe, nsm_block);
+  } else {
+    builder_.CreateBr(smi_safe);
+  }
+  builder_.SetInsertPoint(smi_safe);
+  {
+    auto table_sid = get_element(selector_id_offset, Int64Ty);
+    auto cmp = builder_.CreateICmpEQ(GetConstantInt(selector_id), table_sid);
+    helper_.EmitBrFastSlow(cmp, selector_safe, nsm_block);
+  }
 
+  builder_.SetInsertPoint(nsm_block);
+  // TODO(sarkin): No such method.
+  builder_.CreateUnreachable();
 
+  builder_.SetInsertPoint(selector_safe);
 
   return builder_.CreateCall(target, vargs);
 }
@@ -1832,9 +2374,52 @@ llvm::Value* CodegenFunction::EmitCheckedSmiComparison(
   merge_cmp->addIncoming(fast_cmp, fast_path);
 
   if (!I.instr()->IsComparisonInBranch()) {
-    cmp = helper_.EmitBool(merge_cmp);
+    return helper_.EmitBool(merge_cmp);
   }
   return merge_cmp;
+}
+
+llvm::Value* CodegenFunction::EmitCheckedSmiOp(
+    InstructionInputExtractor I) {
+  auto op = I.NextInputAsEnum<TokenKind>();
+  auto selector = I.NextInput();
+  bool is_left_smi = I.NextInputAsIntPtr();
+  bool is_right_smi = I.NextInputAsIntPtr();
+  auto left = GetValue(I.NextInput());
+  auto right = GetValue(I.NextInput());
+
+  llvm::Value* cmp = nullptr;
+  if (left == right) {
+    cmp = helper_.EmitIsNotSmi(left);
+  } else if (is_left_smi) {
+    cmp = helper_.EmitIsNotSmi(right);
+  } else if (is_right_smi) {
+    cmp = helper_.EmitIsNotSmi(left);
+  } else {
+    cmp = helper_.EmitIsAnyNotSmi(left, right);
+  }
+  auto slow_path = helper_.CreateBasicBlock("checked_smi_slow_path");
+  auto fast_path = helper_.CreateBasicBlock("checked_smi_fast_path");
+  auto merge_paths = helper_.CreateBasicBlock("checked_smi_merge_paths");
+  helper_.EmitBrSlowFast(cmp, slow_path, fast_path);
+
+  builder_.SetInsertPoint(slow_path);
+  auto slow_val = EmitInstanceCall(I);
+  builder_.CreateBr(merge_paths);
+
+  builder_.SetInsertPoint(fast_path);
+  left = helper_.EmitSmiToInt(left);
+  right = helper_.EmitSmiToInt(right);
+  auto fast_val = EmitIntegerArithmetic(op, left, right);
+  fast_val = helper_.EmitNewObject(fast_val);
+  builder_.CreateBr(merge_paths);
+
+  builder_.SetInsertPoint(merge_paths);
+  auto merge_val = builder_.CreatePHI(ObjectPtrTy, 2);
+  merge_val->addIncoming(slow_val, slow_path);
+  merge_val->addIncoming(fast_val, fast_path);
+
+  return merge_val;
 }
 
 llvm::Value* CodegenFunction::EmitAssertAssignable(
@@ -2006,33 +2591,33 @@ llvm::Value* CodegenFunction::EmitStoreInstanceField(InstructionInputExtractor I
     llvm::Value* field = nullptr;
     if (is_initialization) {
       field = helper_.EmitBoxAllocation(unboxed_field_cid);
-      // TODO(sarkin): 
-      helper_.EmitStoreInObject(instance, offset_in_bytes, field);
+      helper_.EmitStoreInObject(instance, offset_in_bytes, field, false);
     } else {
       field = helper_.EmitLoadField(instance, offset_in_bytes, ObjectPtrTy);
     }
 
     auto val_offset = GetValueOffsetForCid(unboxed_field_cid);
     // TODO(sarkin): Might need to cast value to ty here,
-    // e.g. if it's of type ObjectPtrTy, but it should be
-    // already of the right type.
+    // e.g. if it's of type ObjectPtrTy.
     // auto ty = GetUnboxedTypeForCid(unboxed_field_cid);
     helper_.EmitStoreField(field, val_offset, value);
     return nullptr;
   }
 
-  auto store_pointer = helper_.CreateBasicBlock("load_pointer");
+  auto store_pointer_entry = helper_.CreateBasicBlock("store_pointer");
+  llvm::BasicBlock* store_pointer_exit = nullptr;
   {
     auto cur_bb = builder_.GetInsertBlock();
 
-    builder_.SetInsertPoint(store_pointer);
+    builder_.SetInsertPoint(store_pointer_entry);
     if (should_emit_store_barrier) {
-      // TODO(sarkin): 
-      helper_.EmitStoreInObject(instance, offset_in_bytes, value);
+      helper_.EmitStoreInObject(instance, offset_in_bytes, value,
+                                can_value_be_smi);
     } else {
       assert(value->getType() == ObjectPtrTy);
       helper_.EmitStoreField(instance, offset_in_bytes, value);
     }
+    store_pointer_exit = builder_.GetInsertBlock();
 
     builder_.SetInsertPoint(cur_bb);
   }
@@ -2047,7 +2632,7 @@ llvm::Value* CodegenFunction::EmitStoreInstanceField(InstructionInputExtractor I
     auto store_float32x4 = helper_.CreateBasicBlock("store_float32x4");
     auto store_float64x2 = helper_.CreateBasicBlock("store_float64x2");
 
-    auto merge = helper_.CreateBasicBlock("merge_loads");
+    auto merge = helper_.CreateBasicBlock("merge_stores");
 
     auto field = helper_.EmitLoadConstant(field_id);
 
@@ -2056,15 +2641,13 @@ llvm::Value* CodegenFunction::EmitStoreInstanceField(InstructionInputExtractor I
     {
       auto cmp =
           builder_.CreateICmpEQ(is_nullable, GetConstantInt(kNullCid, Int16Ty));
-      builder_.CreateCondBr(cmp, store_pointer, check_unboxing_candidate);
+      builder_.CreateCondBr(cmp, store_pointer_entry, check_unboxing_candidate);
     }
 
     auto kind_bits = helper_.EmitLoadField(field, kFieldKindBitsOffset, Int8Ty);
     {
-      auto is_unboxed_candidate =
-          builder_.CreateAnd(kind_bits, (1 << kFieldUnboxingCandidateBit));
-      auto cmp = builder_.CreateTrunc(is_unboxed_candidate, Int1Ty);
-      builder_.CreateCondBr(cmp, check_unboxing_candidate, store_pointer);
+      auto cmp = helper_.EmitTestBit(kind_bits, kFieldUnboxingCandidateBit);
+      builder_.CreateCondBr(cmp, check_unboxing_candidate, store_pointer_entry);
     }
 
     auto box_field =
@@ -2090,10 +2673,10 @@ llvm::Value* CodegenFunction::EmitStoreInstanceField(InstructionInputExtractor I
     {
       auto cmp = builder_.CreateICmpEQ(guarded_cid,
                                        GetConstantInt(kFloat64x2Cid, Int16Ty));
-      builder_.CreateCondBr(cmp, store_float64x2, store_pointer);
+      builder_.CreateCondBr(cmp, store_float64x2, store_pointer_entry);
     }
 
-    builder_.SetInsertPoint(store_pointer);
+    builder_.SetInsertPoint(store_pointer_exit);
     builder_.CreateBr(merge);
 
     auto null = helper_.EmitNull();
@@ -2106,8 +2689,7 @@ llvm::Value* CodegenFunction::EmitStoreInstanceField(InstructionInputExtractor I
 
       builder_.SetInsertPoint(is_null);
       auto new_box = helper_.EmitBoxAllocation(cid);
-      // TODO(sarkin):
-      helper_.EmitStoreInObject(instance, offset_in_bytes, new_box);
+      helper_.EmitStoreInObject(instance, offset_in_bytes, new_box, false);
       is_not_null = builder_.GetInsertBlock();
       builder_.CreateBr(merge);
 
@@ -2151,11 +2733,11 @@ llvm::Value* CodegenFunction::EmitStoreInstanceField(InstructionInputExtractor I
     builder_.SetInsertPoint(merge);
 
     return nullptr;
-  } 
+  }
 
-  builder_.CreateBr(store_pointer);
+  builder_.CreateBr(store_pointer_entry);
 
-  builder_.SetInsertPoint(store_pointer);
+  builder_.SetInsertPoint(store_pointer_exit);
 
   return nullptr;
 }
@@ -2291,7 +2873,7 @@ llvm::Value* CodegenFunction::EmitStoreIndexed(InstructionInputExtractor I) {
 
   if (class_id == kArrayCid) {
     if (should_emit_store_barrier) {
-      helper_.EmitStoreInObject(array, offset, value);
+      helper_.EmitStoreInObject(array, offset, value, can_value_be_smi);
     } else {
       assert(value->getType() == ObjectPtrTy);
       helper_.EmitStoreField(array, offset, value);
@@ -2321,7 +2903,6 @@ llvm::Value* CodegenFunction::EmitStoreIndexed(InstructionInputExtractor I) {
       class_id == kExternalTypedDataUint8ClampedArrayCid) {
   }
 
-  // TODO(sarkin): Signed?
   if (class_id == kTypedDataInt16ArrayCid ||
       class_id == kTypedDataUint16ArrayCid) {
     value = helper_.EmitUntagSmi(value);
@@ -2339,11 +2920,11 @@ llvm::Value* CodegenFunction::EmitStoreIndexed(InstructionInputExtractor I) {
 
   if (class_id == kTypedDataInt64ArrayCid ||
       class_id == kTypedDataUint64ArrayCid) {
-    auto final_val = builder_.CreateTrunc(value, Int32Ty);
-    put_element(final_val);
+    put_element(value);
     return nullptr;
   }
 
+  // TODO(sarkin):
   if (class_id == kTypedDataFloat32ArrayCid) {
     // auto final_val = builder_.
   }
@@ -2355,10 +2936,11 @@ llvm::Value* CodegenFunction::EmitOneByteStringFromCharCode(
     InstructionInputExtractor I) {
   auto char_code = GetValue(I.NextInput());
 
-  // char_code is Smi
+  // char_code is Smi.
   char_code = helper_.EmitSmiToInt(char_code);
 
-  // TODO(sarkin): Should probably have NonGCObjectPtrTy here.
+  // TODO(sarkin): Can the symbol table be moved by the GC?
+  // If so, then should change to ObjectPtrTy.
   auto pre_symbols_table = helper_.EmitLoadFieldRaw(
       helper_.GetThread(), kThreadPredefinedSymbolsAddressOffset,
       NonGCObjectPtrTy);
@@ -2371,9 +2953,40 @@ llvm::Value* CodegenFunction::EmitOneByteStringFromCharCode(
   return symbol;
 }
 
+void CodegenFunction::EmitRangeError(llvm::Value* index, llvm::Value* length) {
+  auto native_args = helper_.EmitNativeArguments(nullptr, {length, index});
+  helper_.EmitCallToRuntimeTrampoline(
+      CodegenModule::RuntimeEntryTag::kRangeError, native_args);
+  builder_.CreateUnreachable();
+}
+
 llvm::Value* CodegenFunction::EmitGenericCheckBound(
     InstructionInputExtractor I) {
   // TODO(sarkin):
+  bool is_known_smi = I.NextInputAsIntPtr();
+  auto index = GetValue(I.NextInput());
+  auto length = GetValue(I.NextInput());
+
+  auto error_bb = helper_.CreateBasicBlock("bound_error");
+  auto smi_check_bb = helper_.CreateBasicBlock("bound_smi_check");
+  auto cont_bb = helper_.CreateBasicBlock("bound_cont");
+
+  if (!is_known_smi) {
+    auto is_not_smi = helper_.EmitIsNotSmi(index);
+    helper_.EmitBrSlowFast(is_not_smi, error_bb, smi_check_bb);
+  } else {
+    builder_.CreateBr(smi_check_bb);
+  }
+
+  builder_.SetInsertPoint(smi_check_bb);
+  auto cmp = builder_.CreateICmpULT(index, length);
+  helper_.EmitBrFastSlow(cmp, cont_bb, error_bb);
+
+  builder_.SetInsertPoint(error_bb);
+  EmitRangeError(index, length);
+
+  builder_.SetInsertPoint(cont_bb);
+
   return nullptr;
 }
 
@@ -2386,7 +2999,8 @@ llvm::Value* CodegenFunction::EmitStoreStaticField(
 
   auto field = helper_.EmitLoadConstant(field_id);
   if (needs_write_barrier) {
-    helper_.EmitStoreInObject(field, kFieldStaticValueOffset, value);
+    helper_.EmitStoreInObject(field, kFieldStaticValueOffset, value,
+                              can_value_be_smi);
   } else {
     helper_.EmitStoreField(field, kFieldStaticValueOffset, value);
   }
@@ -2403,25 +3017,100 @@ llvm::Value* CodegenFunction::EmitIfThenElse(InstructionInputExtractor I) {
   auto false_val = I.NextInputAsIntPtr();
 
   auto cmp = GetValue("v-1");
-  auto true_branch = helper_.CreateBasicBlock("true_branch");
-  auto false_branch = helper_.CreateBasicBlock("false_branch");
-  auto merge_branch = helper_.CreateBasicBlock("merge_branch");
 
-  builder_.CreateCondBr(cmp, true_branch, false_branch);
-
-  builder_.SetInsertPoint(true_branch);
-  builder_.CreateBr(merge_branch);
-
-  builder_.SetInsertPoint(false_branch);
-  builder_.CreateBr(merge_branch);
-
-  builder_.SetInsertPoint(merge_branch);
-  // PD
-  auto merge_val = builder_.CreatePHI(Int64Ty, 2);
-  merge_val->addIncoming(GetConstantInt(true_val), true_branch);
-  merge_val->addIncoming(GetConstantInt(false_val), false_branch);
-
+  auto merge_val = builder_.CreateSelect(cmp, GetConstantInt(true_val),
+                                         GetConstantInt(false_val));
   return helper_.EmitSmiTag(merge_val);
+}
+
+llvm::Value* CodegenFunction::EmitBoxUint32(InstructionInputExtractor I) {
+  auto val = GetValue(I.NextInput());
+
+  assert(val->getType()->isIntegerTy());
+  if (val->getType() != IntTy) {
+    val = builder_.CreateZExt(val, IntTy);
+  }
+
+  return helper_.EmitSmiTag(val);
+}
+
+llvm::Value* CodegenFunction::EmitBinaryUint32Op(InstructionInputExtractor I) {
+  auto op = I.NextInputAsEnum<TokenKind>();
+  auto left = GetValue(I.NextInput());
+  auto right = GetValue(I.NextInput());
+
+  // assert(left->getType() == Int32Ty);
+  // assert(right->getType() == Int32Ty);
+  // TODO(sarkin): Check that op is not division / remainder.
+  left = builder_.CreateTrunc(left, Int32Ty);
+  right = builder_.CreateTrunc(right, Int32Ty);
+  return EmitIntegerArithmetic(op, left, right);
+}
+
+llvm::Value* CodegenFunction::EmitUnboxUint32(InstructionInputExtractor I) {
+  auto val_cid = I.NextInputAsIntPtr();
+  auto val = GetValue(I.NextInput());
+
+  // TODO(sarkin): Only Smis and Mints for now.
+  // assert(val_cid == kSmiCid || val_cid == kMintCid);
+
+  if (val_cid == kSmiCid) {
+    return helper_.EmitUntagSmi(val);
+  } else if (val_cid == kMintCid) {
+    return helper_.EmitLoadField(val, kMintValueOffset, Int64Ty);
+  } else {
+    // TODO(sarkin):
+    return helper_.EmitUntagSmi(val);
+  }
+
+  return nullptr;
+}
+
+llvm::Value* CodegenFunction::EmitUnboxedIntConverter(InstructionInputExtractor I) {
+  // TODO(sarkin): Not all conversions implemented.
+  auto from = I.NextInputAsEnum<Representation>();
+  auto to = I.NextInputAsEnum<Representation>();
+  auto val = GetValue(I.NextInput());
+
+  if (from == kUnboxedUint32 && to == kUnboxedInt64) {
+    return builder_.CreateZExt(val, Int64Ty);
+  } else if (to == kUnboxedUint32 && from == kUnboxedInt64) {
+    return builder_.CreateTrunc(val, Int32Ty);
+  }
+  assert(false);
+  return nullptr;
+}
+
+llvm::Value* CodegenFunction::EmitShiftInt64Op(InstructionInputExtractor I) {
+  // TODO(sarkin): 
+  auto op = I.NextInputAsEnum<TokenKind>();
+  auto left = GetValue(I.NextInput());
+  auto right = GetValue(I.NextInput());
+
+  if (op == kSHL) {
+    return builder_.CreateShl(left, right);
+  }
+  return builder_.CreateAShr(left, right);
+}
+
+llvm::Value* CodegenFunction::EmitCheckSmi(InstructionInputExtractor I) {
+  // TODO(sarkin): 
+  return nullptr;
+}
+
+llvm::Value* CodegenFunction::EmitBinarySmiOp(InstructionInputExtractor I) {
+  // TODO(sarkin): 
+  auto op = I.NextInputAsEnum<TokenKind>();
+  auto left = GetValue(I.NextInput());
+  auto right = GetValue(I.NextInput());
+
+  left = helper_.EmitSmiToInt(left);
+  right = helper_.EmitSmiToInt(right);
+  if (op == kBIT_AND) {
+    return helper_.EmitNewObject(builder_.CreateAnd(left, right));
+  }
+  assert(false);
+  return nullptr;
 }
 
 llvm::Value* CodegenFunction::EmitCid(llvm::Value* val, bool check_smi) {
@@ -2429,7 +3118,7 @@ llvm::Value* CodegenFunction::EmitCid(llvm::Value* val, bool check_smi) {
     // Offset in bytes
     const int kCidOffset = 2;
     auto cid = helper_.EmitLoadField(val, kCidOffset, Int16Ty);
-    return builder_.CreateZExt(cid, Int64Ty);
+    return builder_.CreateZExt(cid, IntTy);
   };
 
   if (!check_smi) {
@@ -2451,7 +3140,7 @@ llvm::Value* CodegenFunction::EmitCid(llvm::Value* val, bool check_smi) {
   builder_.CreateBr(join_bb);
 
   builder_.SetInsertPoint(join_bb);
-  auto cid = builder_.CreatePHI(Int64Ty, 2);
+  auto cid = builder_.CreatePHI(IntTy, 2);
   cid->addIncoming(cid_smi, smi_bb);
   cid->addIncoming(cid_not_smi, not_smi_bb);
 
@@ -2587,3 +3276,5 @@ void CodegenFunction::ProcessPhiIncomingValues() {
     }
   }
 }
+
+}  // namespace dart_llvm

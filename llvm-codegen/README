@@ -1,0 +1,24 @@
+A small tutorial on how to use the LLVM code generation tool:
+
+mkdir build
+cd build
+cmake -DTARGET_ARCH=[X64|WASM] ../
+make
+
+Suppose that your dart file is example/main.dart, then run:
+pkg/vm/tool/release_llvm_precompiler example/main
+This will generate a bunch of files in example/:
+main.il -- the serialized IL
+main.llvm -- the LLVM IR in text format
+main.s -- the corresponding assembly
+main.S -- the assembly from the Dart AOT pipeline
+main.dill
+main executable -- the executable from the Dart AOT pipeline
+main.so -- the LLVM executable
+
+Then to run this:
+./out/ReleaseX64/dart_precompiled_runtime --llvm-mode example/main.so
+
+For Wasm running:
+pkg/vm/tool/wasm_precompiler example/main
+Produces a WebAssembly module main.wasm, among other things.

@@ -52,6 +52,10 @@ void ILSerializer::SerializeValue(Value* val) const {
   THR_Print(" v%" Pd, val->definition()->ssa_temp_index());
 }
 
+void ILSerializer::SerializeConstantSmi(const Object& val) const {
+  THR_Print(" %" Pd, Smi::Cast(val).Value() << 1);
+}
+
 void ILSerializer::VisitInstruction(Instruction* instr) {
   // Prints v-1 for comparison instructions
   if (instr->IsIfThenElse()) {
@@ -156,7 +160,12 @@ void ILSerializer::VisitFunctionEntry(FunctionEntryInstr* instr) {
 
 void ILSerializer::VisitConstant(ConstantInstr* instr) {
   THR_Print("%s", instr->DebugName());
-  THR_Print(" %" Pd, AddConstant(instr->value()));
+  if (instr->value().IsSmi()) {
+    THR_Print(" 1");
+    SerializeConstantSmi(instr->value());
+  } else {
+    THR_Print(" 0 %" Pd, AddConstant(instr->value()));
+  }
 }
 
 void ILSerializer::VisitParameter(ParameterInstr* instr) {
@@ -172,7 +181,7 @@ void ILSerializer::VisitUnboxInt64(UnboxInt64Instr* instr) {
 }
 
 void ILSerializer::VisitUnboxedConstant(UnboxedConstantInstr* instr) {
-  // TODO(sarkin): Other representations
+  // TODO(sarkin): Other representations.
   THR_Print("%s", instr->DebugName());
   auto& value = instr->value();
   if (instr->representation() == kUnboxedInt32 ||
@@ -220,11 +229,11 @@ void ILSerializer::SerializeIndexOrConstant(Definition* d) const {
   THR_Print(" ");
   if (d->IsConstant()) {
     if (d->AsConstant()->IsUnboxedSignedIntegerConstant()) {
-      THR_Print("%" Pd,
+      THR_Print("%" Pd64,
                 d->AsConstant()->GetUnboxedSignedIntegerConstantValue());
     } else {
       // Smi case
-      THR_Print("%" Pd,
+      THR_Print("%" Pd64,
                 reinterpret_cast<int64_t>(d->AsConstant()->value().raw()));
     }
   } else {
@@ -325,7 +334,6 @@ void ILSerializer::SerializeCall(const TemplateDartCall<0>* instr,
 }
 
 void ILSerializer::VisitStaticCall(StaticCallInstr* instr) {
-  // TODO(sarkin):
   THR_Print("%s", instr->DebugName());
   bool is_llvm = instr->function().IsLLVMCompiled();
   THR_Print(" %" Pd32, is_llvm);
@@ -366,8 +374,10 @@ void ILSerializer::VisitInstanceCall(InstanceCallInstr* instr) {
 void ILSerializer::VisitPolymorphicInstanceCall(
     PolymorphicInstanceCallInstr* instr) {
   THR_Print("%s ", instr->DebugName());
-  // TODO(sarkin): Check smi?
-  SerializeInstanceCall(instr->instance_call(), true);
+  const AbstractType& value_type = *instr->Receiver()->Type()->ToAbstractType();
+  bool check_smi = (CompileType::Smi().IsAssignableTo(value_type) ||
+                    value_type.IsTypeParameter());
+  SerializeInstanceCall(instr->instance_call(), check_smi);
 }
 
 void ILSerializer::VisitAssertBoolean(AssertBooleanInstr* instr) {
@@ -414,7 +424,8 @@ void ILSerializer::VisitCheckedSmiComparison(CheckedSmiComparisonInstr* instr) {
   SerializeValue(instr->left());
   SerializeValue(instr->right());
 
-  SerializeInstanceCall(instr->call(), /* check_smi */ false, false);
+  SerializeInstanceCall(instr->call(), /* check_smi */ false,
+                        /* serialize_arguments */ false);
 
   SerializeValue(instr->left());
   SerializeValue(instr->right());
@@ -475,7 +486,7 @@ void ILSerializer::VisitStoreInstanceField(StoreInstanceFieldInstr* instr) {
 }
 
 void ILSerializer::VisitSpecialParameter(SpecialParameterInstr* instr) {
-  // TODO(sarkin): Serialize the type.
+  // TODO(sarkin): Special parameters are ignored.
   THR_Print("%s", instr->DebugName());
 }
 
@@ -502,7 +513,7 @@ void ILSerializer::VisitLoadIndexed(LoadIndexedInstr* instr) {
   THR_Print(" v%" Pd, instr->array()->definition()->ssa_temp_index());
   auto index = instr->index()->definition();
   if (CanBeImmediateIndex(instr->index(), instr->class_id())) {
-    THR_Print(" %" Pd, Smi::Cast(index->AsConstant()->value()).Value());
+    SerializeConstantSmi(index->AsConstant()->value());
   } else {
     THR_Print(" v%" Pd, index->ssa_temp_index());
   }
@@ -522,7 +533,7 @@ void ILSerializer::VisitStoreIndexed(StoreIndexedInstr* instr) {
   THR_Print(" v%" Pd, instr->array()->definition()->ssa_temp_index());
   auto index = instr->index()->definition();
   if (CanBeImmediateIndex(instr->index(), instr->class_id())) {
-    THR_Print(" %" Pd, Smi::Cast(index->AsConstant()->value()).Value());
+    SerializeConstantSmi(index->AsConstant()->value());
   } else {
     THR_Print(" v%" Pd, index->ssa_temp_index());
   }
@@ -548,8 +559,11 @@ void ILSerializer::VisitOneByteStringFromCharCode(
 }
 
 void ILSerializer::VisitGenericCheckBound(GenericCheckBoundInstr* instr) {
-  // TODO(sarkin):
+  // TODO(sarkin): Not implemented.
   THR_Print("%s", instr->DebugName());
+  THR_Print(" %" Pd32, instr->index()->Type()->ToCid() == kSmiCid);
+  SerializeValue(instr->index());
+  SerializeValue(instr->length());
 }
 
 void ILSerializer::VisitBooleanNegate(BooleanNegateInstr* instr) {
@@ -559,8 +573,83 @@ void ILSerializer::VisitBooleanNegate(BooleanNegateInstr* instr) {
 
 void ILSerializer::VisitIfThenElse(IfThenElseInstr* instr) {
   THR_Print("%s", instr->DebugName());
+
   THR_Print(" %" Pd, instr->if_true());
   THR_Print(" %" Pd, instr->if_false());
+}
+
+void ILSerializer::VisitBinaryUint32Op(BinaryUint32OpInstr* instr) {
+  THR_Print("%s", instr->DebugName());
+  THR_Print(" %" Pd32, instr->op_kind());
+
+  SerializeValue(instr->left());
+  SerializeValue(instr->right());
+}
+
+void ILSerializer::VisitBoxUint32(BoxUint32Instr* instr) {
+  THR_Print("%s", instr->DebugName());
+
+  ASSERT(instr->representation() == kUnboxedUint32);
+  SerializeValue(instr->value());
+}
+
+void ILSerializer::VisitUnboxUint32(UnboxUint32Instr* instr) {
+  // TODO(sarkin):
+  THR_Print("%s", instr->DebugName());
+
+  auto value_cid = instr->value()->Type()->ToCid();
+  THR_Print(" %" Pd, value_cid);
+
+  SerializeValue(instr->value());
+}
+
+void ILSerializer::VisitUnboxedIntConverter(UnboxedIntConverterInstr* instr) {
+  THR_Print("%s", instr->DebugName());
+
+  THR_Print(" %" Pd32, instr->from());
+  THR_Print(" %" Pd32, instr->to());
+
+  SerializeValue(instr->value());
+}
+
+void ILSerializer::VisitShiftInt64Op(ShiftInt64OpInstr* instr) {
+  THR_Print("%s", instr->DebugName());
+
+  THR_Print(" %" Pd32, instr->op_kind());
+  SerializeValue(instr->left());
+  SerializeValue(instr->right());
+}
+
+void ILSerializer::VisitCheckedSmiOp(CheckedSmiOpInstr* instr) {
+  THR_Print("%s", instr->DebugName());
+  String& selector = String::Handle(instr->call()->ic_data()->target_name());
+  THR_Print(" %" Pd32, instr->op_kind());
+  THR_Print(" %s", selector.ToCString());
+
+  THR_Print(" %" Pd32, instr->left()->Type()->ToCid() == kSmiCid);
+  THR_Print(" %" Pd32, instr->right()->Type()->ToCid() == kSmiCid);
+
+  SerializeValue(instr->left());
+  SerializeValue(instr->right());
+
+  // TODO(sarkin): What if left is smi and right isn't?
+  SerializeInstanceCall(instr->call(), /* check_smi */ false, false);
+
+  SerializeValue(instr->left());
+  SerializeValue(instr->right());
+}
+
+void ILSerializer::VisitCheckSmi(CheckSmiInstr* instr) {
+  // TODO(sarkin):
+  THR_Print("%s", instr->DebugName());
+}
+
+void ILSerializer::VisitBinarySmiOp(BinarySmiOpInstr* instr) {
+  // TODO(sarkin):
+  THR_Print("%s", instr->DebugName());
+  THR_Print(" %" Pd32, instr->op_kind());
+  SerializeValue(instr->left());
+  SerializeValue(instr->right());
 }
 
 #endif  // !DART_PRECOMPILED_RUNTIME

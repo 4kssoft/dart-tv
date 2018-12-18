@@ -5699,6 +5699,11 @@ class UnboxInteger32Instr : public UnboxIntegerInstr {
 
   DECLARE_INSTRUCTION_BACKEND()
 
+  virtual bool ComputeCanDeoptimize() const {
+    if (value()->Type()->IsInt()) return false;
+    return UnboxInstr::ComputeCanDeoptimize();
+  }
+
  private:
   DISALLOW_COPY_AND_ASSIGN(UnboxInteger32Instr);
 };

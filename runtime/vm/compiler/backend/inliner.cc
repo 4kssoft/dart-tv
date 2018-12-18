@@ -2632,13 +2632,15 @@ static bool InlineSetIndexed(FlowGraph* flow_graph,
 
   // No need to class check stores to Int32 and Uint32 arrays because
   // we insert unboxing instructions below which include a class check.
-  if ((array_cid != kTypedDataUint32ArrayCid) &&
-      (array_cid != kTypedDataInt32ArrayCid) && value_check != NULL) {
+  if (needs_store_barrier == kNoStoreBarrier) {
     // No store barrier needed because checked value is a smi, an unboxed mint,
     // an unboxed double, an unboxed Float32x4, or unboxed Int32x4.
     needs_store_barrier = kNoStoreBarrier;
-    Instruction* check = flow_graph->CreateCheckClass(
-        stored_value, *value_check, call->deopt_id(), call->token_pos());
+    Instruction* check =
+        new (Z) CheckNullInstr(new (Z) Value(stored_value), Symbols::Dot(),
+                               call->deopt_id(), call->token_pos());
+    //  flow_graph->CreateCheckClass(
+    //      stored_value, *value_check, call->deopt_id(), call->token_pos());
     cursor =
         flow_graph->AppendTo(cursor, check, call->env(), FlowGraph::kEffect);
   }

@@ -51,6 +51,7 @@ class ILSerializer : public FlowGraphVisitor {
   }
 
   void SerializeValue(Value* val) const;
+  void SerializeConstantSmi(const Object& val) const;
 
   void SerializeArgumentsDescriptor(const ArgumentsDescriptor& arg_desc) const;
   void SerializeInstanceCall(InstanceCallInstr* instr,

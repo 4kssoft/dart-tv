@@ -150,6 +150,8 @@ class StackFrame : public ValueObject {
   Thread* thread() const { return thread_; }
 
  private:
+  void VisitObjectPointersLLVM(ObjectPointerVisitor* visitor);
+
   RawCode* GetCodeObject() const;
   RawBytecode* GetBytecodeObject() const;
 

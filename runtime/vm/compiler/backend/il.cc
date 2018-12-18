@@ -1787,11 +1787,12 @@ bool UnboxInt32Instr::ComputeCanDeoptimize() const {
 
 bool UnboxUint32Instr::ComputeCanDeoptimize() const {
   ASSERT(is_truncating());
+  return false;
   if (speculative_mode() == kNotSpeculative) {
     return false;
   }
   if ((value()->Type()->ToCid() == kSmiCid) ||
-      (value()->Type()->ToCid() == kMintCid)) {
+      (value()->Type()->ToCid() == kMintCid) || (value()->Type()->IsInt())) {
     return false;
   }
   // Check input value's range.
@@ -4448,6 +4449,7 @@ intptr_t AssertAssignableInstr::statistics_tag() const {
 }
 
 void AssertAssignableInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+  return;
   compiler->GenerateAssertAssignable(token_pos(), deopt_id(), dst_type(),
                                      dst_name(), locs());
 

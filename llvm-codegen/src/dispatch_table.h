@@ -195,7 +195,7 @@ class DispatchTable {
   DispatchTable(CodegenModule& cgm, const DartMethodTable* dispatch_table)
       : cgm_(cgm), method_table_(dispatch_table) {}
 
-  void AddSelector(const Selector& selector);
+  size_t AddSelector(const Selector& selector);
 
   size_t GetOffset(const std::string& selector);
 

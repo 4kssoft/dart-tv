@@ -26,6 +26,7 @@
 #include "vm/interpreter.h"
 #include "vm/isolate_reload.h"
 #include "vm/kernel_isolate.h"
+#include "vm/llvm_gc.h"
 #include "vm/lockers.h"
 #include "vm/log.h"
 #include "vm/message_handler.h"
@@ -949,7 +950,8 @@ Isolate::Isolate(const Dart_IsolateFlags& api_flags)
       catch_entry_moves_cache_(),
       embedder_entry_points_(NULL),
       obfuscation_map_(NULL),
-      reverse_pc_lookup_cache_(nullptr) {
+      reverse_pc_lookup_cache_(nullptr),
+      llvm_stack_maps_(new LLVMStackMaps()) {
   FlagsCopyFrom(api_flags);
   SetErrorsFatal(true);
   set_compilation_allowed(true);
@@ -1047,6 +1049,7 @@ Isolate::~Isolate() {
     }
     delete[] embedder_entry_points_;
   }
+  delete llvm_stack_maps_;
 }
 
 void Isolate::InitVM() {

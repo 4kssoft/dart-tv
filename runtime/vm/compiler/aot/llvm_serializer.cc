@@ -76,6 +76,7 @@ void LLVMSerializer::SerializeVMConstants() {
 
   P32(kWordSize);
   P32(kWordSizeLog2);
+  P32(kNewObjectBitPosition);
   P32(kObjectAlignment);
   P32(kObjectAlignmentLog2);
 
@@ -83,7 +84,27 @@ void LLVMSerializer::SerializeVMConstants() {
   P(Thread::top_offset());
   P(Thread::end_offset());
   P(Thread::predefined_symbols_address_offset());
+  P(Thread::store_buffer_block_offset());
+  P(Thread::marking_stack_block_offset());
+  P(Thread::write_barrier_code_offset());
+  P(Thread::write_barrier_mask_offset());
+  P(Thread::stack_limit_offset());
 
+  P32(StoreBufferBlock::kSize);
+  P(StoreBufferBlock::top_offset());
+  P(StoreBufferBlock::pointers_offset());
+
+  P32(MarkingStackBlock::kSize);
+  P(MarkingStackBlock::top_offset());
+  P(MarkingStackBlock::pointers_offset());
+
+  P32(RawObject::kOldAndNotRememberedBit);
+  P32(RawObject::kOldAndNotMarkedBit);
+  P(RawObject::kBarrierOverlapShift);
+
+  P(Object::tags_offset());
+
+  // Same as Object::tags_offset, serialize for consistency.
   P(Instance::tags_offset());
   P(Instance::NextFieldOffset());
 
@@ -208,9 +229,6 @@ void LLVMSerializer::SerializeDispatchTable() {
           }
           func ^= funcs.At(i);
           func_name ^= func.name();
-          // TODO(sarkin): Only serialize the Dart functions if they're possibly
-          // called from LLVM, i.e. need to check that dart_id is valid and
-          // properly initialize it.
           obj = function_set_.GetOrNull(func);
           bool is_llvm = !obj.IsNull();
 
@@ -267,6 +285,7 @@ void LLVMSerializer::SerializeAllocationInfo() {
     tags = RawObject::NewBit::update(true, tags);
     // TODO(sarkin): Serializing all valid classes results
     // in a crash when deserializing the app snapshot.
+    // For now, only serialize the classes needed for box allocation.
     auto should_serialize_cls = [&](size_t cid) {
       return cid == kMintCid || cid == kDoubleCid;
     };

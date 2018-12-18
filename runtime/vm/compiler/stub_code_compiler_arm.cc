@@ -461,6 +461,86 @@ void StubCodeCompiler::GenerateCallBootstrapNativeStub(Assembler* assembler) {
 }
 
 // Input parameters:
+//   R10: arguments descriptor array.
+//   CODE_REG: code object.
+void StubCode::GenerateCallLLVMFunctionStub(Assembler* assembler) {
+  __ EnterStubFrame();
+  // Function ID
+  __ ldr(R0, FieldAddress(CODE_REG, Code::llvm_function_id_offset()));
+  __ mov(R1, Operand(THR));
+  __ ldr(R2, Address(FP, kParamEndSlotFromFp * kWordSize));
+  __ ldr(TMP, FieldAddress(CODE_REG,
+                           Code::entry_point_offset(Code::EntryKind::kLLVM)));
+  __ ReserveAlignedFrameSpace(0);
+  __ blx(TMP);
+  __ LeaveStubFrame();
+
+  __ Ret();
+}
+
+// Input parameters:
+// CC::arg1: thread object.
+// CC::arg2: target code object.
+// CC::arg3: arguments descriptor array.
+// CC::arg4: number of arguments.
+// CC::arg5: pointer to argument array.
+void StubCode::GenerateLLVMToDartTrampolineStub(Assembler* assembler) {
+  GenerateCallNativeWithWrapperStub(
+      assembler,
+      Address(THR, Thread::no_scope_native_wrapper_entry_point_offset()));
+  // The return address. R10 is a caller saved register in X64.
+  // __ movq(R10, Address(RSP, 0));
+
+  // // Save C++ ABI callee-saved registers.
+  // __ PushRegisters(CallingConventions::kCalleeSaveCpuRegisters,
+  // CallingConventions::kCalleeSaveXmmRegisters);
+
+  // __ movq(THR, CallingConventions::kArg1Reg);
+  // __ movq(CODE_REG,
+  // Address(THR, Thread::llvm_to_dart_trampoline_stub_offset()));
+
+  // // Push the return address.
+  // __ pushq(R10);
+
+  // __ EnterStubFrame();
+
+  // Label loop, loop_condition;
+  // #if defined(DEBUG)
+  // static const bool kJumpLength = Assembler::kFarJump;
+  // #else
+  // static const bool kJumpLength = Assembler::kNearJump;
+  // #endif  // DEBUG
+  // __ jmp(&loop_condition, kJumpLength);
+  // __ Bind(&loop);
+  // __ subq(RSP, Immediate(kWordSize));
+  // __ movq(CallingConventions::kArg1Reg,
+  // Address(CallingConventions::kArg5Reg, 0));
+  // __ movq(Address(RSP, 0), CallingConventions::kArg1Reg);
+  // __ addq(CallingConventions::kArg5Reg, Immediate(kWordSize));
+
+  // __ Bind(&loop_condition);
+  // __ decq(CallingConventions::kArg4Reg);
+  // __ j(POSITIVE, &loop, Assembler::kNearJump);
+
+  // __ movq(CODE_REG, CallingConventions::kArg2Reg);
+  // __ movq(R10, CallingConventions::kArg3Reg);
+  // __ movq(CallingConventions::kArg1Reg,
+  // FieldAddress(CODE_REG, Code::entry_point_offset()));
+
+  // __ call(CallingConventions::kArg1Reg);
+
+  // __ LeaveStubFrame();
+
+  // __ popq(R10);
+
+  // // Restore C++ ABI callee-saved registers.
+  // __ PopRegisters(CallingConventions::kCalleeSaveCpuRegisters,
+  // CallingConventions::kCalleeSaveXmmRegisters);
+
+  // __ ret();
+}
+
+// Input parameters:
 //   R4: arguments descriptor array.
 void StubCodeCompiler::GenerateCallStaticFunctionStub(Assembler* assembler) {
   // Create a stub frame as we are pushing some objects on the stack before

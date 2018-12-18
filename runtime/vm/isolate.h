@@ -82,6 +82,7 @@ class StoreBuffer;
 class StubCode;
 class ThreadRegistry;
 class UserTag;
+class LLVMStackMaps;
 
 class PendingLazyDeopt {
  public:
@@ -805,6 +806,8 @@ class Isolate : public BaseIsolate {
     return pc >= llvm_segment_start_ && pc <= llvm_segment_end_;
   }
 
+  LLVMStackMaps* llvm_stack_maps() const { return llvm_stack_maps_; }
+
  private:
   friend class Dart;                  // Init, InitOnce, Shutdown.
   friend class IsolateKillerVisitor;  // Kill().
@@ -1029,6 +1032,8 @@ class Isolate : public BaseIsolate {
   const char** obfuscation_map_;
 
   ReversePcLookupCache* reverse_pc_lookup_cache_;
+  LLVMStackMaps* llvm_stack_maps_ = nullptr;
+
   uword llvm_segment_start_ = 0;
   uword llvm_segment_end_ = 0;
 

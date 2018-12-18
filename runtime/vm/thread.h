@@ -120,7 +120,11 @@ class Zone;
     StubCode::DeoptimizeLazyFromThrow().raw(), NULL)                           \
   V(RawCode*, slow_type_test_stub_, StubCode::SlowTypeTest().raw(), NULL)      \
   V(RawCode*, lazy_specialize_type_test_stub_,                                 \
-    StubCode::LazySpecializeTypeTest().raw(), NULL)
+    StubCode::LazySpecializeTypeTest().raw(), NULL)                            \
+  V(RawCode*, llvm_to_dart_trampoline_stub_,                                   \
+    StubCode::LLVMToDartTrampoline_entry()->code(), NULL)                      \
+  V(RawCode*, call_llvm_function_stub_,                                        \
+    StubCode::CallLLVMFunction_entry()->code(), NULL)
 
 #endif
 

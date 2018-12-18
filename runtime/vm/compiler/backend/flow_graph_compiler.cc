@@ -580,7 +580,9 @@ void FlowGraphCompiler::VisitBlocks() {
         EmitInstructionPrologue(instr);
         ASSERT(pending_deoptimization_env_ == NULL);
         pending_deoptimization_env_ = instr->env();
+        current_instruction_ = instr;
         instr->EmitNativeCode(this);
+        current_instruction_ = nullptr;
         pending_deoptimization_env_ = NULL;
         EmitInstructionEpilogue(instr);
         EndCodeSourceRange(instr->token_pos());
@@ -969,9 +971,12 @@ Label* FlowGraphCompiler::AddDeoptStub(intptr_t deopt_id,
   // No deoptimization allowed when 'FLAG_precompiled_mode' is set.
   if (FLAG_precompiled_mode) {
     if (FLAG_trace_compiler) {
-      THR_Print(
-          "Retrying compilation %s, suppressing inlining of deopt_id:%" Pd "\n",
-          parsed_function_.function().ToFullyQualifiedCString(), deopt_id);
+      THR_Print("Retrying compilation %s, suppressing inlining of deopt_id:%" Pd
+                " on %s\n",
+                parsed_function_.function().ToFullyQualifiedCString(), deopt_id,
+                current_instruction_ != nullptr
+                    ? this->current_instruction_->ToCString()
+                    : "???");
     }
     ASSERT(speculative_policy_->AllowsSpeculativeInlining());
     ASSERT(deopt_id != 0);  // longjmp must return non-zero value.

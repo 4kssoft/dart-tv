@@ -30,6 +30,7 @@
 #include "vm/image_snapshot.h"
 #include "vm/isolate_reload.h"
 #include "vm/kernel_isolate.h"
+#include "vm/llvm_gc.h"
 #include "vm/lockers.h"
 #include "vm/message.h"
 #include "vm/message_handler.h"
@@ -1121,7 +1122,6 @@ class LoadLLVMExternals {
         Isolate::Current()->object_store()->llvm_compiled_functions());
     Function& function = Function::Handle();
     Code& code = Code::Handle();
-    // TODO(sarkin): No handle scope or something? or no safepoint scope?
     for (intptr_t i = 0; i < llvm_compiled_functions.Length(); ++i) {
       function ^= llvm_compiled_functions.At(i);
       code ^= function.CurrentCode();
@@ -1183,10 +1183,12 @@ class LoadLLVMExternals {
     const char* kDartToLLVMTrampolineSymbolName = "_DartToLLVMTrampoline";
     const char* kLLVMStartSymbolName = "_LLVM_START";
     const char* kLLVMEndSymbolName = "_LLVM_END";
+    const char* kLLVMStatepointIDToFunctionSymbolName =
+        "_LLVMStatepointIDToFunction";
+    const char* kLLVMGetStackMapsSymbolName = "_LLVMGetStackMaps";
     void* library = bin::Extensions::LoadExtensionLibraryNow(script_name);
     if (library == nullptr) {
-      // TODO(sarkin): ERROR HERE
-      // FATAL1("Failed to load library '%s'\n", script_name);
+      // VM isolate.
       return;
     }
 
@@ -1201,13 +1203,25 @@ class LoadLLVMExternals {
     auto llvm_end = GetSymbol<intptr_t>(library, kLLVMEndSymbolName);
     auto llvm_to_dart_trampoline =
         GetSymbol<intptr_t*>(library, kLLVMToDartTrampolineSymbolName);
+    auto llvm_statepoint_id_to_function =
+        GetSymbol<uword*>(library, kLLVMStatepointIDToFunctionSymbolName);
+    auto llvm_get_stack_maps =
+        GetSymbol<StackMapHeader* (*)()>(library, kLLVMGetStackMapsSymbolName);
 
     *llvm_to_dart_trampoline =
         StubCode::LLVMToDartTrampoline_entry()->EntryPoint();
+
     SetFunctionPool(function_pool, dart_to_llvm_trampoline);
     SetConstantPool(constant_pool);
     SetDartFunctionPool(dart_function_pool);
     Isolate::Current()->SetLLVMRange(llvm_start, llvm_end);
+
+    auto llvm_stack_maps = Isolate::Current()->llvm_stack_maps();
+    llvm_stack_maps->set_llvm_statepoint_id_to_function(
+        llvm_statepoint_id_to_function);
+    llvm_stack_maps->set_header(llvm_get_stack_maps());
+
+    llvm_stack_maps->Parse();
   }
 
  private:

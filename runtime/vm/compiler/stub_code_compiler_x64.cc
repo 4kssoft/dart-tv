@@ -480,24 +480,49 @@ void StubCodeCompiler::GenerateCallStaticFunctionStub(Assembler* assembler) {
 //   R10: arguments descriptor array.
 //   CODE_REG: code object.
 void StubCode::GenerateCallLLVMFunctionStub(Assembler* assembler) {
+  // CODE_REG contains the code object of the target function, because
+  // we replace the entry point of the LLVM compiled functions with
+  // the entry point of this stub. Replace it with the code object
+  // of this stub for correct GC.
+  __ movq(R13, CODE_REG);
+  __ movq(CODE_REG, Address(THR, Thread::call_llvm_function_stub_offset()));
+
   __ EnterStubFrame();
   // Function ID
   __ movq(CallingConventions::kArg1Reg,
-          FieldAddress(CODE_REG, Code::llvm_function_id_offset()));
+          FieldAddress(R13, Code::llvm_function_id_offset()));
   __ movq(CallingConventions::kArg2Reg, THR);
   // Address to args
   __ leaq(CallingConventions::kArg3Reg,
           Address(RBP, kParamEndSlotFromFp * kWordSize));
 
-  __ movq(RBX, FieldAddress(CODE_REG,
-                            Code::entry_point_offset(Code::EntryKind::kLLVM)));
+  __ movq(RBX,
+          FieldAddress(R13, Code::entry_point_offset(Code::EntryKind::kLLVM)));
 
+  // Align frame and 0 initialize.
+  __ movq(TMP, RSP);
   if (OS::ActivationFrameAlignment() > 1) {
     __ andq(RSP, Immediate(~(OS::ActivationFrameAlignment() - 1)));
   }
+  Label loop, loop_condition;
+#if defined(DEBUG)
+  static const bool kJumpLength = Assembler::kFarJump;
+#else
+  static const bool kJumpLength = Assembler::kNearJump;
+#endif  // DEBUG
+  __ jmp(&loop_condition, kJumpLength);
+  __ Bind(&loop);
+  __ movq(Address(TMP, 0), Immediate(0));
+
+  __ Bind(&loop_condition);
+  __ subq(TMP, Immediate(kWordSize));
+  __ cmpq(TMP, RSP);
+  __ j(GREATER_EQUAL, &loop, Assembler::kNearJump);
+
   __ call(RBX);
 
   __ LeaveStubFrame();
+
   __ ret();
 }
 
@@ -508,13 +533,19 @@ void StubCode::GenerateCallLLVMFunctionStub(Assembler* assembler) {
 // CC::arg4: number of arguments.
 // CC::arg5: pointer to argument array.
 void StubCode::GenerateLLVMToDartTrampolineStub(Assembler* assembler) {
+  // The return address. R10 is a caller saved register in X64.
+  __ movq(R10, Address(RSP, 0));
+
   // Save C++ ABI callee-saved registers.
   __ PushRegisters(CallingConventions::kCalleeSaveCpuRegisters,
                    CallingConventions::kCalleeSaveXmmRegisters);
 
   __ movq(THR, CallingConventions::kArg1Reg);
-  __ movq(CODE_REG, CallingConventions::kArg2Reg);
-  __ movq(R10, CallingConventions::kArg3Reg);
+  __ movq(CODE_REG,
+          Address(THR, Thread::llvm_to_dart_trampoline_stub_offset()));
+
+  // Push the return address.
+  __ pushq(R10);
 
   __ EnterStubFrame();
 
@@ -536,11 +567,16 @@ void StubCode::GenerateLLVMToDartTrampolineStub(Assembler* assembler) {
   __ decq(CallingConventions::kArg4Reg);
   __ j(POSITIVE, &loop, Assembler::kNearJump);
 
+  __ movq(CODE_REG, CallingConventions::kArg2Reg);
+  __ movq(R10, CallingConventions::kArg3Reg);
   __ movq(CallingConventions::kArg1Reg,
           FieldAddress(CODE_REG, Code::entry_point_offset()));
+
   __ call(CallingConventions::kArg1Reg);
 
   __ LeaveStubFrame();
+
+  __ popq(R10);
 
   // Restore C++ ABI callee-saved registers.
   __ PopRegisters(CallingConventions::kCalleeSaveCpuRegisters,

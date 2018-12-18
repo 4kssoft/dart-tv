@@ -15,7 +15,6 @@
 #include "util.h"
 
 #include "vm/compiler/backend/llvm_common_defs.h"
-#include "vm/runtime_entry_list.h"
 
 namespace llvm {
 class ArrayType;
@@ -43,6 +42,7 @@ class VectorType;
 namespace dart_llvm {
 
 struct CodegenTypeCache {
+  llvm::IntegerType* IntTy = nullptr;
   llvm::IntegerType* Int1Ty = nullptr;
   llvm::IntegerType* Int8Ty = nullptr;
   llvm::IntegerType* Int16Ty = nullptr;
@@ -86,6 +86,8 @@ struct CodegenTypeCache {
   llvm::PointerType* DispatchTableTy = nullptr;
 };
 
+struct AddStatepointIDsToCallSites;
+
 class CodegenModule : public CodegenTypeCache, public DartVMConstants {
  public:
   CodegenModule(llvm::Module&, const DartProgram* program);
@@ -96,7 +98,6 @@ class CodegenModule : public CodegenTypeCache, public DartVMConstants {
 
   void GenerateProgram();
 
-  // TODO(sarkin): Add constant to returned pointers?
   llvm::GlobalVariable* constant_pool() const { return constant_pool_; }
   llvm::GlobalVariable* function_pool() const { return function_pool_; }
   llvm::GlobalVariable* dart_function_pool() const {
@@ -111,9 +112,13 @@ class CodegenModule : public CodegenTypeCache, public DartVMConstants {
     return llvm_to_dart_trampoline_;
   }
 
+  llvm::Function* read_sp() const { return read_sp_; }
+
   llvm::Function* create_array_stub() const {
     return create_array_stub_;
   }
+
+  llvm::Function* write_barrier() const { return write_barrier_; }
 
   llvm::GlobalVariable* GetLLVMDispatchTable() const {
     auto table = dispatch_table_->dispatch_table();
@@ -150,16 +155,26 @@ class CodegenModule : public CodegenTypeCache, public DartVMConstants {
   llvm::FunctionType* GetStaticFunctionType(size_t num_params);
 
   static const int kNonGCAddressSpace = 0;
+#ifdef TARGET_WASM
+  static const int kGCAddressSpace = 0;
+#else
   static const int kGCAddressSpace = 1;
+#endif
 
 #define DECLARE_TAG(entry) k##entry,
-  enum RuntimeEntryTag { RUNTIME_ENTRY_LIST(DECLARE_TAG) kNumEntries };
+  enum RuntimeEntryTag { LLVM_RUNTIME_ENTRY_LIST(DECLARE_TAG) kNumEntries };
 #undef DECLARE_TAG
 
  private:
+  friend struct AddStatepointIDsToCallSites;
+
   size_t NumRuntimeFunctions() const { return RuntimeEntryTag::kNumEntries; }
 
   llvm::Function* GetFunctionByID(size_t id) const;
+  const DartFunction* GetDartFunctionByID(size_t id) const;
+
+  void AddStatepoint(llvm::Function* func);
+  void CreateStatepointIDToFunctionTable();
 
   void GenerateRuntimeFunctionDeclarations();
   void GenerateFunctions();
@@ -167,12 +182,20 @@ class CodegenModule : public CodegenTypeCache, public DartVMConstants {
 
   void GenerateSpecialFunctions();
   void GenerateDartToLLVMTrampoline();
+  void GenerateReadStackPointer();
   void GenerateLLVMToRuntimeTrampoline();
   void GenerateFixedParamsTrampolines();
   void GenerateCreateArrayStub();
+  void GenerateWriteBarrier();
+  void GenerateGetStackMaps();
+
+  void OptimizeModule();
+
   llvm::Function* GetOrCreateFixedParamTrampoline(size_t num_params);
 
   llvm::Constant* GetConstantInt(int64_t val, llvm::IntegerType* ty = nullptr) const;
+
+  static const std::string kGCStrategyName;
 
   static const std::string kGlobalConstantPoolName;
   static const std::string kGlobalFunctionPoolName;
@@ -187,6 +210,7 @@ class CodegenModule : public CodegenTypeCache, public DartVMConstants {
   const DartProgram* program_ = nullptr;
   std::unique_ptr<DispatchTable> dispatch_table_ = nullptr;
 
+  std::vector<llvm::Function*> statepoint_id_to_func_;
   std::unordered_map<size_t, llvm::Function*> function_by_id_;
   std::unordered_map<size_t, llvm::Function*> fixed_params_trampolines_;
   std::unordered_map<std::pair<size_t, std::string>, llvm::Function*, PairHash>
@@ -201,8 +225,10 @@ class CodegenModule : public CodegenTypeCache, public DartVMConstants {
   llvm::GlobalVariable* runtime_functions_ = nullptr;
   llvm::GlobalVariable* llvm_to_dart_trampoline_ = nullptr;
   llvm::GlobalVariable* temp_dispatch_table_ = nullptr;
+  llvm::Function* read_sp_ = nullptr;
   llvm::Function* llvm_to_runtime_trampoline_ = nullptr;
   llvm::Function* create_array_stub_ = nullptr;
+  llvm::Function* write_barrier_ = nullptr;
   llvm::Function* no_such_method_ = nullptr;
 
   static const std::unordered_map<RuntimeEntryTag, std::string>
@@ -242,6 +268,10 @@ class CodegenHelper : public CodegenTypeCache, public DartVMConstants {
   llvm::Value* EmitTrue();
   llvm::Value* EmitNull();
 
+  llvm::Value* EmitTestBit(llvm::Value* val, int bit_num);
+
+  llvm::Value* EmitIsNewObject(llvm::Value* val);
+
   void EmitBrSlowFast(llvm::Value* cond,
                       llvm::BasicBlock* slow_path,
                       llvm::BasicBlock* fast_path);
@@ -261,7 +291,14 @@ class CodegenHelper : public CodegenTypeCache, public DartVMConstants {
   llvm::Value* EmitUntagObject(llvm::Value* obj);
   llvm::Value* EmitTagObject(llvm::Value* obj);
 
-  llvm::Value* EmitField(llvm::Value* obj, intptr_t offset);
+  llvm::Value* EmitFieldPointer(llvm::Value* obj,
+                                intptr_t offset,
+                                llvm::Type* ty);
+
+  llvm::Value* EmitFieldPointer(llvm::Value* obj,
+                                llvm::Value* offset,
+                                llvm::Type* ty);
+
   llvm::Value* EmitNewObject(llvm::Value* ptr);
   llvm::Value* EmitNewObjectAndTag(llvm::Value* ptr);
 
@@ -317,11 +354,13 @@ class CodegenHelper : public CodegenTypeCache, public DartVMConstants {
 
   void EmitStoreInObject(llvm::Value* object,
                          intptr_t offset,
-                         llvm::Value* val);
+                         llvm::Value* val,
+                         bool can_value_be_smi);
 
   void EmitStoreInObject(llvm::Value* object,
                          llvm::Value* offset,
-                         llvm::Value* val);
+                         llvm::Value* val,
+                         bool can_value_be_smi);
 
   llvm::Value* GetParam(size_t i) const;
   llvm::Value* GetThread() const;
@@ -340,16 +379,13 @@ class CodegenHelper : public CodegenTypeCache, public DartVMConstants {
                                    llvm::Value* ret_val);
 
   CodegenModule& cgm_;
-  llvm::Function* function_;
+  llvm::Function* function_ = nullptr;
 
   std::unique_ptr<
       llvm::IRBuilder<llvm::ConstantFolder, llvm::IRBuilderDefaultInserter>>
       builder_;
 };
 
-// TODO(sarkin): 1 to 1 correspondence between LLVM BBs and Dart's BBs is
-// assumed now, investigate whether that is the case.
-// Possible issues: Dart IR *might* have multiple function entry basic blocks.
 class CodegenFunction : public CodegenTypeCache, public DartVMConstants {
  public:
   explicit CodegenFunction(CodegenModule& cgm,
@@ -381,9 +417,14 @@ class CodegenFunction : public CodegenTypeCache, public DartVMConstants {
                                       llvm::Value* left,
                                       llvm::Value* right);
 
+  llvm::Value* EmitIntegerArithmetic(TokenKind op,
+                                     llvm::Value* left,
+                                     llvm::Value* right);
+
   llvm::Constant* GetConstantInt(int64_t val, llvm::IntegerType* ty = nullptr) const;
 
   void EmitNullError();
+  void EmitRangeError(llvm::Value* index, llvm::Value* length);
   void EmitNonBoolTypeError(llvm::Value* val);
 
   llvm::Value* EmitLLVMStaticCall(size_t llvm_function_id,

@@ -302,10 +302,10 @@ Selector::Selector(std::string func_name,
 }
 
 
-void DispatchTable::AddSelector(const Selector& selector) {
+size_t DispatchTable::AddSelector(const Selector& selector) {
   auto it = selector_to_id_.find(selector.selector());
   if (it != selector_to_id_.end()) {
-    return;
+    return it->second;
   }
   auto selector_id = selector_rows_.size();
   selector_to_id_.emplace(selector.selector(), selector_id);
@@ -328,6 +328,8 @@ void DispatchTable::AddSelector(const Selector& selector) {
   }
 
   selector_rows_.emplace_back(selector_id, cids, table_entries);
+
+  return selector_id;
 }
 
 void DispatchTable::BuildTable() {
@@ -343,8 +345,6 @@ void DispatchTable::BuildTable() {
       continue;
     }
     if (row.ComputeTableSize() <= 2) {
-    // TODO(sarkin): 
-    // if (row.ranges().size() == 1) {
       int offset = row_fitter.FitRowWithSingleRange(&row);
       offsets_[row.selector_id()] = offset;
       row.set_offset(offset);
