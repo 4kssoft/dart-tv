@@ -71,8 +71,8 @@ void LLVMSerializer::Serialize() {
 }
 
 void LLVMSerializer::SerializeVMConstants() {
-  auto P = [&](auto v) { THR_Print("%" Pd "\n", v); };
-  auto P32 = [&](auto v) { THR_Print("%" Pd32 "\n", v); };
+  auto P = [&](intptr_t v) { THR_Print("%" Pd "\n", v); };
+  auto P32 = [&](int32_t v) { THR_Print("%" Pd32 "\n", v); };
 
   P32(kWordSize);
   P32(kWordSizeLog2);

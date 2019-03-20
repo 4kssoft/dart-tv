@@ -27,6 +27,8 @@ class Extensions {
   static void* ResolveSymbol(void* lib_handle, const char* symbol);
   static void UnloadLibrary(void* lib_handle);
 
+  static const char* GetRawError();
+
  private:
   static Dart_Handle GetError();
 

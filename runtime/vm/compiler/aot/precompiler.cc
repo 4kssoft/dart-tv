@@ -173,6 +173,10 @@ Precompiler::Precompiler(Thread* thread)
   Precompiler::singleton_ = this;
 }
 
+Precompiler::~Precompiler() {
+  Precompiler::singleton_ = nullptr;
+}
+
 void Precompiler::DoCompileAll() {
   ASSERT(I->compilation_allowed());
 
@@ -206,6 +210,9 @@ void Precompiler::DoCompileAll() {
       // as well as other type checks.
       HierarchyInfo hierarchy_info(T);
 
+      const bool xxx = FLAG_serialize_il;
+      FLAG_serialize_il = false;
+
       // Precompile constructors to compute information such as
       // optimized instruction count (used in inlining heuristics).
       ClassFinalizer::ClearAllCode(
@@ -214,6 +221,8 @@ void Precompiler::DoCompileAll() {
 
       ClassFinalizer::ClearAllCode(
           /*including_nonchanging_cids=*/FLAG_use_bare_instructions);
+
+      FLAG_serialize_il = xxx;
 
       // All stubs have already been generated, all of them share the same pool.
       // We use that pool to initialize our global object pool, to guarantee
@@ -2211,6 +2220,12 @@ void PrecompileParsedFunctionHelper::FinalizeCompilation(
     CodeStatistics* stats) {
   const Function& function = parsed_function()->function();
   Zone* const zone = thread()->zone();
+
+  const auto& func = flow_graph->function();
+  if (func.IsLLVMCompiled()) {
+    ILSerializer::PrintSerialization(flow_graph,
+                                     &Precompiler::Instance()->llvm_serializer());
+  }
 
   // CreateDeoptInfo uses the object pool and needs to be done before
   // FinalizeCode.

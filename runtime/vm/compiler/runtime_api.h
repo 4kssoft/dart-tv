@@ -565,6 +565,9 @@ class Thread : public AllStatic {
   static word write_barrier_entry_point_offset();
   static word vm_tag_offset();
 
+  static word call_llvm_function_stub_offset();
+  static word llvm_to_dart_trampoline_stub_offset();
+
 #if !defined(TARGET_ARCH_DBC)
   static word write_barrier_code_offset();
   static word array_write_barrier_code_offset();
@@ -681,6 +684,7 @@ class Code : public AllStatic {
   static intptr_t entry_point_offset(
       CodeEntryKind kind = CodeEntryKind::kNormal);
   static intptr_t saved_instructions_offset();
+  static word llvm_function_id_offset();
 };
 
 class SubtypeTestCache : public AllStatic {

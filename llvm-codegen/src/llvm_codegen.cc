@@ -223,7 +223,7 @@ llvm::Function* CodegenModule::GetOrCreateHandleOptionalParamsTrampoline(
   auto trampoline_ty = llvm::FunctionType::get(ObjectPtrTy, params, false);
   auto trampoline = llvm::Function::Create(
       trampoline_ty, llvm::GlobalVariable::InternalLinkage, trampoline_name,
-      module_);
+      &module_);
   auto target_fn = GetDartFunctionByID(function_id);
   // Set GC strategy only if the target function can trigger GC, because
   // the trampoline only forwards the arguments and does nothing that can
@@ -300,7 +300,7 @@ llvm::Function* CodegenModule::GetOrCreateDartCallTrampoline(
   auto trampoline_ty = llvm::FunctionType::get(ObjectPtrTy, params, false);
   auto trampoline = llvm::Function::Create(
       trampoline_ty, llvm::GlobalVariable::InternalLinkage, trampoline_name,
-      module_);
+      &module_);
   trampoline->setGC(kGCStrategyName);
 
   CodegenHelper helper(*this, trampoline);
@@ -359,7 +359,7 @@ llvm::Function* CodegenModule::GetOrCreateClassAllocationStub(size_t cid) {
   auto stub_ty = llvm::FunctionType::get(ObjectPtrTy, params, false);
   auto stub_name = "_LLVMAllocationStub_" + std::to_string(cid);
   auto stub = llvm::Function::Create(
-      stub_ty, llvm::GlobalVariable::InternalLinkage, stub_name, module_);
+      stub_ty, llvm::GlobalVariable::InternalLinkage, stub_name, &module_);
   stub->setGC(kGCStrategyName);
 
   CodegenHelper helper(*this, stub);
@@ -460,6 +460,10 @@ struct AddStatepointIDsToCallSites : public llvm::FunctionPass {
   void addStatepoints(llvm::BasicBlock& bb, llvm::Function* func) {
     for (llvm::Instruction& instruction : bb) {
       if (auto call = llvm::dyn_cast<llvm::CallInst>(&instruction)) {
+        llvm::Function* fn = call->getCalledFunction();
+        if (fn && fn == cgm.new_object()) {
+          continue;
+        }
         cgm.AddStatepoint(func);
         auto attr = llvm::Attribute::get(cgm.GetLLVMContext(), "statepoint-id",
                                          std::to_string(id));
@@ -495,22 +499,13 @@ struct RewriteGCIntrinsics : public llvm::FunctionPass {
     for (llvm::Instruction& instruction : bb) {
       if (llvm::CallInst* call = llvm::dyn_cast<llvm::CallInst>(&instruction)) {
         llvm::Function* fn = call->getCalledFunction();
-        if (fn && fn->isIntrinsic()) {
-          fn->recalculateIntrinsicID();
+        if (fn && fn == cgm_.new_object()) {
           llvm::IRBuilder<> b(&instruction);
-          // Have to stop iteration by returning true if block structure has
-          // changed.
-          switch (fn->getIntrinsicID()) {
-            case llvm::Intrinsic::dart_new_object: {
-              auto pointer = call->getArgOperand(0);
-              pointer = b.CreateAddrSpaceCast(pointer, cgm_.ObjectPtrTy);
-              call->replaceAllUsesWith(pointer);
-              call->eraseFromParent();
-              return true;
-            }
-            default:
-              break;
-          }
+          auto pointer = call->getArgOperand(0);
+          pointer = b.CreateAddrSpaceCast(pointer, cgm_.ObjectPtrTy);
+          call->replaceAllUsesWith(pointer);
+          call->eraseFromParent();
+          return true;
         }
       }
     }
@@ -518,8 +513,10 @@ struct RewriteGCIntrinsics : public llvm::FunctionPass {
   }
 
   bool runOnFunction(llvm::Function& func) override {
-    for (llvm::BasicBlock& bb : func) {
-      while (tryRewrite(bb)) {
+    if (cgm_.new_object() != nullptr) {
+      for (llvm::BasicBlock& bb : func) {
+        while (tryRewrite(bb)) {
+        }
       }
     }
     return false;
@@ -529,7 +526,7 @@ struct RewriteGCIntrinsics : public llvm::FunctionPass {
 char RewriteGCIntrinsics::ID = 1;
 
 void CodegenModule::OptimizeModule() {
-  // TODO(sarkin): 
+  // TODO(sarkin):
   auto run_standard_opt = [&](int opt_level, int size_level) {
     llvm::legacy::PassManager mpm;
     llvm::legacy::FunctionPassManager fpm(&module_);
@@ -593,6 +590,7 @@ void CodegenModule::OptimizeModule() {
     }
   }
 
+#if 0
   auto optimize_after = [&]() {
     {
       llvm::legacy::PassManager mpm;
@@ -618,7 +616,9 @@ void CodegenModule::OptimizeModule() {
       }
     }
   };
-  // optimize_after();
+  optimize_after();
+#endif
+
   // TODO(sarkin): Sometimes O3 does a worse job than optimize_after.
   run_standard_opt(3, 1);
 }
@@ -687,7 +687,7 @@ void CodegenModule::GenerateRuntimeFunctionDeclarations() {
     assert(it != kRuntimeEntryTagToName.end());
     auto func = llvm::Function::Create(RuntimeFunctionTy,
                                        llvm::GlobalVariable::ExternalLinkage,
-                                       it->second, module_);
+                                       it->second, &module_);
     // Pass NativeArguments by value
     func->addParamAttr(0, llvm::Attribute::AttrKind::ByVal);
 
@@ -717,7 +717,7 @@ void CodegenModule::GenerateSpecialFunctions() {
 void CodegenModule::GenerateDartToLLVMTrampoline() {
   llvm::Function* trampoline = llvm::Function::Create(
       FixedParamTrampolineTy, llvm::GlobalVariable::ExternalLinkage,
-      kDartToLLVMTrampolineName, module_);
+      kDartToLLVMTrampolineName, &module_);
 
   trampoline->setGC(kGCStrategyName);
 
@@ -747,7 +747,7 @@ void CodegenModule::GenerateLLVMToRuntimeTrampoline() {
                               false);
   auto trampoline = llvm::Function::Create(
       trampoline_ty, llvm::GlobalVariable::InternalLinkage,
-      "_LLVMToRuntimeTrampoline", module_);
+      "_LLVMToRuntimeTrampoline", &module_);
   // Explicitly set calling convention, as the function is internal and
   // the calling convention might be optimized to fastcc.
   trampoline->setCallingConv(llvm::CallingConv::C);
@@ -789,7 +789,7 @@ void CodegenModule::GenerateReadStackPointer() {
   auto& func = read_sp_;
   auto func_ty = llvm::FunctionType::get(IntTy, false);
   func = llvm::Function::Create(func_ty, llvm::GlobalVariable::InternalLinkage,
-                                "", module_);
+                                "", &module_);
   func->addAttribute(llvm::AttributeList::FunctionIndex,
                    llvm::Attribute::AttrKind::AlwaysInline);
 
@@ -829,7 +829,7 @@ void CodegenModule::GenerateCreateArrayStub() {
   auto stub_name = "_LLVMCreateArrayStub";
   auto& stub = create_array_stub_;
   stub = llvm::Function::Create(
-      stub_ty, llvm::GlobalVariable::InternalLinkage, stub_name, module_);
+      stub_ty, llvm::GlobalVariable::InternalLinkage, stub_name, &module_);
   stub->setGC(kGCStrategyName);
 
   CodegenHelper helper(*this, stub);
@@ -987,7 +987,7 @@ void CodegenModule::GenerateWriteBarrier() {
   auto barrier_name = "_LLVMWriteBarrier";
   auto& wb = write_barrier_;
   wb = llvm::Function::Create(barrier_ty, llvm::GlobalVariable::InternalLinkage,
-                              barrier_name, module_);
+                              barrier_name, &module_);
   wb->setGC(kGCStrategyName);
   wb->addAttribute(llvm::AttributeList::FunctionIndex,
                    llvm::Attribute::AttrKind::NoInline);
@@ -1067,7 +1067,7 @@ void CodegenModule::GenerateWriteBarrier() {
     auto func_ty = llvm::FunctionType::get(VoidTy, {NonGCObjectPtrTy}, false);
     auto func = llvm::Function::Create(
         func_ty, llvm::GlobalVariable::LinkageTypes::ExternalLinkage,
-        "StoreBufferBlockProcess", module_);
+        "StoreBufferBlockProcess", &module_);
     builder.CreateCall(func, {thread});
   }
   builder.CreateRetVoid();
@@ -1142,7 +1142,7 @@ void CodegenModule::GenerateWriteBarrier() {
     auto func_ty = llvm::FunctionType::get(VoidTy, {NonGCObjectPtrTy}, false);
     auto func = llvm::Function::Create(
         func_ty, llvm::GlobalVariable::LinkageTypes::ExternalLinkage,
-        "MarkingStackBlockProcess", module_);
+        "MarkingStackBlockProcess", &module_);
     builder.CreateCall(func, {thread});
   }
   builder.CreateRetVoid();
@@ -1157,7 +1157,7 @@ void CodegenModule::GenerateGetStackMaps() {
   auto func_ty = llvm::FunctionType::get(NonGCObjectPtrTy, {}, false);
   auto func =
       llvm::Function::Create(func_ty, llvm::GlobalVariable::ExternalLinkage,
-                             "_LLVMGetStackMaps", module_);
+                             "_LLVMGetStackMaps", &module_);
 
   CodegenHelper helper(*this, func);
   auto bb = helper.CreateBasicBlock("entry");
@@ -1174,7 +1174,7 @@ llvm::Function* CodegenModule::GetOrCreateFixedParamTrampoline(
   }
   auto trampoline = llvm::Function::Create(
       FixedParamTrampolineTy, llvm::GlobalVariable::InternalLinkage,
-      "_FixedParamTrampoline$" + std::to_string(num_params), module_);
+      "_FixedParamTrampoline$" + std::to_string(num_params), &module_);
 
   trampoline->setGC(kGCStrategyName);
 
@@ -1230,7 +1230,7 @@ void CodegenModule::GenerateFunctions() {
 
     auto llvm_func =
         llvm::Function::Create(GetStaticFunctionType(func->num_params()),
-                               linkage, "LLVM_" + func->name(), module_);
+                               linkage, "LLVM_" + func->name(), &module_);
     if (func->can_trigger_gc()) {
       llvm_func->setGC(kGCStrategyName);
     }
@@ -1441,7 +1441,7 @@ llvm::Value* CodegenHelper::EmitSmiToInt(llvm::Value* val) {
 llvm::Value* CodegenHelper::EmitIsAnyNotSmi(llvm::Value* a, llvm::Value* b) {
   assert(a->getType() == ObjectPtrTy);
   assert(b->getType() == ObjectPtrTy);
-  
+
   a = EmitSmiToInt(a);
   b = EmitSmiToInt(b);
 
@@ -1491,18 +1491,28 @@ llvm::Value* CodegenHelper::EmitFieldPointer(llvm::Value* obj,
   return builder_->CreatePointerCast(field_ptr, field_ptr_ty);
 }
 
+llvm::Function* CodegenModule::GetOrCreateNewObject() {
+  if (new_object_ == nullptr) {
+    auto ty = llvm::FunctionType::get(ObjectPtrTy, {NonGCObjectPtrTy}, false);
+    new_object_ = llvm::Function::Create(ty, llvm::Function::ExternalLinkage, "__to_ptr", &module_);
+    new_object_->addFnAttr("gc-leaf-function");
+  }
+  return new_object_;
+}
+
 llvm::Value* CodegenHelper::EmitNewObject(llvm::Value* ptr) {
   if (ptr->getType() != NonGCObjectPtrTy) {
     assert(ptr->getType() == Int64Ty);
     ptr = builder_->CreateIntToPtr(ptr, NonGCObjectPtrTy);
   }
+
   // TODO(sarkin): Currently the intrinsic takes an Int64Ty, which doesn't
   // work for 32-bit architectures. Add different intrinsics for different
   // pointer widths in LLVM, something like the uadd_with_overflow intrinsic
   // does.
 #ifdef TARGET_X64
-  return builder_->CreateIntrinsic(llvm::Intrinsic::dart_new_object, {}, {ptr});
-#endif 
+  return builder_->CreateCall(cgm_.GetOrCreateNewObject(), {ptr});
+#endif
   return ptr;
 }
 
@@ -2342,6 +2352,7 @@ llvm::Value* CodegenFunction::EmitCheckedSmiComparison(
   bool is_right_smi = I.NextInputAsIntPtr();
   auto left = GetValue(I.NextInput());
   auto right = GetValue(I.NextInput());
+  auto is_static_call = I.NextInputAsIntPtr();
 
   llvm::Value* cmp = nullptr;
   if (left == right) {
@@ -2359,7 +2370,7 @@ llvm::Value* CodegenFunction::EmitCheckedSmiComparison(
   helper_.EmitBrSlowFast(cmp, slow_path, fast_path);
 
   builder_.SetInsertPoint(slow_path);
-  auto object_cmp = EmitInstanceCall(I);
+  auto object_cmp = !is_static_call ? EmitInstanceCall(I) : EmitStaticCall(I);
   auto cmp_against = helper_.EmitBool(GetConstantInt(!is_negated, Int1Ty));
   auto slow_cmp = builder_.CreateICmpEQ(object_cmp, cmp_against);
   builder_.CreateBr(merge_paths);
@@ -2387,6 +2398,7 @@ llvm::Value* CodegenFunction::EmitCheckedSmiOp(
   bool is_right_smi = I.NextInputAsIntPtr();
   auto left = GetValue(I.NextInput());
   auto right = GetValue(I.NextInput());
+  auto is_static_call = I.NextInputAsIntPtr();
 
   llvm::Value* cmp = nullptr;
   if (left == right) {
@@ -2404,7 +2416,7 @@ llvm::Value* CodegenFunction::EmitCheckedSmiOp(
   helper_.EmitBrSlowFast(cmp, slow_path, fast_path);
 
   builder_.SetInsertPoint(slow_path);
-  auto slow_val = EmitInstanceCall(I);
+  auto slow_val = !is_static_call ? EmitInstanceCall(I) : EmitStaticCall(I);
   builder_.CreateBr(merge_paths);
 
   builder_.SetInsertPoint(fast_path);
@@ -2567,7 +2579,7 @@ llvm::Value* CodegenFunction::EmitLoadField(InstructionInputExtractor I) {
     merge_field->addIncoming(float64x2_field, load_float64x2);
 
     return merge_field;
-  } 
+  }
 
   builder_.CreateBr(load_pointer);
 
@@ -3082,7 +3094,7 @@ llvm::Value* CodegenFunction::EmitUnboxedIntConverter(InstructionInputExtractor 
 }
 
 llvm::Value* CodegenFunction::EmitShiftInt64Op(InstructionInputExtractor I) {
-  // TODO(sarkin): 
+  // TODO(sarkin):
   auto op = I.NextInputAsEnum<TokenKind>();
   auto left = GetValue(I.NextInput());
   auto right = GetValue(I.NextInput());
@@ -3094,12 +3106,12 @@ llvm::Value* CodegenFunction::EmitShiftInt64Op(InstructionInputExtractor I) {
 }
 
 llvm::Value* CodegenFunction::EmitCheckSmi(InstructionInputExtractor I) {
-  // TODO(sarkin): 
+  // TODO(sarkin):
   return nullptr;
 }
 
 llvm::Value* CodegenFunction::EmitBinarySmiOp(InstructionInputExtractor I) {
-  // TODO(sarkin): 
+  // TODO(sarkin):
   auto op = I.NextInputAsEnum<TokenKind>();
   auto left = GetValue(I.NextInput());
   auto right = GetValue(I.NextInput());

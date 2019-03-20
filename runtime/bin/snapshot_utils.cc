@@ -191,6 +191,11 @@ class DylibAppSnapshot : public AppSnapshot {
 static AppSnapshot* TryReadAppSnapshotDynamicLibrary(const char* script_name) {
   void* library = Extensions::LoadExtensionLibrary(script_name);
   if (library == NULL) {
+    // TODO(vegorov) gross hack to make development easier.
+    const size_t len = strlen(script_name);
+    if (len > 2 && strncmp(script_name + len - 3, ".so", 3) == 0) {
+      FATAL2("Failed to load %s: %s\n", script_name, Extensions::GetRawError());
+    }
     return NULL;
   }
 

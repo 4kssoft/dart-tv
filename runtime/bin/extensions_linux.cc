@@ -23,6 +23,8 @@ void* Extensions::LoadExtensionLibrary(const char* library_file) {
   return dlopen(library_file, RTLD_LAZY);
 }
 
+const char* Extensions::GetRawError() { return dlerror(); }
+
 void* Extensions::LoadExtensionLibraryNow(const char* library_file) {
   return dlopen(library_file, RTLD_NOW);
 }

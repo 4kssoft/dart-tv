@@ -18,17 +18,21 @@ namespace {
 intptr_t CountInstructions(BlockEntryInstr* instr) {
   intptr_t instr_count = 0;
   ForwardInstructionIterator it(instr);
-  auto has_comparison = [&](auto instr) {
+  auto has_comparison = [&](Instruction* instr) {
     return instr->IsBranch() || instr->IsIfThenElse();
   };
   for (; !it.Done(); it.Advance()) {
+    if (it.Current() == instr) continue;
+    if (it.Current()->IsParallelMove()) continue;
     instr_count += 1 + has_comparison(it.Current());
   }
   if (instr->IsBlockEntryWithInitialDefs()) {
     auto initial_defs =
         instr->AsBlockEntryWithInitialDefs()->initial_definitions();
     if (initial_defs != nullptr) {
-      instr_count += initial_defs->length();
+      for (auto def : *initial_defs) {
+        if (def->input_use_list() != nullptr) instr_count++;
+      }
     }
   }
   if (instr->IsJoinEntry()) {
@@ -77,6 +81,7 @@ void ILSerializer::VisitBlocks() {
     ForwardInstructionIterator it(entry);
     for (; !it.Done(); it.Advance()) {
       auto current = it.Current();
+      if (current->IsParallelMove()) continue;
       VisitInstruction(current);
       THR_Print("\n");
     }
@@ -124,6 +129,10 @@ void ILSerializer::VisitGraphEntry(GraphEntryInstr* instr) {
 
   if (instr->initial_definitions() != nullptr) {
     for (Definition* def : *instr->initial_definitions()) {
+      if (def->input_use_list() == nullptr) {
+        continue;
+      }
+
       VisitInstruction(def);
       THR_Print("\n");
     }
@@ -152,6 +161,10 @@ void ILSerializer::VisitFunctionEntry(FunctionEntryInstr* instr) {
 
   if (instr->initial_definitions() != nullptr) {
     for (Definition* def : *instr->initial_definitions()) {
+      if (def->input_use_list() == nullptr) {
+        continue;
+      }
+
       VisitInstruction(def);
       THR_Print("\n");
     }
@@ -159,6 +172,7 @@ void ILSerializer::VisitFunctionEntry(FunctionEntryInstr* instr) {
 }
 
 void ILSerializer::VisitConstant(ConstantInstr* instr) {
+  RELEASE_ASSERT(instr->input_use_list() != nullptr);
   THR_Print("%s", instr->DebugName());
   if (instr->value().IsSmi()) {
     THR_Print(" 1");
@@ -333,9 +347,8 @@ void ILSerializer::SerializeCall(const TemplateDartCall<0>* instr,
   }
 }
 
-void ILSerializer::VisitStaticCall(StaticCallInstr* instr) {
-  THR_Print("%s", instr->DebugName());
-  bool is_llvm = instr->function().IsLLVMCompiled();
+void ILSerializer::SerializeStaticCall(StaticCallInstr* instr, bool serialize_arguments) {
+  const bool is_llvm = instr->function().IsLLVMCompiled();
   THR_Print(" %" Pd32, is_llvm);
 
   if (!is_llvm) {
@@ -353,7 +366,12 @@ void ILSerializer::VisitStaticCall(StaticCallInstr* instr) {
       String::Handle(String::New(patch_point)), instr->function());
   THR_Print(" %s", patch_point);
 
-  SerializeCall(instr);
+  SerializeCall(instr, serialize_arguments);
+}
+
+void ILSerializer::VisitStaticCall(StaticCallInstr* instr) {
+  THR_Print("%s", instr->DebugName());
+  SerializeStaticCall(instr);
 }
 
 void ILSerializer::SerializeInstanceCall(InstanceCallInstr* instr,
@@ -363,6 +381,9 @@ void ILSerializer::SerializeInstanceCall(InstanceCallInstr* instr,
   SerializeCall(instr, serialize_arguments);
 }
 
+void ILSerializer::VisitDefault(Instruction* instr) {
+  FATAL1("Unsupported instruction %s", instr->ToCString());
+}
 void ILSerializer::VisitInstanceCall(InstanceCallInstr* instr) {
   THR_Print("%s ", instr->DebugName());
   const AbstractType& value_type = *instr->Receiver()->Type()->ToAbstractType();
@@ -413,7 +434,7 @@ void ILSerializer::VisitStoreStaticField(StoreStaticFieldInstr* instr) {
 
 void ILSerializer::VisitCheckedSmiComparison(CheckedSmiComparisonInstr* instr) {
   THR_Print("%s", instr->DebugName());
-  String& selector = String::Handle(instr->call()->ic_data()->target_name());
+  String& selector = String::Handle(instr->call()->Selector());
   THR_Print(" %" Pd32, instr->kind());
   THR_Print(" %s", selector.ToCString());
   THR_Print(" %" Pd32, instr->is_negated());
@@ -424,8 +445,16 @@ void ILSerializer::VisitCheckedSmiComparison(CheckedSmiComparisonInstr* instr) {
   SerializeValue(instr->left());
   SerializeValue(instr->right());
 
-  SerializeInstanceCall(instr->call(), /* check_smi */ false,
-                        /* serialize_arguments */ false);
+  if (auto* instance_call = instr->call()->AsInstanceCall()) {
+    THR_Print(" 0");
+    SerializeInstanceCall(instance_call, /* check_smi */ false,
+                          /* serialize_arguments */ false);
+  } else if (auto* static_call = instr->call()->AsStaticCall()){
+    THR_Print(" 1");
+    SerializeStaticCall(static_call);
+  } else {
+    UNREACHABLE();
+  }
 
   SerializeValue(instr->left());
   SerializeValue(instr->right());
@@ -455,10 +484,10 @@ void ILSerializer::VisitLoadField(LoadFieldInstr* instr) {
   THR_Print(" %" Pd32 " %" Pd32, instr->IsUnboxedLoad(),
             instr->IsPotentialUnboxedLoad());
   THR_Print(" %" Pd32, instr->representation());
-  THR_Print(" %" Pd, instr->offset_in_bytes());
+  THR_Print(" %" Pd, instr->slot().offset_in_bytes());
   SerializeValue(instr->instance());
-  if (instr->field() != nullptr) {
-    auto& field = Field::Handle(instr->field()->Original());
+  if (instr->slot().IsDartField()) {
+    auto& field = Field::Handle(instr->slot().field().Original());
     THR_Print(" %" Pd, AddConstant(field));
   } else {
     THR_Print(" 0");
@@ -473,16 +502,20 @@ void ILSerializer::VisitStoreInstanceField(StoreInstanceFieldInstr* instr) {
   THR_Print(" %" Pd32, instr->ShouldEmitStoreBarrier());
   SerializeValue(instr->instance());
   SerializeValue(instr->value());
-  if (!instr->field().IsNull()) {
-    THR_Print(" %" Pd, instr->field().UnboxedFieldCid());
+  if (instr->slot().IsDartField()) {
+    THR_Print(" %" Pd, instr->slot().field().UnboxedFieldCid());
   } else {
     THR_Print(" 0");
   }
-  THR_Print(" %" Pd, instr->offset_in_bytes());
+  THR_Print(" %" Pd, instr->slot().offset_in_bytes());
   const intptr_t cid = instr->value()->Type()->ToNullableCid();
   THR_Print(" %" Pd32, cid != kSmiCid && instr->CanValueBeSmi());
-  auto& field = Field::Handle(instr->field().Original());
-  THR_Print(" %" Pd, AddConstant(field));
+  if (instr->slot().IsDartField()) {
+    auto& field = Field::Handle(instr->slot().field().Original());
+    THR_Print(" %" Pd, AddConstant(field));
+  } else {
+    THR_Print(" %" Pd, AddConstant(Object::Handle()));
+  }
 }
 
 void ILSerializer::VisitSpecialParameter(SpecialParameterInstr* instr) {
@@ -622,7 +655,7 @@ void ILSerializer::VisitShiftInt64Op(ShiftInt64OpInstr* instr) {
 
 void ILSerializer::VisitCheckedSmiOp(CheckedSmiOpInstr* instr) {
   THR_Print("%s", instr->DebugName());
-  String& selector = String::Handle(instr->call()->ic_data()->target_name());
+  String& selector = String::Handle(instr->call()->Selector());
   THR_Print(" %" Pd32, instr->op_kind());
   THR_Print(" %s", selector.ToCString());
 
@@ -633,7 +666,16 @@ void ILSerializer::VisitCheckedSmiOp(CheckedSmiOpInstr* instr) {
   SerializeValue(instr->right());
 
   // TODO(sarkin): What if left is smi and right isn't?
-  SerializeInstanceCall(instr->call(), /* check_smi */ false, false);
+  if (auto* instance_call = instr->call()->AsInstanceCall()) {
+    THR_Print(" 0");
+    SerializeInstanceCall(instance_call, /* check_smi */ false,
+                          /* serialize_arguments */ false);
+  } else if (auto* static_call = instr->call()->AsStaticCall()) {
+    THR_Print(" 1");
+    SerializeStaticCall(static_call);
+  } else {
+    UNREACHABLE();
+  }
 
   SerializeValue(instr->left());
   SerializeValue(instr->right());

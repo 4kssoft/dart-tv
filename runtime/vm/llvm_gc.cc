@@ -22,7 +22,7 @@ void LLVMStackMap::Visit(StackFrame* frame,
   const auto num_locations = record_->num_locations;
   auto locations = &record_->first_location;
 
-  auto assert_is_zero = [&](auto loc) {
+  auto assert_is_zero = [&](const StackMapRecordLocation& loc) {
     ASSERT(loc.location_type == StackMapRecordLocation::ConstantLocation);
     ASSERT(loc.offset_or_small_constant == 0);
   };
@@ -139,7 +139,7 @@ void LLVMStackMaps::Parse() {
     sorted_indices_[i] = i;
   }
   std::sort(sorted_indices_, sorted_indices_ + num_records_,
-            [&](auto a, auto b) { return statepoints_[a] < statepoints_[b]; });
+            [&](intptr_t a, intptr_t b) { return statepoints_[a] < statepoints_[b]; });
 }
 
 void LLVMStackMaps::Visit(StackFrame* frame, ObjectPointerVisitor* visitor) {

@@ -165,6 +165,9 @@ class CodegenModule : public CodegenTypeCache, public DartVMConstants {
   enum RuntimeEntryTag { LLVM_RUNTIME_ENTRY_LIST(DECLARE_TAG) kNumEntries };
 #undef DECLARE_TAG
 
+  llvm::Function* new_object() const { return new_object_; }
+  llvm::Function* GetOrCreateNewObject();
+
  private:
   friend struct AddStatepointIDsToCallSites;
 
@@ -230,6 +233,8 @@ class CodegenModule : public CodegenTypeCache, public DartVMConstants {
   llvm::Function* create_array_stub_ = nullptr;
   llvm::Function* write_barrier_ = nullptr;
   llvm::Function* no_such_method_ = nullptr;
+  llvm::Function* new_object_ = nullptr;
+
 
   static const std::unordered_map<RuntimeEntryTag, std::string>
       kRuntimeEntryTagToName;

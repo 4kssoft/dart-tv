@@ -59,15 +59,23 @@ class LLVMConstantTraits {
 
   static uword Hash(const Object& obj) {
     if (obj.IsNull()) {
-      return Instance::Handle(Instance::null()).CanonicalizeHash();
+      return 2011;
+    }
+    if (obj.IsString() || obj.IsNumber()) {
+      return Instance::Cast(obj).CanonicalizeHash();
+    }
+    if (obj.IsCode()) {
+      // Instructions don't move during compaction.
+      return Code::Cast(obj).PayloadStart();
+    }
+    if (obj.IsFunction()) {
+      return Function::Cast(obj).Hash();
     }
     if (obj.IsField()) {
-      return String::Handle(Field::Cast(obj).name()).Hash();
+      return dart::String::HashRawSymbol(Field::Cast(obj).name());
     }
-    if (obj.IsClass()) {
-      return String::Handle(Class::Cast(obj).Name()).Hash();
-    }
-    return Instance::Cast(obj).CanonicalizeHash();
+    // Unlikely.
+    return obj.GetClassId();
   }
 };
 

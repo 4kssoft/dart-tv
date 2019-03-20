@@ -1193,8 +1193,6 @@ class Class : public Object {
     NOT_IN_PRECOMPILED(StoreNonPointer(&raw_ptr()->kernel_offset_, offset));
   }
 
-  RawArray* invocation_dispatcher_cache() const;
-
   void DisableAllocationStub() const;
 
   RawArray* constants() const;
@@ -1301,6 +1299,8 @@ class Class : public Object {
                                const Array& args_desc,
                                const Function& dispatcher) const;
 
+  RawArray* invocation_dispatcher_cache() const;
+
  private:
   RawType* declaration_type() const { return raw_ptr()->declaration_type_; }
 
@@ -1370,7 +1370,6 @@ class Class : public Object {
   RawString* GenerateUserVisibleName() const;
   void set_state_bits(intptr_t bits) const;
 
-  RawArray* invocation_dispatcher_cache() const;
 
   void set_canonical_type(const Type& value) const;
   RawType* canonical_type() const;
@@ -3732,10 +3731,10 @@ class Library : public Object {
   //
   // WARNING: If the isolate received an [UnwindError] this function will not
   // return and rather unwinds until the enclosing setjmp() handler.
-  bool FindPragma(Thread* T,
+  static bool FindPragma(Thread* T,
                   const Object& object,
                   const String& pragma_name,
-                  Object* options) const;
+                  Object* options = nullptr);
 
   RawClass* toplevel_class() const { return raw_ptr()->toplevel_class_; }
   void set_toplevel_class(const Class& value) const;

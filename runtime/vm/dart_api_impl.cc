@@ -1126,9 +1126,9 @@ class LoadLLVMExternals {
       function ^= llvm_compiled_functions.At(i);
       code ^= function.CurrentCode();
       function.setup_entry_points_for_llvm(
-          StubCode::CallLLVMFunction_entry()->EntryPoint());
+          Code::EntryPoint(StubCode::CallLLVMFunction().raw()));
       code.setup_entry_points_for_llvm(
-          StubCode::CallLLVMFunction_entry()->EntryPoint(),
+          Code::EntryPoint(StubCode::CallLLVMFunction().raw()),
           reinterpret_cast<uword>(dart_to_llvm_trampoline),
           static_cast<uword>(function_pool[i]), i);
     }
@@ -1208,8 +1208,7 @@ class LoadLLVMExternals {
     auto llvm_get_stack_maps =
         GetSymbol<StackMapHeader* (*)()>(library, kLLVMGetStackMapsSymbolName);
 
-    *llvm_to_dart_trampoline =
-        StubCode::LLVMToDartTrampoline_entry()->EntryPoint();
+    *llvm_to_dart_trampoline = Code::EntryPoint(StubCode::LLVMToDartTrampoline().raw());
 
     SetFunctionPool(function_pool, dart_to_llvm_trampoline);
     SetConstantPool(constant_pool);

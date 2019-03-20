@@ -21,6 +21,8 @@ class ILSerializer : public FlowGraphVisitor {
                         LLVMSerializer* llvm_serializer);
   virtual ~ILSerializer() {}
 
+  virtual void VisitDefault(Instruction* instr);
+
 #define DECLARE_VISIT_INSTRUCTION(ShortName, Attrs)                            \
   virtual void Visit##ShortName(ShortName##Instr* instr);
   FOR_EACH_SUPPORTED_INSTRUCTION(DECLARE_VISIT_INSTRUCTION)
@@ -59,6 +61,7 @@ class ILSerializer : public FlowGraphVisitor {
                              bool serialize_arguments = true);
   void SerializeCall(const TemplateDartCall<0>* instr,
                      bool serialize_arguments = true);
+  void SerializeStaticCall(StaticCallInstr* call, bool serialize_arguments = true);
 
   void SerializeIndexOrConstant(Definition* d) const;
   template <typename T>

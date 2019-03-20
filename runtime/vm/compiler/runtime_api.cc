@@ -440,6 +440,7 @@ word Array::header_size() {
   V(Closure, instantiator_type_arguments_offset)                               \
   V(Code, object_pool_offset)                                                  \
   V(Code, saved_instructions_offset)                                           \
+  V(Code, llvm_function_id_offset)                                             \
   V(Context, num_variables_offset)                                             \
   V(Context, parent_offset)                                                    \
   V(Double, value_offset)                                                      \
@@ -491,6 +492,8 @@ word Array::header_size() {
   V(Thread, top_offset)                                                        \
   V(Thread, top_resource_offset)                                               \
   V(Thread, vm_tag_offset)                                                     \
+  V(Thread, call_llvm_function_stub_offset)                                    \
+  V(Thread, llvm_to_dart_trampoline_stub_offset)                               \
   V(TimelineStream, enabled_offset)                                            \
   V(TwoByteString, data_offset)                                                \
   V(Type, arguments_offset)                                                    \

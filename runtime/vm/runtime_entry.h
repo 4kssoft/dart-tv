@@ -91,8 +91,8 @@ class RuntimeEntry : public BaseRuntimeEntry {
 
 // Helper macros for declaring and defining runtime entries.
 
-#define DEFINE_RUNTIME_ENTRY(name, argument_count)                             \
-  extern void DRT_##name(NativeArguments arguments);                           \
+#define DEFINE_RUNTIME_ENTRY_WITH_VISIBILITY(vis, name, argument_count)                             \
+  extern __attribute__((visibility(vis))) void DRT_##name(NativeArguments arguments);                           \
   extern const RuntimeEntry k##name##RuntimeEntry(                             \
       "DRT_" #name, &DRT_##name, argument_count, false, false);                \
   static void DRT_Helper##name(Isolate* isolate, Thread* thread, Zone* zone,   \
@@ -115,6 +115,9 @@ class RuntimeEntry : public BaseRuntimeEntry {
   }                                                                            \
   static void DRT_Helper##name(Isolate* isolate, Thread* thread, Zone* zone,   \
                                NativeArguments arguments)
+
+#define DEFINE_RUNTIME_ENTRY(name, argument_count) \
+  DEFINE_RUNTIME_ENTRY_WITH_VISIBILITY("default", name, argument_count)
 
 #define DECLARE_RUNTIME_ENTRY(name)                                            \
   extern const RuntimeEntry k##name##RuntimeEntry;                             \

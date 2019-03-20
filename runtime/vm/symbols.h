@@ -484,6 +484,7 @@ class ObjectPointerVisitor;
   V(FfiNativeType, "NativeType")                                               \
   V(FfiDynamicLibrary, "DynamicLibrary")                                       \
   V(vm_llvm, "vm:llvm")                                                        \
+  V(vm_never_inline, "vm:never-inline")                                        \
 
 // Contains a list of frequently used strings in a canonicalized form. This
 // list is kept in the vm_isolate in order to share the copy across isolates

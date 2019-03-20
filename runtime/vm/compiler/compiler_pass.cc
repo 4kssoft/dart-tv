@@ -204,13 +204,6 @@ void CompilerPass::PrintGraph(CompilerPassState* state,
 
     FlowGraphPrinter::PrintGraph(phase, flow_graph);
   }
-
-  const auto& func = flow_graph->function();
-  if (FLAG_serialize_il && func.IsLLVMCompiled() &&
-      ((current_flags & mask) != 0)) {
-    ILSerializer::PrintSerialization(flow_graph,
-                                     &state->precompiler->llvm_serializer());
-  }
 }
 
 #define INVOKE_PASS(Name)                                                      \

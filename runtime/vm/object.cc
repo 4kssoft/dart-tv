@@ -2952,7 +2952,7 @@ RawFunction* Function::GetMethodExtractor(const String& getter_name) const {
 bool Library::FindPragma(Thread* T,
                          const Object& obj,
                          const String& pragma_name,
-                         Object* options) const {
+                         Object* options) {
   auto I = T->isolate();
   auto Z = T->zone();
   auto& lib = Library::Handle(Z);
@@ -2999,7 +2999,9 @@ bool Library::FindPragma(Thread* T,
             pragma_name.raw()) {
       continue;
     }
-    *options = Instance::Cast(pragma).GetField(pragma_options_field);
+    if (options != nullptr) {
+      *options = Instance::Cast(pragma).GetField(pragma_options_field);
+    }
     return true;
   }
 
@@ -6204,8 +6206,7 @@ bool Function::IsInFactoryScope() const {
 }
 
 bool Function::IsLLVMCompiled() const {
-  Object& options = Object::Handle();
-  return FindPragma(Isolate::Current(), Symbols::vm_llvm(), &options);
+  return Library::FindPragma(Thread::Current(), *this, Symbols::vm_llvm());
 }
 
 void Function::set_name(const String& value) const {

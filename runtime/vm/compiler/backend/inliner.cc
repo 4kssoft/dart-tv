@@ -958,6 +958,10 @@ class CallSiteInliner : public ValueObject {
       return false;
     }
 
+    if (Library::FindPragma(thread(), function, Symbols::vm_never_inline(), /*options=*/ nullptr)) {
+      return false;
+    }
+
     GrowableArray<Value*>* arguments = call_data->arguments;
     const intptr_t constant_arguments = CountConstants(*arguments);
     InliningDecision decision = ShouldWeInline(

@@ -35,8 +35,8 @@ elseif (TARGET_ARCH STREQUAL "WASM")
 endif()
 
 # Set the output folder where your program will be created
-set(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin/${CMAKE_BUILD_TYPE}${TARGET_ARCH})
-set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib/${CMAKE_BUILD_TYPE}${TARGET_ARCH})
+set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BUILD_TYPE}${TARGET_ARCH})
+set(LIBRARY_OUTPUT_PATH ${CMAKE_BUILD_TYPE}${TARGET_ARCH})
 
 find_package(LLVM REQUIRED CONFIG)
 include_directories(${LLVM_INCLUDE_DIRS})
@@ -50,5 +50,6 @@ llvm_map_components_to_libnames(llvm_libs core support ipo scalaropts transformu
 # The following folder will be included
 include_directories(src)
 include_directories(third_party)
+include_directories(../runtime)
 
 add_subdirectory(src)

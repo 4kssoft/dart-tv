@@ -7983,10 +7983,12 @@ class FlowGraphVisitor : public ValueObject {
   // instructions in order from the block entry to exit.
   virtual void VisitBlocks();
 
+  virtual void VisitDefault(Instruction* instr) { }
+
 // Visit functions for instruction classes, with an empty default
 // implementation.
 #define DECLARE_VISIT_INSTRUCTION(ShortName, Attrs)                            \
-  virtual void Visit##ShortName(ShortName##Instr* instr) {}
+  virtual void Visit##ShortName(ShortName##Instr* instr) { VisitDefault(instr); }
 
   FOR_EACH_INSTRUCTION(DECLARE_VISIT_INSTRUCTION)
 

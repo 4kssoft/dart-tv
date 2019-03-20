@@ -12,6 +12,9 @@ BUILD_ELF=0
 ARGV=()
 for arg in "$@"; do
   case $arg in
+    -v | --verbose )
+    set -x
+    ;;
     --packages=*)
     PACKAGES="$arg"
     ;;
@@ -46,7 +49,7 @@ fi
 SNAPSHOT_FILE="${ARGV[0]}"
 SOURCE_FILE="${ARGV[0]}.dart"
 
-GEN_SNAPSHOT_OPTION=("--snapshot-kind=app-aot-assembly" "--serialize-il" "--compiler-passes=[AllocateRegisters")
+GEN_SNAPSHOT_OPTION=("--snapshot-kind=app-aot-assembly" "--serialize-il" "--compiler-passes=[AllocateRegisters" "--no-use-bare-instructions")
 GEN_SNAPSHOT_FILENAME="--assembly=${SNAPSHOT_FILE}.S"
 
 function follow_links() {
@@ -67,16 +70,22 @@ CUR_DIR="$(cd "${PROG_NAME%/*}" ; pwd -P)"
 export LLVM_CONFIGURATION=${LLVM_CONFIGURATION:-DebugX64}
 
 SDK_DIR="$CUR_DIR/../../.."
-LLVM_DIR="$SDK_DIR/llvm-codegen"
-LLVM_BIN_DIR="$LLVM_DIR/bin/$LLVM_CONFIGURATION"
+LLVM_DIR="$SDK_DIR/out/llvm-codegen"
+LLVM_BIN_DIR="$LLVM_DIR/src/$LLVM_CONFIGURATION"
 OUT_DIR="$SDK_DIR/out"
 
 export DART_CONFIGURATION=${DART_CONFIGURATION:-ReleaseX64}
 BIN_DIR="$OUT_DIR/$DART_CONFIGURATION"
 
+if [[ "$DART_CONFIGURATION" == Product* ]]; then
+  GEN_KERNEL_OPTIONS+=("-Ddart.vm.product=true")
+fi
+
+DART_BINARY=$SDK_DIR/tools/sdks/dart-sdk/bin/dart
+
 # Step 1: Generate Kernel binary from the input Dart source.
 echo "Generating Kernel"
-"$BIN_DIR"/dart                                                                \
+"$DART_BINARY"                                                                 \
      "${SDK_DIR}/pkg/vm/bin/gen_kernel.dart"                                   \
      --platform "${BIN_DIR}/vm_platform_strong.dill"                           \
      --aot                                                                     \
@@ -99,7 +108,7 @@ gcc -shared -o "$SNAPSHOT_FILE" "${SNAPSHOT_FILE}.S"
 # Step 4: Generate LLVM code
 echo "Generating LLVM code"
 "$LLVM_BIN_DIR"/main "$SNAPSHOT_FILE.il" >"$SNAPSHOT_FILE.llvm"
-llc --x86-asm-syntax=intel --disable-fp-elim -relocation-model=pic         \
+llc --x86-asm-syntax=intel --frame-pointer=non-leaf -relocation-model=pic         \
 "$SNAPSHOT_FILE.llvm" -o "$SNAPSHOT_FILE.s"
 
 # Step 5: Add special symbols to mark the start and end of the LLVM .text segment
