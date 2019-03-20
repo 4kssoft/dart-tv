@@ -76,18 +76,25 @@ struct InstrAttrs {
 
 namespace dart_llvm {
 
+#define REPRESENTATIONS_LIST(V) \
+  V(kNoRepresentation) \
+  V(kTagged) \
+  V(kUntagged) \
+  V(kUnboxedDouble) \
+  V(kUnboxedFloat) \
+  V(kUnboxedInt32) \
+  V(kUnboxedUint32) \
+  V(kUnboxedInt64) \
+  V(kUnboxedFloat32x4) \
+  V(kUnboxedInt32x4) \
+  V(kUnboxedFloat64x2) \
+  V(kPairOfTagged) \
+
+
 enum Representation {
-  kNoRepresentation,
-  kTagged,
-  kUntagged,
-  kUnboxedDouble,
-  kUnboxedInt32,
-  kUnboxedUint32,
-  kUnboxedInt64,
-  kUnboxedFloat32x4,
-  kUnboxedInt32x4,
-  kUnboxedFloat64x2,
-  kPairOfTagged,
+#define DECLARE_REPRESENTATION(Name) Name,
+  REPRESENTATIONS_LIST(DECLARE_REPRESENTATION)
+#undef DECLARE_REPRESENTATION
   kNumRepresentations
 };
 

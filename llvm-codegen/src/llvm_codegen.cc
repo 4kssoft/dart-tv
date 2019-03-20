@@ -275,7 +275,7 @@ llvm::Function* CodegenModule::GetOrCreateHandleOptionalParamsTrampoline(
   }
   auto call = builder.CreateCall(GetFunctionByID(function_id), {forward_args});
   call->setTailCallKind(llvm::CallInst::TailCallKind::TCK_Tail);
-  
+
   builder.CreateRet(call);
 
   optional_param_trampoline_cache_.emplace(
@@ -1891,6 +1891,16 @@ llvm::Value* CodegenFunction::EmitPhi(InstructionInputExtractor I) {
   return builder_.CreatePHI(phi_ty, num_income_values);
 }
 
+const char* RepresentationName(Representation rep) {
+  switch (rep) {
+#define DEFINE_CASE(Name) case Representation::Name: return #Name;
+    REPRESENTATIONS_LIST(DEFINE_CASE)
+#undef DEFINE_CASE
+    default:
+      return "<?>";
+  }
+}
+
 llvm::Value* CodegenFunction::EmitUnboxedConstant(InstructionInputExtractor I) {
   auto representation = I.NextInputAsEnum<Representation>();
   if (representation == Representation::kUnboxedInt32 ||
@@ -1898,6 +1908,7 @@ llvm::Value* CodegenFunction::EmitUnboxedConstant(InstructionInputExtractor I) {
     auto val = I.NextInputAsInt64();
     return GetConstantInt(val);
   } else {
+    std::cerr << "Unsupported representation: " << RepresentationName(representation) << std::endl;
     // TODO(sarkin): Other representations
     assert(false);
   }
