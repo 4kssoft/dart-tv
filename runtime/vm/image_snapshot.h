@@ -321,6 +321,7 @@ class AssemblyImageWriter : public ImageWriter {
 
   StreamingWriteStream assembly_stream_;
   Dwarf* dwarf_;
+  intptr_t code_index_ = 0;
 
   DISALLOW_COPY_AND_ASSIGN(AssemblyImageWriter);
 };

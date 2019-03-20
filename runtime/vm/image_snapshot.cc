@@ -438,6 +438,9 @@ void AssemblyImageWriter::WriteText(WriteStream* clustered_stream, bool vm) {
   TypeTestingStubNamer tts;
   intptr_t text_offset = 0;
 
+  const intptr_t kEntryPointLabelBufferSize = 1024;
+  char* entry_point_label = zone->Alloc<char>(kEntryPointLabelBufferSize);
+
   ASSERT(offset_space_ != V8SnapshotProfileWriter::kSnapshot);
   for (intptr_t i = 0; i < instructions_.length(); i++) {
     auto& data = instructions_[i];
@@ -514,31 +517,32 @@ void AssemblyImageWriter::WriteText(WriteStream* clustered_stream, bool vm) {
     if (owner.IsNull()) {
       const char* name = StubCode::NameOfStub(insns.EntryPoint());
       if (name != nullptr) {
-        assembly_stream_.Print("Precompiled_Stub_%s:\n", name);
+        Utils::SNPrint(entry_point_label, kEntryPointLabelBufferSize, "Precompiled_Stub_%s", name);
       } else {
         if (name == nullptr) {
           name = NameOfStubIsolateSpecificStub(object_store, code);
         }
         ASSERT(name != nullptr);
-        assembly_stream_.Print("Precompiled__%s:\n", name);
+        Utils::SNPrint(entry_point_label, kEntryPointLabelBufferSize, "Precompiled__%s", name);
       }
     } else if (owner.IsClass()) {
       str = Class::Cast(owner).Name();
       const char* name = str.ToCString();
       EnsureAssemblerIdentifier(const_cast<char*>(name));
-      assembly_stream_.Print("Precompiled_AllocationStub_%s_%" Pd ":\n", name,
+      Utils::SNPrint(entry_point_label, kEntryPointLabelBufferSize, "Precompiled_AllocationStub_%s_%" Pd "", name,
                              i);
     } else if (owner.IsAbstractType()) {
       const char* name = tts.StubNameForType(AbstractType::Cast(owner));
-      assembly_stream_.Print("Precompiled_%s:\n", name);
+      Utils::SNPrint(entry_point_label, kEntryPointLabelBufferSize, "Precompiled_%s", name);
     } else if (owner.IsFunction()) {
       const char* name = Function::Cast(owner).ToQualifiedCString();
       EnsureAssemblerIdentifier(const_cast<char*>(name));
-      assembly_stream_.Print("Precompiled_%s_%" Pd ":\n", name, i);
+      Utils::SNPrint(entry_point_label, kEntryPointLabelBufferSize, "Precompiled_%s_%" Pd "", name, i);
     } else {
       UNREACHABLE();
     }
-
+    assembly_stream_.Print("%s:\n", entry_point_label);
+    assembly_stream_.Print(".type %s,@function\n", entry_point_label);
 #ifdef DART_PRECOMPILER
     // Create a label for use by DWARF.
     if (!code.IsNull()) {
@@ -561,6 +565,10 @@ void AssemblyImageWriter::WriteText(WriteStream* clustered_stream, bool vm) {
 
       text_offset += WriteByteSequence(entry, end);
     }
+
+    const intptr_t index = code_index_++;
+    assembly_stream_.Print(".Lcode%" Pd "_end:\n", index);
+    assembly_stream_.Print(".size %s, .Lcode%" Pd "_end - %s\n", entry_point_label, index, entry_point_label);
 
     ASSERT((text_offset - instr_start) == insns.raw()->HeapSize());
   }
