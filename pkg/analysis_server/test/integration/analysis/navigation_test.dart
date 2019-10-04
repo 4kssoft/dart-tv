@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -12,7 +12,6 @@ import '../support/integration_tests.dart';
 main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(AnalysisNavigationTest);
-    defineReflectiveTests(AnalysisNavigationTest_UseCFE);
   });
 }
 
@@ -133,14 +132,4 @@ part of foo;
     checkLocal(
         'TypeParameter field;', 'TypeParameter>', ElementKind.TYPE_PARAMETER);
   }
-}
-
-@reflectiveTest
-class AnalysisNavigationTest_UseCFE extends AnalysisNavigationTest {
-  @override
-  bool get useCFE => true;
-
-  @override
-  @failingTest
-  test_navigation() => super.test_navigation();
 }

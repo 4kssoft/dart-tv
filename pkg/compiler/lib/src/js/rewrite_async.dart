@@ -509,7 +509,7 @@ abstract class AsyncRewriterBase extends js.NodeVisitor {
   /// [fn] in that place.
   withExpressions(List<js.Expression> nodes, fn(List<js.Expression> results)) {
     int oldTempVarIndex = currentTempVarIndex;
-    // Find last occurence of a 'transform' expression in [nodes].
+    // Find last occurrence of a 'transform' expression in [nodes].
     // All expressions before that must be stored in temp-vars.
     int lastTransformIndex = 0;
     for (int i = nodes.length - 1; i >= 0; --i) {
@@ -1251,6 +1251,12 @@ abstract class AsyncRewriterBase extends js.NodeVisitor {
   js.Name visitName(js.Name node) => node;
 
   @override
+  js.Parentheses visitParentheses(js.Parentheses node) {
+    unsupported(node);
+    return null;
+  }
+
+  @override
   visitNamedFunction(js.NamedFunction node) {
     unsupported(node);
   }
@@ -1379,8 +1385,9 @@ abstract class AsyncRewriterBase extends js.NodeVisitor {
           if (clause is js.Case) {
             return new js.Case(
                 clause.expression, translateToBlock(clause.body));
-          } else if (clause is js.Default) {
-            return new js.Default(translateToBlock(clause.body));
+          } else {
+            return new js.Default(
+                translateToBlock((clause as js.Default).body));
           }
         }).toList();
         addStatement(new js.Switch(key, cases));
@@ -1504,6 +1511,7 @@ abstract class AsyncRewriterBase extends js.NodeVisitor {
   }
 
   /// See the comments of [rewriteFunction] for more explanation.
+  @override
   void visitTry(js.Try node) {
     if (!shouldTransform(node)) {
       js.Block body = translateToBlock(node.body);
@@ -1715,6 +1723,7 @@ js.VariableInitialization _makeVariableInitializer(dynamic variable,
 }
 
 class AsyncRewriter extends AsyncRewriterBase {
+  @override
   bool get isAsync => true;
 
   /// The Completer that will finish an async function.
@@ -1781,6 +1790,7 @@ class AsyncRewriter extends AsyncRewriterBase {
     reporter.internalError(spannable, "Yield in non-generating async function");
   }
 
+  @override
   void addErrorExit(SourceInformation sourceInformation) {
     if (!hasHandlerLabels) return; // rethrow handled in method boilerplate.
     beginLabel(rethrowLabel);
@@ -1797,6 +1807,7 @@ class AsyncRewriter extends AsyncRewriterBase {
   /// Returning from an async method calls [asyncStarHelper] with the result.
   /// (the result might have been stored in [returnValue] by some finally
   /// block).
+  @override
   void addSuccessExit(SourceInformation sourceInformation) {
     if (analysis.hasExplicitReturns) {
       beginLabel(exitLabel);
@@ -1923,6 +1934,7 @@ class AsyncRewriter extends AsyncRewriterBase {
 }
 
 class SyncStarRewriter extends AsyncRewriterBase {
+  @override
   bool get isSyncStar => true;
 
   /// Constructor creating the Iterable for a sync* method. Called with
@@ -2062,6 +2074,7 @@ class SyncStarRewriter extends AsyncRewriterBase {
     }).withSourceInformation(functionSourceInformation);
   }
 
+  @override
   void addErrorExit(SourceInformation sourceInformation) {
     hasHandlerLabels = true; // TODO(sra): Add short form error handler.
     beginLabel(rethrowLabel);
@@ -2074,6 +2087,7 @@ class SyncStarRewriter extends AsyncRewriterBase {
   }
 
   /// Returning from a sync* function returns an [endOfIteration] marker.
+  @override
   void addSuccessExit(SourceInformation sourceInformation) {
     if (analysis.hasExplicitReturns) {
       beginLabel(exitLabel);
@@ -2108,6 +2122,7 @@ class SyncStarRewriter extends AsyncRewriterBase {
 }
 
 class AsyncStarRewriter extends AsyncRewriterBase {
+  @override
   bool get isAsyncStar => true;
 
   /// The stack of labels of finally blocks to assign to [next] if the
@@ -2709,6 +2724,11 @@ class PreTranslationAnalysis extends js.NodeVisitor<bool> {
   @override
   bool visitName(js.Name node) {
     return false;
+  }
+
+  @override
+  bool visitParentheses(js.Parentheses node) {
+    return visit(node.enclosed);
   }
 
   @override

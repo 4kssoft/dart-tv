@@ -3,17 +3,20 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:collection';
-import 'package:analyzer/src/generated/engine.dart' show AnalysisContext;
-
-/// Helpers for Analyzer's Element model and corelib model.
 
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/element/element.dart';
+import 'package:analyzer/dart/element/nullability_suffix.dart';
 import 'package:analyzer/dart/element/type.dart'
-    show DartType, InterfaceType, ParameterizedType, FunctionType;
+    show DartType, InterfaceType, FunctionType;
+import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer/src/dart/element/type.dart';
 import 'package:analyzer/src/generated/constant.dart'
     show DartObject, DartObjectImpl;
+import 'package:analyzer/src/generated/constant.dart';
+import 'package:analyzer/src/generated/type_system.dart' show Dart2TypeSystem;
+
+import 'type_utilities.dart';
 
 class Tuple2<T0, T1> {
   final T0 e0;
@@ -21,21 +24,69 @@ class Tuple2<T0, T1> {
   Tuple2(this.e0, this.e1);
 }
 
-// TODO(jmesserly): replace this with instantiateToBounds
-T fillDynamicTypeArgs<T extends DartType>(T t) {
-  if (t is ParameterizedType && t.typeArguments.isNotEmpty) {
-    var rawT = (t.element as TypeParameterizedElement).type;
+/// Instantiates [t] with dynamic bounds.
+///
+/// Note: this should only be used when the resulting type is later replaced,
+/// such as a "deferred supertype" (used to break circularity between the
+/// supertype's type arguments and the class definition). Otherwise
+/// [instantiateElementTypeToBounds] should be used instead.
+InterfaceType fillDynamicTypeArgsForClass(InterfaceType t) {
+  if (t.typeArguments.isNotEmpty) {
     var dyn =
-        new List.filled(rawT.typeArguments.length, DynamicTypeImpl.instance);
-    return rawT.substitute2(dyn, rawT.typeArguments) as T;
+        List.filled(t.element.typeParameters.length, DynamicTypeImpl.instance);
+    return t.element.instantiate(
+      typeArguments: dyn,
+      nullabilitySuffix: NullabilitySuffix.star,
+    );
   }
   return t;
 }
 
-/// Given an annotated [node] and a [test] function, returns the first matching
-/// constant valued annotation.
+/// Instantiates the [element] type to bounds.
 ///
-/// For example if we had the ClassDeclaration node for `FontElement`:
+/// Conceptually this is similar to [Dart2TypeSystem.instantiateToBounds] on
+/// `element.type`, but unfortunately typedef elements do not return a
+/// meaningful type, so we need to work around that.
+DartType instantiateElementTypeToBounds(
+    Dart2TypeSystem rules, TypeDefiningElement element) {
+  Element e = element;
+  if (e is TypeParameterizedElement) {
+    // TODO(jmesserly): we can't use `instantiateToBounds` because typedefs do
+    // not include their type parameters, for example:
+    //
+    //     typedef void void Func<T>(T x);               // Dart 1 syntax.
+    //     typedef void GenericFunc<T> = S Func<S>(T x); // Dart 2 syntax.
+    //
+    // There is no way to get a type that has `<T>` as a type formal from the
+    // element (without constructing it ourselves).
+    //
+    // Futhermore, the second line is represented by a GenericTypeAliasElement,
+    // and its type getter does not even include its own type formals `<S>`.
+    // That has to be worked around using `.function.type`.
+    DartType type;
+    if (e is GenericTypeAliasElement) {
+      type = e.function.type;
+    } else if (e is FunctionTypedElement) {
+      type = e.type;
+    } else if (e is ClassElement) {
+      type = getLegacyRawClassType(e);
+    }
+    var bounds = rules.instantiateTypeFormalsToBounds(e.typeParameters);
+    if (bounds == null) return type;
+    return type.substitute2(
+        bounds, TypeParameterTypeImpl.getTypes(e.typeParameters));
+  }
+  return getLegacyElementType(element);
+}
+
+/// Given an [element] and a [test] function, returns the first matching
+/// constant valued metadata annotation on the element.
+///
+/// If the element is a synthetic getter/setter (Analyzer creates these for
+/// fields), then this will use the corresponding real element, which will have
+/// the metadata annotations.
+///
+/// For example if we had the [ClassDeclaration] node for `FontElement`:
 ///
 ///    @js.JS('HTMLFontElement')
 ///    @deprecated
@@ -47,6 +98,11 @@ T fillDynamicTypeArgs<T extends DartType>(T t) {
 ///
 DartObject findAnnotation(Element element, bool test(DartObjectImpl value)) {
   if (element == null) return null;
+  var accessor = element;
+  if (accessor is PropertyAccessorElement && accessor.isSynthetic) {
+    // Look for metadata on the real element, not the synthetic one.
+    element = accessor.variable;
+  }
   for (var metadata in element.metadata) {
     var value = metadata.computeConstantValue();
     if (value is DartObjectImpl && test(value)) return value;
@@ -81,7 +137,7 @@ bool inInvocationContext(Expression node) {
   if (node == null) return false;
   var parent = node.parent;
   while (parent is ParenthesizedExpression) {
-    node = parent;
+    node = parent as Expression;
     parent = node.parent;
   }
   return parent is InvocationExpression && identical(node, parent.function) ||
@@ -104,11 +160,11 @@ bool isLibraryPrefix(Expression node) =>
 ExecutableElement getFunctionBodyElement(FunctionBody body) {
   var f = body.parent;
   if (f is FunctionExpression) {
-    return f.element;
+    return f.declaredElement;
   } else if (f is MethodDeclaration) {
-    return f.element;
+    return f.declaredElement;
   } else {
-    return (f as ConstructorDeclaration).element;
+    return (f as ConstructorDeclaration).declaredElement;
   }
 }
 
@@ -133,13 +189,14 @@ String getAnnotationName(Element element, bool match(DartObjectImpl value)) =>
 
 List<ClassElement> getSuperclasses(ClassElement cls) {
   var result = <ClassElement>[];
-  var visited = new HashSet<ClassElement>();
+  var visited = HashSet<ClassElement>();
   while (cls != null && visited.add(cls)) {
     for (var mixinType in cls.mixins.reversed) {
       var mixin = mixinType.element;
       if (mixin != null) result.add(mixin);
     }
     var supertype = cls.supertype;
+    // Object or mixin declaration.
     if (supertype == null) break;
 
     cls = supertype.element;
@@ -176,7 +233,7 @@ bool hasNoSuchMethod(ClassElement classElement) {
   var method = classElement.lookUpMethod(
       FunctionElement.NO_SUCH_METHOD_METHOD_NAME, classElement.library);
   var definingClass = method?.enclosingElement;
-  return definingClass != null && !definingClass.type.isObject;
+  return definingClass is ClassElement && !definingClass.isDartCoreObject;
 }
 
 /// Returns true if this class is of the form:
@@ -202,7 +259,8 @@ bool isCallableClass(ClassElement c) {
   // * `dynamic d; d();` without a declared `call` method is handled by dcall.
   // * for `class C implements Callable { noSuchMethod(i) { ... } }` we find
   //   the `call` method on the `Callable` interface.
-  var callMethod = c.type.lookUpInheritedGetterOrMethod('call');
+  var callMethod =
+      getLegacyRawClassType(c).lookUpInheritedGetterOrMethod('call');
   return callMethod is PropertyAccessorElement
       ? callMethod.returnType is FunctionType
       : callMethod != null;
@@ -231,7 +289,9 @@ bool typesAreEqual(DartType x, DartType y) {
       if (x.typeFormals.isNotEmpty) {
         var fresh = FunctionTypeImpl.relateTypeFormals(
             x, y, (t, s, _, __) => typesAreEqual(t, s));
-        if (fresh == null) return false;
+        if (fresh == null) {
+          return false;
+        }
         return typesAreEqual(x.instantiate(fresh), y.instantiate(fresh));
       }
 
@@ -273,8 +333,32 @@ bool _namedArgumentsAreEqual(
 
 /// Returns a valid hashCode for [t] for use with [typesAreEqual].
 int typeHashCode(DartType t) {
+  // TODO(jmesserly): this is from Analyzer; it's not a great hash function.
+  // We should at least fix how this combines hashes.
   if (t is FunctionType) {
-    // TODO(jmesserly): this is from Analyzer; it's not a great hash function.
+    if (t.typeFormals.isNotEmpty) {
+      // Instantiate the generic function type, so we hash equivalent
+      // generic function types to the same value. For example, `<X>(X) -> X`
+      // and `<Y>(Y) -> Y` shouold have the same hash.
+      //
+      // TODO(jmesserly): it would be better to instantiate these with unique
+      // types for each position, so we can distinguish cases like these:
+      //
+      //     <A, B>(A) -> B
+      //     <C, D>(D) -> C      // reversed
+      //     <E, F>(E) -> void   // uses `void`
+      //
+      // Currently all of those will have the same hash code.
+      //
+      // The choice of `void` is rather arbitrary. Of the types we can easily
+      // obtain from Analyzer, it should collide a bit less than something like
+      // `dynamic`.
+      int code = t.typeFormals.length;
+      code = (code << 1) +
+          typeHashCode(t.instantiate(
+              List.filled(t.typeFormals.length, VoidTypeImpl.instance)));
+      return code;
+    }
     int code = typeHashCode(t.returnType);
     for (var p in t.normalParameterTypes) {
       code = (code << 1) + typeHashCode(p);
@@ -302,7 +386,7 @@ Uri uriForCompilationUnit(CompilationUnitElement unit) {
   return sourcePath.startsWith('package:')
       ? Uri.parse(sourcePath)
       // TODO(jmesserly): shouldn't this be path.toUri?
-      : new Uri.file(sourcePath);
+      : Uri.file(sourcePath);
 }
 
 /// Returns true iff this factory constructor just throws [UnsupportedError]/
@@ -310,7 +394,7 @@ Uri uriForCompilationUnit(CompilationUnitElement unit) {
 /// `dart:html` has many of these.
 bool isUnsupportedFactoryConstructor(ConstructorDeclaration node) {
   var ctorBody = node.body;
-  var element = node.element;
+  var element = node.declaredElement;
   if (element.isPrivate &&
       element.librarySource.isInSystemLibrary &&
       ctorBody is BlockFunctionBody) {
@@ -342,5 +426,13 @@ bool isBuiltinAnnotation(
   return uri.scheme == 'dart' && path == libraryName;
 }
 
-ClassElement getClass(AnalysisContext c, String uri, String name) =>
-    c.computeLibraryElement(c.sourceFactory.forUri(uri)).getType(name);
+/// Returns the integer value for [node] as a [BigInt].
+///
+/// `node.value` should not be used directly as it depends on platform integers
+/// and may be `null` for some valid integer literals (in either an `int` or a
+/// `double` context)
+BigInt getLiteralBigIntValue(IntegerLiteral node) {
+  // TODO(jmesserly): workaround for #34360: Analyzer tree does not store
+  // the BigInt or double value, so we need to re-parse it from the token.
+  return BigInt.parse(node.literal.lexeme);
+}

@@ -24,6 +24,7 @@ String nodeToString(Node node, {bool pretty: false}) {
 /// Visitor that creates an XML-like representation of the structure of a
 /// JavaScript [Node].
 class DebugPrinter extends BaseVisitor with Indentation, Tagging<Node> {
+  @override
   StringBuffer sb = new StringBuffer();
 
   void visitNodeWithChildren(Node node, String type, [Map params]) {
@@ -52,9 +53,7 @@ class DebugPrinter extends BaseVisitor with Indentation, Tagging<Node> {
     openAndCloseNode(node, '${node.runtimeType}', {'value': node.value});
   }
 
-  /**
-   * Pretty-prints given node tree into string.
-   */
+  /// Pretty-prints given node tree into string.
   static String prettyPrint(Node node) {
     var p = new DebugPrinter();
     node.accept(p);

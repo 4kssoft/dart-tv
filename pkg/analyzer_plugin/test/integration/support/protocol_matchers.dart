@@ -1,8 +1,8 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 //
-// This file has been automatically generated.  Please do not edit it manually.
+// This file has been automatically generated. Please do not edit it manually.
 // To regenerate the file, use the script
 // "pkg/analysis_server/tool/spec/generate_files".
 
@@ -34,6 +34,8 @@ final Matcher isAddContentOverlay = new LazyMatcher(() => new MatchesJsonObject(
  *   "message": String
  *   "correction": optional String
  *   "code": String
+ *   "url": optional String
+ *   "contextMessages": optional List<DiagnosticMessage>
  *   "hasFix": optional bool
  * }
  */
@@ -46,6 +48,8 @@ final Matcher isAnalysisError =
           "code": isString
         }, optionalFields: {
           "correction": isString,
+          "url": isString,
+          "contextMessages": isListOf(isDiagnosticMessage),
           "hasFix": isBool
         }));
 
@@ -151,7 +155,6 @@ final Matcher isChangeContentOverlay = new LazyMatcher(() =>
  *   "hasNamedParameters": optional bool
  *   "parameterName": optional String
  *   "parameterType": optional String
- *   "importUri": optional String
  * }
  */
 final Matcher isCompletionSuggestion =
@@ -177,8 +180,7 @@ final Matcher isCompletionSuggestion =
           "requiredParameterCount": isInt,
           "hasNamedParameters": isBool,
           "parameterName": isString,
-          "parameterType": isString,
-          "importUri": isString
+          "parameterType": isString
         }));
 
 /**
@@ -223,6 +225,17 @@ final Matcher isContextRoot = new LazyMatcher(() => new MatchesJsonObject(
     optionalFields: {"optionsFile": isFilePath}));
 
 /**
+ * DiagnosticMessage
+ *
+ * {
+ *   "message": String
+ *   "location": Location
+ * }
+ */
+final Matcher isDiagnosticMessage = new LazyMatcher(() => new MatchesJsonObject(
+    "DiagnosticMessage", {"message": isString, "location": isLocation}));
+
+/**
  * Element
  *
  * {
@@ -258,6 +271,7 @@ final Matcher isElement =
  *   CONSTRUCTOR_INVOCATION
  *   ENUM
  *   ENUM_CONSTANT
+ *   EXTENSION
  *   FIELD
  *   FILE
  *   FUNCTION
@@ -268,6 +282,7 @@ final Matcher isElement =
  *   LIBRARY
  *   LOCAL_VARIABLE
  *   METHOD
+ *   MIXIN
  *   PARAMETER
  *   PREFIX
  *   SETTER
@@ -286,6 +301,7 @@ final Matcher isElementKind = new MatchesEnum("ElementKind", [
   "CONSTRUCTOR_INVOCATION",
   "ENUM",
   "ENUM_CONSTANT",
+  "EXTENSION",
   "FIELD",
   "FILE",
   "FUNCTION",
@@ -296,6 +312,7 @@ final Matcher isElementKind = new MatchesEnum("ElementKind", [
   "LIBRARY",
   "LOCAL_VARIABLE",
   "METHOD",
+  "MIXIN",
   "PARAMETER",
   "PREFIX",
   "SETTER",
@@ -691,6 +708,33 @@ final Matcher isOutline =
         }, optionalFields: {
           "children": isListOf(isOutline)
         }));
+
+/**
+ * ParameterInfo
+ *
+ * {
+ *   "kind": ParameterKind
+ *   "name": String
+ *   "type": String
+ *   "defaultValue": optional String
+ * }
+ */
+final Matcher isParameterInfo = new LazyMatcher(() => new MatchesJsonObject(
+    "ParameterInfo",
+    {"kind": isParameterKind, "name": isString, "type": isString},
+    optionalFields: {"defaultValue": isString}));
+
+/**
+ * ParameterKind
+ *
+ * enum {
+ *   NAMED
+ *   OPTIONAL
+ *   REQUIRED
+ * }
+ */
+final Matcher isParameterKind =
+    new MatchesEnum("ParameterKind", ["NAMED", "OPTIONAL", "REQUIRED"]);
 
 /**
  * Position

@@ -4,7 +4,7 @@
 
 import 'dart:async';
 
-/*element: main:[null]*/
+/*member: main:[null]*/
 main() {
   awaitOfFuture();
   awaitOfInt();
@@ -15,13 +15,10 @@ main() {
 // Await of Future.value.
 ////////////////////////////////////////////////////////////////////////////////
 
-/*element: _method1:[null]*/
-_method1(
-    /*kernel.[null|subclass=Object]*/
-    /*strong.[null|subclass=JSInt]*/
-    o) {}
+/*member: _method1:[null]*/
+_method1(/*[null|subclass=JSInt]*/ o) {}
 
-/*element: awaitOfFuture:[exact=_Future]*/
+/*member: awaitOfFuture:[exact=_Future]*/
 awaitOfFuture() async {
   var future = new Future.value(0);
   var local = await future;
@@ -32,13 +29,10 @@ awaitOfFuture() async {
 // Await of int.
 ////////////////////////////////////////////////////////////////////////////////
 
-/*element: _method2:[null]*/
-_method2(
-    /*kernel.[null|subclass=Object]*/
-    /*strong.[null|subclass=JSInt]*/
-    o) {}
+/*member: _method2:[null]*/
+_method2(/*[null|subclass=JSInt]*/ o) {}
 
-/*element: awaitOfInt:[exact=_Future]*/
+/*member: awaitOfInt:[exact=_Future]*/
 awaitOfInt() async {
   var local = await 0;
   _method2(local);
@@ -48,17 +42,15 @@ awaitOfInt() async {
 // Await for of Stream.fromIterable.
 ////////////////////////////////////////////////////////////////////////////////
 
-/*element: _method3:[null]*/
+/*member: _method3:[null]*/
 _method3(
-    /*Container([exact=JSExtendableArray], element: [exact=JSUInt31], length: 1)*/ o) {}
-
-/*element: _method4:[null]*/
-_method4(
-    /*kernel.[null|subclass=Object]*/
-    /*strong.[null|subclass=JSInt]*/
+    /*Container([exact=JSExtendableArray], element: [exact=JSUInt31], length: 1)*/
     o) {}
 
-/*element: awaitForOfStream:[exact=_Future]*/
+/*member: _method4:[null]*/
+_method4(/*[null|subclass=JSInt]*/ o) {}
+
+/*member: awaitForOfStream:[exact=_Future]*/
 awaitForOfStream() async {
   var list = [0];
   _method3(list);

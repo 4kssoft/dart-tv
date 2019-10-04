@@ -9,13 +9,13 @@ import 'package:compiler/src/io/location_provider.dart';
 import 'package:expect/expect.dart';
 import 'package:kernel/ast.dart' show Location;
 
-import '../output_collector.dart';
+import '../helpers/output_collector.dart';
 
 test(List events, Map<int, List<int>> expectedPositions) {
   BufferedOutputSink sink = new BufferedOutputSink();
-  LocationProvider locationProvider = new LocationCollector();
-  // ignore: LIST_ELEMENT_TYPE_NOT_ASSIGNABLE
-  CodeOutput output = new StreamCodeOutput(sink, [locationProvider]);
+  LocationCollector locationProvider = new LocationCollector();
+  CodeOutput output =
+      new StreamCodeOutput(sink, <CodeOutputListener>[locationProvider]);
   for (var event in events) {
     if (event is String) {
       output.add(event);
@@ -78,7 +78,7 @@ main() {
     3: null
   });
 
-  Map positions = {
+  Map<int, List<int>> positions = {
     0: [0, 0],
     1: [0, 1],
     2: [1, 0],

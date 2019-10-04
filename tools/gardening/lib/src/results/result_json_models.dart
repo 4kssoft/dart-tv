@@ -23,12 +23,10 @@ class Configuration {
   final String builderTag;
   final bool fastStartup;
   final int timeout;
-  final bool dart2JsWithKernel;
-  final bool dart2JsOldFrontend;
   final bool enableAsserts;
   final bool hotReload;
   final bool hotReloadRollback;
-  final bool previewDart2;
+  final bool noPreviewDart2;
   final List<String> selectors;
 
   Configuration(
@@ -48,22 +46,21 @@ class Configuration {
       this.builderTag,
       this.fastStartup,
       this.timeout,
-      this.dart2JsWithKernel,
-      this.dart2JsOldFrontend,
       this.enableAsserts,
       this.hotReload,
       this.hotReloadRollback,
-      this.previewDart2,
+      this.noPreviewDart2,
       this.selectors);
 
   static Configuration getFromJson(dynamic json) {
+    var isStrong = !(json["no_preview_dart_2"] ?? false);
     return new Configuration(
         json["mode"],
         json["arch"],
         json["compiler"],
         json["runtime"],
         json["checked"],
-        json["strong"],
+        isStrong,
         json["host_checked"],
         json["minified"],
         json["csp"],
@@ -74,12 +71,10 @@ class Configuration {
         json["builder_tag"],
         json["fast_startup"],
         json["timeout"],
-        json["dart2js_with_kernel"] ?? false,
-        json["dart2js_old_frontend"] ?? false,
         json["enable_asserts"] ?? false,
         json["hot_reload"] ?? false,
         json["hot_reload_rollback"] ?? false,
-        json["preview_dart_2"] ?? false,
+        !isStrong,
         json["selectors"].cast<String>() ?? <String>[]);
   }
 
@@ -102,12 +97,10 @@ class Configuration {
       _boolToArg("use-sdk", useSdk),
       _stringToArg("builder-tag", builderTag),
       _boolToArg("fast-startup", fastStartup),
-      _boolToArg("dart2js-with-kernel", dart2JsWithKernel),
-      _boolToArg("dart2js-old-frontend", dart2JsOldFrontend),
       _boolToArg("enable-asserts", enableAsserts),
       _boolToArg("hot-reload", hotReload),
       _boolToArg("hot-reload-rollback", hotReloadRollback),
-      _boolToArg("preview-dart-2", previewDart2)
+      _boolToArg("no-preview-dart-2", noPreviewDart2)
     ].where((x) => x != null).toList();
     if (includeSelectors && selectors != null && selectors.length > 0) {
       args.addAll(selectors);
@@ -118,8 +111,8 @@ class Configuration {
   String toCsvString() {
     return "$mode;$arch;$compiler;$runtime;$checked;$strong;$hostChecked;"
         "$minified;$csp;$fasta;$system;$vmOptions;$useSdk;$builderTag;$fastStartup;"
-        "$dart2JsWithKernel;$dart2JsOldFrontend;$enableAsserts;$hotReload;"
-        "$hotReloadRollback;$previewDart2;$selectors";
+        "$enableAsserts;$hotReload;"
+        "$hotReloadRollback;$noPreviewDart2;$selectors";
   }
 
   String _stringToArg(String name, String value) {
@@ -130,7 +123,7 @@ class Configuration {
   }
 
   String _boolToArg(String name, bool value) {
-    return value ? "--$name" : null;
+    return value == true ? "--$name" : null;
   }
 
   String _listToArg(String name, List<String> strings) {

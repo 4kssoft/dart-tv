@@ -135,12 +135,17 @@ class IsolateReloadContext {
   explicit IsolateReloadContext(Isolate* isolate, JSONStream* js);
   ~IsolateReloadContext();
 
+  // If kernel_buffer is provided, the VM takes ownership when Reload is called.
   void Reload(bool force_reload,
               const char* root_script_url = NULL,
-              const char* packages_url = NULL);
+              const char* packages_url = NULL,
+              const uint8_t* kernel_buffer = NULL,
+              intptr_t kernel_buffer_size = 0);
 
   // All zone allocated objects must be allocated from this zone.
   Zone* zone() const { return zone_; }
+
+  bool UseSavedClassTableForGC() const { return saved_class_table_ != nullptr; }
 
   bool reload_skipped() const { return reload_skipped_; }
   bool reload_aborted() const { return reload_aborted_; }
@@ -170,6 +175,7 @@ class IsolateReloadContext {
   // Prefers old classes when we are in the middle of a reload.
   RawClass* GetClassForHeapWalkAt(intptr_t cid);
   intptr_t GetClassSizeForHeapWalkAt(intptr_t cid);
+  void DiscardSavedClassTable(bool is_rollback);
 
   void RegisterClass(const Class& new_cls);
 
@@ -232,17 +238,15 @@ class IsolateReloadContext {
   void CheckpointClasses();
 
   bool ScriptModifiedSince(const Script& script, int64_t since);
-  BitVector* FindModifiedLibraries(bool force_reload, bool root_lib_modified);
   void FindModifiedSources(Thread* thread,
                            bool force_reload,
                            Dart_SourceFile** modified_sources,
-                           intptr_t* count);
+                           intptr_t* count,
+                           const char* packages_url);
 
   void CheckpointLibraries();
 
-  // Transforms the heap based on instance_morphers_. Return whether there was
-  // any morphing.
-  bool MorphInstances();
+  void MorphInstancesAndApplyNewClassTable();
 
   void RunNewFieldInitializers();
 
@@ -264,7 +268,7 @@ class IsolateReloadContext {
   void ClearReplacedObjectBits();
 
   // atomic_install:
-  void MarkAllFunctionsForRecompilation();
+  void RunInvalidationVisitors();
   void ResetUnoptimizedICsOnStack();
   void ResetMegamorphicCaches();
   void InvalidateWorld();
@@ -283,6 +287,10 @@ class IsolateReloadContext {
   intptr_t saved_num_cids_;
   ClassAndSize* saved_class_table_;
   intptr_t num_saved_libs_;
+  intptr_t num_received_libs_;
+  intptr_t bytes_received_libs_;
+  intptr_t num_received_classes_;
+  intptr_t num_received_procedures_;
 
   // Collect the necessary instance transformation for schema changes.
   ZoneGrowableArray<InstanceMorpher*> instance_morphers_;
@@ -320,6 +328,7 @@ class IsolateReloadContext {
   RawLibrary* OldLibraryOrNullBaseMoved(const Library& replacement_or_new);
 
   void BuildLibraryMapping();
+  void BuildRemovedClassesSet();
 
   void AddClassMapping(const Class& replacement_or_new, const Class& original);
 
@@ -341,6 +350,7 @@ class IsolateReloadContext {
   RawError* error_;
   RawArray* old_classes_set_storage_;
   RawArray* class_map_storage_;
+  RawArray* removed_class_set_storage_;
   RawArray* old_libraries_set_storage_;
   RawArray* library_map_storage_;
   RawArray* become_map_storage_;
@@ -361,6 +371,38 @@ class IsolateReloadContext {
   friend class ReasonForCancelling;
 
   static Dart_FileModifiedCallback file_modified_callback_;
+};
+
+class CallSiteResetter : public ValueObject {
+ public:
+  explicit CallSiteResetter(Zone* zone);
+
+  void ZeroEdgeCounters(const Function& function);
+  void ResetCaches(const Code& code);
+  void ResetCaches(const ObjectPool& pool);
+  void RebindStaticTargets(const Bytecode& code);
+  void Reset(const ICData& ic);
+  void ResetSwitchableCalls(const Code& code);
+
+ private:
+  Zone* zone_;
+  Instructions& instrs_;
+  ObjectPool& pool_;
+  Object& object_;
+  String& name_;
+  Class& new_cls_;
+  Library& new_lib_;
+  Function& new_function_;
+  Field& new_field_;
+  Array& entries_;
+  Function& old_target_;
+  Function& new_target_;
+  Function& caller_;
+  Array& args_desc_array_;
+  Array& ic_data_array_;
+  Array& edge_counters_;
+  PcDescriptors& descriptors_;
+  ICData& ic_data_;
 };
 
 }  // namespace dart

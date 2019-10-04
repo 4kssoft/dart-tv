@@ -5,6 +5,10 @@
 #ifndef RUNTIME_VM_STACK_FRAME_DBC_H_
 #define RUNTIME_VM_STACK_FRAME_DBC_H_
 
+#if !defined(RUNTIME_VM_STACK_FRAME_H_)
+#error Do not include stack_frame_dbc.h directly; use stack_frame.h instead.
+#endif
+
 namespace dart {
 
 /* DBC Frame Layout
@@ -55,6 +59,7 @@ static const int kFunctionSlotFromFp = -4;
 // these indices during code generation in the backend.
 static const int kParamEndSlotFromFp = 4;  // One slot past last parameter.
 static const int kFirstLocalSlotFromFp = -1;
+static const int kLastParamSlotFromEntrySp = 0;  // Should not be used on DBC.
 
 DART_FORCE_INLINE static intptr_t LocalVarIndex(intptr_t fp_offset,
                                                 intptr_t var_index) {
@@ -73,12 +78,22 @@ DART_FORCE_INLINE static bool IsCalleeFrameOf(uword fp, uword other_fp) {
   return other_fp > fp;
 }
 
+DART_FORCE_INLINE static bool IsBytecodeCalleeFrameOf(uword fp,
+                                                      uword other_fp) {
+  UNREACHABLE();
+  return false;
+}
+
 static const int kExitLinkSlotFromEntryFp = 0;
 
 // Value for stack limit that is used to cause an interrupt.
 // Note that on DBC stack is growing upwards so interrupt limit is 0 unlike
 // on all other architectures.
 static const uword kInterruptStackLimit = 0;
+
+// TODO(37140): For FFI native -> Dart callbacks, the number of stack slots
+// between arguments passed on stack and arguments saved in callback prologue.
+constexpr intptr_t kCallbackSlotsBeforeSavedArguments = -1;
 
 }  // namespace dart
 

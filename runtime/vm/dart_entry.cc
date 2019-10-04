@@ -6,18 +6,22 @@
 
 #include "platform/safe_stack.h"
 #include "vm/class_finalizer.h"
+#include "vm/compiler/frontend/bytecode_reader.h"
 #include "vm/compiler/jit/compiler.h"
 #include "vm/debugger.h"
+#include "vm/heap/safepoint.h"
 #include "vm/interpreter.h"
 #include "vm/object_store.h"
 #include "vm/resolver.h"
 #include "vm/runtime_entry.h"
-#include "vm/safepoint.h"
 #include "vm/simulator.h"
 #include "vm/stub_code.h"
 #include "vm/symbols.h"
 
 namespace dart {
+
+DECLARE_FLAG(bool, enable_interpreter);
+DECLARE_FLAG(bool, precompiled_mode);
 
 // A cache of VM heap allocated arguments descriptors.
 RawArray* ArgumentsDescriptor::cached_args_descriptors_[kCachedDescriptorCount];
@@ -25,16 +29,6 @@ RawArray* ArgumentsDescriptor::cached_args_descriptors_[kCachedDescriptorCount];
 RawObject* DartEntry::InvokeFunction(const Function& function,
                                      const Array& arguments) {
   ASSERT(Thread::Current()->IsMutatorThread());
-
-  // We use a kernel2kernel constant evaluator in Dart 2.0 AOT compilation
-  // and never start the VM service isolate. So we should never end up invoking
-  // any dart code in the Dart 2.0 AOT compiler.
-#if !defined(DART_PRECOMPILED_RUNTIME)
-  if (Isolate::Current()->strong() && FLAG_precompiled_mode) {
-    UNREACHABLE();
-  }
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)
-
   const int kTypeArgsLen = 0;  // No support to pass type args to generic func.
   const Array& arguments_descriptor =
       Array::Handle(ArgumentsDescriptor::New(kTypeArgsLen, arguments.Length()));
@@ -66,9 +60,9 @@ class ScopedIsolateStackLimits : public ValueObject {
     ASSERT(thread->isolate() == Isolate::Current());
     saved_stack_limit_ = thread->saved_stack_limit();
 #if defined(USING_SIMULATOR)
-    thread->SetStackLimit(Simulator::Current()->stack_limit());
+    thread->SetStackLimit(Simulator::Current()->overflow_stack_limit());
 #else
-    thread->SetStackLimit(OSThread::Current()->stack_limit_with_headroom());
+    thread->SetStackLimit(OSThread::Current()->overflow_stack_limit());
     // TODO(regis): For now, the interpreter is using its own stack limit.
 #endif
 
@@ -99,10 +93,11 @@ class ScopedIsolateStackLimits : public ValueObject {
 
 // Clears/restores Thread::long_jump_base on construction/destruction.
 // Ensures that we do not attempt to long jump across Dart frames.
-class SuspendLongJumpScope : public StackResource {
+class SuspendLongJumpScope : public ThreadStackResource {
  public:
   explicit SuspendLongJumpScope(Thread* thread)
-      : StackResource(thread), saved_long_jump_base_(thread->long_jump_base()) {
+      : ThreadStackResource(thread),
+        saved_long_jump_base_(thread->long_jump_base()) {
     thread->set_long_jump_base(NULL);
   }
 
@@ -120,6 +115,24 @@ RawObject* DartEntry::InvokeFunction(const Function& function,
                                      const Array& arguments,
                                      const Array& arguments_descriptor,
                                      uword current_sp) {
+  // We use a kernel2kernel constant evaluator in Dart 2.0 AOT compilation
+  // and never start the VM service isolate. So we should never end up invoking
+  // any dart code in the Dart 2.0 AOT compiler.
+  if (FLAG_precompiled_mode) {
+#if !defined(DART_PRECOMPILED_RUNTIME)
+    UNREACHABLE();
+#else
+    if (FLAG_precompiled_mode && FLAG_use_bare_instructions) {
+      Thread* thread = Thread::Current();
+      thread->set_global_object_pool(
+          thread->isolate()->object_store()->global_object_pool());
+      ASSERT(thread->global_object_pool() != Object::null());
+    }
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+  }
+
+  ASSERT(!function.IsNull());
+
   // Get the entrypoint corresponding to the function specified, this
   // will result in a compilation of the function if it is not already
   // compiled.
@@ -127,38 +140,44 @@ RawObject* DartEntry::InvokeFunction(const Function& function,
   Zone* zone = thread->zone();
   ASSERT(thread->IsMutatorThread());
   ScopedIsolateStackLimits stack_limit(thread, current_sp);
+#if !defined(DART_PRECOMPILED_RUNTIME)
   if (!function.HasCode()) {
-#if defined(DART_USE_INTERPRETER)
-    // The function is not compiled yet. Interpret it if it has bytecode.
-    // The bytecode is loaded as part as an aborted compilation step.
-    if (!function.HasBytecode()) {
-      const Object& result =
-          Object::Handle(zone, Compiler::CompileFunction(thread, function));
-      if (result.IsError()) {
-        return Error::Cast(result).raw();
+    if (FLAG_enable_interpreter && function.IsBytecodeAllowed(zone)) {
+      if (!function.HasBytecode()) {
+        RawError* error =
+            kernel::BytecodeReader::ReadFunctionBytecode(thread, function);
+        if (error != Error::null()) {
+          return error;
+        }
       }
+
+      // If we have bytecode but no native code then invoke the interpreter.
+      if (function.HasBytecode() && (FLAG_compilation_counter_threshold != 0)) {
+        ASSERT(thread->no_callback_scope_depth() == 0);
+        SuspendLongJumpScope suspend_long_jump_scope(thread);
+        TransitionToGenerated transition(thread);
+        return Interpreter::Current()->Call(function, arguments_descriptor,
+                                            arguments, thread);
+      }
+
+      // Fall back to compilation.
     }
-    if (!function.HasCode() && function.HasBytecode()) {
-      const Code& bytecode = Code::Handle(zone, function.Bytecode());
-      ASSERT(!bytecode.IsNull());
-      ASSERT(thread->no_callback_scope_depth() == 0);
-      SuspendLongJumpScope suspend_long_jump_scope(thread);
-      TransitionToGenerated transition(thread);
-      return Interpreter::Current()->Call(bytecode, arguments_descriptor,
-                                          arguments, thread);
-    }
-#else
+
     const Object& result =
         Object::Handle(zone, Compiler::CompileFunction(thread, function));
     if (result.IsError()) {
       return Error::Cast(result).raw();
     }
-#endif
+
+    // At this point we should have native code.
+    ASSERT(function.HasCode());
   }
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+
 // Now Call the invoke stub which will invoke the dart function.
 #if !defined(TARGET_ARCH_DBC)
-  invokestub entrypoint = reinterpret_cast<invokestub>(
-      StubCode::InvokeDartCode_entry()->EntryPoint());
+  invokestub entrypoint =
+      reinterpret_cast<invokestub>(StubCode::InvokeDartCode().EntryPoint());
 #endif
   const Code& code = Code::Handle(zone, function.CurrentCode());
   ASSERT(!code.IsNull());
@@ -217,7 +236,7 @@ RawObject* DartEntry::InvokeClosure(const Array& arguments,
     const String& getter_name = Symbols::GetCall();
     Class& cls = Class::Handle(zone, instance.clazz());
     while (!cls.IsNull()) {
-      function ^= cls.LookupDynamicFunction(getter_name);
+      function = cls.LookupDynamicFunction(getter_name);
       if (!function.IsNull()) {
         Isolate* isolate = thread->isolate();
         if (!OSThread::Current()->HasStackHeadroom()) {
@@ -293,7 +312,7 @@ RawObject* DartEntry::InvokeNoSuchMethod(const Instance& receiver,
     ASSERT(!FLAG_lazy_dispatchers);
     // If noSuchMethod(invocation) is not found, call Object::noSuchMethod.
     Thread* thread = Thread::Current();
-    function ^= Resolver::ResolveDynamicForReceiverClass(
+    function = Resolver::ResolveDynamicForReceiverClass(
         Class::Handle(thread->zone(),
                       thread->isolate()->object_store()->object_class()),
         Symbols::NoSuchMethod(), nsm_args_desc);
@@ -338,20 +357,24 @@ bool ArgumentsDescriptor::MatchesNameAt(intptr_t index,
   return NameAt(index) == other.raw();
 }
 
-intptr_t ArgumentsDescriptor::type_args_len_offset() {
-  return Array::element_offset(kTypeArgsLenIndex);
-}
+RawArray* ArgumentsDescriptor::GetArgumentNames() const {
+  const intptr_t num_named_args = NamedCount();
+  if (num_named_args == 0) {
+    return Array::null();
+  }
 
-intptr_t ArgumentsDescriptor::count_offset() {
-  return Array::element_offset(kCountIndex);
-}
-
-intptr_t ArgumentsDescriptor::positional_count_offset() {
-  return Array::element_offset(kPositionalCountIndex);
-}
-
-intptr_t ArgumentsDescriptor::first_named_entry_offset() {
-  return Array::element_offset(kFirstNamedEntryIndex);
+  Zone* zone = Thread::Current()->zone();
+  const Array& names =
+      Array::Handle(zone, Array::New(num_named_args, Heap::kOld));
+  String& name = String::Handle(zone);
+  const intptr_t num_pos_args = PositionalCount();
+  for (intptr_t i = 0; i < num_named_args; ++i) {
+    const intptr_t index = PositionAt(i) - num_pos_args;
+    name = NameAt(i);
+    ASSERT(names.At(index) == Object::null());
+    names.SetAt(index, name);
+  }
+  return names.raw();
 }
 
 RawArray* ArgumentsDescriptor::New(intptr_t type_args_len,
@@ -415,7 +438,11 @@ RawArray* ArgumentsDescriptor::New(intptr_t type_args_len,
 
   // Share the immutable descriptor when possible by canonicalizing it.
   descriptor.MakeImmutable();
-  descriptor ^= descriptor.CheckAndCanonicalize(thread, NULL);
+  const char* error_str = NULL;
+  descriptor ^= descriptor.CheckAndCanonicalize(thread, &error_str);
+  if (error_str != NULL) {
+    FATAL1("Failed to canonicalize: %s", error_str);
+  }
   ASSERT(!descriptor.IsNull());
   return descriptor.raw();
 }
@@ -460,15 +487,26 @@ RawArray* ArgumentsDescriptor::NewNonCached(intptr_t type_args_len,
   // Share the immutable descriptor when possible by canonicalizing it.
   descriptor.MakeImmutable();
   if (canonicalize) {
-    descriptor ^= descriptor.CheckAndCanonicalize(thread, NULL);
+    const char* error_str = NULL;
+    descriptor ^= descriptor.CheckAndCanonicalize(thread, &error_str);
+    if (error_str != NULL) {
+      FATAL1("Failed to canonicalize: %s", error_str);
+    }
   }
   ASSERT(!descriptor.IsNull());
   return descriptor.raw();
 }
 
-void ArgumentsDescriptor::InitOnce() {
+void ArgumentsDescriptor::Init() {
   for (int i = 0; i < kCachedDescriptorCount; i++) {
     cached_args_descriptors_[i] = NewNonCached(/*type_args_len=*/0, i, false);
+  }
+}
+
+void ArgumentsDescriptor::Cleanup() {
+  for (int i = 0; i < kCachedDescriptorCount; i++) {
+    // Don't free pointers to RawArray objects managed by the VM.
+    cached_args_descriptors_[i] = NULL;
   }
 }
 

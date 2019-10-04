@@ -2,8 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-main() {
-  Bar bar = new Bar();
+void main() {
+  Bar bar = Bar();
   bar.doStuff();
 }
 
@@ -26,6 +26,7 @@ class Bar extends Foo {
     data3 = this;
   }
 
+  @override
   void doStuff() {
     /* bl */
     /*s:1*/ print(data2);

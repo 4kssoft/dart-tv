@@ -10,6 +10,7 @@
 
 namespace dart {
 
+
 class TypeTestingStubNamer {
  public:
   TypeTestingStubNamer();
@@ -36,8 +37,8 @@ class TypeTestingStubGenerator {
   // During bootstrapping it will return `null` for a whitelisted set of types,
   // otherwise it will return a default stub which tail-calls
   // subtypingtest/runtime code.
-  static RawInstructions* DefaultCodeForType(const AbstractType& type,
-                                             bool lazy_specialize = true);
+  static RawCode* DefaultCodeForType(const AbstractType& type,
+                                     bool lazy_specialize = true);
 
 #if !defined(DART_PRECOMPILED_RUNTIME)
   static void SpecializeStubFor(Thread* thread, const AbstractType& type);
@@ -47,39 +48,40 @@ class TypeTestingStubGenerator {
 
   // Creates new stub for [type] (and registers the tuple in object store
   // array) or returns default stub.
-  RawInstructions* OptimizedCodeForType(const AbstractType& type);
+  RawCode* OptimizedCodeForType(const AbstractType& type);
 
  private:
 #if !defined(TARGET_ARCH_DBC) && !defined(TARGET_ARCH_IA32)
 #if !defined(DART_PRECOMPILED_RUNTIME)
-  RawInstructions* BuildCodeForType(const Type& type);
-  static void BuildOptimizedTypeTestStub(Assembler* assembler,
+  RawCode* BuildCodeForType(const Type& type);
+  static void BuildOptimizedTypeTestStub(compiler::Assembler* assembler,
                                          HierarchyInfo* hi,
                                          const Type& type,
                                          const Class& type_class);
 
-  static void BuildOptimizedTypeTestStubFastCases(Assembler* assembler,
-                                                  HierarchyInfo* hi,
-                                                  const Type& type,
-                                                  const Class& type_class,
-                                                  Register instance_reg,
-                                                  Register class_id_reg);
+  static void BuildOptimizedTypeTestStubFastCases(
+      compiler::Assembler* assembler,
+      HierarchyInfo* hi,
+      const Type& type,
+      const Class& type_class,
+      Register instance_reg,
+      Register class_id_reg);
 
-  static void BuildOptimizedSubtypeRangeCheck(Assembler* assembler,
+  static void BuildOptimizedSubtypeRangeCheck(compiler::Assembler* assembler,
                                               const CidRangeVector& ranges,
                                               Register class_id_reg,
                                               Register instance_reg,
                                               bool smi_is_ok);
 
   static void BuildOptimizedSubclassRangeCheckWithTypeArguments(
-      Assembler* assembler,
+      compiler::Assembler* assembler,
       HierarchyInfo* hi,
       const Class& type_class,
       const TypeArguments& type_parameters,
       const TypeArguments& type_arguments);
 
   static void BuildOptimizedSubclassRangeCheckWithTypeArguments(
-      Assembler* assembler,
+      compiler::Assembler* assembler,
       HierarchyInfo* hi,
       const Class& type_class,
       const TypeArguments& type_parameters,
@@ -88,21 +90,21 @@ class TypeTestingStubGenerator {
       const Register instance_reg,
       const Register instance_type_args_reg);
 
-  static void BuildOptimizedSubclassRangeCheck(Assembler* assembler,
+  static void BuildOptimizedSubclassRangeCheck(compiler::Assembler* assembler,
                                                const CidRangeVector& ranges,
                                                Register class_id_reg,
                                                Register instance_reg,
-                                               Label* check_failed);
+                                               compiler::Label* check_failed);
 
   static void BuildOptimizedTypeArgumentValueCheck(
-      Assembler* assembler,
+      compiler::Assembler* assembler,
       HierarchyInfo* hi,
       const AbstractType& type_arg,
       intptr_t type_param_value_offset_i,
-      Label* check_failed);
+      compiler::Label* check_failed);
 
   static void BuildOptimizedTypeArgumentValueCheck(
-      Assembler* assembler,
+      compiler::Assembler* assembler,
       HierarchyInfo* hi,
       const AbstractType& type_arg,
       intptr_t type_param_value_offset_i,
@@ -111,49 +113,13 @@ class TypeTestingStubGenerator {
       const Register instantiator_type_args_reg,
       const Register function_type_args_reg,
       const Register type_arg_reg,
-      Label* check_failed);
+      compiler::Label* check_failed);
 
 #endif  // !defined(DART_PRECOMPILED_RUNTIME)
 #endif  // !defined(TARGET_ARCH_DBC) && !defined(TARGET_ARCH_IA32)
 
   TypeTestingStubNamer namer_;
   ObjectStore* object_store_;
-  GrowableObjectArray& array_;
-  Instructions& instr_;
-};
-
-// It is assumed that the caller ensures, while this object lives there is no
-// other access to [Isolate::Current()->object_store()->type_testing_stubs()].
-class TypeTestingStubFinder {
- public:
-  TypeTestingStubFinder();
-
-  // When serializing an AOT snapshot via our clustered snapshot writer, we
-  // write out references to the [Instructions] object for all the
-  // [AbstractType] objects we encounter.
-  //
-  // This method is used for this mapping of stub entrypoint addresses to the
-  // corresponding [Instructions] object.
-  RawInstructions* LookupByAddresss(uword entry_point) const;
-
-  // When generating an AOT snapshot as an assembly file (i.e. ".S" file) we
-  // need to generate labels for the type testing stubs.
-  //
-  // This method maps stub entrypoint addresses to meaningful names.
-  const char* StubNameFromAddresss(uword entry_point) const;
-
- private:
-  // Sorts the tuples in [array_] according to entrypoint.
-  void SortTableForFastLookup();
-
-  // Returns the tuple index where [entry_point] was found.
-  intptr_t LookupInSortedArray(uword entry_point) const;
-
-  TypeTestingStubNamer namer_;
-  GrowableObjectArray& array_;
-  AbstractType& type_;
-  Code& code_;
-  Instructions& instr_;
 };
 
 template <typename T>
@@ -161,6 +127,7 @@ class ReusableHandleStack {
  public:
   explicit ReusableHandleStack(Zone* zone) : zone_(zone), handles_count_(0) {}
 
+ private:
   T* Obtain() {
     T* handle;
     if (handles_count_ < handles_.length()) {
@@ -173,8 +140,6 @@ class ReusableHandleStack {
     return handle;
   }
 
-  // The released [handle] can be used even after releasing until the next
-  // call to [Obtain].
   void Release(T* handle) {
     handles_count_--;
     ASSERT(handles_count_ >= 0);
@@ -185,6 +150,25 @@ class ReusableHandleStack {
 
   intptr_t handles_count_;
   MallocGrowableArray<T*> handles_;
+
+  template <typename U>
+  friend class ScopedHandle;
+};
+
+template <typename T>
+class ScopedHandle {
+ public:
+  explicit ScopedHandle(ReusableHandleStack<T>* stack)
+      : stack_(stack), handle_(stack_->Obtain()) {}
+
+  ~ScopedHandle() { stack_->Release(handle_); }
+
+  T& operator*() { return *handle_; }
+  T* operator->() { return handle_; }
+
+ private:
+  ReusableHandleStack<T>* stack_;
+  T* handle_;
 };
 
 // Attempts to find a [Class] from un-instantiated [TypeArgument] vector to
@@ -238,21 +222,16 @@ class TypeArgumentClassFinder {
       // No support for recursive types.
       return false;
     } else if (type.IsType()) {
-      TypeArguments* type_arguments = type_arguments_handles_.Obtain();
+      ScopedHandle<TypeArguments> type_arguments(&type_arguments_handles_);
       *type_arguments = Type::Cast(type).arguments();
       const intptr_t len = type_arguments->Length();
       for (intptr_t i = 0; i < len; ++i) {
         type_ = type_arguments->TypeAt(i);
         if (!FindClassFromType(type_)) {
-          type_arguments_handles_.Release(type_arguments);
           return false;
         }
       }
-      type_arguments_handles_.Release(type_arguments);
       return true;
-    } else if (type.IsBoundedType()) {
-      // No support for bounded types.
-      return false;
     }
     UNREACHABLE();
     return false;
@@ -302,7 +281,7 @@ class TypeArgumentInstantiator {
 };
 
 // Collects data on how [Type] objects are used in generated code.
-class TypeUsageInfo : public StackResource {
+class TypeUsageInfo : public ThreadStackResource {
  public:
   explicit TypeUsageInfo(Thread* thread);
   ~TypeUsageInfo();
@@ -411,6 +390,12 @@ void RegisterTypeArgumentsUse(const Function& function,
                               TypeUsageInfo* type_usage_info,
                               const Class& klass,
                               Definition* type_arguments);
+
+#if !defined(PRODUCT) && !defined(DART_PRECOMPILED_RUNTIME)
+
+void DeoptimizeTypeTestingStubs();
+
+#endif  // !defined(PRODUCT) && !defined(DART_PRECOMPILED_RUNTIME)
 
 }  // namespace dart
 

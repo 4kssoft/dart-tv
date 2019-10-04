@@ -13,7 +13,6 @@ struct tm;
 namespace dart {
 
 // Forward declarations.
-class Isolate;
 class Zone;
 
 // Interface to the underlying OS platform.
@@ -92,6 +91,9 @@ class OS {
   static uintptr_t GetProgramCounter();
 
   // Print formatted output to stdout/stderr for debugging.
+  // Tracing and debugging prints from the VM should strongly prefer to use
+  // PrintErr to avoid interfering with the application's output, which may
+  // be parsed by another program.
   static void Print(const char* format, ...) PRINTF_ATTRIBUTE(1, 2);
   static void PrintErr(const char* format, ...) PRINTF_ATTRIBUTE(1, 2);
   static void VFPrint(FILE* stream, const char* format, va_list args);
@@ -115,14 +117,17 @@ class OS {
   static void RegisterCodeObservers();
 
   // Initialize the OS class.
-  static void InitOnce();
+  static void Init();
 
-  // Shut down the OS class.
-  static void Shutdown();
+  // Cleanup the OS class.
+  static void Cleanup();
 
-  static DART_NORETURN void Abort();
+  // Only implemented on Windows, prevents cleanup code from running.
+  static void PrepareToAbort();
 
-  static DART_NORETURN void Exit(int code);
+  DART_NORETURN static void Abort();
+
+  DART_NORETURN static void Exit(int code);
 };
 
 }  // namespace dart

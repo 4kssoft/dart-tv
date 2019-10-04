@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -15,7 +15,6 @@ import 'package:analyzer/src/analysis_options/analysis_options_provider.dart';
 import 'package:analyzer/src/context/builder.dart';
 import 'package:analyzer/src/context/context_root.dart';
 import 'package:analyzer/src/dart/analysis/driver.dart';
-import 'package:analyzer/src/dart/analysis/file_state.dart';
 import 'package:analyzer/src/dart/sdk/sdk.dart';
 import 'package:analyzer/src/file_system/file_system.dart';
 import 'package:analyzer/src/generated/engine.dart';
@@ -24,15 +23,15 @@ import 'package:analyzer/src/generated/java_io.dart';
 import 'package:analyzer/src/generated/sdk.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer/src/generated/source_io.dart';
+import 'package:analyzer/src/manifest/manifest_validator.dart';
 import 'package:analyzer/src/plugin/resolver_provider.dart';
 import 'package:analyzer/src/pubspec/pubspec_validator.dart';
-import 'package:analyzer/src/source/package_map_provider.dart';
 import 'package:analyzer/src/source/package_map_resolver.dart';
 import 'package:analyzer/src/source/path_filter.dart';
-import 'package:analyzer/src/source/pub_package_map_provider.dart';
 import 'package:analyzer/src/source/sdk_ext.dart';
 import 'package:analyzer/src/task/options.dart';
 import 'package:analyzer/src/util/glob.dart';
+import 'package:analyzer/src/util/uri.dart';
 import 'package:analyzer/src/util/yaml.dart';
 import 'package:analyzer_plugin/protocol/protocol_common.dart' as protocol;
 import 'package:analyzer_plugin/utilities/analyzer_converter.dart';
@@ -288,6 +287,12 @@ abstract class ContextManager {
   List<AnalysisDriver> getDriversInAnalysisRoot(Folder analysisRoot);
 
   /**
+   * Determine whether the given [path], when interpreted relative to innermost
+   * context root, contains a folder whose name starts with '.'.
+   */
+  bool isContainedInDotFolder(String path);
+
+  /**
    * Return `true` if the given [path] is ignored by a [ContextInfo] whose
    * folder contains it.
    */
@@ -350,6 +355,11 @@ abstract class ContextManagerCallbacks {
   void afterWatchEvent(WatchEvent event);
 
   /**
+   * Called when analysis options or URI resolution in the [driver] are changed.
+   */
+  void analysisOptionsUpdated(AnalysisDriver driver);
+
+  /**
    * Called when the set of files associated with a context have changed (or
    * some of those files have been modified).  [changeSet] is the set of
    * changes that need to be applied to the context.
@@ -367,22 +377,10 @@ abstract class ContextManagerCallbacks {
   void broadcastWatchEvent(WatchEvent event);
 
   /**
-   * Signals that the context manager has started to compute a package map (if
-   * [computing] is `true`) or has finished (if [computing] is `false`).
-   */
-  void computingPackageMap(bool computing);
-
-  /**
    * Create and return a context builder that can be used to create a context
    * for the files in the given [folder] when analyzed using the given [options].
    */
   ContextBuilder createContextBuilder(Folder folder, AnalysisOptions options);
-
-  /**
-   * Called when the context manager changes the folder with which a context is
-   * associated. Currently this is mostly FYI, and used only in tests.
-   */
-  void moveContext(Folder from, Folder to);
 
   /**
    * Remove the context associated with the given [folder].  [flushedFiles] is
@@ -408,6 +406,11 @@ class ContextManagerImpl implements ContextManager {
   static const String LIB_DIR_NAME = 'lib';
 
   /**
+   * File name of Android manifest files.
+   */
+  static const String MANIFEST_NAME = 'AndroidManifest.xml';
+
+  /**
    * File name of pubspec files.
    */
   static const String PUBSPEC_NAME = 'pubspec.yaml';
@@ -428,11 +431,6 @@ class ContextManagerImpl implements ContextManager {
    * The [ResourceProvider] using which paths are converted into [Resource]s.
    */
   final ResourceProvider resourceProvider;
-
-  /**
-   * The file content overlay.
-   */
-  final FileContentOverlay fileContentOverlay;
 
   /**
    * The manager used to access the SDK that should be associated with a
@@ -476,12 +474,6 @@ class ContextManagerImpl implements ContextManager {
   final ResolverProvider packageResolverProvider;
 
   /**
-   * Provider which is used to determine the mapping from package name to
-   * package folder.
-   */
-  final PubPackageMapProvider _packageMapProvider;
-
-  /**
    * A list of the globs used to determine which files should be analyzed.
    */
   final List<Glob> analyzedFilesGlobs;
@@ -518,10 +510,8 @@ class ContextManagerImpl implements ContextManager {
 
   ContextManagerImpl(
       this.resourceProvider,
-      this.fileContentOverlay,
       this.sdkManager,
       this.packageResolverProvider,
-      this._packageMapProvider,
       this.analyzedFilesGlobs,
       this._instrumentationService,
       this.defaultContextOptions) {
@@ -575,6 +565,15 @@ class ContextManagerImpl implements ContextManager {
       }
     }
     return drivers;
+  }
+
+  /**
+   * Determine whether the given [path], when interpreted relative to innermost
+   * context root, contains a folder whose name starts with '.'.
+   */
+  bool isContainedInDotFolder(String path) {
+    ContextInfo info = _getInnermostContextInfoFor(path);
+    return info != null && _isContainedInDotFolder(info.folder.path, path);
   }
 
   @override
@@ -873,11 +872,36 @@ class ContextManagerImpl implements ContextManager {
     try {
       String content = _readFile(path);
       LineInfo lineInfo = _computeLineInfo(content);
-      List<AnalysisError> errors =
-          GenerateOptionsErrorsTask.analyzeAnalysisOptions(
-              resourceProvider.getFile(path).createSource(),
-              content,
-              driver.sourceFactory);
+      List<AnalysisError> errors = analyzeAnalysisOptions(
+          resourceProvider.getFile(path).createSource(),
+          content,
+          driver.sourceFactory);
+      AnalyzerConverter converter = new AnalyzerConverter();
+      convertedErrors = converter.convertAnalysisErrors(errors,
+          lineInfo: lineInfo, options: driver.analysisOptions);
+    } catch (exception) {
+      // If the file cannot be analyzed, fall through to clear any previous
+      // errors.
+    }
+    callbacks.notificationManager.recordAnalysisErrors(
+        NotificationManager.serverId,
+        path,
+        convertedErrors ?? <protocol.AnalysisError>[]);
+  }
+
+  /**
+   * Use the given analysis [driver] to analyze the content of the
+   * AndroidManifest file at the given [path].
+   */
+  void _analyzeManifestFile(AnalysisDriver driver, String path) {
+    List<protocol.AnalysisError> convertedErrors;
+    try {
+      String content = _readFile(path);
+      ManifestValidator validator =
+          new ManifestValidator(resourceProvider.getFile(path).createSource());
+      LineInfo lineInfo = _computeLineInfo(content);
+      List<AnalysisError> errors = validator.validate(
+          content, driver.analysisOptions.chromeOsManifestChecks);
       AnalyzerConverter converter = new AnalyzerConverter();
       convertedErrors = converter.convertAnalysisErrors(errors,
           lineInfo: lineInfo, options: driver.analysisOptions);
@@ -919,8 +943,7 @@ class ContextManagerImpl implements ContextManager {
         convertedErrors ?? <protocol.AnalysisError>[]);
   }
 
-  void _checkForAnalysisOptionsUpdate(
-      String path, ContextInfo info, ChangeType changeType) {
+  void _checkForAnalysisOptionsUpdate(String path, ContextInfo info) {
     if (AnalysisEngine.isAnalysisOptionsFileName(path, pathContext)) {
       AnalysisDriver driver = info.analysisDriver;
       if (driver == null) {
@@ -929,39 +952,42 @@ class ContextManagerImpl implements ContextManager {
         // yet created a driver for that context.
         return;
       }
-      String contextRoot = info.folder.path;
-      ContextBuilder builder =
-          callbacks.createContextBuilder(info.folder, defaultContextOptions);
-      AnalysisOptions options = builder.getAnalysisOptions(contextRoot,
-          contextRoot: driver.contextRoot);
-      SourceFactory factory = builder.createSourceFactory(contextRoot, options);
-      driver.configure(analysisOptions: options, sourceFactory: factory);
       // TODO(brianwilkerson) Set exclusion patterns.
       _analyzeAnalysisOptionsFile(driver, path);
+      _updateAnalysisOptions(info);
     }
   }
 
-  void _checkForPackagespecUpdate(
-      String path, ContextInfo info, Folder folder) {
+  void _checkForManifestUpdate(String path, ContextInfo info) {
+    if (_isManifest(path)) {
+      AnalysisDriver driver = info.analysisDriver;
+      if (driver == null) {
+        // I suspect that this happens as a result of a race condition: server
+        // has determined that the file (at [path]) is in a context, but hasn't
+        // yet created a driver for that context.
+        return;
+      }
+      _analyzeManifestFile(driver, path);
+    }
+  }
+
+  void _checkForPackagespecUpdate(String path, ContextInfo info) {
     // Check to see if this is the .packages file for this context and if so,
     // update the context's source factory.
     if (pathContext.basename(path) == PACKAGE_SPEC_NAME) {
-      String contextRoot = info.folder.path;
-      ContextBuilder builder =
-          callbacks.createContextBuilder(info.folder, defaultContextOptions);
       AnalysisDriver driver = info.analysisDriver;
-      if (driver != null) {
-        AnalysisOptions options = builder.getAnalysisOptions(contextRoot,
-            contextRoot: driver.contextRoot);
-        SourceFactory factory =
-            builder.createSourceFactory(contextRoot, options);
-        driver.configure(analysisOptions: options, sourceFactory: factory);
+      if (driver == null) {
+        // I suspect that this happens as a result of a race condition: server
+        // has determined that the file (at [path]) is in a context, but hasn't
+        // yet created a driver for that context.
+        return;
       }
+
+      _updateAnalysisOptions(info);
     }
   }
 
-  void _checkForPubspecUpdate(
-      String path, ContextInfo info, ChangeType changeType) {
+  void _checkForPubspecUpdate(String path, ContextInfo info) {
     if (_isPubspec(path)) {
       AnalysisDriver driver = info.analysisDriver;
       if (driver == null) {
@@ -971,6 +997,7 @@ class ContextManagerImpl implements ContextManager {
         return;
       }
       _analyzePubspecFile(driver, path);
+      _updateAnalysisOptions(info);
     }
   }
 
@@ -1040,32 +1067,20 @@ class ContextManagerImpl implements ContextManager {
       // resolve packages.
       return new NoPackageFolderDisposition(packageRoot: packageRoot);
     } else {
-      PackageMapInfo packageMapInfo;
-      callbacks.computingPackageMap(true);
-      try {
-        // Try .packages first.
-        if (pathContext.basename(packagespecFile.path) == PACKAGE_SPEC_NAME) {
-          Packages packages = _readPackagespec(packagespecFile);
-          return new PackagesFileDisposition(packages);
-        }
-        if (packageResolverProvider != null) {
-          UriResolver resolver = packageResolverProvider(folder);
-          if (resolver != null) {
-            return new CustomPackageResolverDisposition(resolver);
-          }
-        }
+      // Try .packages first.
+      if (pathContext.basename(packagespecFile.path) == PACKAGE_SPEC_NAME) {
+        Packages packages = _readPackagespec(packagespecFile);
+        return new PackagesFileDisposition(packages);
+      }
 
-        packageMapInfo = _packageMapProvider.computePackageMap(folder);
-      } finally {
-        callbacks.computingPackageMap(false);
+      if (packageResolverProvider != null) {
+        UriResolver resolver = packageResolverProvider(folder);
+        if (resolver != null) {
+          return new CustomPackageResolverDisposition(resolver);
+        }
       }
-      for (String dependencyPath in packageMapInfo.dependencies) {
-        addDependency(dependencyPath);
-      }
-      if (packageMapInfo.packageMap == null) {
-        return new NoPackageFolderDisposition();
-      }
-      return new PackageMapDisposition(packageMapInfo.packageMap);
+
+      return new NoPackageFolderDisposition();
     }
   }
 
@@ -1144,6 +1159,28 @@ class ContextManagerImpl implements ContextManager {
     if (pubspecFile.exists) {
       _analyzePubspecFile(info.analysisDriver, pubspecFile.path);
     }
+
+    void checkManifestFilesIn(Folder folder) {
+      // Don't traverse into dot directories.
+      if (folder.shortName.startsWith('.')) {
+        return;
+      }
+
+      for (var child in folder.getChildren()) {
+        if (child is File) {
+          if (child.shortName == MANIFEST_NAME &&
+              !excludedPaths.contains(child.path)) {
+            _analyzeManifestFile(info.analysisDriver, child.path);
+          }
+        } else if (child is Folder) {
+          if (!excludedPaths.contains(child.path)) {
+            checkManifestFilesIn(child);
+          }
+        }
+      }
+    }
+
+    checkManifestFilesIn(folder);
     return info;
   }
 
@@ -1414,7 +1451,6 @@ class ContextManagerImpl implements ContextManager {
         }
         break;
       case ChangeType.REMOVE:
-
         // If package spec info is removed, check to see if we can merge contexts.
         // Note that it's important to verify that there is NEITHER a .packages nor a
         // lingering pubspec.yaml before merging.
@@ -1457,9 +1493,10 @@ class ContextManagerImpl implements ContextManager {
           }
         }
     }
-    _checkForPackagespecUpdate(path, info, info.folder);
-    _checkForAnalysisOptionsUpdate(path, info, type);
-    _checkForPubspecUpdate(path, info, type);
+    _checkForPackagespecUpdate(path, info);
+    _checkForAnalysisOptionsUpdate(path, info);
+    _checkForPubspecUpdate(path, info);
+    _checkForManifestUpdate(path, info);
   }
 
   /**
@@ -1511,6 +1548,8 @@ class ContextManagerImpl implements ContextManager {
     return false;
   }
 
+  bool _isManifest(String path) => pathContext.basename(path) == MANIFEST_NAME;
+
   bool _isPackagespec(String path) =>
       pathContext.basename(path) == PACKAGE_SPEC_NAME;
 
@@ -1540,8 +1579,7 @@ class ContextManagerImpl implements ContextManager {
    * the contents cannot be read.
    */
   String _readFile(String path) {
-    return fileContentOverlay[path] ??
-        resourceProvider.getFile(path).readAsStringSync();
+    return resourceProvider.getFile(path).readAsStringSync();
   }
 
   Packages _readPackagespec(File specFile) {
@@ -1586,6 +1624,18 @@ class ContextManagerImpl implements ContextManager {
       }
     }
     return false;
+  }
+
+  void _updateAnalysisOptions(ContextInfo info) {
+    AnalysisDriver driver = info.analysisDriver;
+    String contextRoot = info.folder.path;
+    ContextBuilder builder =
+        callbacks.createContextBuilder(info.folder, defaultContextOptions);
+    AnalysisOptions options = builder.getAnalysisOptions(contextRoot,
+        contextRoot: driver.contextRoot);
+    SourceFactory factory = builder.createSourceFactory(contextRoot, options);
+    driver.configure(analysisOptions: options, sourceFactory: factory);
+    callbacks.analysisOptionsUpdated(driver);
   }
 
   void _updateContextPackageUriResolver(Folder contextFolder) {
@@ -1787,9 +1837,10 @@ class PackagesFileDisposition extends FolderDisposition {
     if (packageMap == null) {
       packageMap = <String, List<Folder>>{};
       if (packages != null) {
+        var pathContext = resourceProvider.pathContext;
         packages.asMap().forEach((String name, Uri uri) {
           if (uri.scheme == 'file' || uri.scheme == '' /* unspecified */) {
-            var path = resourceProvider.pathContext.fromUri(uri);
+            String path = fileUriToNormalizedPath(pathContext, uri);
             packageMap[name] = <Folder>[resourceProvider.getFolder(path)];
           }
         });

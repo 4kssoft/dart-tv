@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -9,7 +9,7 @@ import 'package:analysis_server/src/protocol_server.dart' as protocol;
  * A concrete implementation of [OccurrencesCollector].
  */
 class OccurrencesCollectorImpl implements OccurrencesCollector {
-  Map<protocol.Element, protocol.Occurrences> elementOccurrences =
+  final Map<protocol.Element, protocol.Occurrences> elementOccurrences =
       <protocol.Element, protocol.Occurrences>{};
 
   List<protocol.Occurrences> get allOccurrences {

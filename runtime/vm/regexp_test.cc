@@ -16,13 +16,13 @@ static RawArray* Match(const String& pat, const String& str) {
   Thread* thread = Thread::Current();
   Zone* zone = thread->zone();
   const RegExp& regexp =
-      RegExp::Handle(RegExpEngine::CreateRegExp(thread, pat, false, false));
-  const Smi& idx = Smi::Handle(Smi::New(0));
+      RegExp::Handle(RegExpEngine::CreateRegExp(thread, pat, RegExpFlags()));
+  const Smi& idx = Object::smi_zero();
   return IRRegExpMacroAssembler::Execute(regexp, str, idx, /*sticky=*/false,
                                          zone);
 }
 
-TEST_CASE(RegExp_OneByteString) {
+ISOLATE_UNIT_TEST_CASE(RegExp_OneByteString) {
   uint8_t chars[] = {'a', 'b', 'c', 'b', 'a'};
   intptr_t len = ARRAY_SIZE(chars);
   const String& str =
@@ -43,7 +43,7 @@ TEST_CASE(RegExp_OneByteString) {
   EXPECT_EQ(3, smi_2.Value());
 }
 
-TEST_CASE(RegExp_TwoByteString) {
+ISOLATE_UNIT_TEST_CASE(RegExp_TwoByteString) {
   uint16_t chars[] = {'a', 'b', 'c', 'b', 'a'};
   intptr_t len = ARRAY_SIZE(chars);
   const String& str =
@@ -68,7 +68,7 @@ static void NoopFinalizer(void* isolate_callback_data,
                           Dart_WeakPersistentHandle handle,
                           void* peer) {}
 
-TEST_CASE(RegExp_ExternalOneByteString) {
+ISOLATE_UNIT_TEST_CASE(RegExp_ExternalOneByteString) {
   uint8_t chars[] = {'a', 'b', 'c', 'b', 'a'};
   intptr_t len = ARRAY_SIZE(chars);
   const String& str = String::Handle(ExternalOneByteString::New(
@@ -89,7 +89,7 @@ TEST_CASE(RegExp_ExternalOneByteString) {
   EXPECT_EQ(3, smi_2.Value());
 }
 
-TEST_CASE(RegExp_ExternalTwoByteString) {
+ISOLATE_UNIT_TEST_CASE(RegExp_ExternalTwoByteString) {
   uint16_t chars[] = {'a', 'b', 'c', 'b', 'a'};
   intptr_t len = ARRAY_SIZE(chars);
   const String& str = String::Handle(ExternalTwoByteString::New(

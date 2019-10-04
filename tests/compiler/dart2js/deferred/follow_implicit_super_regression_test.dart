@@ -6,7 +6,7 @@ import 'package:async_helper/async_helper.dart';
 import 'package:compiler/src/compiler.dart' as dart2js;
 import 'package:expect/expect.dart';
 
-import '../memory_compiler.dart';
+import '../helpers/memory_compiler.dart';
 
 void main() {
   runTest() async {
@@ -20,8 +20,7 @@ void main() {
       return elementEnvironment.lookupLibrary(Uri.parse(name));
     }
 
-    var outputUnitForMember =
-        compiler.backend.outputUnitData.outputUnitForMember;
+    var outputUnitForMember = closedWorld.outputUnitData.outputUnitForMember;
 
     dynamic lib = lookupLibrary("memory:lib.dart");
     var a = elementEnvironment.lookupLibraryMember(lib, "a");
@@ -41,7 +40,7 @@ void main() {
 
 // Make sure that the implicit references to supers are found by the deferred
 // loading dependency mechanism.
-const Map MEMORY_SOURCE_FILES = const {
+const Map<String, String> MEMORY_SOURCE_FILES = const {
   "main.dart": """
 import "lib.dart" deferred as lib;
 

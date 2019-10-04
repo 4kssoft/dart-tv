@@ -1,8 +1,6 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
-library analyzer.src.task.strong_mode;
 
 import 'dart:collection';
 
@@ -11,15 +9,12 @@ import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer/src/dart/element/element.dart';
+import 'package:analyzer/src/dart/element/inheritance_manager3.dart';
 import 'package:analyzer/src/dart/element/type.dart';
-import 'package:analyzer/src/dart/resolver/inheritance_manager.dart';
-import 'package:analyzer/src/generated/resolver.dart'
-    show TypeProvider, InheritanceManager;
-import 'package:analyzer/src/generated/type_system.dart';
+import 'package:analyzer/src/generated/resolver.dart' show TypeProvider;
 import 'package:analyzer/src/summary/format.dart';
 import 'package:analyzer/src/summary/idl.dart';
-import 'package:analyzer/src/summary/link.dart'
-    show FieldElementForLink_ClassField, ParameterElementForLink;
+import 'package:analyzer/src/summary2/lazy_ast.dart';
 
 /**
  * Sets the type of the field. The types in implicit accessors are updated
@@ -28,11 +23,6 @@ import 'package:analyzer/src/summary/link.dart'
 void setFieldType(VariableElement field, DartType newType) {
   (field as VariableElementImpl).type = newType;
 }
-
-/**
- * A function that return the [InheritanceManager] for the class [element].
- */
-typedef InheritanceManager InheritanceManagerProvider(ClassElement element);
 
 /**
  * A function that returns `true` if the given [element] passes the filter.
@@ -44,60 +34,39 @@ typedef bool VariableFilter(VariableElement element);
  * instance methods within a single compilation unit.
  */
 class InstanceMemberInferrer {
-  /**
-   * The type provider used to look up types.
-   */
   final TypeProvider typeProvider;
+  final InheritanceManager3 inheritance;
+  final Set<ClassElement> elementsBeingInferred = new HashSet<ClassElement>();
 
-  /**
-   * The type system used to compute the least upper bound of types.
-   */
-  TypeSystem typeSystem;
-
-  /**
-   * The provider for inheritance managers used to find overridden method.
-   */
-  final InheritanceManagerProvider inheritanceManagerProvider;
-
-  /**
-   * The classes that have been visited while attempting to infer the types of
-   * instance members of some base class.
-   */
-  HashSet<ClassElementImpl> elementsBeingInferred =
-      new HashSet<ClassElementImpl>();
+  InterfaceType interfaceType;
 
   /**
    * Initialize a newly create inferrer.
    */
-  InstanceMemberInferrer(
-      TypeProvider typeProvider, this.inheritanceManagerProvider,
-      {TypeSystem typeSystem})
-      : typeSystem = (typeSystem != null)
-            ? typeSystem
-            : new TypeSystemImpl(typeProvider),
-        this.typeProvider = typeProvider;
+  InstanceMemberInferrer(this.typeProvider, this.inheritance);
 
   /**
    * Infer type information for all of the instance members in the given
    * compilation [unit].
    */
   void inferCompilationUnit(CompilationUnitElement unit) {
-    for (ClassElement classElement in unit.types) {
-      try {
-        _inferClass(classElement);
-      } on _CycleException {
-        // This is a short circuit return to prevent types that inherit from
-        // types containing a circular reference from being inferred.
-      }
-    }
+    _inferClasses(unit.mixins);
+    _inferClasses(unit.types);
   }
 
   /**
-   * Return `true` if the list of [elements] contains only methods.
+   * Return `true` if the elements corresponding to the [elements] have the same
+   * kind as the [element].
    */
   bool _allSameElementKind(
       ExecutableElement element, List<ExecutableElement> elements) {
-    return elements.every((e) => e.kind == element.kind);
+    var elementKind = element.kind;
+    for (int i = 0; i < elements.length; i++) {
+      if (elements[i].kind != elementKind) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**
@@ -105,33 +74,50 @@ class InstanceMemberInferrer {
    * value is never `null`, but might be an error, and/or have the `null` type.
    */
   _FieldOverrideInferenceResult _computeFieldOverrideType(
-      InheritanceManager inheritanceManager, PropertyAccessorElement accessor) {
+      PropertyAccessorElement accessor) {
     String name = accessor.displayName;
 
-    var overriddenElements = <ExecutableElement>[];
-    overriddenElements.addAll(
-        inheritanceManager.lookupOverrides(accessor.enclosingElement, name));
-    if (overriddenElements.isEmpty || !accessor.variable.isFinal) {
-      List<ExecutableElement> overriddenSetters = inheritanceManager
-          .lookupOverrides(accessor.enclosingElement, '$name=');
-      overriddenElements.addAll(overriddenSetters);
+    var overriddenGetters = inheritance.getOverridden(
+      interfaceType,
+      new Name(accessor.library.source.uri, name),
+    );
+
+    List<ExecutableElement> overriddenSetters;
+    if (overriddenGetters == null || !accessor.variable.isFinal) {
+      overriddenSetters = inheritance.getOverridden(
+        interfaceType,
+        new Name(accessor.library.source.uri, '$name='),
+      );
+    }
+
+    // Choose overridden members from getters or/and setters.
+    List<ExecutableElement> overriddenElements = <ExecutableElement>[];
+    if (overriddenGetters == null && overriddenSetters == null) {
+      overriddenElements = const <ExecutableElement>[];
+    } else if (overriddenGetters == null && overriddenSetters != null) {
+      overriddenElements = overriddenSetters;
+    } else if (overriddenGetters != null && overriddenSetters == null) {
+      overriddenElements = overriddenGetters;
+    } else {
+      overriddenElements = <ExecutableElement>[]
+        ..addAll(overriddenGetters)
+        ..addAll(overriddenSetters);
     }
 
     bool isCovariant = false;
     DartType impliedType;
     for (ExecutableElement overriddenElement in overriddenElements) {
-      FunctionType overriddenType =
-          _toOverriddenFunctionType(accessor, overriddenElement);
-      if (overriddenType == null) {
+      var overriddenElementKind = overriddenElement.kind;
+      if (overriddenElement == null) {
         return new _FieldOverrideInferenceResult(false, null, true);
       }
 
       DartType type;
-      if (overriddenElement.kind == ElementKind.GETTER) {
-        type = overriddenType.returnType;
-      } else if (overriddenElement.kind == ElementKind.SETTER) {
-        if (overriddenType.parameters.length == 1) {
-          ParameterElement parameter = overriddenType.parameters[0];
+      if (overriddenElementKind == ElementKind.GETTER) {
+        type = overriddenElement.returnType;
+      } else if (overriddenElementKind == ElementKind.SETTER) {
+        if (overriddenElement.parameters.length == 1) {
+          ParameterElement parameter = overriddenElement.parameters[0];
           type = parameter.type;
           isCovariant = isCovariant || parameter.isCovariant;
         }
@@ -161,7 +147,7 @@ class InstanceMemberInferrer {
    */
   DartType _computeParameterType(ParameterElement parameter, int index,
       List<FunctionType> overriddenTypes) {
-    DartType parameterType = null;
+    DartType parameterType;
     int length = overriddenTypes.length;
     for (int i = 0; i < length; i++) {
       ParameterElement matchingParameter = _getCorrespondingParameter(
@@ -169,6 +155,7 @@ class InstanceMemberInferrer {
       DartType type = matchingParameter?.type ?? typeProvider.dynamicType;
       if (parameterType == null) {
         if (type is FunctionType &&
+            type.element != null &&
             type.element is! TypeDefiningElement &&
             type.element.enclosingElement is! TypeDefiningElement) {
           // The resulting parameter's type element has an `enclosingElement` of
@@ -181,9 +168,13 @@ class InstanceMemberInferrer {
           parameterType = type;
         }
       } else if (parameterType != type) {
-        if (parameter is ParameterElementForLink) {
-          parameter.setInferenceError(new TopLevelInferenceErrorBuilder(
-              kind: TopLevelInferenceErrorKind.overrideConflictParameterType));
+        if (parameter is ParameterElementImpl && parameter.linkedNode != null) {
+          LazyAst.setTypeInferenceError(
+            parameter.linkedNode,
+            TopLevelInferenceErrorBuilder(
+              kind: TopLevelInferenceErrorKind.overrideConflictParameterType,
+            ),
+          );
         }
         return typeProvider.dynamicType;
       }
@@ -200,7 +191,7 @@ class InstanceMemberInferrer {
    * want to be smarter about it.
    */
   DartType _computeReturnType(Iterable<DartType> overriddenReturnTypes) {
-    DartType returnType = null;
+    DartType returnType;
     for (DartType type in overriddenReturnTypes) {
       if (type == null) {
         type = typeProvider.dynamicType;
@@ -252,8 +243,7 @@ class InstanceMemberInferrer {
    * If the given [element] represents a non-synthetic instance property
    * accessor for which no type was provided, infer its types.
    */
-  void _inferAccessor(
-      InheritanceManager inheritanceManager, PropertyAccessorElement element) {
+  void _inferAccessor(PropertyAccessorElement element) {
     if (element.isSynthetic || element.isStatic) {
       return;
     }
@@ -263,7 +253,7 @@ class InstanceMemberInferrer {
     }
 
     _FieldOverrideInferenceResult typeResult =
-        _computeFieldOverrideType(inheritanceManager, element);
+        _computeFieldOverrideType(element);
     if (typeResult.isError == null || typeResult.type == null) {
       return;
     }
@@ -301,8 +291,6 @@ class InstanceMemberInferrer {
         throw new _CycleException();
       }
       try {
-        InheritanceManager inheritanceManager =
-            inheritanceManagerProvider(classElement);
         //
         // Ensure that all of instance members in the supertypes have had types
         // inferred for them.
@@ -310,18 +298,20 @@ class InstanceMemberInferrer {
         _inferType(classElement.supertype);
         classElement.mixins.forEach(_inferType);
         classElement.interfaces.forEach(_inferType);
+        classElement.superclassConstraints.forEach(_inferType);
         //
         // Then infer the types for the members.
         //
-        classElement.fields.forEach((field) {
-          _inferField(inheritanceManager, field);
-        });
-        classElement.accessors.forEach((accessor) {
-          _inferAccessor(inheritanceManager, accessor);
-        });
-        classElement.methods.forEach((method) {
-          _inferExecutable(inheritanceManager, method);
-        });
+        this.interfaceType = classElement.thisType;
+        for (FieldElement field in classElement.fields) {
+          _inferField(field);
+        }
+        for (PropertyAccessorElement accessor in classElement.accessors) {
+          _inferAccessor(accessor);
+        }
+        for (MethodElement method in classElement.methods) {
+          _inferExecutable(method);
+        }
         //
         // Infer initializing formal parameter types. This must happen after
         // field types are inferred.
@@ -330,6 +320,17 @@ class InstanceMemberInferrer {
         classElement.hasBeenInferred = true;
       } finally {
         elementsBeingInferred.remove(classElement);
+      }
+    }
+  }
+
+  void _inferClasses(List<ClassElement> elements) {
+    for (ClassElement element in elements) {
+      try {
+        _inferClass(element);
+      } on _CycleException {
+        // This is a short circuit return to prevent types that inherit from
+        // types containing a circular reference from being inferred.
       }
     }
   }
@@ -351,14 +352,18 @@ class InstanceMemberInferrer {
    * getter or setter, infer the return type and any parameter type(s) where
    * they were not provided.
    */
-  void _inferExecutable(
-      InheritanceManager inheritanceManager, ExecutableElement element) {
+  void _inferExecutable(ExecutableElement element) {
     if (element.isSynthetic || element.isStatic) {
       return;
     }
-    List<ExecutableElement> overriddenElements = inheritanceManager
-        .lookupOverrides(element.enclosingElement, element.displayName);
-    if (overriddenElements.isEmpty ||
+
+    // TODO(scheglov) If no implicit types, don't ask inherited.
+
+    List<ExecutableElement> overriddenElements = inheritance.getOverridden(
+      interfaceType,
+      new Name(element.library.source.uri, element.name),
+    );
+    if (overriddenElements == null ||
         !_allSameElementKind(element, overriddenElements)) {
       return;
     }
@@ -403,25 +408,33 @@ class InstanceMemberInferrer {
    * If the given [field] represents a non-synthetic instance field for
    * which no type was provided, infer the type of the field.
    */
-  void _inferField(InheritanceManager inheritanceManager, FieldElement field) {
+  void _inferField(FieldElement field) {
     if (field.isSynthetic || field.isStatic) {
       return;
     }
 
     _FieldOverrideInferenceResult typeResult =
-        _computeFieldOverrideType(inheritanceManager, field.getter);
+        _computeFieldOverrideType(field.getter);
     if (typeResult.isError) {
-      if (field is FieldElementForLink_ClassField) {
-        field.setInferenceError(new TopLevelInferenceErrorBuilder(
-            kind: TopLevelInferenceErrorKind.overrideConflictFieldType));
+      if (field is FieldElementImpl && field.linkedNode != null) {
+        LazyAst.setTypeInferenceError(
+          field.linkedNode,
+          TopLevelInferenceErrorBuilder(
+            kind: TopLevelInferenceErrorKind.overrideConflictFieldType,
+          ),
+        );
       }
       return;
     }
 
     if (field.hasImplicitType) {
       DartType newType = typeResult.type;
-      if (newType == null && field.initializer != null) {
-        newType = field.initializer.returnType;
+
+      if (newType == null) {
+        var initializer = field.initializer;
+        if (initializer != null) {
+          newType = initializer.returnType;
+        }
       }
 
       if (newType == null || newType.isBottom || newType.isDartCoreNull) {
@@ -477,14 +490,7 @@ class InstanceMemberInferrer {
       ExecutableElement element, ExecutableElement overriddenElement) {
     List<DartType> typeFormals =
         TypeParameterTypeImpl.getTypes(element.type.typeFormals);
-
     FunctionType overriddenType = overriddenElement.type;
-    if (overriddenType == null) {
-      // TODO(brianwilkerson) I think the overridden method should always have
-      // a type, but there appears to be a bug that causes it to sometimes be
-      // null, we guard against that case by not performing inference.
-      return null;
-    }
     if (overriddenType.typeFormals.isNotEmpty) {
       if (overriddenType.typeFormals.length != typeFormals.length) {
         return null;
@@ -561,7 +567,7 @@ class VariableGatherer extends RecursiveAstVisitor {
    * Initialize a newly created gatherer to gather all of the variables that
    * pass the given [filter] (or all variables if no filter is provided).
    */
-  VariableGatherer([this.filter = null]);
+  VariableGatherer([this.filter]);
 
   @override
   void visitSimpleIdentifier(SimpleIdentifier node) {

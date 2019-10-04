@@ -46,7 +46,7 @@ bool SocketBase::FormatNumericAddress(const RawAddr& addr,
                                       int len) {
   socklen_t salen = SocketAddress::GetAddrLength(addr);
   return (NO_RETRY_EXPECTED(getnameinfo(&addr.addr, salen, address, len, NULL,
-                                        0, NI_NUMERICHOST) == 0));
+                                        0, NI_NUMERICHOST) == 0)) != 0;
 }
 
 bool SocketBase::IsBindError(intptr_t error_number) {
@@ -301,7 +301,7 @@ AddressList<InterfaceSocketAddress>* SocketBase::ListInterfaces(
 
 void SocketBase::Close(intptr_t fd) {
   ASSERT(fd >= 0);
-  VOID_TEMP_FAILURE_RETRY(close(fd));
+  close(fd);
 }
 
 bool SocketBase::GetNoDelay(intptr_t fd, bool* enabled) {
@@ -389,6 +389,25 @@ bool SocketBase::SetBroadcast(intptr_t fd, bool enabled) {
   return NO_RETRY_EXPECTED(setsockopt(fd, SOL_SOCKET, SO_BROADCAST,
                                       reinterpret_cast<char*>(&on),
                                       sizeof(on))) == 0;
+}
+
+bool SocketBase::SetOption(intptr_t fd,
+                           int level,
+                           int option,
+                           const char* data,
+                           int length) {
+  return NO_RETRY_EXPECTED(setsockopt(fd, level, option, data, length)) == 0;
+}
+
+bool SocketBase::GetOption(intptr_t fd,
+                           int level,
+                           int option,
+                           char* data,
+                           unsigned int* length) {
+  socklen_t optlen = static_cast<socklen_t>(*length);
+  auto result = NO_RETRY_EXPECTED(getsockopt(fd, level, option, data, &optlen));
+  *length = static_cast<unsigned int>(optlen);
+  return result == 0;
 }
 
 bool SocketBase::JoinMulticast(intptr_t fd,

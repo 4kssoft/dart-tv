@@ -5,6 +5,8 @@
 library models;
 
 import 'dart:async';
+import 'dart:typed_data';
+import 'package:observatory/object_graph.dart';
 
 part 'src/models/exceptions.dart';
 
@@ -51,7 +53,6 @@ part 'src/models/objects/target.dart';
 part 'src/models/objects/thread.dart';
 part 'src/models/objects/timeline.dart';
 part 'src/models/objects/timeline_event.dart';
-part 'src/models/objects/token_stream.dart';
 part 'src/models/objects/type_arguments.dart';
 part 'src/models/objects/unknown.dart';
 part 'src/models/objects/unlinked_call.dart';
@@ -92,7 +93,6 @@ part 'src/models/repositories/strongly_reachable_instances.dart';
 part 'src/models/repositories/subtype_test_cache.dart';
 part 'src/models/repositories/target.dart';
 part 'src/models/repositories/timeline.dart';
-part 'src/models/repositories/top_retaining_instances.dart';
 part 'src/models/repositories/type_arguments.dart';
 part 'src/models/repositories/unlinked_call.dart';
 part 'src/models/repositories/vm.dart';

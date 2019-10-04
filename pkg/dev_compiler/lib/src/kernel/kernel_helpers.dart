@@ -17,11 +17,16 @@ Library getLibrary(NamedNode node) {
   return null;
 }
 
-final Pattern _syntheticTypeCharacters = new RegExp('[&^#.]');
+final Pattern _syntheticTypeCharacters = RegExp('[&^#.|]');
 
-String _escapeIdentifier(String identifier) {
+String escapeIdentifier(String identifier) {
   // Remove the special characters used to encode mixin application class names
-  // which are legal in Kernel, but not in JavaScript.
+  // and extension method / parameter names which are legal in Kernel, but not
+  // in JavaScript.
+  //
+  // Note, there is an implicit assumption here that we won't have
+  // collisions since everything is mapped to \$.  That may work out fine given
+  // how these are sythesized, but may need to revisit.
   return identifier?.replaceAll(_syntheticTypeCharacters, r'$');
 }
 
@@ -32,13 +37,13 @@ String _escapeIdentifier(String identifier) {
 ///
 /// In the current encoding, generic classes are generated in a function scope
 /// which avoids name clashes of the escaped class name.
-String getLocalClassName(Class node) => _escapeIdentifier(node.name);
+String getLocalClassName(Class node) => escapeIdentifier(node.name);
 
 /// Returns the escaped name for the type parameter [node].
 ///
 /// In the current encoding, generic classes are generated in a function scope
 /// which avoids name clashes of the escaped parameter name.
-String getTypeParameterName(TypeParameter node) => _escapeIdentifier(node.name);
+String getTypeParameterName(TypeParameter node) => escapeIdentifier(node.name);
 
 String getTopLevelName(NamedNode n) {
   if (n is Procedure) return n.name.name;
@@ -79,16 +84,38 @@ Expression findAnnotation(TreeNode node, bool test(Expression value)) {
   return annotations.firstWhere(test, orElse: () => null);
 }
 
+/// Returns true if [value] represents an annotation for class [className] in
+/// "dart:" library [libraryName].
 bool isBuiltinAnnotation(
-    Expression value, String libraryName, String expectedName) {
-  if (value is ConstructorInvocation) {
-    var c = value.target.enclosingClass;
-    if (c.name == expectedName) {
-      var uri = c.enclosingLibrary.importUri;
-      return uri.scheme == 'dart' && uri.path == libraryName;
-    }
+    Expression value, String libraryName, String className) {
+  var c = getAnnotationClass(value);
+  if (c != null && c.name == className) {
+    var uri = c.enclosingLibrary.importUri;
+    return uri.scheme == 'dart' && uri.path == libraryName;
   }
   return false;
+}
+
+/// Gets the class of the instance referred to by metadata annotation [node].
+///
+/// For example:
+///
+/// - `@JS()` would return the "JS" class in "package:js".
+/// - `@anonymous` would return the "_Anonymous" class in "package:js".
+///
+/// This function works regardless of whether the CFE is evaluating constants,
+/// or whether the constant is a field reference (such as "anonymous" above).
+Class getAnnotationClass(Expression node) {
+  if (node is ConstantExpression) {
+    var constant = node.constant;
+    if (constant is InstanceConstant) return constant.classNode;
+  } else if (node is ConstructorInvocation) {
+    return node.target.enclosingClass;
+  } else if (node is StaticGet) {
+    var type = node.target.getterType;
+    if (type is InterfaceType) return type.classNode;
+  }
+  return null;
 }
 
 /// Returns true if [name] is an operator method that is available on primitive
@@ -138,7 +165,7 @@ bool isMixinAliasClass(Class c) =>
 
 List<Class> getSuperclasses(Class c) {
   var result = <Class>[];
-  var visited = new HashSet<Class>();
+  var visited = HashSet<Class>();
   while (c != null && visited.add(c)) {
     for (var m = c.mixedInClass; m != null; m = m.mixedInClass) {
       result.add(m);
@@ -170,10 +197,17 @@ bool isInlineJS(Member e) =>
     e.name.name == 'JS' &&
     e.enclosingLibrary.importUri.toString() == 'dart:_foreign_helper';
 
-// Check whether we have any covariant parameters.
-// Usually we don't, so we can use the same type.
-bool isCovariant(VariableDeclaration p) =>
-    p.isCovariant || p.isGenericCovariantImpl;
+/// Whether the parameter [p] is covariant (either explicitly `covariant` or
+/// implicitly due to generics) and needs a check for soundness.
+bool isCovariantParameter(VariableDeclaration p) {
+  return p.isCovariant || p.isGenericCovariantImpl;
+}
+
+/// Whether the field [p] is covariant (either explicitly `covariant` or
+/// implicitly due to generics) and needs a check for soundness.
+bool isCovariantField(Field f) {
+  return f.isCovariant || f.isGenericCovariantImpl;
+}
 
 /// Returns true iff this factory constructor just throws [UnsupportedError]/
 ///
@@ -189,12 +223,10 @@ bool isUnsupportedFactoryConstructor(Procedure node) {
           var expr = statement.expression;
           if (expr is Throw) {
             var error = expr.expression;
-            if (error is ConstructorInvocation &&
-                error.target.enclosingClass.name == 'UnsupportedError') {
-              // HTML adds a lot of private constructors that are unreachable.
-              // Skip these.
-              return true;
-            }
+
+            // HTML adds a lot of private constructors that are unreachable.
+            // Skip these.
+            return isBuiltinAnnotation(error, 'core', 'UnsupportedError');
           }
         }
       }
@@ -230,7 +262,61 @@ Class getSuperclassAndMixins(Class c, List<Class> mixins) {
 
   var sc = c.superclass;
   for (; sc.isAnonymousMixin; sc = sc.superclass) {
-    mixins.add(sc.mixedInClass);
+    mixedInClass = sc.mixedInClass;
+    if (mixedInClass != null) mixins.add(sc.mixedInClass);
   }
   return sc;
+}
+
+/// Returns true if a switch statement contains any continues with a label.
+bool hasLabeledContinue(SwitchStatement node) {
+  var visitor = LabelContinueFinder();
+  node.accept(visitor);
+  return visitor.found;
+}
+
+class LabelContinueFinder extends StatementVisitor {
+  var found = false;
+
+  visit(Statement s) {
+    if (!found && s != null) s.accept(this);
+  }
+
+  @override
+  visitBlock(Block node) => node.statements.forEach(visit);
+  @override
+  visitAssertBlock(AssertBlock node) => node.statements.forEach(visit);
+  @override
+  visitWhileStatement(WhileStatement node) => visit(node.body);
+  @override
+  visitDoStatement(DoStatement node) => visit(node.body);
+  @override
+  visitForStatement(ForStatement node) => visit(node.body);
+  @override
+  visitForInStatement(ForInStatement node) => visit(node.body);
+  @override
+  visitContinueSwitchStatement(ContinueSwitchStatement node) => found = true;
+
+  @override
+  visitSwitchStatement(SwitchStatement node) {
+    node.cases.forEach((c) => visit(c.body));
+  }
+
+  @override
+  visitIfStatement(IfStatement node) {
+    visit(node.then);
+    visit(node.otherwise);
+  }
+
+  @override
+  visitTryCatch(TryCatch node) {
+    visit(node.body);
+    node.catches.forEach((c) => visit(c.body));
+  }
+
+  @override
+  visitTryFinally(TryFinally node) {
+    visit(node.body);
+    visit(node.finalizer);
+  }
 }

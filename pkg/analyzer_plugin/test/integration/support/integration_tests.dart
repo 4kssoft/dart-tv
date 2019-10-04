@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -15,9 +15,9 @@ import 'package:test/test.dart';
 import 'integration_test_methods.dart';
 import 'protocol_matchers.dart';
 
-const Matcher isBool = const isInstanceOf<bool>();
+const Matcher isBool = const TypeMatcher<bool>();
 
-const Matcher isInt = const isInstanceOf<int>();
+const Matcher isInt = const TypeMatcher<int>();
 
 const Matcher isNotification = const MatchesJsonObject(
     'notification', const {'event': isString},
@@ -25,7 +25,7 @@ const Matcher isNotification = const MatchesJsonObject(
 
 const Matcher isObject = isMap;
 
-const Matcher isString = const isInstanceOf<String>();
+const Matcher isString = const TypeMatcher<String>();
 
 final Matcher isResponse = new MatchesJsonObject('response', {'id': isString},
     optionalFields: {'result': anything, 'error': isRequestError});
@@ -40,7 +40,7 @@ Matcher isOneOf(List<Matcher> choiceMatchers) => new _OneOf(choiceMatchers);
 /**
  * Assert that [actual] matches [matcher].
  */
-void outOfTestExpect(actual, matcher,
+void outOfTestExpect(actual, Matcher matcher,
     {String reason, skip, bool verbose: false}) {
   var matchState = {};
   try {
@@ -374,7 +374,7 @@ class MatchesJsonObject extends _RecursiveMatcher {
     }
     if (requiredFields != null) {
       requiredFields.forEach((String key, Matcher valueMatcher) {
-        if (!item.containsKey(key)) {
+        if (!(item as Map).containsKey(key)) {
           mismatches.add((Description mismatchDescription) =>
               mismatchDescription
                   .add('is missing field ')
@@ -391,7 +391,7 @@ class MatchesJsonObject extends _RecursiveMatcher {
       if (requiredFields != null && requiredFields.containsKey(key)) {
         // Already checked this field
       } else if (optionalFields != null && optionalFields.containsKey(key)) {
-        _checkField(key, value, optionalFields[key], mismatches);
+        _checkField(key as String, value, optionalFields[key], mismatches);
       } else {
         mismatches.add((Description mismatchDescription) => mismatchDescription
             .add('has unexpected field ')
@@ -548,10 +548,10 @@ class Server {
         return;
       }
       outOfTestExpect(message, isMap);
-      Map messageAsMap = message;
+      Map messageAsMap = message as Map;
       if (messageAsMap.containsKey('id')) {
         outOfTestExpect(messageAsMap['id'], isString);
-        String id = message['id'];
+        String id = message['id'] as String;
         Completer completer = _pendingCommands[id];
         if (completer == null) {
           fail('Unexpected response from server: id=$id');
@@ -572,7 +572,8 @@ class Server {
         // params.
         outOfTestExpect(messageAsMap, contains('event'));
         outOfTestExpect(messageAsMap['event'], isString);
-        notificationProcessor(messageAsMap['event'], messageAsMap['params']);
+        notificationProcessor(
+            messageAsMap['event'] as String, messageAsMap['params']);
         // Check that the message is well-formed.  We do this after calling
         // notificationController.add() so that we don't stall the test in the
         // event of an error.
@@ -652,9 +653,6 @@ class Server {
       arguments.add('--pause-isolates-on-exit');
     } else if (servicesPort != null) {
       arguments.add('--enable-vm-service=$servicesPort');
-    }
-    if (Platform.packageRoot != null) {
-      arguments.add('--package-root=${Platform.packageRoot}');
     }
     if (Platform.packageConfig != null) {
       arguments.add('--packages=${Platform.packageConfig}');
@@ -754,7 +752,7 @@ class _ListOf extends Matcher {
    */
   final Matcher iterableMatcher;
 
-  _ListOf(elementMatcher)
+  _ListOf(Matcher elementMatcher)
       : elementMatcher = elementMatcher,
         iterableMatcher = everyElement(elementMatcher);
 
@@ -954,7 +952,5 @@ abstract class _RecursiveMatcher extends Matcher {
    * Create a [MismatchDescriber] describing a mismatch with a simple string.
    */
   MismatchDescriber simpleDescription(String description) =>
-      (Description mismatchDescription) {
-        mismatchDescription.add(description);
-      };
+      (Description mismatchDescription) => mismatchDescription.add(description);
 }

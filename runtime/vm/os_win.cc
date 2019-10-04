@@ -79,7 +79,7 @@ const char* OS::GetTimeZoneName(int64_t seconds_since_epoch) {
                                          : zone_information.StandardName;
   intptr_t utf8_len =
       WideCharToMultiByte(CP_UTF8, 0, wchar_name, -1, NULL, 0, NULL, NULL);
-  char* name = Thread::Current()->zone()->Alloc<char>(utf8_len + 1);
+  char* name = ThreadState::Current()->zone()->Alloc<char>(utf8_len + 1);
   WideCharToMultiByte(CP_UTF8, 0, wchar_name, -1, name, utf8_len, NULL, NULL);
   name[utf8_len] = '\0';
   return name;
@@ -175,9 +175,11 @@ int64_t OS::GetCurrentThreadCPUMicros() {
 }
 
 intptr_t OS::ActivationFrameAlignment() {
-#if defined(TARGET_ARCH_ARM64)
+#if defined(TARGET_ARCH_ARM64) ||                                              \
+    defined(TARGET_ARCH_DBC) && defined(HOST_ARCH_ARM64)
   return 16;
-#elif defined(TARGET_ARCH_ARM)
+#elif defined(TARGET_ARCH_ARM) ||                                              \
+    defined(TARGET_ARCH_DBC) && defined(HOST_ARCH_ARM)
   return 8;
 #elif defined(_WIN64)
   // Windows 64-bit ABI requires the stack to be 16-byte aligned.
@@ -287,6 +289,8 @@ bool OS::StringToInt64(const char* str, int64_t* value) {
   int i = 0;
   if (str[0] == '-') {
     i = 1;
+  } else if (str[0] == '+') {
+    i = 1;
   }
   if ((str[i] == '0') && (str[i + 1] == 'x' || str[i + 1] == 'X') &&
       (str[i + 2] != '\0')) {
@@ -312,18 +316,15 @@ void OS::PrintErr(const char* format, ...) {
   va_end(args);
 }
 
-void OS::InitOnce() {
-  // TODO(5411554): For now we check that initonce is called only once,
-  // Once there is more formal mechanism to call InitOnce we can move
-  // this check there.
+void OS::Init() {
   static bool init_once_called = false;
-  ASSERT(init_once_called == false);
+  if (init_once_called) {
+    return;
+  }
   init_once_called = true;
   // Do not pop up a message box when abort is called.
   _set_abort_behavior(0, _WRITE_ABORT_MSG);
-  ThreadLocalData::InitOnce();
-  MonitorWaitData::monitor_wait_data_key_ = OSThread::CreateThreadLocal();
-  MonitorData::GetMonitorWaitDataForThread();
+  ThreadLocalData::Init();
   LARGE_INTEGER ticks_per_sec;
   if (!QueryPerformanceFrequency(&ticks_per_sec)) {
     qpc_ticks_per_second = 0;
@@ -332,14 +333,18 @@ void OS::InitOnce() {
   }
 }
 
-void OS::Shutdown() {
+void OS::Cleanup() {
   // TODO(zra): Enable once VM can shutdown cleanly.
-  // ThreadLocalData::Shutdown();
+  // ThreadLocalData::Cleanup();
+}
+
+void OS::PrepareToAbort() {
+  // TODO(zra): Remove once VM shuts down cleanly.
+  private_flag_windows_run_tls_destructors = false;
 }
 
 void OS::Abort() {
-  // TODO(zra): Remove once VM shuts down cleanly.
-  private_flag_windows_run_tls_destructors = false;
+  PrepareToAbort();
   abort();
 }
 

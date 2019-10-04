@@ -5,7 +5,7 @@
 library js_backend.backend.resolution_listener;
 
 import '../common/names.dart' show Identifiers;
-import '../common_elements.dart' show CommonElements, ElementEnvironment;
+import '../common_elements.dart' show KCommonElements, KElementEnvironment;
 import '../constants/values.dart';
 import '../deferred_load.dart';
 import '../elements/entities.dart';
@@ -17,8 +17,7 @@ import '../universe/call_structure.dart' show CallStructure;
 import '../universe/use.dart' show StaticUse, TypeUse;
 import '../universe/world_impact.dart'
     show WorldImpact, WorldImpactBuilder, WorldImpactBuilderImpl;
-import 'allocator_analysis.dart';
-import 'backend.dart';
+import 'field_analysis.dart';
 import 'backend_impact.dart';
 import 'backend_usage.dart';
 import 'checked_mode_helpers.dart';
@@ -32,8 +31,8 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
   final DeferredLoadTask _deferredLoadTask;
 
   final CompilerOptions _options;
-  final ElementEnvironment _elementEnvironment;
-  final CommonElements _commonElements;
+  final KElementEnvironment _elementEnvironment;
+  final KCommonElements _commonElements;
   final BackendImpacts _impacts;
 
   final NativeBasicData _nativeData;
@@ -44,7 +43,7 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
   final CustomElementsResolutionAnalysis _customElementsAnalysis;
 
   final NativeResolutionEnqueuer _nativeEnqueuer;
-  final KAllocatorAnalysis _allocatorAnalysis;
+  final KFieldAnalysis _fieldAnalysis;
 
   /// True when we enqueue the loadLibrary code.
   bool _isLoadLibraryFunctionResolved = false;
@@ -60,7 +59,7 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
       this._noSuchMethodRegistry,
       this._customElementsAnalysis,
       this._nativeEnqueuer,
-      this._allocatorAnalysis,
+      this._fieldAnalysis,
       this._deferredLoadTask);
 
   void _registerBackendImpact(
@@ -122,8 +121,12 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
       mainImpact.registerStaticUse(
           new StaticUse.staticInvoke(mainMethod, callStructure));
     }
-    mainImpact.registerStaticUse(
-        new StaticUse.staticInvoke(mainMethod, CallStructure.NO_ARGS));
+    if (mainMethod.isGetter) {
+      mainImpact.registerStaticUse(new StaticUse.staticGet(mainMethod));
+    } else {
+      mainImpact.registerStaticUse(
+          new StaticUse.staticInvoke(mainMethod, CallStructure.NO_ARGS));
+    }
     return mainImpact;
   }
 
@@ -134,8 +137,8 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
   }
 
   @override
-  void onQueueOpen(Enqueuer enqueuer, FunctionEntity mainMethod,
-      Iterable<LibraryEntity> libraries) {
+  void onQueueOpen(
+      Enqueuer enqueuer, FunctionEntity mainMethod, Iterable<Uri> libraries) {
     if (_deferredLoadTask.isProgramSplit) {
       enqueuer.applyImpact(_computeDeferredLoadingImpact(),
           impactSource: 'deferred load');
@@ -181,6 +184,12 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
       _backendUsage.isNoSuchMethodUsed = true;
     }
 
+    if (_nativeData.isAllowInteropUsed) {
+      _backendUsage.processBackendImpact(_impacts.allowInterop);
+      enqueuer
+          .applyImpact(_impacts.allowInterop.createImpact(_elementEnvironment));
+    }
+
     if (!enqueuer.queueIsEmpty) return false;
 
     return true;
@@ -216,9 +225,7 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
     } else if (constant.isType) {
       FunctionEntity helper = _commonElements.createRuntimeType;
       impactBuilder.registerStaticUse(new StaticUse.staticInvoke(
-          // TODO(johnniwinther): Find the right [CallStructure].
-          helper,
-          null));
+          helper, helper.parameterStructure.callStructure));
       _backendUsage.registerBackendFunctionUse(helper);
       impactBuilder
           .registerTypeUse(new TypeUse.instantiation(_commonElements.typeType));
@@ -233,10 +240,9 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
         // If we use a type literal in a constant, the compile time
         // constant emitter will generate a call to the createRuntimeType
         // helper so we register a use of that.
+        FunctionEntity helper = _commonElements.createRuntimeType;
         impactBuilder.registerStaticUse(new StaticUse.staticInvoke(
-            // TODO(johnniwinther): Find the right [CallStructure].
-            _commonElements.createRuntimeType,
-            null));
+            helper, helper.parameterStructure.callStructure));
       }
     }
   }
@@ -285,6 +291,10 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
     }
     _backendUsage.registerUsedMember(member);
 
+    if (_commonElements.isCreateInvocationMirrorHelper(member)) {
+      _registerBackendImpact(worldImpact, _impacts.noSuchMethodSupport);
+    }
+
     if (_elementEnvironment.isDeferredLoadLibraryGetter(member)) {
       // TODO(sigurdm): Create a function registerLoadLibraryAccess.
       if (!_isLoadLibraryFunctionResolved) {
@@ -298,7 +308,6 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
       // runtimeType. We have to enable runtime type before hitting the
       // codegen, so that constructors know whether they need to generate code
       // for runtime type.
-      _backendUsage.isRuntimeTypeUsed = true;
       // TODO(ahe): Record precise dependency here.
       worldImpact.addImpact(_registerRuntimeType());
     }
@@ -329,12 +338,16 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
       _registerBackendImpact(impactBuilder, _impacts.functionClass);
     } else if (cls == _commonElements.mapClass) {
       _registerBackendImpact(impactBuilder, _impacts.mapClass);
+    } else if (cls == _commonElements.setClass) {
+      _registerBackendImpact(impactBuilder, _impacts.setClass);
     } else if (cls == _commonElements.boundClosureClass) {
       _registerBackendImpact(impactBuilder, _impacts.boundClosureClass);
     } else if (_nativeData.isNativeOrExtendsNative(cls)) {
       _registerBackendImpact(impactBuilder, _impacts.nativeOrExtendsClass);
     } else if (cls == _commonElements.mapLiteralClass) {
       _registerBackendImpact(impactBuilder, _impacts.mapLiteralClass);
+    } else if (cls == _commonElements.setLiteralClass) {
+      _registerBackendImpact(impactBuilder, _impacts.setLiteralClass);
     }
     if (cls == _commonElements.closureClass) {
       _registerBackendImpact(impactBuilder, _impacts.closureClass);
@@ -406,7 +419,7 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
 
   @override
   WorldImpact registerInstantiatedClass(ClassEntity cls) {
-    _allocatorAnalysis.registerInstantiatedClass(cls);
+    _fieldAnalysis.registerInstantiatedClass(cls);
     return _processClass(cls);
   }
 
@@ -419,9 +432,6 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
     // will instantiate those two classes.
     _addInterceptors(_commonElements.jsBoolClass, impactBuilder);
     _addInterceptors(_commonElements.jsNullClass, impactBuilder);
-    if (_options.enableTypeAssertions) {
-      _registerBackendImpact(impactBuilder, _impacts.enableTypeAssertions);
-    }
     if (_options.disableRtiOptimization) {
       // When RTI optimization is disabled we always need all RTI helpers, so
       // register these here.
@@ -429,9 +439,14 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
       _registerBackendImpact(impactBuilder, _impacts.getRuntimeTypeArgument);
     }
 
-    if (JavaScriptBackend.TRACE_CALLS) {
+    if (_options.experimentCallInstrumentation) {
       _registerBackendImpact(impactBuilder, _impacts.traceHelper);
     }
+
+    if (_options.experimentNewRti) {
+      _registerBackendImpact(impactBuilder, _impacts.rtiAddRules);
+    }
+
     _registerBackendImpact(impactBuilder, _impacts.assertUnreachable);
     _registerCheckedModeHelpers(impactBuilder);
     return impactBuilder;

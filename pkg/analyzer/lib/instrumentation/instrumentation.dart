@@ -1,11 +1,9 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:async';
 import 'dart:convert';
-
-import 'package:analyzer/src/task/api/model.dart';
 
 /**
  * A container with analysis performance constants.
@@ -70,6 +68,7 @@ class InstrumentationService {
   static const String TAG_ERROR = 'Err';
   static const String TAG_EXCEPTION = 'Ex';
   static const String TAG_FILE_READ = 'Read';
+  static const String TAG_INFO = 'Info';
   static const String TAG_LOG_ENTRY = 'Log';
   static const String TAG_NOTIFICATION = 'Noti';
   static const String TAG_PERFORMANCE = 'Perf';
@@ -122,17 +121,6 @@ class InstrumentationService {
   String get _timestamp => new DateTime.now().millisecondsSinceEpoch.toString();
 
   /**
-   * Log that the given analysis [task] is being performed in the given
-   * [context].
-   */
-  void logAnalysisTask(String context, AnalysisTask task) {
-    if (_instrumentationServer != null) {
-      _instrumentationServer
-          .log(_join([TAG_ANALYSIS_TASK, context, task.description]));
-    }
-  }
-
-  /**
    * Log the fact that an error, described by the given [message], has occurred.
    */
   void logError(String message) {
@@ -162,6 +150,11 @@ class InstrumentationService {
           .log(_join([TAG_FILE_READ, path, timeStamp, content]));
     }
   }
+
+  /**
+   * Log unstructured text information for debugging purposes.
+   */
+  void logInfo(String message) => _log(TAG_INFO, message);
 
   /**
    * Log that a log entry that was written to the analysis engine's log. The log
@@ -346,7 +339,7 @@ class InstrumentationService {
   void logVersion(String uuid, String clientId, String clientVersion,
       String serverVersion, String sdkVersion) {
     String normalize(String value) =>
-        value != null && value.length > 0 ? value : 'unknown';
+        value != null && value.isNotEmpty ? value : 'unknown';
 
     if (_instrumentationServer != null) {
       _instrumentationServer.logWithPriority(_join([

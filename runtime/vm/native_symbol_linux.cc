@@ -7,15 +7,16 @@
 
 #include "platform/memory_sanitizer.h"
 #include "vm/native_symbol.h"
+#include "vm/os.h"
 
 #include <cxxabi.h>  // NOLINT
 #include <dlfcn.h>   // NOLINT
 
 namespace dart {
 
-void NativeSymbolResolver::InitOnce() {}
+void NativeSymbolResolver::Init() {}
 
-void NativeSymbolResolver::ShutdownOnce() {}
+void NativeSymbolResolver::Cleanup() {}
 
 char* NativeSymbolResolver::LookupSymbolName(uintptr_t pc, uintptr_t* start) {
   Dl_info info;
@@ -54,6 +55,12 @@ bool NativeSymbolResolver::LookupSharedObject(uword pc,
   *dso_base = reinterpret_cast<uword>(info.dli_fbase);
   *dso_name = strdup(info.dli_fname);
   return true;
+}
+
+void NativeSymbolResolver::AddSymbols(const char* dso_name,
+                                      void* buffer,
+                                      size_t size) {
+  OS::PrintErr("warning: Dart_AddSymbols has no effect on Linux\n");
 }
 
 }  // namespace dart

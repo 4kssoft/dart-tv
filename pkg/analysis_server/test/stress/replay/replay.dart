@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -10,6 +10,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:analysis_server/protocol/protocol_generated.dart';
+import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/error/listener.dart' as error;
 import 'package:analyzer/src/dart/scanner/reader.dart';
@@ -29,7 +30,7 @@ import 'operation.dart';
 /**
  * Run the simulation based on the given command-line [arguments].
  */
-Future<Null> main(List<String> arguments) async {
+Future<void> main(List<String> arguments) async {
   Driver driver = new Driver();
   await driver.run(arguments);
 }
@@ -135,14 +136,14 @@ class Driver {
   /**
    * Allow the output from the server to be read and processed.
    */
-  Future<Null> readServerOutput() async {
+  Future<void> readServerOutput() async {
     await new Future.delayed(new Duration(milliseconds: 2));
   }
 
   /**
    * Run the simulation based on the given command-line arguments ([args]).
    */
-  Future<Null> run(List<String> args) async {
+  Future<void> run(List<String> args) async {
     //
     // Process the command-line arguments.
     //
@@ -273,7 +274,8 @@ class Driver {
   List<int> _getBreakOffsets(String text) {
     List<int> breakOffsets = <int>[];
     Scanner scanner = new Scanner(null, new CharSequenceReader(text),
-        error.AnalysisErrorListener.NULL_LISTENER);
+        error.AnalysisErrorListener.NULL_LISTENER)
+      ..configureFeatures(FeatureSet.forTesting(sdkVersion: '2.2.2'));
     Token token = scanner.tokenize();
     // TODO(brianwilkerson) Randomize. Sometimes add zero (0) as a break point.
     while (token.type != TokenType.EOF) {
@@ -358,7 +360,7 @@ class Driver {
   /**
    * Replay the changes in each commit.
    */
-  Future<Null> _replayChanges() async {
+  Future<void> _replayChanges() async {
     //
     // Get the revision history of the repo.
     //
@@ -415,7 +417,7 @@ class Driver {
       }
     } finally {
       // Ensure that the repository is left at the most recent commit.
-      if (history.commitIds.length > 0) {
+      if (history.commitIds.isNotEmpty) {
         repository.checkout(history.commitIds[0]);
       }
     }
@@ -428,7 +430,7 @@ class Driver {
    * Replay the changes between two commits, as represented by the given
    * [commitDelta].
    */
-  Future<Null> _replayDiff(CommitDelta commitDelta) async {
+  Future<void> _replayDiff(CommitDelta commitDelta) async {
     List<FileEdit> editList = <FileEdit>[];
     for (DiffRecord record in commitDelta.diffRecords) {
       FileEdit edit = new FileEdit(overlayStyle, record);
@@ -475,7 +477,7 @@ class Driver {
   /**
    * Run the simulation by starting up a server and sending it requests.
    */
-  Future<Null> _runSimulation() async {
+  Future<void> _runSimulation() async {
     server = new Server(logger: logger);
     Stopwatch stopwatch = new Stopwatch();
     statistics.stopwatch = stopwatch;

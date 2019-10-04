@@ -4,12 +4,11 @@
 
 import 'dart:async';
 import 'dart:io';
-import 'package:front_end/src/api_prototype/memory_file_system.dart';
 import 'package:front_end/src/api_unstable/ddc.dart' as fe;
-import 'package:front_end/src/fasta/type_inference/type_schema_environment.dart';
 import 'package:kernel/core_types.dart';
 import 'package:kernel/kernel.dart';
 import 'package:kernel/class_hierarchy.dart';
+import 'package:kernel/target/targets.dart';
 import 'package:test/test.dart';
 
 import 'package:dev_compiler/src/kernel/command.dart';
@@ -40,11 +39,11 @@ void main() {
     });
     test('List', () async {
       await expectNotNull(
-          'main() { print([42, null]); }', '<dart.core::int>[42, null], 42');
+          'main() { print([42, null]); }', '<dart.core::int*>[42, null], 42');
     });
     test('Map', () async {
       await expectNotNull('main() { print({"x": null}); }',
-          '<dart.core::String, dart.core::Null>{"x": null}, "x"');
+          '<dart.core::String*, dart.core::Null?>{"x": null}, "x"');
     });
 
     test('Symbol', () async {
@@ -52,7 +51,7 @@ void main() {
     });
 
     test('Type', () async {
-      await expectNotNull('main() { print(Object); }', 'dart.core::Object');
+      await expectNotNull('main() { print(Object); }', 'dart.core::Object*');
     });
   });
 
@@ -62,12 +61,12 @@ void main() {
 
   test('is', () async {
     await expectNotNull('main() { 42 is int; null is int; }',
-        '42 is dart.core::int, 42, null is dart.core::int');
+        '42 is dart.core::int*, 42, null is dart.core::int*');
   });
 
   test('as', () async {
     await expectNotNull(
-        'main() { 42 as int; null as int; }', '42 as dart.core::int, 42');
+        'main() { 42 as int; null as int; }', '42 as dart.core::int*, 42');
   });
 
   test('constructor', () async {
@@ -249,8 +248,8 @@ void main() {
   });
 
   test('function expression', () async {
-    await expectNotNull(
-        'main() { () => null; f() {}; f; }', '() → dart.core::Null => null, f');
+    await expectNotNull('main() { () => null; f() {}; f; }',
+        '() → dart.core::Null? => null, f');
   });
 
   test('cascades (kernel let)', () async {
@@ -340,7 +339,7 @@ void main() {
           // arithmetic operation results on `i` are themselves not null, even
           // though `i` is nullable.
           '0, i.{dart.core::num::<}(10), 10, i = i.{dart.core::num::+}(1), '
-          'i.{dart.core::num::+}(1), 1, i.{dart.core::num::>=}(10), 10');
+              'i.{dart.core::num::+}(1), 1, i.{dart.core::num::>=}(10), 10');
     });
     test('for-in', () async {
       await expectNotNull('''main() {
@@ -391,7 +390,8 @@ void main() {
       await expectNotNull('''main() {
         var x = () => 42;
         var y = (() => x = null);
-      }''', '() → dart.core::int => 42, 42, () → dart.core::Null => x = null');
+      }''',
+          '() → dart.core::int* => 42, 42, () → dart.core::Null? => x = null');
     });
     test('do not depend on unrelated variables', () async {
       await expectNotNull('''main() {
@@ -407,6 +407,27 @@ void main() {
         x = null;
         y; // this is still non-null even though `x` is nullable
       }''', '1, dart.core::identical(x, 1), 1, y');
+    });
+  });
+  group('functions parameters in SDK', () {
+    setUp(() {
+      // Using annotations here to test how the parameter is detected when
+      // compiling functions from the SDK.
+      // A regression test for: https://github.com/dart-lang/sdk/issues/37700
+      useAnnotations = true;
+    });
+    tearDown(() {
+      useAnnotations = false;
+    });
+    test('optional with default value', () async {
+      await expectNotNull('''
+        f(x, [y = 1]) { x; y; }
+      ''', '1');
+    });
+    test('named with default value', () async {
+      await expectNotNull('''
+        f(x, {y = 1}) { x; y; }
+      ''', '1');
     });
   });
 
@@ -431,7 +452,7 @@ void main() {
       test('parameters', () async {
         await expectNotNull(
             '$imports f(@notNull x, [@notNull y, @notNull z = 42]) '
-            '{ x; y; z; }',
+                '{ x; y; z; }',
             '42, x, y, z');
       });
       test('named parameters', () async {
@@ -458,7 +479,7 @@ void main() {
     test('method', () async {
       await expectNotNull(
           'library b; $imports class C { @notNull m() {} } '
-          'main() { var c = new C(); c.m(); }',
+              'main() { var c = new C(); c.m(); }',
           'new b::C::•(), c.{b::C::m}(), c');
     });
   });
@@ -469,16 +490,34 @@ void main() {
 /// inference.
 Future expectNotNull(String code, String expectedNotNull) async {
   var component = await kernelCompile(code);
-  var collector = new NotNullCollector();
+  var collector = NotNullCollector();
   component.accept(collector);
-  var actualNotNull =
-      collector.notNullExpressions.map((e) => e.toString()).join(', ');
+  var actualNotNull = collector.notNullExpressions
+      // ConstantExpressions print the table offset - we want to compare
+      // against the underlying constant value instead.
+      .map((e) {
+        if (e is ConstantExpression) {
+          Constant c = e.constant;
+          if (c is DoubleConstant &&
+              c.value.isFinite &&
+              c.value.truncateToDouble() == c.value) {
+            // Print integer values as integers
+            return BigInt.from(c.value).toString();
+          }
+          return c.toString();
+        }
+        return e.toString();
+      })
+      // Filter out our own NotNull annotations.  The library prefix changes
+      // per test, so just filter on the suffix.
+      .where((s) => !s.endsWith('::_NotNull {}'))
+      .join(', ');
   expect(actualNotNull, equals(expectedNotNull));
 }
 
 /// Given the Dart [code], expects all the expressions inferred to be not-null.
 Future expectAllNotNull(String code) async {
-  (await kernelCompile(code)).accept(new ExpectAllNotNull());
+  (await kernelCompile(code)).accept(ExpectAllNotNull());
 }
 
 bool useAnnotations = false;
@@ -489,9 +528,10 @@ class _TestRecursiveVisitor extends RecursiveVisitor<void> {
 
   @override
   visitComponent(Component node) {
-    inference ??= new NullableInference(new JSTypeRep(
-      new TypeSchemaEnvironment(
-          new CoreTypes(node), new ClassHierarchy(node), true),
+    var hierarchy = ClassHierarchy(node);
+    inference ??= NullableInference(JSTypeRep(
+      fe.TypeSchemaEnvironment(CoreTypes(node), hierarchy),
+      hierarchy,
     ));
 
     if (useAnnotations) {
@@ -543,27 +583,28 @@ class ExpectAllNotNull extends _TestRecursiveVisitor {
 }
 
 fe.InitializedCompilerState _compilerState;
-final _fileSystem = new MemoryFileSystem(new Uri.file('/memory/'));
+final _fileSystem = fe.MemoryFileSystem(Uri.file('/memory/'));
 
 Future<Component> kernelCompile(String code) async {
   var succeeded = true;
-  void errorHandler(fe.CompilationMessage error) {
-    if (error.severity == fe.Severity.error) {
+  void diagnosticMessageHandler(fe.DiagnosticMessage message) {
+    if (message.severity == fe.Severity.error) {
       succeeded = false;
     }
+    fe.printDiagnosticMessage(message, print);
   }
 
-  var sdkUri = new Uri.file('/memory/dart_sdk.dill');
+  var sdkUri = Uri.file('/memory/dart_sdk.dill');
   var sdkFile = _fileSystem.entityForUri(sdkUri);
   if (!await sdkFile.exists()) {
-    sdkFile.writeAsBytesSync(new File(defaultSdkSummaryPath).readAsBytesSync());
+    sdkFile.writeAsBytesSync(File(defaultSdkSummaryPath).readAsBytesSync());
   }
-  var packagesUri = new Uri.file('/memory/.packages');
+  var packagesUri = Uri.file('/memory/.packages');
   var packagesFile = _fileSystem.entityForUri(packagesUri);
   if (!await packagesFile.exists()) {
     packagesFile.writeAsStringSync('meta:/memory/meta/lib');
     _fileSystem
-        .entityForUri(new Uri.file('/memory/meta/lib/meta.dart'))
+        .entityForUri(Uri.file('/memory/meta/lib/meta.dart'))
         .writeAsStringSync('''
 class _NotNull { const _NotNull(); }
 const notNull = const _NotNull();
@@ -572,13 +613,17 @@ const nullCheck = const _NullCheck();
     ''');
   }
 
-  var mainUri = new Uri.file('/memory/test.dart');
+  var mainUri = Uri.file('/memory/test.dart');
   _fileSystem.entityForUri(mainUri).writeAsStringSync(code);
-  _compilerState = await fe.initializeCompiler(
-      _compilerState, sdkUri, packagesUri, [], new DevCompilerTarget(),
-      fileSystem: _fileSystem);
+  var oldCompilerState = _compilerState;
+  _compilerState = await fe.initializeCompiler(oldCompilerState, false, null,
+      sdkUri, packagesUri, null, [], DevCompilerTarget(TargetFlags()),
+      fileSystem: _fileSystem,
+      experiments: const {},
+      environmentDefines: const {});
+  if (!identical(oldCompilerState, _compilerState)) inference = null;
   fe.DdcResult result =
-      await fe.compile(_compilerState, [mainUri], errorHandler);
+      await fe.compile(_compilerState, [mainUri], diagnosticMessageHandler);
   expect(succeeded, true);
   return result.component;
 }

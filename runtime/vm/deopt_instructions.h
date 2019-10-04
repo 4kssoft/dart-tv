@@ -19,7 +19,6 @@
 
 namespace dart {
 
-class Location;
 class Value;
 class MaterializeObjectInstr;
 class StackFrame;
@@ -97,9 +96,9 @@ class DeoptContext {
 
   double FpuRegisterValue(FpuRegister reg) const {
     ASSERT(FlowGraphCompiler::SupportsUnboxedDoubles());
+#if !defined(TARGET_ARCH_DBC)
     ASSERT(fpu_registers_ != NULL);
     ASSERT(reg >= 0);
-#if !defined(TARGET_ARCH_DBC)
     ASSERT(reg < kNumberOfFpuRegisters);
     return *reinterpret_cast<double*>(&fpu_registers_[reg]);
 #else
@@ -166,8 +165,10 @@ class DeoptContext {
   // objects.
   void FillDestFrame();
 
-  // Allocate and prepare exceptions metadata for TrySync
-  intptr_t* CatchEntryState(intptr_t num_vars);
+  // Convert deoptimization instructions to a list of moves that need
+  // to be executed when entering catch entry block from this deoptimization
+  // point.
+  const CatchEntryMoves* ToCatchEntryMoves(intptr_t num_vars);
 
   // Materializes all deferred objects.  Returns the total number of
   // artificial arguments used during deoptimization.
@@ -334,11 +335,10 @@ class DeoptInstr : public ZoneAllocated {
 
   virtual void Execute(DeoptContext* deopt_context, intptr_t* dest_addr) = 0;
 
-  // Convert DeoptInstr to TrySync metadata entry.
-  virtual CatchEntryStatePair ToCatchEntryStatePair(DeoptContext* deopt_context,
-                                                    intptr_t dest_slot) {
+  virtual CatchEntryMove ToCatchEntryMove(DeoptContext* deopt_context,
+                                          intptr_t dest_slot) {
     UNREACHABLE();
-    return CatchEntryStatePair();
+    return CatchEntryMove();
   }
 
   virtual DeoptInstr::Kind kind() const = 0;
@@ -461,10 +461,12 @@ class RegisterSource {
 
   RegisterType reg() const { return static_cast<RegisterType>(raw_index()); }
 
-  static const char* Name(Register reg) { return Assembler::RegisterName(reg); }
+  static const char* Name(Register reg) {
+    return RegisterNames::RegisterName(reg);
+  }
 
   static const char* Name(FpuRegister fpu_reg) {
-    return Assembler::FpuRegisterName(fpu_reg);
+    return RegisterNames::FpuRegisterName(fpu_reg);
   }
 
   const intptr_t source_index_;
@@ -480,7 +482,9 @@ typedef RegisterSource<FpuRegister> FpuRegisterSource;
 // the heap and reset the builder's internal state for the next DeoptInfo.
 class DeoptInfoBuilder : public ValueObject {
  public:
-  DeoptInfoBuilder(Zone* zone, const intptr_t num_args, Assembler* assembler);
+  DeoptInfoBuilder(Zone* zone,
+                   const intptr_t num_args,
+                   compiler::Assembler* assembler);
 
   // Return address before instruction.
   void AddReturnAddress(const Function& function,
@@ -547,7 +551,7 @@ class DeoptInfoBuilder : public ValueObject {
 
   GrowableArray<DeoptInstr*> instructions_;
   const intptr_t num_args_;
-  Assembler* assembler_;
+  compiler::Assembler* assembler_;
 
   // Used to compress entries by sharing suffixes.
   TrieNode* trie_root_;
@@ -600,7 +604,6 @@ class DeoptTable : public AllStatic {
   static const intptr_t kEntrySize = 3;
 };
 
-
 // Holds deopt information at one deoptimization point. The information consists
 // of two parts:
 //  - first a prefix consisting of kMaterializeObject instructions describing
@@ -636,7 +639,6 @@ class DeoptInfo : public AllStatic {
   static bool VerifyDecompression(const GrowableArray<DeoptInstr*>& original,
                                   const Array& deopt_table,
                                   const TypedData& packed);
-
 
  private:
   static void UnpackInto(const Array& table,

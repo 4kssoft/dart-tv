@@ -10,8 +10,7 @@ import 'package:kernel/ast.dart';
 import 'package:kernel/binary/ast_to_binary.dart';
 import 'package:kernel/binary/limited_ast_to_binary.dart';
 import 'package:kernel/kernel.dart';
-
-import 'util.dart';
+import 'package:kernel/src/tool/command_line_util.dart';
 
 void usage() {
   print("Split a dill file into separate dill files (one library per file).");
@@ -24,8 +23,9 @@ void usage() {
 }
 
 main(args) async {
-  CommandLineHelper.requireExactlyOneArgument(true, args, usage);
-  Component binary = CommandLineHelper.tryLoadDill(args[0], usage);
+  CommandLineHelper.requireExactlyOneArgument(args, usage,
+      requireFileExists: true);
+  Component binary = CommandLineHelper.tryLoadDill(args[0]);
 
   int part = 1;
   binary.libraries.forEach((lib) => lib.isExternal = true);

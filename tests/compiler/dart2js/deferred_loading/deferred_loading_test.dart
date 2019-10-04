@@ -9,16 +9,15 @@ import 'package:compiler/src/common.dart';
 import 'package:compiler/src/compiler.dart';
 import 'package:compiler/src/deferred_load.dart';
 import 'package:compiler/src/elements/entities.dart';
-import 'package:compiler/src/kernel/element_map.dart';
-import 'package:compiler/src/kernel/kernel_backend_strategy.dart';
+import 'package:compiler/src/ir/util.dart';
+import 'package:compiler/src/js_model/element_map.dart';
+import 'package:compiler/src/js_model/js_world.dart';
 import 'package:expect/expect.dart';
 import '../equivalence/id_equivalence.dart';
 import '../equivalence/id_equivalence_helper.dart';
 import 'package:compiler/src/constants/values.dart';
 
 import 'package:kernel/ast.dart' as ir;
-
-const List<String> skipForKernel = const <String>[];
 
 ///  Add in options to pass to the compiler like
 /// `Flags.disableTypeInference` or `Flags.disableInlining`
@@ -32,15 +31,10 @@ const List<String> compilerOptions = const <String>[];
 main(List<String> args) {
   asyncTest(() async {
     Directory dataDir = new Directory.fromUri(Platform.script.resolve('data'));
-    await checkTests(dataDir, computeKernelOutputUnitData,
-        computeClassDataFromKernel: computeKernelClassOutputUnitData,
-        libDirectory: new Directory.fromUri(Platform.script.resolve('libs')),
-        skipForKernel: skipForKernel,
-        options: compilerOptions,
-        args: args,
-        testOmit: true, setUpFunction: () {
+    await checkTests(dataDir, const OutputUnitDataComputer(),
+        options: compilerOptions, args: args, setUpFunction: () {
       importPrefixes.clear();
-    });
+    }, testedConfigs: allStrongConfigs);
   });
 }
 
@@ -64,7 +58,7 @@ String outputUnitString(OutputUnit unit) {
 
     if (importPrefixes.containsKey(import.name)) {
       var existing = importPrefixes[import.name];
-      var current = import.enclosingLibrary.canonicalUri;
+      var current = import.enclosingLibraryUri;
       Expect.equals(
           existing,
           current,
@@ -74,50 +68,77 @@ String outputUnitString(OutputUnit unit) {
           '    We require using unique prefixes on these tests to make '
           'the expectations more readable.');
     }
-    importPrefixes[import.name] = import.enclosingLibrary.canonicalUri;
+    importPrefixes[import.name] = import.enclosingLibraryUri;
   }
   return 'OutputUnit(${unit.name}, {$sb})';
 }
 
-/// OutputData for [member] as a kernel based element.
-///
-/// At this point the compiler has already been run, so it is holding the
-/// relevant OutputUnits, we just need to extract that information from it. We
-/// fill [actualMap] with the data computed about what the resulting OutputUnit
-/// is.
-void computeKernelOutputUnitData(
-    Compiler compiler, MemberEntity member, Map<Id, ActualData> actualMap,
-    {bool verbose: false}) {
-  KernelBackendStrategy backendStrategy = compiler.backendStrategy;
-  KernelToElementMapForBuilding elementMap = backendStrategy.elementMap;
-  MemberDefinition definition = elementMap.getMemberDefinition(member);
-  new TypeMaskIrComputer(
-          compiler.reporter,
-          actualMap,
-          elementMap,
-          member,
-          compiler.backend.outputUnitData,
-          backendStrategy.closureDataLookup as ClosureDataLookup<ir.Node>)
-      .run(definition.node);
+class OutputUnitDataComputer extends DataComputer<String> {
+  const OutputUnitDataComputer();
+
+  /// OutputData for [member] as a kernel based element.
+  ///
+  /// At this point the compiler has already been run, so it is holding the
+  /// relevant OutputUnits, we just need to extract that information from it. We
+  /// fill [actualMap] with the data computed about what the resulting OutputUnit
+  /// is.
+  @override
+  void computeMemberData(Compiler compiler, MemberEntity member,
+      Map<Id, ActualData<String>> actualMap,
+      {bool verbose: false}) {
+    JsClosedWorld closedWorld = compiler.backendClosedWorldForTesting;
+    JsToElementMap elementMap = closedWorld.elementMap;
+    MemberDefinition definition = elementMap.getMemberDefinition(member);
+    new OutputUnitIrComputer(compiler.reporter, actualMap, elementMap,
+            closedWorld.outputUnitData, closedWorld.closureDataLookup)
+        .run(definition.node);
+  }
+
+  @override
+  void computeClassData(
+      Compiler compiler, ClassEntity cls, Map<Id, ActualData<String>> actualMap,
+      {bool verbose: false}) {
+    JsClosedWorld closedWorld = compiler.backendClosedWorldForTesting;
+    JsToElementMap elementMap = closedWorld.elementMap;
+    ClassDefinition definition = elementMap.getClassDefinition(cls);
+    new OutputUnitIrComputer(compiler.reporter, actualMap, elementMap,
+            closedWorld.outputUnitData, closedWorld.closureDataLookup)
+        .computeForClass(definition.node);
+  }
+
+  @override
+  DataInterpreter<String> get dataValidator => const StringDataInterpreter();
 }
 
-/// IR visitor for computing inference data for a member.
-class TypeMaskIrComputer extends IrDataExtractor {
-  final KernelToElementMapForBuilding _elementMap;
+class OutputUnitIrComputer extends IrDataExtractor<String> {
+  final JsToElementMap _elementMap;
   final OutputUnitData _data;
-  final ClosureDataLookup<ir.Node> _closureDataLookup;
+  final ClosureData _closureDataLookup;
 
-  TypeMaskIrComputer(
+  Set<String> _constants = {};
+
+  OutputUnitIrComputer(
       DiagnosticReporter reporter,
-      Map<Id, ActualData> actualMap,
+      Map<Id, ActualData<String>> actualMap,
       this._elementMap,
-      MemberEntity member,
       this._data,
       this._closureDataLookup)
       : super(reporter, actualMap);
 
-  String getMemberValue(MemberEntity member) {
-    return outputUnitString(_data.outputUnitForMember(member));
+  String getMemberValue(MemberEntity member, Set<String> constants) {
+    StringBuffer sb = new StringBuffer();
+    sb.write(outputUnitString(_data.outputUnitForMemberForTesting(member)));
+    if (constants.isNotEmpty) {
+      List<String> text = constants.toList()..sort();
+      sb.write(',constants=[${text.join(',')}]');
+    }
+    return sb.toString();
+  }
+
+  @override
+  String computeClassValue(Id id, ir.Class node) {
+    return outputUnitString(
+        _data.outputUnitForClassForTesting(_elementMap.getClass(node)));
   }
 
   @override
@@ -137,7 +158,7 @@ class TypeMaskIrComputer extends IrDataExtractor {
         }
         _registerValue(
             new NodeId(span.begin, IdKind.node),
-            outputUnitString(_data.outputUnitForConstant(constant)),
+            outputUnitString(_data.outputUnitForConstantForTesting(constant)),
             node,
             span,
             actualMap,
@@ -145,45 +166,38 @@ class TypeMaskIrComputer extends IrDataExtractor {
       }
     }
 
-    return getMemberValue(_elementMap.getMember(node));
+    String value = getMemberValue(_elementMap.getMember(node), _constants);
+    _constants = {};
+    return value;
+  }
+
+  @override
+  visitConstantExpression(ir.ConstantExpression node) {
+    ConstantValue constant = _elementMap.getConstantValue(node);
+    if (!constant.isPrimitive) {
+      _constants.add('${constant.toStructuredText()}='
+          '${outputUnitString(_data.outputUnitForConstant(constant))}');
+    }
+    return super.visitConstantExpression(node);
   }
 
   @override
   String computeNodeValue(Id id, ir.TreeNode node) {
     if (node is ir.FunctionExpression || node is ir.FunctionDeclaration) {
       ClosureRepresentationInfo info = _closureDataLookup.getClosureInfo(node);
-      return getMemberValue(info.callMethod);
+      return getMemberValue(info.callMethod, const {});
     }
     return null;
   }
 }
 
-void computeKernelClassOutputUnitData(
-    Compiler compiler, ClassEntity cls, Map<Id, ActualData> actualMap,
-    {bool verbose: false}) {
-  OutputUnitData data = compiler.backend.outputUnitData;
-  String value = outputUnitString(data.outputUnitForClass(cls));
-
-  KernelBackendStrategy backendStrategy = compiler.backendStrategy;
-  KernelToElementMapForBuilding elementMap = backendStrategy.elementMap;
-  ClassDefinition definition = elementMap.getClassDefinition(cls);
-
-  _registerValue(
-      new ClassId(cls.name),
-      value,
-      cls,
-      computeSourceSpanFromTreeNode(definition.node),
-      actualMap,
-      compiler.reporter);
-}
-
 /// Set [actualMap] to hold a key of [id] with the computed data [value]
 /// corresponding to [object] at location [sourceSpan]. We also perform error
 /// checking to ensure that the same [id] isn't added twice.
-void _registerValue(Id id, String value, Object object, SourceSpan sourceSpan,
-    Map<Id, ActualData> actualMap, CompilerDiagnosticReporter reporter) {
+void _registerValue<T>(Id id, T value, Object object, SourceSpan sourceSpan,
+    Map<Id, ActualData<T>> actualMap, CompilerDiagnosticReporter reporter) {
   if (actualMap.containsKey(id)) {
-    ActualData existingData = actualMap[id];
+    ActualData<T> existingData = actualMap[id];
     reportHere(reporter, sourceSpan,
         "Duplicate id ${id}, value=$value, object=$object");
     reportHere(
@@ -194,6 +208,7 @@ void _registerValue(Id id, String value, Object object, SourceSpan sourceSpan,
     Expect.fail("Duplicate id $id.");
   }
   if (value != null) {
-    actualMap[id] = new ActualData(new IdValue(id, value), sourceSpan, object);
+    actualMap[id] =
+        new ActualData<T>(id, value, sourceSpan.uri, sourceSpan.begin, object);
   }
 }

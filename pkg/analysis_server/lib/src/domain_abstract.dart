@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -41,7 +41,7 @@ abstract class AbstractRequestHandler implements RequestHandler {
   Future<List<plugin.Response>> waitForResponses(
       Map<PluginInfo, Future<plugin.Response>> futures,
       {plugin.RequestParams requestParameters,
-      int timeout: 500}) async {
+      int timeout = 500}) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     // TODO(brianwilkerson) requestParameters might need to be required.

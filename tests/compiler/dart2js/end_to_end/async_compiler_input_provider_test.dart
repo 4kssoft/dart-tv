@@ -11,7 +11,7 @@ import "package:async_helper/async_helper.dart";
 import 'package:compiler/compiler.dart' as compiler;
 import 'package:compiler/src/filenames.dart';
 
-const SOURCES = const {
+const Map<String, String> SOURCES = const {
   "/main.dart": """
     import "foo.dart";
     main() => foo();
@@ -46,13 +46,13 @@ main() {
   var entrypoint = Uri.parse("file:///main.dart");
 
   // Find the path to sdk/ in the repo relative to this script.
-  Uri libraryRoot = Uri.base.resolve('sdk/');
+  Uri librariesSpec = Uri.base.resolve('sdk/lib/libraries.json');
   Uri packageRoot = Uri.base.resolve('packages/');
   var platformDir =
       Uri.parse(nativeToUriPath(Platform.resolvedExecutable)).resolve('.');
   asyncTest(() => compiler.compile(
           entrypoint,
-          libraryRoot,
+          librariesSpec,
           packageRoot,
           provideInput,
           handleDiagnostic,

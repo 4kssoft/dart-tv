@@ -1,10 +1,11 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:async';
 
 import 'package:analysis_server/src/provisional/completion/completion_core.dart';
+import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/type.dart';
@@ -13,16 +14,7 @@ import 'package:analyzer_plugin/protocol/protocol_common.dart';
 import 'package:analyzer_plugin/src/utilities/completion/completion_target.dart';
 import 'package:analyzer_plugin/src/utilities/completion/optype.dart';
 
-export 'package:analysis_server/src/provisional/completion/completion_core.dart'
-    show EMPTY_LIST;
 export 'package:analyzer_plugin/utilities/completion/relevance.dart';
-
-/**
- * An object used to instantiate a [DartCompletionContributor] instance
- * for each 'completion.getSuggestions' request.
- * Contributors should *not* be cached between requests.
- */
-typedef DartCompletionContributor DartCompletionContributorFactory();
 
 /**
  * An object used to produce completions
@@ -50,6 +42,18 @@ abstract class DartCompletionRequest extends CompletionRequest {
    * or `null` if this is not a "dot" completion (e.g. `foo.b`).
    */
   Expression get dotTarget;
+
+  /**
+   * Return a list containing the names of the experiments that have been
+   * enabled.
+   */
+  List<String> get enabledExperiments;
+
+  /**
+   * Return the feature set that was used to analyze the compilation unit in
+   * which suggestions are being made.
+   */
+  FeatureSet get featureSet;
 
   /**
    * Return `true` if free standing identifiers should be suggested

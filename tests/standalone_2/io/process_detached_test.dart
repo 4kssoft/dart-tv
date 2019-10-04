@@ -18,7 +18,11 @@ void test() {
   asyncStart();
   var script =
       Platform.script.resolve('process_detached_script.dart').toFilePath();
-  var future = Process.start(Platform.executable, [script],
+  var future = Process.start(
+      Platform.executable,
+      []
+        ..addAll(Platform.executableArguments)
+        ..add(script),
       mode: ProcessStartMode.detached);
   future.then((process) {
     Expect.isNotNull(process.pid);
@@ -37,7 +41,8 @@ void testWithStdio() {
   asyncStart();
   var script =
       Platform.script.resolve('process_detached_script.dart').toFilePath();
-  var future = Process.start(Platform.executable, [script, 'echo'],
+  var future = Process.start(Platform.executable,
+      []..addAll(Platform.executableArguments)..addAll([script, 'echo']),
       mode: ProcessStartMode.detachedWithStdio);
   future.then((process) {
     Expect.isNotNull(process.pid);
@@ -48,7 +53,7 @@ void testWithStdio() {
     process.stdin.flush().then((_) => process.stdin.close());
     var f1 = process.stdout.fold([], (p, e) => p..addAll(e));
     var f2 = process.stderr.fold([], (p, e) => p..addAll(e));
-    Future.wait([f1, f2]).then((values) {
+    return Future.wait([f1, f2]).then((values) {
       Expect.listEquals(values[0], message);
       Expect.listEquals(values[1], message);
     }).whenComplete(() {

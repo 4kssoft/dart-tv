@@ -1,19 +1,17 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:async';
 
 import 'package:analysis_server/src/computer/computer_outline.dart';
-import 'package:analyzer/file_system/file_system.dart';
-import 'package:analyzer/src/dart/analysis/driver.dart';
+import 'package:analyzer/src/dart/analysis/experiments.dart';
 import 'package:analyzer_plugin/protocol/protocol_common.dart';
 import 'package:meta/meta.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import '../../abstract_context.dart';
-import '../utilities/flutter_util.dart';
 
 main() {
   defineReflectiveSuite(() {
@@ -29,17 +27,17 @@ class AbstractOutlineComputerTest extends AbstractContextTest {
   @override
   void setUp() {
     super.setUp();
-    testPath = resourceProvider.convertPath('/test.dart');
+    testPath = convertPath('/home/test/lib/test.dart');
   }
 
   Future<Outline> _computeOutline(String code) async {
     testCode = code;
     newFile(testPath, content: code);
-    AnalysisResult analysisResult = await driver.getResult(testPath);
+    var resolveResult = await session.getResolvedUnit(testPath);
     return new DartUnitOutlineComputer(
-            testPath, analysisResult.lineInfo, analysisResult.unit,
-            withBasicFlutter: true)
-        .compute();
+      resolveResult,
+      withBasicFlutter: true,
+    ).compute();
   }
 }
 
@@ -48,8 +46,7 @@ class FlutterOutlineComputerTest extends AbstractOutlineComputerTest {
   @override
   void setUp() {
     super.setUp();
-    Folder libFolder = configureFlutterPackage(resourceProvider);
-    packageMap['flutter'] = [libFolder];
+    addFlutterPackage();
   }
 
   test_columnWithChildren() async {
@@ -417,6 +414,128 @@ enum MyEnum {
     }
   }
 
+  test_extension_named() async {
+    createAnalysisOptionsFile(experiments: [EnableString.extension_methods]);
+    Outline unitOutline = await _computeOutline('''
+extension MyExt on String {
+  int get halfLength => length ~/ 2;
+  void writeOn(StringBuffer b) {
+    b.write(this);
+  }
+}
+''');
+    List<Outline> topOutlines = unitOutline.children;
+    expect(topOutlines, hasLength(1));
+    // MyExt
+    {
+      Outline outline_MyExt = topOutlines[0];
+      Element element_MyExt = outline_MyExt.element;
+      expect(element_MyExt.kind, ElementKind.EXTENSION);
+      expect(element_MyExt.name, 'MyExt');
+      {
+        Location location = element_MyExt.location;
+        expect(location.offset, testCode.indexOf('MyExt on'));
+        expect(location.length, 'MyExt'.length);
+      }
+      expect(element_MyExt.parameters, null);
+      expect(element_MyExt.returnType, null);
+      // StringUtilities children
+      List<Outline> outlines_MyExt = outline_MyExt.children;
+      expect(outlines_MyExt, hasLength(2));
+    }
+  }
+
+  test_extension_unnamed() async {
+    createAnalysisOptionsFile(experiments: [EnableString.extension_methods]);
+    Outline unitOutline = await _computeOutline('''
+extension on String {
+  int get halfLength => length ~/ 2;
+  void writeOn(StringBuffer b) {
+    b.write(this);
+  }
+}
+''');
+    List<Outline> topOutlines = unitOutline.children;
+    expect(topOutlines, hasLength(1));
+    // MyExt
+    {
+      Outline outline_MyExt = topOutlines[0];
+      Element element_MyExt = outline_MyExt.element;
+      expect(element_MyExt.kind, ElementKind.EXTENSION);
+      expect(element_MyExt.name, '');
+      {
+        Location location = element_MyExt.location;
+        expect(location.offset, testCode.indexOf('String'));
+        expect(location.length, 'String'.length);
+      }
+      expect(element_MyExt.parameters, null);
+      expect(element_MyExt.returnType, null);
+      // StringUtilities children
+      List<Outline> outlines_MyExt = outline_MyExt.children;
+      expect(outlines_MyExt, hasLength(2));
+    }
+  }
+
+  test_genericTypeAlias_incomplete() async {
+    Outline unitOutline = await _computeOutline('''
+typedef F = Object;
+''');
+    List<Outline> topOutlines = unitOutline.children;
+    expect(topOutlines, hasLength(1));
+    // F
+    Outline outline_F = topOutlines[0];
+    Element element_F = outline_F.element;
+    expect(element_F.kind, ElementKind.FUNCTION_TYPE_ALIAS);
+    expect(element_F.name, "F");
+    {
+      Location location = element_F.location;
+      expect(location.offset, testCode.indexOf("F ="));
+      expect(location.length, 'F'.length);
+    }
+    expect(element_F.parameters, '');
+    expect(element_F.returnType, '');
+  }
+
+  test_genericTypeAlias_minimal() async {
+    Outline unitOutline = await _computeOutline('''
+typedef F = void Function();
+''');
+    List<Outline> topOutlines = unitOutline.children;
+    expect(topOutlines, hasLength(1));
+    // F
+    Outline outline_F = topOutlines[0];
+    Element element_F = outline_F.element;
+    expect(element_F.kind, ElementKind.FUNCTION_TYPE_ALIAS);
+    expect(element_F.name, "F");
+    {
+      Location location = element_F.location;
+      expect(location.offset, testCode.indexOf("F ="));
+      expect(location.length, 'F'.length);
+    }
+    expect(element_F.parameters, '()');
+    expect(element_F.returnType, 'void');
+  }
+
+  test_genericTypeAlias_noReturnType() async {
+    Outline unitOutline = await _computeOutline('''
+typedef F = Function();
+''');
+    List<Outline> topOutlines = unitOutline.children;
+    expect(topOutlines, hasLength(1));
+    // F
+    Outline outline_F = topOutlines[0];
+    Element element_F = outline_F.element;
+    expect(element_F.kind, ElementKind.FUNCTION_TYPE_ALIAS);
+    expect(element_F.name, "F");
+    {
+      Location location = element_F.location;
+      expect(location.offset, testCode.indexOf("F ="));
+      expect(location.length, 'F'.length);
+    }
+    expect(element_F.parameters, '()');
+    expect(element_F.returnType, '');
+  }
+
   test_groupAndTest() async {
     Outline outline = await _computeOutline('''
 void group(name, closure) {}
@@ -561,7 +680,7 @@ main(p()) {
   }
 
   test_isTest_isTestGroup() async {
-    addMetaPackageSource();
+    addMetaPackage();
     Outline outline = await _computeOutline('''
 import 'package:meta/meta.dart';
 
@@ -833,6 +952,77 @@ f() {
     }
   }
 
+  test_mixin() async {
+    Outline unitOutline = await _computeOutline('''
+mixin M<N> {
+  c(int d) {}
+  String get e => null;
+  set f(int g) {}
+}
+''');
+    List<Outline> topOutlines = unitOutline.children;
+    expect(topOutlines, hasLength(1));
+    // M
+    {
+      Outline outline_M = topOutlines[0];
+      Element element_M = outline_M.element;
+      expect(element_M.kind, ElementKind.MIXIN);
+      expect(element_M.name, "M");
+      expect(element_M.typeParameters, "<N>");
+      {
+        Location location = element_M.location;
+        expect(location.offset, testCode.indexOf("M<N>"));
+        expect(location.length, 1);
+      }
+      expect(element_M.parameters, isNull);
+      expect(element_M.returnType, isNull);
+      // M children
+      List<Outline> outlines_M = outline_M.children;
+      expect(outlines_M, hasLength(3));
+      {
+        Outline outline = outlines_M[0];
+        Element element = outline.element;
+        expect(element.kind, ElementKind.METHOD);
+        expect(element.name, "c");
+        {
+          Location location = element.location;
+          expect(location.offset, testCode.indexOf("c(int d)"));
+          expect(location.length, 1);
+        }
+        expect(element.parameters, "(int d)");
+        expect(element.returnType, "");
+        expect(element.isAbstract, isFalse);
+        expect(element.isStatic, isFalse);
+      }
+      {
+        Outline outline = outlines_M[1];
+        Element element = outline.element;
+        expect(element.kind, ElementKind.GETTER);
+        expect(element.name, "e");
+        {
+          Location location = element.location;
+          expect(location.offset, testCode.indexOf("e => null"));
+          expect(location.length, 1);
+        }
+        expect(element.parameters, isNull);
+        expect(element.returnType, "String");
+      }
+      {
+        Outline outline = outlines_M[2];
+        Element element = outline.element;
+        expect(element.kind, ElementKind.SETTER);
+        expect(element.name, "f");
+        {
+          Location location = element.location;
+          expect(location.offset, testCode.indexOf("f(int g)"));
+          expect(location.length, 1);
+        }
+        expect(element.parameters, "(int g)");
+        expect(element.returnType, "");
+      }
+    }
+  }
+
   test_sourceRanges_fields() async {
     Outline unitOutline = await _computeOutline('''
 class A {
@@ -989,6 +1179,7 @@ class A {
     Outline unitOutline = await _computeOutline('''
 typedef String FTA<K, V>(int i, String s);
 typedef FTB(int p);
+typedef GTAF<T> = void Function<S>(T t, S s);
 class A<T> {}
 class B {}
 class CTA<T> = A<T> with B;
@@ -999,7 +1190,7 @@ String get propA => null;
 set propB(int v) {}
 ''');
     List<Outline> topOutlines = unitOutline.children;
-    expect(topOutlines, hasLength(10));
+    expect(topOutlines, hasLength(11));
     // FTA
     {
       Outline outline = topOutlines[0];
@@ -1030,9 +1221,24 @@ set propB(int v) {}
       expect(element.parameters, "(int p)");
       expect(element.returnType, "");
     }
+    // GenericTypeAlias - function
+    {
+      Outline outline = topOutlines[2];
+      Element element = outline.element;
+      expect(element.kind, ElementKind.FUNCTION_TYPE_ALIAS);
+      expect(element.name, "GTAF");
+      expect(element.typeParameters, '<T>');
+      {
+        Location location = element.location;
+        expect(location.offset, testCode.indexOf("GTAF<T> ="));
+        expect(location.length, "GTAF".length);
+      }
+      expect(element.parameters, "(T t, S s)");
+      expect(element.returnType, "void");
+    }
     // CTA
     {
-      Outline outline = topOutlines[4];
+      Outline outline = topOutlines[5];
       Element element = outline.element;
       expect(element.kind, ElementKind.CLASS_TYPE_ALIAS);
       expect(element.name, "CTA");
@@ -1047,7 +1253,7 @@ set propB(int v) {}
     }
     // CTB
     {
-      Outline outline = topOutlines[5];
+      Outline outline = topOutlines[6];
       Element element = outline.element;
       expect(element.kind, ElementKind.CLASS_TYPE_ALIAS);
       expect(element.name, 'CTB');
@@ -1056,7 +1262,7 @@ set propB(int v) {}
     }
     // fA
     {
-      Outline outline = topOutlines[6];
+      Outline outline = topOutlines[7];
       Element element = outline.element;
       expect(element.kind, ElementKind.FUNCTION);
       expect(element.name, "fA");
@@ -1070,7 +1276,7 @@ set propB(int v) {}
     }
     // fB
     {
-      Outline outline = topOutlines[7];
+      Outline outline = topOutlines[8];
       Element element = outline.element;
       expect(element.kind, ElementKind.FUNCTION);
       expect(element.name, "fB");
@@ -1084,7 +1290,7 @@ set propB(int v) {}
     }
     // propA
     {
-      Outline outline = topOutlines[8];
+      Outline outline = topOutlines[9];
       Element element = outline.element;
       expect(element.kind, ElementKind.GETTER);
       expect(element.name, "propA");
@@ -1098,7 +1304,7 @@ set propB(int v) {}
     }
     // propB
     {
-      Outline outline = topOutlines[9];
+      Outline outline = topOutlines[10];
       Element element = outline.element;
       expect(element.kind, ElementKind.SETTER);
       expect(element.name, "propB");
@@ -1114,7 +1320,7 @@ set propB(int v) {}
 
   void _expect(Outline outline,
       {ElementKind kind,
-      bool leaf: false,
+      bool leaf = false,
       int length,
       String name,
       int offset,

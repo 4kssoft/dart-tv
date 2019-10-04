@@ -8,31 +8,27 @@ library type_representation_test;
 
 import 'package:async_helper/async_helper.dart';
 import 'package:compiler/src/common_elements.dart';
-import 'package:compiler/src/commandline_options.dart';
 import 'package:compiler/src/compiler.dart';
 import 'package:compiler/src/elements/types.dart';
 import 'package:compiler/src/js/js.dart';
 import 'package:compiler/src/elements/entities.dart';
-import 'package:compiler/src/js_backend/backend.dart' show JavaScriptBackend;
 import 'package:compiler/src/js_backend/runtime_types.dart'
-    show TypeRepresentationGenerator;
+    show RuntimeTypeTags, TypeRepresentationGenerator;
+import 'package:compiler/src/js_model/js_strategy.dart';
 import 'package:compiler/src/world.dart';
 import 'package:expect/expect.dart';
 import '../helpers/element_lookup.dart';
-import '../memory_compiler.dart';
-import '../type_test_helper.dart';
+import '../helpers/memory_compiler.dart';
+import '../helpers/type_test_helper.dart';
 
 void main() {
   asyncTest(() async {
-    print('--test from kernel------------------------------------------------');
     await testAll();
-    print('--test from kernel (strong)---------------------------------------');
-    await testAll(strongMode: true);
   });
 }
 
-testAll({bool strongMode: false}) async {
-  await testTypeRepresentations(strongMode: strongMode);
+testAll() async {
+  await testTypeRepresentations();
 }
 
 List<FunctionTypeData> signatures = const <FunctionTypeData>[
@@ -53,7 +49,7 @@ List<FunctionTypeData> signatures = const <FunctionTypeData>[
       "<T extends num, S>(FutureOr<T> a, S b, List<void> c)"),
 ];
 
-testTypeRepresentations({bool strongMode}) async {
+testTypeRepresentations() async {
   String source = '''
 import 'dart:async';
 
@@ -65,17 +61,16 @@ main() {
   ${createUses(signatures, prefix: 'm')}
 }
 ''';
-  CompilationResult result = await runCompiler(
-      memorySourceFiles: {'main.dart': source},
-      options: strongMode ? [Flags.strongMode] : []);
+  CompilationResult result =
+      await runCompiler(memorySourceFiles: {'main.dart': source});
   Expect.isTrue(result.isSuccess);
   Compiler compiler = result.compiler;
-  JavaScriptBackend backend = compiler.backend;
+  JsBackendStrategy backendStrategy = compiler.backendStrategy;
 
+  RuntimeTypeTags rtiTags = const RuntimeTypeTags();
   TypeRepresentationGenerator typeRepresentation =
       new TypeRepresentationGenerator(
-          backend.namer, compiler.backendClosedWorldForTesting.nativeData,
-          strongMode: strongMode);
+          rtiTags, compiler.backendClosedWorldForTesting.nativeData);
 
   Expression onVariable(TypeVariableType _variable) {
     TypeVariableType variable = _variable;
@@ -91,12 +86,18 @@ main() {
       [String expectedTypedefRepresentation]) {
     bool encodeTypedefName = false;
     Expression expression = typeRepresentation.getTypeRepresentation(
-        backend.emitter.emitter, type, onVariable, (x) => encodeTypedefName);
+        backendStrategy.emitterTask.emitter,
+        type,
+        onVariable,
+        (x) => encodeTypedefName);
     Expect.stringEquals(expectedRepresentation, stringify(expression));
 
     encodeTypedefName = true;
     expression = typeRepresentation.getTypeRepresentation(
-        backend.emitter.emitter, type, onVariable, (x) => encodeTypedefName);
+        backendStrategy.emitterTask.emitter,
+        type,
+        onVariable,
+        (x) => encodeTypedefName);
     if (expectedTypedefRepresentation == null) {
       expectedTypedefRepresentation = expectedRepresentation;
     }
@@ -104,24 +105,22 @@ main() {
   }
 
   String getJsName(Entity cls) {
-    Expression name =
-        typeRepresentation.getJavaScriptClassName(cls, backend.emitter.emitter);
+    Expression name = typeRepresentation.getJavaScriptClassName(
+        cls, backendStrategy.emitterTask.emitter);
     return stringify(name);
   }
 
   JClosedWorld closedWorld = compiler.backendClosedWorldForTesting;
   ElementEnvironment elementEnvironment = closedWorld.elementEnvironment;
-  String func = backend.namer.functionTypeTag;
-  String ret = backend.namer.functionTypeReturnTypeTag;
-  String retvoid = strongMode
-      ? '$ret: -1'
-      : '${backend.namer.functionTypeVoidReturnTag}: true';
-  String args = backend.namer.functionTypeRequiredParametersTag;
-  String opt = backend.namer.functionTypeOptionalParametersTag;
-  String named = backend.namer.functionTypeNamedParametersTag;
-  String bounds = backend.namer.functionTypeGenericBoundsTag;
-  String futureOr = backend.namer.futureOrTag;
-  String futureOrType = backend.namer.futureOrTypeTag;
+  String func = rtiTags.functionTypeTag;
+  String ret = rtiTags.functionTypeReturnTypeTag;
+  String retvoid = '$ret: -1';
+  String args = rtiTags.functionTypeRequiredParametersTag;
+  String opt = rtiTags.functionTypeOptionalParametersTag;
+  String named = rtiTags.functionTypeNamedParametersTag;
+  String bounds = rtiTags.functionTypeGenericBoundsTag;
+  String futureOr = rtiTags.futureOrTag;
+  String futureOrType = rtiTags.futureOrTypeTag;
 
   ClassEntity List_ = findClass(closedWorld, 'List');
   TypeVariableType List_E =
@@ -178,7 +177,6 @@ main() {
   String Typedef8_tag = getTypedefTag(Typedef8_);
   String Typedef9_tag = getTypedefTag(Typedef9_);
   String Typedef10_tag = getTypedefTag(Typedef10_);
-  String Typedef11_tag = getTypedefTag(Typedef11_);
 
   expect(int_, '$int_rep');
   expect(String_, '$String_rep');
@@ -187,9 +185,9 @@ main() {
   // List<E>
   expect(elementEnvironment.getThisType(List_), '[$List_rep, $List_E_rep]');
   // List
-  expect(elementEnvironment.getRawType(List_), '$List_rep');
+  expect(elementEnvironment.getRawType(List_), '[$List_rep,,]');
   // List<dynamic>
-  expect(instantiate(List_, [dynamic_]), '$List_rep');
+  expect(instantiate(List_, [dynamic_]), '[$List_rep,,]');
   // List<int>
   expect(instantiate(List_, [int_]), '[$List_rep, $int_rep]');
   // List<Typedef1>
@@ -208,64 +206,58 @@ main() {
   expect(
       instantiate(List_, [Typedef5_]),
       '[$List_rep, {$func: 1,'
-      ' $args: [$int_rep, $String_rep]}]',
+          ' $args: [$int_rep, $String_rep]}]',
       '[$List_rep, {$func: 1,'
-      ' $args: [$int_rep, $String_rep]$Typedef5_tag}]');
+          ' $args: [$int_rep, $String_rep]$Typedef5_tag}]');
   expect(
       instantiate(List_, [Typedef6_]),
       '[$List_rep, {$func: 1,'
-      ' $args: [$int_rep], $opt: [$String_rep]}]',
+          ' $args: [$int_rep], $opt: [$String_rep]}]',
       '[$List_rep, {$func: 1,'
-      ' $args: [$int_rep], $opt: [$String_rep]$Typedef6_tag}]');
+          ' $args: [$int_rep], $opt: [$String_rep]$Typedef6_tag}]');
   expect(
       instantiate(List_, [Typedef7_]),
       '[$List_rep, {$func: 1, $args: '
-      '[$int_rep, $String_rep], $opt: [[$List_rep, $int_rep],,]}]',
+          '[$int_rep, $String_rep], $opt: [[$List_rep, $int_rep],,]}]',
       '[$List_rep, {$func: 1, $args: '
-      '[$int_rep, $String_rep], $opt: [[$List_rep, $int_rep],,]'
-      '$Typedef7_tag}]');
+          '[$int_rep, $String_rep], $opt: [[$List_rep, $int_rep],,]'
+          '$Typedef7_tag}]');
   expect(
       instantiate(List_, [Typedef8_]),
       '[$List_rep, {$func: 1, $args: [$int_rep],'
-      ' $named: {b: $String_rep}}]',
+          ' $named: {b: $String_rep}}]',
       '[$List_rep, {$func: 1, $args: [$int_rep],'
-      ' $named: {b: $String_rep}$Typedef8_tag}]');
+          ' $named: {b: $String_rep}$Typedef8_tag}]');
   expect(
       instantiate(List_, [Typedef9_]),
       '[$List_rep, {$func: 1, '
-      '$args: [$int_rep, $String_rep], $named: '
-      '{c: [$List_rep, $int_rep], d: null}}]',
+          '$args: [$int_rep, $String_rep], $named: '
+          '{c: [$List_rep, $int_rep], d: null}}]',
       '[$List_rep, {$func: 1, '
-      '$args: [$int_rep, $String_rep], $named: {c: [$List_rep, $int_rep],'
-      ' d: null}$Typedef9_tag}]');
+          '$args: [$int_rep, $String_rep], $named: {c: [$List_rep, $int_rep],'
+          ' d: null}$Typedef9_tag}]');
   expect(
       instantiate(List_, [Typedef10_]),
       '[$List_rep, {$func: 1, '
-      '$args: [{$func: 1, $retvoid, '
-      '$args: [$int_rep], $opt: [,]}]}]',
+          '$args: [{$func: 1, $retvoid, '
+          '$args: [$int_rep], $opt: [,]}]}]',
       '[$List_rep, {$func: 1, '
-      '$args: [{$func: 1, $retvoid, '
-      '$args: [$int_rep], $opt: [,]}]$Typedef10_tag}]');
-  if (!strongMode) {
-    expect(
-        instantiate(List_, [Typedef11_]),
-        '[$List_rep, {$func: 1, $args: [,, [$List_rep,,]]}]',
-        '[$List_rep, {$func: 1, $args: [,, [$List_rep,,]]$Typedef11_tag}]');
-  } else {
-    expect(
-        instantiate(List_, [Typedef11_]),
-        '[$List_rep, {$func: 1, $bounds: [$num_rep, $Object_rep], '
-        '$ret: {$futureOr: 1, $futureOrType: $int_rep}, '
-        '$args: [{$futureOr: 1, $futureOrType: 0}, 1, [$List_rep, -1]]}]');
-  }
+          '$args: [{$func: 1, $retvoid, '
+          '$args: [$int_rep], $opt: [,]}]$Typedef10_tag}]');
+
+  expect(
+      instantiate(List_, [Typedef11_]),
+      '[$List_rep, {$func: 1, $bounds: [$num_rep, $Object_rep], '
+      '$ret: {$futureOr: 1, $futureOrType: $int_rep}, '
+      '$args: [{$futureOr: 1, $futureOrType: 0}, 1, [$List_rep, -1]]}]');
 
   // Map<K,V>
   expect(elementEnvironment.getThisType(Map_),
       '[$Map_rep, $Map_K_rep, $Map_V_rep]');
   // Map
-  expect(elementEnvironment.getRawType(Map_), '$Map_rep');
+  expect(elementEnvironment.getRawType(Map_), '[$Map_rep,,,]');
   // Map<dynamic,dynamic>
-  expect(instantiate(Map_, [dynamic_, dynamic_]), '$Map_rep');
+  expect(instantiate(Map_, [dynamic_, dynamic_]), '[$Map_rep,,,]');
   // Map<int,String>
   expect(
       instantiate(Map_, [int_, String_]), '[$Map_rep, $int_rep, $String_rep]');
@@ -321,14 +313,9 @@ main() {
       ' $retvoid, $args: [$int_rep], $opt: [,]}]}');
 
   // FutureOr<int> m11<T, S>(FutureOr<T> a, S b, List<void> c) {}
-  if (!strongMode) {
-    expect(findFunctionType(closedWorld, 'm11'),
-        '{$func: 1, $args: [,, [$List_rep,,]]}');
-  } else {
-    expect(
-        findFunctionType(closedWorld, 'm11'),
-        '{$func: 1, $bounds: [$num_rep, $Object_rep], '
-        '$ret: {$futureOr: 1, $futureOrType: $int_rep}, '
-        '$args: [{$futureOr: 1, $futureOrType: 0}, 1, [$List_rep, -1]]}');
-  }
+  expect(
+      findFunctionType(closedWorld, 'm11'),
+      '{$func: 1, $bounds: [$num_rep, $Object_rep], '
+      '$ret: {$futureOr: 1, $futureOrType: $int_rep}, '
+      '$args: [{$futureOr: 1, $futureOrType: 0}, 1, [$List_rep, -1]]}');
 }

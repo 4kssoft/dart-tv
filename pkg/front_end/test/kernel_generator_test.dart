@@ -7,7 +7,6 @@ import 'package:kernel/ast.dart'
 
 import 'package:test/test.dart'
     show
-        contains,
         expect,
         greaterThan,
         group,
@@ -15,16 +14,12 @@ import 'package:test/test.dart'
         isFalse,
         isNotEmpty,
         isNotNull,
-        isNull,
         isTrue,
         same,
         test;
 
 import 'package:front_end/src/api_prototype/front_end.dart'
     show CompilerOptions;
-
-import 'package:front_end/src/fasta/deprecated_problems.dart'
-    show deprecated_InputError;
 
 import 'package:front_end/src/fasta/fasta_codes.dart' show messageMissingMain;
 
@@ -46,11 +41,12 @@ main() {
         ..librariesSpecificationUri = invalidCoreLibsSpecUri
         ..sdkSummary = null
         ..compileSdk = true // To prevent FE from loading an sdk-summary.
-        ..onError = (e) => errors.add(e);
+        ..onDiagnostic = errors.add;
 
-      var component =
-          await compileScript('main() => print("hi");', options: options);
-      expect(component, isNull);
+      Component component =
+          (await compileScript('main() => print("hi");', options: options))
+              ?.component;
+      expect(component, isNotNull);
       expect(errors, isNotEmpty);
     });
 
@@ -59,11 +55,12 @@ main() {
       var options = new CompilerOptions()
         ..sdkSummary =
             Uri.parse('org-dartlang-test:///not_existing_summary_file')
-        ..onError = (e) => errors.add(e);
+        ..onDiagnostic = errors.add;
 
-      var component =
-          await compileScript('main() => print("hi");', options: options);
-      expect(component, isNull);
+      Component component =
+          (await compileScript('main() => print("hi");', options: options))
+              ?.component;
+      expect(component, isNotNull);
       expect(errors, isNotEmpty);
     });
 
@@ -74,8 +71,9 @@ main() {
         // contains broken URIs to ensure we do not attempt to lookup for
         // sources of the sdk directly.
         ..librariesSpecificationUri = invalidCoreLibsSpecUri;
-      var component =
-          await compileScript('main() => print("hi");', options: options);
+      Component component =
+          (await compileScript('main() => print("hi");', options: options))
+              ?.component;
       var core = component.libraries.firstWhere(isDartCoreLibrary);
       var printMember = core.members.firstWhere((m) => m.name.name == 'print');
 
@@ -86,30 +84,16 @@ main() {
 
     test('compiler requires a main method', () async {
       var errors = [];
-      var options = new CompilerOptions()..onError = (e) => errors.add(e);
+      var options = new CompilerOptions()..onDiagnostic = errors.add;
       await compileScript('a() => print("hi");', options: options);
       expect(errors.first.message, messageMissingMain.message);
     });
 
-    // TODO(ahe): This test is wrong at least with respect to expecting that
-    // [deprecated_InputError] leaks through the API. Furthermore, the default
-    // behavior should be to recover from errors, as this is the most important
-    // use case we have.
-    test('default error handler throws on errors', () async {
-      var options = new CompilerOptions();
-      var exceptionThrown = false;
-      try {
-        await compileScript('a() => print("hi");', options: options);
-      } on deprecated_InputError catch (e) {
-        exceptionThrown = true;
-        expect('${e.error}', contains("Compilation aborted"));
-      }
-      expect(exceptionThrown, isTrue);
-    }, skip: true /* Issue 30194 */);
-
     test('generated program contains source-info', () async {
-      var component = await compileScript('a() => print("hi"); main() {}',
-          fileName: 'a.dart');
+      Component component = (await compileScript(
+              'a() => print("hi"); main() {}',
+              fileName: 'a.dart'))
+          ?.component;
       // Kernel always store an empty '' key in the map, so there is always at
       // least one. Having more means that source-info is added.
       expect(component.uriToSource.keys.length, greaterThan(1));
@@ -119,8 +103,10 @@ main() {
     });
 
     test('code from summary dependencies are marked external', () async {
-      var component = await compileScript('a() => print("hi"); main() {}',
-          fileName: 'a.dart');
+      Component component = (await compileScript(
+              'a() => print("hi"); main() {}',
+              fileName: 'a.dart'))
+          ?.component;
       for (var lib in component.libraries) {
         if (lib.importUri.scheme == 'dart') {
           expect(lib.isExternal, isTrue);
@@ -129,13 +115,14 @@ main() {
 
       // Pretend that the compiled code is a summary
       var bytes = serializeComponent(component);
-      component = await compileScript(
-          {
-            'b.dart': 'import "a.dart" as m; b() => m.a(); main() {}',
-            'summary.dill': bytes
-          },
-          fileName: 'b.dart',
-          inputSummaries: ['summary.dill']);
+      component = (await compileScript(
+              {
+                'b.dart': 'import "a.dart" as m; b() => m.a(); main() {}',
+                'summary.dill': bytes
+              },
+              fileName: 'b.dart',
+              inputSummaries: ['summary.dill']))
+          ?.component;
 
       var aLib = component.libraries
           .firstWhere((lib) => lib.importUri.path == '/a/b/c/a.dart');
@@ -143,8 +130,10 @@ main() {
     });
 
     test('code from linked dependencies are not marked external', () async {
-      var component = await compileScript('a() => print("hi"); main() {}',
-          fileName: 'a.dart');
+      Component component = (await compileScript(
+              'a() => print("hi"); main() {}',
+              fileName: 'a.dart'))
+          ?.component;
       for (var lib in component.libraries) {
         if (lib.importUri.scheme == 'dart') {
           expect(lib.isExternal, isTrue);
@@ -152,13 +141,14 @@ main() {
       }
 
       var bytes = serializeComponent(component);
-      component = await compileScript(
-          {
-            'b.dart': 'import "a.dart" as m; b() => m.a(); main() {}',
-            'link.dill': bytes
-          },
-          fileName: 'b.dart',
-          linkedDependencies: ['link.dill']);
+      component = (await compileScript(
+              {
+                'b.dart': 'import "a.dart" as m; b() => m.a(); main() {}',
+                'link.dill': bytes
+              },
+              fileName: 'b.dart',
+              linkedDependencies: ['link.dill']))
+          ?.component;
 
       var aLib = component.libraries
           .firstWhere((lib) => lib.importUri.path == '/a/b/c/a.dart');
@@ -171,7 +161,7 @@ main() {
   group('kernelForComponent', () {
     test('compiler does not require a main method', () async {
       var errors = [];
-      var options = new CompilerOptions()..onError = (e) => errors.add(e);
+      var options = new CompilerOptions()..onDiagnostic = errors.add;
       await compileUnit(['a.dart'], {'a.dart': 'a() => print("hi");'},
           options: options);
       expect(errors, isEmpty);
@@ -179,7 +169,7 @@ main() {
 
     test('compiler is not hermetic by default', () async {
       var errors = [];
-      var options = new CompilerOptions()..onError = (e) => errors.add(e);
+      var options = new CompilerOptions()..onDiagnostic = errors.add;
       await compileUnit([
         'a.dart'
       ], {

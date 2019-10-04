@@ -8,24 +8,31 @@
 /// [CompilerContext].
 library fasta.command_line_reporting;
 
-import 'dart:io' show exitCode;
+import 'dart:math' show min;
 
-import 'package:kernel/ast.dart' show Location;
+import 'dart:typed_data' show Uint8List;
 
-import 'colors.dart' show cyan, green, magenta, red;
+import 'package:kernel/ast.dart' show Location, TreeNode;
+
+import '../compute_platform_binaries_location.dart' show translateSdk;
+
+import 'colors.dart' show green, magenta, red;
 
 import 'compiler_context.dart' show CompilerContext;
 
-import 'deprecated_problems.dart'
-    show Crash, deprecated_InputError, safeToString;
+import 'crash.dart' show Crash, safeToString;
 
 import 'fasta_codes.dart' show LocatedMessage;
 
-import 'messages.dart' show getLocation, getSourceLine, isVerbose;
+import 'messages.dart' show getLocation, getSourceLine;
 
-import 'problems.dart' show unexpected;
+import 'problems.dart' show unhandled;
 
-import 'severity.dart' show Severity;
+import 'resolve_input_uri.dart' show isWindows;
+
+import 'severity.dart' show Severity, severityPrefixes;
+
+import 'scanner/characters.dart' show $CARET, $SPACE, $TAB;
 
 import 'util/relativize.dart' show relativizeUri;
 
@@ -42,63 +49,45 @@ String format(LocatedMessage message, Severity severity, {Location location}) {
       // empty names.
       length = 1;
     }
-    String text =
-        "${severityName(severity, capitalized: true)}: ${message.message}";
+    String prefix = severityPrefixes[severity];
+    String messageText =
+        prefix == null ? message.message : "$prefix: ${message.message}";
     if (message.tip != null) {
-      text += "\n${message.tip}";
+      messageText += "\n${message.tip}";
     }
     if (CompilerContext.enableColors) {
       switch (severity) {
         case Severity.error:
         case Severity.internalProblem:
-          text = red(text);
-          break;
-
-        case Severity.nit:
-          text = cyan(text);
+          messageText = red(messageText);
           break;
 
         case Severity.warning:
-          text = magenta(text);
+          messageText = magenta(messageText);
           break;
 
         case Severity.context:
-          text = green(text);
+          messageText = green(messageText);
           break;
 
         default:
-          return unexpected("$severity", "format", -1, null);
+          return unhandled("$severity", "format", -1, null);
       }
     }
 
     if (message.uri != null) {
-      String path = relativizeUri(message.uri);
+      String path =
+          relativizeUri(Uri.base, translateSdk(message.uri), isWindows);
       int offset = message.charOffset;
       location ??= (offset == -1 ? null : getLocation(message.uri, offset));
-      String sourceLine = getSourceLine(location);
-      if (sourceLine == null) {
-        sourceLine = "";
-      } else if (sourceLine.isNotEmpty) {
-        String indentation = " " * (location.column - 1);
-        String pointer = indentation + ("^" * length);
-        if (pointer.length > sourceLine.length) {
-          // Truncate the carets to handle messages that span multiple lines.
-          int pointerLength = sourceLine.length;
-          // Add one to cover the case of a parser error pointing to EOF when
-          // the last line doesn't end with a newline. For messages spanning
-          // multiple lines, this also provides a minor visual clue that can be
-          // useful for debugging Fasta.
-          pointerLength += 1;
-          pointer = pointer.substring(0, pointerLength);
-          pointer += "...";
-        }
-        sourceLine = "\n$sourceLine\n$pointer";
+      if (location?.line == TreeNode.noOffset) {
+        location = null;
       }
-      String position =
-          location == null ? "" : ":${location.line}:${location.column}";
-      return "$path$position: $text$sourceLine";
+      String sourceLine = getSourceLine(location);
+      return formatErrorMessage(
+          sourceLine, location, length, path, messageText);
     } else {
-      return text;
+      return messageText;
     }
   } catch (error, trace) {
     print("Crash when formatting: "
@@ -109,6 +98,44 @@ String format(LocatedMessage message, Severity severity, {Location location}) {
   }
 }
 
+String formatErrorMessage(String sourceLine, Location location,
+    int squigglyLength, String path, String messageText) {
+  if (sourceLine == null) {
+    sourceLine = "";
+  } else if (sourceLine.isNotEmpty) {
+    // TODO(askesc): Much more could be done to indent properly in the
+    // presence of all sorts of unicode weirdness.
+    // This handling covers the common case of single-width characters
+    // indented with spaces and/or tabs, using no surrogates.
+    int indentLength = location.column - 1;
+    Uint8List indentation = new Uint8List(indentLength + squigglyLength)
+      ..fillRange(0, indentLength, $SPACE)
+      ..fillRange(indentLength, indentLength + squigglyLength, $CARET);
+    int lengthInSourceLine = min(indentation.length, sourceLine.length);
+    for (int i = 0; i < lengthInSourceLine; i++) {
+      if (sourceLine.codeUnitAt(i) == $TAB) {
+        indentation[i] = $TAB;
+      }
+    }
+    String pointer = new String.fromCharCodes(indentation);
+    if (pointer.length > sourceLine.length) {
+      // Truncate the carets to handle messages that span multiple lines.
+      int pointerLength = sourceLine.length;
+      // Add one to cover the case of a parser error pointing to EOF when
+      // the last line doesn't end with a newline. For messages spanning
+      // multiple lines, this also provides a minor visual clue that can be
+      // useful for debugging Fasta.
+      pointerLength += 1;
+      pointer = pointer.substring(0, pointerLength);
+      pointer += "...";
+    }
+    sourceLine = "\n$sourceLine\n$pointer";
+  }
+  String position =
+      location == null ? "" : ":${location.line}:${location.column}";
+  return "$path$position: $messageText$sourceLine";
+}
+
 /// Are problems of [severity] suppressed?
 bool isHidden(Severity severity) {
   switch (severity) {
@@ -117,14 +144,11 @@ bool isHidden(Severity severity) {
     case Severity.context:
       return false;
 
-    case Severity.nit:
-      return !isVerbose;
-
     case Severity.warning:
       return hideWarnings;
 
     default:
-      return unexpected("$severity", "isHidden", -1, null);
+      return unhandled("$severity", "isHidden", -1, null);
   }
 }
 
@@ -138,9 +162,6 @@ bool shouldThrowOn(Severity severity) {
     case Severity.internalProblem:
       return true;
 
-    case Severity.nit:
-      return CompilerContext.current.options.throwOnNitsForDebugging;
-
     case Severity.warning:
       return CompilerContext.current.options.throwOnWarningsForDebugging;
 
@@ -148,54 +169,7 @@ bool shouldThrowOn(Severity severity) {
       return false;
 
     default:
-      return unexpected("$severity", "shouldThrowOn", -1, null);
-  }
-}
-
-/// Convert [severity] to a name that can be used to prefix a message.
-String severityName(Severity severity, {bool capitalized: false}) {
-  switch (severity) {
-    case Severity.error:
-      return capitalized ? "Error" : "error";
-
-    case Severity.internalProblem:
-      return capitalized ? "Internal problem" : "internal problem";
-
-    case Severity.nit:
-      return capitalized ? "Nit" : "nit";
-
-    case Severity.warning:
-      return capitalized ? "Warning" : "warning";
-
-    case Severity.context:
-      return capitalized ? "Context" : "context";
-
-    default:
-      return unexpected("$severity", "severityName", -1, null);
-  }
-}
-
-/// Print a formatted message and throw when errors are treated as fatal.
-/// Also set [exitCode] depending on the value of
-/// `CompilerContext.current.options.setExitCodeOnProblem`.
-void _printAndThrowIfDebugging(
-    String text, Severity severity, Uri uri, int charOffset) {
-  // I believe we should only set it if we are reporting something, if we are
-  // formatting to embed the error in the program, then we probably don't want
-  // to do it in format.
-  // Note: I also want to limit dependencies to dart:io for when we use the FE
-  // outside of the VM. This default reporting is likely not going to be used in
-  // that context, but the default formatter is.
-  if (CompilerContext.current.options.setExitCodeOnProblem) {
-    exitCode = 1;
-  }
-  print(text);
-  if (shouldThrowOn(severity)) {
-    if (isVerbose) print(StackTrace.current);
-    // TODO(sigmund,ahe): ensure there is no circularity when InputError is
-    // handled.
-    throw new deprecated_InputError(uri, charOffset,
-        "Compilation aborted due to fatal ${severityName(severity)}.");
+      return unhandled("$severity", "shouldThrowOn", -1, null);
   }
 }
 
@@ -206,26 +180,14 @@ bool isCompileTimeError(Severity severity) {
       return true;
 
     case Severity.errorLegacyWarning:
-      return CompilerContext.current.options.strongMode;
+      return true;
 
-    case Severity.nit:
     case Severity.warning:
     case Severity.context:
       return false;
-  }
-  return unexpected("$severity", "isCompileTimeError", -1, null);
-}
 
-/// Report [message] unless [severity] is suppressed (see [isHidden]). Throws
-/// an exception if [severity] is fatal (see [isFatal]).
-///
-/// This method isn't intended to be called directly. Use
-/// [CompilerContext.report] instead.
-void report(LocatedMessage message, Severity severity) {
-  if (isHidden(severity)) return;
-  if (isCompileTimeError(severity)) {
-    CompilerContext.current.logError(message, severity);
+    case Severity.ignored:
+      break; // Fall-through to unhandled below.
   }
-  _printAndThrowIfDebugging(
-      format(message, severity), severity, message.uri, message.charOffset);
+  return unhandled("$severity", "isCompileTimeError", -1, null);
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -10,6 +10,7 @@ import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import '../analysis_abstract.dart';
+import '../mocks.dart';
 
 main() {
   defineReflectiveSuite(() {
@@ -26,6 +27,27 @@ class StatementCompletionTest extends AbstractAnalysisTest {
     super.setUp();
     createProject();
     handler = new EditDomainHandler(server);
+  }
+
+  test_invalidFilePathFormat_notAbsolute() async {
+    var request =
+        new EditGetStatementCompletionParams('test.dart', 0).toRequest('0');
+    var response = await waitResponse(request);
+    expect(
+      response,
+      isResponseFailure('0', RequestErrorCode.INVALID_FILE_PATH_FORMAT),
+    );
+  }
+
+  test_invalidFilePathFormat_notNormalized() async {
+    var request = new EditGetStatementCompletionParams(
+            convertPath('/foo/../bar/test.dart'), 0)
+        .toRequest('0');
+    var response = await waitResponse(request);
+    expect(
+      response,
+      isResponseFailure('0', RequestErrorCode.INVALID_FILE_PATH_FORMAT),
+    );
   }
 
   test_plainEnterFromStart() async {
@@ -82,7 +104,7 @@ main() {
 
   void _assertHasChange(String message, String expectedCode, [Function cmp]) {
     if (change.message == message) {
-      if (!change.edits.isEmpty) {
+      if (change.edits.isNotEmpty) {
         String resultCode =
             SourceEdit.applySequence(testCode, change.edits[0].edits);
         expect(resultCode, expectedCode.replaceAll('/*caret*/', ''));
@@ -102,7 +124,7 @@ main() {
   }
 
   _prepareCompletion(String search,
-      {bool atStart: false, bool atEnd: false, int delta: 0}) async {
+      {bool atStart = false, bool atEnd = false, int delta = 0}) async {
     int offset = findOffset(search);
     if (atStart) {
       delta = 0;

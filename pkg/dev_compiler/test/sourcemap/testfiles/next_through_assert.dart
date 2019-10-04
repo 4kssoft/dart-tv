@@ -3,10 +3,10 @@
 // BSD-style license that can be found in the LICENSE file.
 
 /*Debugger:stepOver*/
-main() {
+void main() {
   assert(/*bc:1*/ foo());
 }
 
-foo() {
+bool foo() {
   return true;
 }

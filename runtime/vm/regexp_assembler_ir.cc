@@ -6,17 +6,18 @@
 
 #include "vm/regexp_assembler_ir.h"
 
+#include "platform/unicode.h"
 #include "vm/bit_vector.h"
 #include "vm/compiler/backend/il_printer.h"
 #include "vm/compiler/frontend/flow_graph_builder.h"
 #include "vm/compiler/jit/compiler.h"
 #include "vm/dart_entry.h"
+#include "vm/longjump.h"
 #include "vm/object_store.h"
 #include "vm/regexp.h"
 #include "vm/resolver.h"
 #include "vm/runtime_entry.h"
 #include "vm/stack_frame.h"
-#include "vm/unicode.h"
 
 #define Z zone()
 
@@ -39,7 +40,6 @@
 
 namespace dart {
 
-static const intptr_t kInvalidTryIndex = CatchClauseNode::kInvalidTryIndex;
 static const intptr_t kMinStackSize = 512;
 
 /*
@@ -114,11 +114,12 @@ IRRegExpMacroAssembler::IRRegExpMacroAssembler(
                                              kMinStackSize / 4, Heap::kOld)));
 
   // Create and generate all preset blocks.
-  entry_block_ = new (zone) GraphEntryInstr(
-      *parsed_function_,
-      new (zone) TargetEntryInstr(block_id_.Alloc(), kInvalidTryIndex,
-                                  GetNextDeoptId()),
-      osr_id);
+  entry_block_ = new (zone) GraphEntryInstr(*parsed_function_, osr_id);
+
+  auto function_entry = new (zone) FunctionEntryInstr(
+      entry_block_, block_id_.Alloc(), kInvalidTryIndex, GetNextDeoptId());
+  entry_block_->set_normal_entry(function_entry);
+
   start_block_ = new (zone)
       JoinEntryInstr(block_id_.Alloc(), kInvalidTryIndex, GetNextDeoptId());
   success_block_ = new (zone)
@@ -321,9 +322,12 @@ RawArray* IRRegExpMacroAssembler::Execute(const RegExp& regexp,
 
   const Object& retval =
       Object::Handle(zone, DartEntry::InvokeFunction(fun, args));
+  if (retval.IsUnwindError()) {
+    Exceptions::PropagateError(Error::Cast(retval));
+  }
   if (retval.IsError()) {
     const Error& error = Error::Cast(retval);
-    OS::Print("%s\n", error.ToErrorCString());
+    OS::PrintErr("%s\n", error.ToErrorCString());
     // Should never happen.
     UNREACHABLE();
   }
@@ -359,7 +363,7 @@ LocalVariable* IRRegExpMacroAssembler::Local(const String& name) {
 
 ConstantInstr* IRRegExpMacroAssembler::Int64Constant(int64_t value) const {
   return new (Z)
-      ConstantInstr(Integer::ZoneHandle(Z, Integer::New(value, Heap::kOld)));
+      ConstantInstr(Integer::ZoneHandle(Z, Integer::NewCanonical(value)));
 }
 
 ConstantInstr* IRRegExpMacroAssembler::Uint64Constant(uint64_t value) const {
@@ -385,9 +389,13 @@ ConstantInstr* IRRegExpMacroAssembler::WordCharacterMapConstant() const {
       regexp_class.LookupStaticFieldAllowPrivate(Symbols::_wordCharacterMap()));
   ASSERT(!word_character_field.IsNull());
 
+  DEBUG_ASSERT(Thread::Current()->TopErrorHandlerIsSetJump());
   if (word_character_field.IsUninitialized()) {
     ASSERT(!Compiler::IsBackgroundCompilation());
-    word_character_field.EvaluateInitializer();
+    const Error& error = Error::Handle(Z, word_character_field.Initialize());
+    if (!error.IsNull()) {
+      Report::LongJump(error);
+    }
   }
   ASSERT(!word_character_field.IsUninitialized());
 
@@ -569,7 +577,7 @@ Value* IRRegExpMacroAssembler::BindLoadLocal(const LocalVariable& local) {
 #define HANDLE_DEAD_CODE_EMISSION()                                            \
   if (current_instruction_ == NULL) {                                          \
     if (FLAG_trace_irregexp) {                                                 \
-      OS::Print(                                                               \
+      OS::PrintErr(                                                            \
           "WARNING: Attempting to append to a closed assembler. "              \
           "This could be either a bug or generation of dead code "             \
           "inherited from V8.\n");                                             \
@@ -761,38 +769,27 @@ void IRRegExpMacroAssembler::CheckCharacterGT(uint16_t limit,
 void IRRegExpMacroAssembler::CheckAtStart(BlockLabel* on_at_start) {
   TAG();
 
-  BlockLabel not_at_start;
-
-  // Did we start the match at the start of the string at all?
-  BranchOrBacktrack(
-      Comparison(kNE, LoadLocal(start_index_param_), Uint64Constant(0)),
-      &not_at_start);
-
-  // If we did, are we still at the start of the input, i.e. is
-  // (offset == string_length * -1)?
+  // Are we at the start of the input, i.e. is (offset == string_length * -1)?
   Definition* neg_len_def =
       InstanceCall(InstanceCallDescriptor::FromToken(Token::kNEGATE),
                    PushLocal(string_param_length_));
   Definition* offset_def = LoadLocal(current_position_);
   BranchOrBacktrack(Comparison(kEQ, neg_len_def, offset_def), on_at_start);
-
-  BindBlock(&not_at_start);
 }
 
-void IRRegExpMacroAssembler::CheckNotAtStart(BlockLabel* on_not_at_start) {
+// cp_offset => offset from the current (character) pointer
+// This offset may be negative due to traversing backwards during lookbehind.
+void IRRegExpMacroAssembler::CheckNotAtStart(intptr_t cp_offset,
+                                             BlockLabel* on_not_at_start) {
   TAG();
 
-  // Did we start the match at the start of the string at all?
-  BranchOrBacktrack(
-      Comparison(kNE, LoadLocal(start_index_param_), Uint64Constant(0)),
-      on_not_at_start);
-
-  // If we did, are we still at the start of the input, i.e. is
-  // (offset == string_length * -1)?
-  Definition* neg_len_def =
-      InstanceCall(InstanceCallDescriptor::FromToken(Token::kNEGATE),
-                   PushLocal(string_param_length_));
-  Definition* offset_def = LoadLocal(current_position_);
+  // Are we at the start of the input, i.e. is (offset == string_length * -1)?
+  auto offset_def =
+      PushArgument(Bind(Add(PushLocal(current_position_),
+                            PushArgument(Bind(Int64Constant(cp_offset))))));
+  auto neg_len_def = PushArgument(
+      Bind(InstanceCall(InstanceCallDescriptor::FromToken(Token::kNEGATE),
+                        PushLocal(string_param_length_))));
   BranchOrBacktrack(Comparison(kNE, neg_len_def, offset_def), on_not_at_start);
 }
 
@@ -823,6 +820,8 @@ void IRRegExpMacroAssembler::CheckGreedyLoop(BlockLabel* on_equal) {
 
 void IRRegExpMacroAssembler::CheckNotBackReferenceIgnoreCase(
     intptr_t start_reg,
+    bool read_backward,
+    bool unicode,
     BlockLabel* on_no_match) {
   TAG();
   ASSERT(start_reg + 1 <= registers_count_);
@@ -848,19 +847,37 @@ void IRRegExpMacroAssembler::CheckNotBackReferenceIgnoreCase(
       Comparison(kEQ, LoadLocal(capture_length_), Uint64Constant(0)),
       &fallthrough);
 
-  // Check that there are sufficient characters left in the input.
-  PushArgumentInstr* pos_push = PushLocal(current_position_);
-  PushArgumentInstr* len_push = PushLocal(capture_length_);
-  BranchOrBacktrack(
-      Comparison(kGT,
-                 InstanceCall(InstanceCallDescriptor::FromToken(Token::kADD),
-                              pos_push, len_push),
-                 Uint64Constant(0)),
-      on_no_match);
+  PushArgumentInstr* pos_push = nullptr;
+  PushArgumentInstr* len_push = nullptr;
+
+  if (!read_backward) {
+    // Check that there are sufficient characters left in the input.
+    pos_push = PushLocal(current_position_);
+    len_push = PushLocal(capture_length_);
+    BranchOrBacktrack(
+        Comparison(kGT,
+                   InstanceCall(InstanceCallDescriptor::FromToken(Token::kADD),
+                                pos_push, len_push),
+                   Uint64Constant(0)),
+        on_no_match);
+  }
 
   pos_push = PushLocal(current_position_);
   len_push = PushLocal(string_param_length_);
   StoreLocal(match_start_index_, Bind(Add(pos_push, len_push)));
+
+  if (read_backward) {
+    // First check that there are enough characters before this point in
+    // the string that we can match the backreference.
+    BranchOrBacktrack(Comparison(kLT, LoadLocal(match_start_index_),
+                                 LoadLocal(capture_length_)),
+                      on_no_match);
+
+    // The string to check is before the current position, not at it.
+    pos_push = PushLocal(match_start_index_);
+    len_push = PushLocal(capture_length_);
+    StoreLocal(match_start_index_, Bind(Sub(pos_push, len_push)));
+  }
 
   pos_push = PushArgument(LoadRegister(start_reg));
   len_push = PushLocal(string_param_length_);
@@ -951,9 +968,17 @@ void IRRegExpMacroAssembler::CheckNotBackReferenceIgnoreCase(
     Value* rhs_index_value = Bind(LoadLocal(capture_start_index_));
     Value* length_value = Bind(LoadLocal(capture_length_));
 
-    Definition* is_match_def = new (Z) CaseInsensitiveCompareUC16Instr(
-        string_value, lhs_index_value, rhs_index_value, length_value,
-        specialization_cid_);
+    Definition* is_match_def;
+
+    if (unicode) {
+      is_match_def = new (Z) CaseInsensitiveCompareInstr(
+          string_value, lhs_index_value, rhs_index_value, length_value,
+          kCaseInsensitiveCompareUTF16RuntimeEntry, specialization_cid_);
+    } else {
+      is_match_def = new (Z) CaseInsensitiveCompareInstr(
+          string_value, lhs_index_value, rhs_index_value, length_value,
+          kCaseInsensitiveCompareUCS2RuntimeEntry, specialization_cid_);
+    }
 
     BranchOrBacktrack(Comparison(kNE, is_match_def, BoolConstant(true)),
                       on_no_match);
@@ -961,15 +986,23 @@ void IRRegExpMacroAssembler::CheckNotBackReferenceIgnoreCase(
 
   BindBlock(&success);
 
-  // Move current character position to position after match.
-  PushArgumentInstr* match_end_push = PushLocal(match_end_index_);
-  len_push = PushLocal(string_param_length_);
-  StoreLocal(current_position_, Bind(Sub(match_end_push, len_push)));
+  if (read_backward) {
+    // Move current character position to start of match.
+    pos_push = PushLocal(current_position_);
+    len_push = PushLocal(capture_length_);
+    StoreLocal(current_position_, Bind(Sub(pos_push, len_push)));
+  } else {
+    // Move current character position to position after match.
+    PushArgumentInstr* match_end_push = PushLocal(match_end_index_);
+    len_push = PushLocal(string_param_length_);
+    StoreLocal(current_position_, Bind(Sub(match_end_push, len_push)));
+  }
 
   BindBlock(&fallthrough);
 }
 
 void IRRegExpMacroAssembler::CheckNotBackReference(intptr_t start_reg,
+                                                   bool read_backward,
                                                    BlockLabel* on_no_match) {
   TAG();
   ASSERT(start_reg + 1 <= registers_count_);
@@ -992,20 +1025,38 @@ void IRRegExpMacroAssembler::CheckNotBackReference(intptr_t start_reg,
       Comparison(kEQ, LoadLocal(capture_length_), Uint64Constant(0)),
       &fallthrough);
 
-  // Check that there are sufficient characters left in the input.
-  PushArgumentInstr* pos_push = PushLocal(current_position_);
-  PushArgumentInstr* len_push = PushLocal(capture_length_);
-  BranchOrBacktrack(
-      Comparison(kGT,
-                 InstanceCall(InstanceCallDescriptor::FromToken(Token::kADD),
-                              pos_push, len_push),
-                 Uint64Constant(0)),
-      on_no_match);
+  PushArgumentInstr* pos_push = nullptr;
+  PushArgumentInstr* len_push = nullptr;
+
+  if (!read_backward) {
+    // Check that there are sufficient characters left in the input.
+    pos_push = PushLocal(current_position_);
+    len_push = PushLocal(capture_length_);
+    BranchOrBacktrack(
+        Comparison(kGT,
+                   InstanceCall(InstanceCallDescriptor::FromToken(Token::kADD),
+                                pos_push, len_push),
+                   Uint64Constant(0)),
+        on_no_match);
+  }
 
   // Compute pointers to match string and capture string.
   pos_push = PushLocal(current_position_);
   len_push = PushLocal(string_param_length_);
   StoreLocal(match_start_index_, Bind(Add(pos_push, len_push)));
+
+  if (read_backward) {
+    // First check that there are enough characters before this point in
+    // the string that we can match the backreference.
+    BranchOrBacktrack(Comparison(kLT, LoadLocal(match_start_index_),
+                                 LoadLocal(capture_length_)),
+                      on_no_match);
+
+    // The string to check is before the current position, not at it.
+    pos_push = PushLocal(match_start_index_);
+    len_push = PushLocal(capture_length_);
+    StoreLocal(match_start_index_, Bind(Sub(pos_push, len_push)));
+  }
 
   pos_push = PushArgument(LoadRegister(start_reg));
   len_push = PushLocal(string_param_length_);
@@ -1041,10 +1092,17 @@ void IRRegExpMacroAssembler::CheckNotBackReference(intptr_t start_reg,
 
   BindBlock(&success);
 
-  // Move current character position to position after match.
-  PushArgumentInstr* match_end_push = PushLocal(match_end_index_);
-  len_push = PushLocal(string_param_length_);
-  StoreLocal(current_position_, Bind(Sub(match_end_push, len_push)));
+  if (read_backward) {
+    // Move current character position to start of match.
+    pos_push = PushLocal(current_position_);
+    len_push = PushLocal(capture_length_);
+    StoreLocal(current_position_, Bind(Sub(pos_push, len_push)));
+  } else {
+    // Move current character position to position after match.
+    PushArgumentInstr* match_end_push = PushLocal(match_end_index_);
+    len_push = PushLocal(string_param_length_);
+    StoreLocal(current_position_, Bind(Sub(match_end_push, len_push)));
+  }
 
   BindBlock(&fallthrough);
 }
@@ -1352,10 +1410,13 @@ void IRRegExpMacroAssembler::LoadCurrentCharacter(intptr_t cp_offset,
                                                   bool check_bounds,
                                                   intptr_t characters) {
   TAG();
-  ASSERT(cp_offset >= -1);        // ^ and \b can look behind one character.
   ASSERT(cp_offset < (1 << 30));  // Be sane! (And ensure negation works)
   if (check_bounds) {
-    CheckPosition(cp_offset + characters - 1, on_end_of_input);
+    if (cp_offset >= 0) {
+      CheckPosition(cp_offset + characters - 1, on_end_of_input);
+    } else {
+      CheckPosition(cp_offset, on_end_of_input);
+    }
   }
   LoadCurrentCharacterUnchecked(cp_offset, characters);
 }
@@ -1585,13 +1646,24 @@ void IRRegExpMacroAssembler::WriteStackPointerToRegister(intptr_t reg) {
 void IRRegExpMacroAssembler::CheckPosition(intptr_t cp_offset,
                                            BlockLabel* on_outside_input) {
   TAG();
-  Definition* curpos_def = LoadLocal(current_position_);
-  Definition* cp_off_def = Int64Constant(-cp_offset);
+  if (cp_offset >= 0) {
+    Definition* curpos_def = LoadLocal(current_position_);
+    Definition* cp_off_def = Int64Constant(-cp_offset);
+    // If (current_position_ < -cp_offset), we are in bounds.
+    // Remember, current_position_ is a negative offset from the string end.
 
-  // If (current_position_ < -cp_offset), we are in bounds.
-  // Remember, current_position_ is a negative offset from the string end.
-
-  BranchOrBacktrack(Comparison(kGTE, curpos_def, cp_off_def), on_outside_input);
+    BranchOrBacktrack(Comparison(kGTE, curpos_def, cp_off_def),
+                      on_outside_input);
+  } else {
+    // We need to see if there's enough characters left in the string to go
+    // back cp_offset characters, so get the normalized position and then
+    // make sure that (normalized_position >= -cp_offset).
+    PushArgumentInstr* pos_push = PushLocal(current_position_);
+    PushArgumentInstr* len_push = PushLocal(string_param_length_);
+    BranchOrBacktrack(
+        Comparison(kLT, Add(pos_push, len_push), Uint64Constant(-cp_offset)),
+        on_outside_input);
+  }
 }
 
 void IRRegExpMacroAssembler::BranchOrBacktrack(ComparisonInstr* comparison,
@@ -1655,6 +1727,7 @@ void IRRegExpMacroAssembler::CheckPreemption(bool is_backtrack) {
   // not act as an OSR entry outside loops.
   AppendInstruction(new (Z) CheckStackOverflowInstr(
       TokenPosition::kNoSource,
+      /*stack_depth=*/0,
       /*loop_depth=*/1, GetNextDeoptId(),
       is_backtrack ? CheckStackOverflowInstr::kOsrAndPreemption
                    : CheckStackOverflowInstr::kOsrOnly));

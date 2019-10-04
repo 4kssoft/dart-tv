@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -13,17 +13,6 @@ main() {
 
 class TopLevelVariableTest extends PartialCodeTest {
   buildAll() {
-    List<String> allExceptEof = <String>[
-      'class',
-      'typedef',
-      'functionVoid',
-      'functionNonVoid',
-      'var',
-      'const',
-      'final',
-      'getter',
-      'setter'
-    ];
     buildTests(
         'top_level_variable',
         [
@@ -54,7 +43,7 @@ class TopLevelVariableTest extends PartialCodeTest {
               CompileTimeErrorCode.CONST_NOT_INITIALIZED
             ],
             "const a;",
-            failing: ['functionNonVoid', 'getter', 'setter'],
+            failing: ['functionNonVoid', 'getter', 'setter', 'mixin'],
             expectedErrorsInValidCode: [
               CompileTimeErrorCode.CONST_NOT_INITIALIZED
             ],
@@ -156,7 +145,7 @@ class TopLevelVariableTest extends PartialCodeTest {
               StaticWarningCode.FINAL_NOT_INITIALIZED
             ],
             "final a;",
-            failing: ['functionNonVoid', 'getter', 'setter'],
+            failing: ['functionNonVoid', 'getter', 'setter', 'mixin'],
             expectedErrorsInValidCode: [
               StaticWarningCode.FINAL_NOT_INITIALIZED
             ],
@@ -204,7 +193,7 @@ class TopLevelVariableTest extends PartialCodeTest {
             'var a',
             [ParserErrorCode.EXPECTED_TOKEN],
             "var a;",
-            failing: ['functionNonVoid', 'getter', 'setter'],
+            failing: ['functionNonVoid', 'getter', 'mixin', 'setter'],
           ),
           new TestDescriptor(
             'varNameEquals',
@@ -214,7 +203,17 @@ class TopLevelVariableTest extends PartialCodeTest {
               ParserErrorCode.EXPECTED_TOKEN
             ],
             "var a = _s_;",
-            failing: allExceptEof,
+            failing: [
+              'class',
+              'typedef',
+              'functionVoid',
+              'functionNonVoid',
+              'const',
+              'enum',
+              'getter',
+              'mixin',
+              'setter'
+            ],
           ),
           new TestDescriptor(
             'varNameEqualsExpression',

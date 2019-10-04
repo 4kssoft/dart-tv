@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -19,8 +19,8 @@ main() {
 @reflectiveTest
 class LabelContributorTest extends DartCompletionContributorTest {
   CompletionSuggestion assertSuggestLabel(String name,
-      {int relevance: DART_RELEVANCE_DEFAULT,
-      CompletionSuggestionKind kind: CompletionSuggestionKind.IDENTIFIER}) {
+      {int relevance = DART_RELEVANCE_DEFAULT,
+      CompletionSuggestionKind kind = CompletionSuggestionKind.IDENTIFIER}) {
     CompletionSuggestion cs =
         assertSuggest(name, csKind: kind, relevance: relevance);
     expect(cs.returnType, isNull);

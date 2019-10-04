@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -10,7 +10,6 @@ import '../support/integration_tests.dart';
 main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(CreateContextTest);
-    defineReflectiveTests(CreateContextTest_UseCFE);
   });
 }
 
@@ -22,10 +21,4 @@ class CreateContextTest extends AbstractAnalysisServerIntegrationTest {
         (await sendExecutionCreateContext(sourceDirectory.path)).id;
     expect(contextId, isNotNull);
   }
-}
-
-@reflectiveTest
-class CreateContextTest_UseCFE extends CreateContextTest {
-  @override
-  bool get useCFE => true;
 }

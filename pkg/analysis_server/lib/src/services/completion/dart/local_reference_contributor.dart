@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -11,12 +11,13 @@ import 'package:analysis_server/src/services/completion/dart/completion_manager.
     show DartCompletionRequestImpl;
 import 'package:analysis_server/src/services/completion/dart/utilities.dart';
 import 'package:analysis_server/src/services/correction/strings.dart';
-import 'package:analysis_server/src/utilities/documentation.dart';
+import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/ast/ast.dart';
-import 'package:analyzer/dart/ast/standard_resolution_map.dart';
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/element/element.dart';
+import 'package:analyzer/dart/element/nullability_suffix.dart';
 import 'package:analyzer/dart/element/type.dart';
+import 'package:analyzer/src/util/comment.dart';
 import 'package:analyzer_plugin/protocol/protocol_common.dart' as protocol
     show Element, ElementKind;
 import 'package:analyzer_plugin/src/utilities/completion/optype.dart';
@@ -54,8 +55,10 @@ class LocalReferenceContributor extends DartCompletionContributor {
 
         // Do not suggest loop variable of a ForEachStatement
         // when completing the expression of the ForEachStatement
-        if (node is ForEachStatement) {
+        if (node is ForStatement && node.forLoopParts is ForEachParts) {
           node = node.parent;
+        } else if (node is ForEachParts) {
+          node = node.parent.parent;
         }
 
         _LocalVisitor visitor = new _LocalVisitor(
@@ -65,7 +68,7 @@ class LocalReferenceContributor extends DartCompletionContributor {
         return visitor.suggestions;
       }
     }
-    return EMPTY_LIST;
+    return const <CompletionSuggestion>[];
   }
 }
 
@@ -159,6 +162,18 @@ class _LocalVisitor extends LocalDeclarationVisitor {
   }
 
   @override
+  void declaredExtension(ExtensionDeclaration declaration) {
+    if (optype.includeReturnValueSuggestions) {
+      _addLocalSuggestion_includeReturnValueSuggestions(
+          declaration.documentationComment,
+          declaration.name,
+          NO_RETURN_TYPE,
+          protocol.ElementKind.EXTENSION,
+          isDeprecated: isDeprecated(declaration));
+    }
+  }
+
+  @override
   void declaredField(FieldDeclaration fieldDecl, VariableDeclaration varDecl) {
     if ((optype.includeReturnValueSuggestions &&
             (!optype.inStaticMethodBody || fieldDecl.isStatic)) ||
@@ -226,6 +241,20 @@ class _LocalVisitor extends LocalDeclarationVisitor {
   }
 
   @override
+  void declaredGenericTypeAlias(GenericTypeAlias declaration) {
+    if (optype.includeTypeNameSuggestions) {
+      // TODO (danrubel) determine parameters and return type
+      _addLocalSuggestion_includeTypeNameSuggestions(
+          declaration.documentationComment,
+          declaration.name,
+          declaration.functionType?.returnType,
+          protocol.ElementKind.FUNCTION_TYPE_ALIAS,
+          isAbstract: true,
+          isDeprecated: isDeprecated(declaration));
+    }
+  }
+
+  @override
   void declaredLabel(Label label, bool isCaseLabel) {
     // ignored
   }
@@ -281,6 +310,19 @@ class _LocalVisitor extends LocalDeclarationVisitor {
   }
 
   @override
+  void declaredMixin(MixinDeclaration declaration) {
+    if (optype.includeTypeNameSuggestions) {
+      _addLocalSuggestion_includeTypeNameSuggestions(
+          declaration.documentationComment,
+          declaration.name,
+          NO_RETURN_TYPE,
+          protocol.ElementKind.MIXIN,
+          isAbstract: true,
+          isDeprecated: isDeprecated(declaration));
+    }
+  }
+
+  @override
   void declaredParam(SimpleIdentifier id, TypeAnnotation typeName) {
     if (optype.includeReturnValueSuggestions) {
       _addLocalSuggestion_includeReturnValueSuggestions(
@@ -303,14 +345,30 @@ class _LocalVisitor extends LocalDeclarationVisitor {
     }
   }
 
+  @override
+  void declaredTypeParameter(TypeParameter node) {
+    if (optype.includeTypeNameSuggestions) {
+      _addLocalSuggestion(
+        null,
+        node.name,
+        null,
+        protocol.ElementKind.TYPE_PARAMETER,
+        isDeprecated: isDeprecated(node),
+        kind: CompletionSuggestionKind.IDENTIFIER,
+        relevance: DART_RELEVANCE_TYPE_PARAMETER,
+      );
+    }
+  }
+
   void _addLocalSuggestion(Comment documentationComment, SimpleIdentifier id,
       TypeAnnotation typeName, protocol.ElementKind elemKind,
-      {bool isAbstract: false,
-      bool isDeprecated: false,
-      ClassDeclaration classDecl,
+      {bool isAbstract = false,
+      bool isDeprecated = false,
+      ClassOrMixinDeclaration classDecl,
+      CompletionSuggestionKind kind,
       FormalParameterList param,
-      int relevance: DART_RELEVANCE_DEFAULT}) {
-    CompletionSuggestionKind kind = targetIsFunctionalArgument
+      int relevance = DART_RELEVANCE_DEFAULT}) {
+    kind ??= targetIsFunctionalArgument
         ? CompletionSuggestionKind.IDENTIFIER
         : optype.suggestKind;
     CompletionSuggestion suggestion = createLocalSuggestion(
@@ -339,9 +397,9 @@ class _LocalVisitor extends LocalDeclarationVisitor {
   void _addLocalSuggestion_enumConstant(
       EnumConstantDeclaration constantDeclaration,
       EnumDeclaration enumDeclaration,
-      {bool isAbstract: false,
-      bool isDeprecated: false,
-      int relevance: DART_RELEVANCE_DEFAULT}) {
+      {bool isAbstract = false,
+      bool isDeprecated = false,
+      int relevance = DART_RELEVANCE_DEFAULT}) {
     String completion =
         '${enumDeclaration.name.name}.${constantDeclaration.name.name}';
     CompletionSuggestion suggestion = new CompletionSuggestion(
@@ -376,11 +434,11 @@ class _LocalVisitor extends LocalDeclarationVisitor {
       SimpleIdentifier id,
       TypeAnnotation typeName,
       protocol.ElementKind elemKind,
-      {bool isAbstract: false,
-      bool isDeprecated: false,
-      ClassDeclaration classDecl,
+      {bool isAbstract = false,
+      bool isDeprecated = false,
+      ClassOrMixinDeclaration classDecl,
       FormalParameterList param,
-      int relevance: DART_RELEVANCE_DEFAULT}) {
+      int relevance = DART_RELEVANCE_DEFAULT}) {
     relevance = optype.returnValueSuggestionsFilter(
         _staticTypeOfIdentifier(id), relevance);
     if (relevance != null) {
@@ -396,13 +454,12 @@ class _LocalVisitor extends LocalDeclarationVisitor {
   void _addLocalSuggestion_includeReturnValueSuggestions_enumConstant(
       EnumConstantDeclaration constantDeclaration,
       EnumDeclaration enumDeclaration,
-      {bool isAbstract: false,
-      bool isDeprecated: false,
-      int relevance: DART_RELEVANCE_DEFAULT}) {
-    ClassElement classElement =
-        resolutionMap.elementDeclaredByEnumDeclaration(enumDeclaration);
-    relevance =
-        optype.returnValueSuggestionsFilter(classElement?.type, relevance);
+      {bool isAbstract = false,
+      bool isDeprecated = false,
+      int relevance = DART_RELEVANCE_DEFAULT}) {
+    ClassElement classElement = enumDeclaration.declaredElement;
+    relevance = optype.returnValueSuggestionsFilter(
+        _instantiateClassElement(classElement), relevance);
     if (relevance != null) {
       _addLocalSuggestion_enumConstant(constantDeclaration, enumDeclaration,
           isAbstract: isAbstract,
@@ -416,11 +473,11 @@ class _LocalVisitor extends LocalDeclarationVisitor {
       SimpleIdentifier id,
       TypeAnnotation typeName,
       protocol.ElementKind elemKind,
-      {bool isAbstract: false,
-      bool isDeprecated: false,
+      {bool isAbstract = false,
+      bool isDeprecated = false,
       ClassDeclaration classDecl,
       FormalParameterList param,
-      int relevance: DART_RELEVANCE_DEFAULT}) {
+      int relevance = DART_RELEVANCE_DEFAULT}) {
     relevance = optype.typeNameSuggestionsFilter(
         _staticTypeOfIdentifier(id), relevance);
     if (relevance != null) {
@@ -469,16 +526,36 @@ class _LocalVisitor extends LocalDeclarationVisitor {
     }).toList();
 
     Iterable<ParameterElement> requiredParameters = paramList
-        .where((FormalParameter param) => param.isRequired)
-        .map((p) => p.element);
+        .where((FormalParameter param) => param.isRequiredPositional)
+        .map((p) => p.declaredElement);
     suggestion.requiredParameterCount = requiredParameters.length;
 
     Iterable<ParameterElement> namedParameters = paramList
         .where((FormalParameter param) => param.isNamed)
-        .map((p) => p.element);
+        .map((p) => p.declaredElement);
     suggestion.hasNamedParameters = namedParameters.isNotEmpty;
 
     addDefaultArgDetails(suggestion, null, requiredParameters, namedParameters);
+  }
+
+  InterfaceType _instantiateClassElement(ClassElement element) {
+    var typeParameters = element.typeParameters;
+    var typeArguments = const <DartType>[];
+    if (typeParameters.isNotEmpty) {
+      var typeProvider = request.libraryElement.context.typeProvider;
+      typeArguments = typeParameters.map((t) {
+        return typeProvider.dynamicType;
+      }).toList();
+    }
+
+    var nullabilitySuffix = request.featureSet.isEnabled(Feature.non_nullable)
+        ? NullabilitySuffix.none
+        : NullabilitySuffix.star;
+
+    return element.instantiate(
+      typeArguments: typeArguments,
+      nullabilitySuffix: nullabilitySuffix,
+    );
   }
 
   bool _isVoid(TypeAnnotation returnType) {
@@ -493,7 +570,7 @@ class _LocalVisitor extends LocalDeclarationVisitor {
 
   DartType _staticTypeOfIdentifier(Identifier id) {
     if (id.staticElement is ClassElement) {
-      return (id.staticElement as ClassElement).type;
+      return _instantiateClassElement(id.staticElement as ClassElement);
     } else {
       return id.staticType;
     }
@@ -510,7 +587,7 @@ class _LocalVisitor extends LocalDeclarationVisitor {
           .map((Token t) => t.toString())
           .join('\n')
           .replaceAll('\r\n', '\n');
-      String doc = removeDartDocDelimiters(text);
+      String doc = getDartDocPlainText(text);
       suggestion.docComplete = doc;
       suggestion.docSummary = getDartDocSummary(doc);
     }

@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -31,13 +31,19 @@ class AssertStatementTest extends PartialCodeTest {
                 ParserErrorCode.EXPECTED_TOKEN
               ],
               "assert (_s_);",
-              failing: allExceptEof),
+              failing: [
+                'assert',
+                'block',
+                'labeled',
+                'localFunctionNonVoid',
+                'localFunctionVoid',
+                'return'
+              ]),
           new TestDescriptor(
               'condition',
               'assert (a',
               [ParserErrorCode.EXPECTED_TOKEN, ScannerErrorCode.EXPECTED_TOKEN],
-              "assert (a);",
-              failing: allExceptEof),
+              "assert (a);"),
           new TestDescriptor(
               'comma',
               'assert (a,',
@@ -48,14 +54,12 @@ class AssertStatementTest extends PartialCodeTest {
               'message',
               'assert (a, b',
               [ParserErrorCode.EXPECTED_TOKEN, ScannerErrorCode.EXPECTED_TOKEN],
-              "assert (a, b);",
-              failing: allExceptEof),
+              "assert (a, b);"),
           new TestDescriptor(
               'trailingComma',
               'assert (a, b,',
               [ParserErrorCode.EXPECTED_TOKEN, ScannerErrorCode.EXPECTED_TOKEN],
-              "assert (a, b,);",
-              failing: allExceptEof),
+              "assert (a, b,);"),
           new TestDescriptor('rightParen', 'assert (a, b)',
               [ParserErrorCode.EXPECTED_TOKEN], "assert (a, b);"),
         ],

@@ -131,4 +131,26 @@ class C {
   }
 }
 
+typedef IntFunc(int arg);
+
+IntFunc testPartialInstantiation() {
+  void foo<T>(T t) {}
+  IntFunc intFunc = foo;
+  return intFunc;
+}
+
+class D<T> {
+  foo(T t) {
+    return () => t;
+  }
+
+  bar() {
+    return () {
+      inner() {}
+
+      inner();
+    };
+  }
+}
+
 main() {}

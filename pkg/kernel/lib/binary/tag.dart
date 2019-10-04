@@ -8,14 +8,17 @@ class Tag {
   static const int Something = 1;
 
   static const int Class = 2;
+  static const int Extension = 115;
 
   static const int FunctionNode = 3;
 
+  // Members
   static const int Field = 4;
   static const int Constructor = 5;
   static const int Procedure = 6;
   static const int RedirectingFactoryConstructor = 108;
 
+  // Initializers
   static const int InvalidInitializer = 7;
   static const int FieldInitializer = 8;
   static const int SuperInitializer = 9;
@@ -23,6 +26,7 @@ class Tag {
   static const int LocalInitializer = 11;
   static const int AssertInitializer = 12;
 
+  // Expressions
   static const int CheckLibraryIsLoaded = 13;
   static const int LoadLibrary = 14;
   static const int DirectPropertyGet = 15;
@@ -44,9 +48,14 @@ class Tag {
   static const int ConstructorInvocation = 31;
   static const int ConstConstructorInvocation = 32;
   static const int Not = 33;
+  static const int NullCheck = 117;
   static const int LogicalExpression = 34;
   static const int ConditionalExpression = 35;
   static const int StringConcatenation = 36;
+  static const int ListConcatenation = 111;
+  static const int SetConcatenation = 112;
+  static const int MapConcatenation = 113;
+  static const int InstanceCreation = 114;
   static const int IsExpression = 37;
   static const int AsExpression = 38;
   static const int StringLiteral = 39;
@@ -64,13 +73,18 @@ class Tag {
   static const int AwaitExpression = 51;
   static const int FunctionExpression = 52;
   static const int Let = 53;
+  static const int BlockExpression = 82;
   static const int Instantiation = 54;
   static const int PositiveIntLiteral = 55;
   static const int NegativeIntLiteral = 56;
   static const int BigIntLiteral = 57;
   static const int ConstListLiteral = 58;
   static const int ConstMapLiteral = 59;
+  static const int SetLiteral = 109;
+  static const int ConstSetLiteral = 110;
+  static const int FileUriExpression = 116;
 
+  // Statements
   static const int ExpressionStatement = 61;
   static const int Block = 62;
   static const int EmptyStatement = 63;
@@ -92,9 +106,10 @@ class Tag {
   static const int FunctionDeclaration = 79;
   static const int AsyncForInStatement = 80;
   static const int AssertBlock = 81;
+  // 82 is occupied by [BlockExpression] (expression).
 
+  // Types
   static const int TypedefType = 87;
-  static const int VectorType = 88;
   static const int BottomType = 89;
   static const int InvalidType = 90;
   static const int DynamicType = 91;
@@ -105,20 +120,18 @@ class Tag {
   static const int SimpleInterfaceType = 96;
   static const int SimpleFunctionType = 97;
 
-  static const int NullReference = 99;
-  static const int ClassReference = 100;
-  static const int MemberReference = 101;
+  static const int ConstantExpression = 106;
 
-  static const int VectorCreation = 102;
-  static const int VectorGet = 103;
-  static const int VectorSet = 104;
-  static const int VectorCopy = 105;
-
-  static const int ClosureCreation = 106;
-
-  static const int ConstantExpression = 107;
-
-  // Note that 108 is occupied by [RedirectingFactoryConstructor] above.
+  /// 108 is occupied by [RedirectingFactoryConstructor] (member).
+  /// 109 is occupied by [SetLiteral] (expression).
+  /// 110 is occupied by [ConstSetLiteral] (expression).
+  /// 111 is occupied by [ListConcatenation] (expression).
+  /// 112 is occupied by [SetConcatenation] (expression).
+  /// 113 is occupied by [MapConcatenation] (expression).
+  /// 114 is occupied by [InstanceCreation] (expression).
+  /// 115 is occupied by [Extension].
+  /// 116 is occupied by [FileUriExpression] (expression).
+  /// 117 is occupied by [NullCheck] (expression).
 
   static const int SpecializedTagHighBit = 0x80; // 10000000
   static const int SpecializedTagMask = 0xF8; // 11111000
@@ -135,7 +148,7 @@ class Tag {
   /// Internal version of kernel binary format.
   /// Bump it when making incompatible changes in kernel binaries.
   /// Keep in sync with runtime/vm/kernel_binary.h, pkg/kernel/binary.md.
-  static const int BinaryFormatVersion = 7;
+  static const int BinaryFormatVersion = 34;
 }
 
 abstract class ConstantTag {
@@ -144,10 +157,14 @@ abstract class ConstantTag {
   static const int IntConstant = 2;
   static const int DoubleConstant = 3;
   static const int StringConstant = 4;
-  static const int MapConstant = 5;
-  static const int ListConstant = 6;
-  static const int InstanceConstant = 7;
-  static const int PartialInstantiationConstant = 8;
-  static const int TearOffConstant = 9;
-  static const int TypeLiteralConstant = 10;
+  static const int SymbolConstant = 5;
+  static const int MapConstant = 6;
+  static const int ListConstant = 7;
+  static const int SetConstant = 13;
+  static const int InstanceConstant = 8;
+  static const int PartialInstantiationConstant = 9;
+  static const int TearOffConstant = 10;
+  static const int TypeLiteralConstant = 11;
+  static const int UnevaluatedConstant = 12;
+  // 13 is occupied by [SetConstant]
 }

@@ -6,23 +6,21 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:front_end/src/api_prototype/constant_evaluator.dart'
+    as constants show SimpleErrorReporter, transformComponent;
+
 import 'package:args/args.dart';
 import 'package:kernel/class_hierarchy.dart';
 import 'package:kernel/core_types.dart';
 import 'package:kernel/kernel.dart';
 import 'package:kernel/src/tool/batch_util.dart';
 import 'package:kernel/target/targets.dart';
-import 'package:kernel/transformations/constants.dart' as constants;
+
 import 'package:kernel/transformations/continuation.dart' as cont;
 import 'package:kernel/transformations/empty.dart' as empty;
 import 'package:kernel/transformations/method_call.dart' as method_call;
 import 'package:kernel/transformations/mixin_full_resolution.dart' as mix;
-import 'package:kernel/transformations/treeshaker.dart' as treeshaker;
-// import 'package:kernel/verifier.dart';
-import 'package:kernel/transformations/coq.dart' as coq;
 import 'package:kernel/vm/constants_native_effects.dart';
-
-import 'util.dart';
 
 ArgParser parser = new ArgParser()
   ..addOption('format',
@@ -36,16 +34,11 @@ ArgParser parser = new ArgParser()
       negatable: false,
       help: 'Be verbose (e.g. prints transformed main library).',
       defaultsTo: false)
-  ..addMultiOption('embedder-entry-points-manifest',
-      help: 'A path to a file describing entrypoints '
-          '(lines of the form `<library>,<class>,<member>`).')
+  ..addMultiOption('define', abbr: 'D', splitCommas: false)
   ..addOption('transformation',
       abbr: 't',
       help: 'The transformation to apply.',
-      defaultsTo: 'continuation')
-  ..addFlag('sync-async',
-      help: 'Whether `async` functions start synchronously.',
-      defaultsTo: false);
+      defaultsTo: 'continuation');
 
 main(List<String> arguments) async {
   if (arguments.isNotEmpty && arguments[0] == '--batch') {
@@ -70,16 +63,25 @@ Future<CompilerOutcome> runTransformation(List<String> arguments) async {
   var output = options['out'];
   var format = options['format'];
   var verbose = options['verbose'];
-  var syncAsync = options['sync-async'];
+
+  Map<String, String> defines = <String, String>{};
+  for (String define in options['define']) {
+    int index = define.indexOf('=');
+    String name;
+    String expression;
+    if (index != -1) {
+      name = define.substring(0, index);
+      expression = define.substring(index + 1);
+    } else {
+      name = define;
+      expression = define;
+    }
+    defines[name] = expression;
+  }
 
   if (output == null) {
     output = '${input.substring(0, input.lastIndexOf('.'))}.transformed.dill';
   }
-
-  List<String> embedderEntryPointManifests =
-      options['embedder-entry-points-manifest'] as List<String>;
-  List<treeshaker.ProgramRoot> programRoots =
-      parseProgramRoots(embedderEntryPointManifests);
 
   var component = loadComponentFromBinary(input);
 
@@ -87,26 +89,18 @@ Future<CompilerOutcome> runTransformation(List<String> arguments) async {
   final hierarchy = new ClassHierarchy(component);
   switch (options['transformation']) {
     case 'continuation':
-      component = cont.transformComponent(coreTypes, component, syncAsync);
+      bool productMode = defines["dart.vm.product"] == "true";
+      component = cont.transformComponent(coreTypes, component,
+          productMode: productMode);
       break;
     case 'resolve-mixins':
       mix.transformLibraries(
           new NoneTarget(null), coreTypes, hierarchy, component.libraries);
       break;
-    case 'coq':
-      component = coq.transformComponent(coreTypes, component);
-      break;
     case 'constants':
-      // We use the -D defines supplied to this VM instead of explicitly using a
-      // constructed map of constants.
-      final Map<String, String> defines = null;
-      final VmConstantsBackend backend =
-          new VmConstantsBackend(defines, coreTypes);
-      component = constants.transformComponent(component, backend);
-      break;
-    case 'treeshake':
-      component = treeshaker.transformComponent(coreTypes, hierarchy, component,
-          programRoots: programRoots);
+      final VmConstantsBackend backend = new VmConstantsBackend(coreTypes);
+      component = constants.transformComponent(
+          component, backend, defines, const constants.SimpleErrorReporter());
       break;
     case 'methodcall':
       component =

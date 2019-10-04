@@ -5,6 +5,10 @@
 #ifndef RUNTIME_PLATFORM_UTILS_WIN_H_
 #define RUNTIME_PLATFORM_UTILS_WIN_H_
 
+#if !defined(RUNTIME_PLATFORM_UTILS_H_)
+#error Do not include utils_win.h directly; use utils.h instead.
+#endif
+
 #include <intrin.h>
 #include <stdlib.h>
 
@@ -33,6 +37,8 @@ inline int Utils::CountTrailingZeros(uword x) {
 #endif
   return static_cast<int>(result);
 }
+
+// WARNING: The below functions assume host is always Little Endian!
 
 inline uint16_t Utils::HostToBigEndian16(uint16_t value) {
   return _byteswap_ushort(value);

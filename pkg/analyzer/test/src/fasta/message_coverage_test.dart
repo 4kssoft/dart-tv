@@ -6,13 +6,13 @@ import 'dart:io' as io;
 
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
-import 'package:front_end/src/testing/package_root.dart' as package_root;
 import 'package:path/path.dart' as path;
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 import 'package:yaml/yaml.dart';
 
 import '../../generated/parser_fasta_test.dart';
+import '../../utils/package_root.dart' as package_root;
 
 main() {
   defineReflectiveSuite(() {
@@ -38,7 +38,7 @@ class AbstractRecoveryTest extends FastaParserTestCase {
   }
 
   /**
-   * Given the path to the file 'message.yaml', return a list of the top-level
+   * Given the path to the file 'messages.yaml', return a list of the top-level
    * keys defined in that file that define an 'analyzerCode'.
    */
   List<String> getMappedCodes(String messagesPath) {
@@ -61,7 +61,7 @@ class AbstractRecoveryTest extends FastaParserTestCase {
   }
 
   /**
-   * Given the path to the file 'message.yaml', return a list of the analyzer
+   * Given the path to the file 'messages.yaml', return a list of the analyzer
    * codes defined in that file.
    */
   List<String> getReferencedCodes(String messagesPath) {

@@ -1,11 +1,13 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:async';
 
+import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/element/element.dart';
-import 'package:analyzer/src/dart/analysis/driver.dart';
+import 'package:analyzer/src/dart/analysis/experiments.dart';
+import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import '../dart/analysis/base.dart';
@@ -16,6 +18,7 @@ main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(TopLevelInferenceTest);
     defineReflectiveTests(TopLevelInferenceErrorsTest);
+    defineReflectiveTests(TopLevelInferenceTestWithSpread);
 //    defineReflectiveTests(ApplyCheckElementTextReplacements);
   });
 }
@@ -29,9 +32,6 @@ class ApplyCheckElementTextReplacements {
 
 @reflectiveTest
 class TopLevelInferenceErrorsTest extends AbstractStrongTest {
-  @override
-  bool get enableNewAnalysisDriver => true;
-
   test_initializer_additive() async {
     await _assertErrorOnlyLeft(['+', '-']);
   }
@@ -332,7 +332,7 @@ abstract class B {
   String aaa;
 }
 class C implements A, B {
-  /*error:INVALID_METHOD_OVERRIDE*/var aaa;
+  var /*error:INVALID_OVERRIDE,error:INVALID_OVERRIDE*/aaa;
 }
 ''';
     await checkFile(content);
@@ -354,7 +354,7 @@ class C implements A, B {
     await checkFile(content);
   }
 
-  Future<Null> _assertErrorOnlyLeft(List<String> operators) async {
+  Future<void> _assertErrorOnlyLeft(List<String> operators) async {
     String code = 'var a = 1;\n';
     for (var i = 0; i < operators.length; i++) {
       String operator = operators[i];
@@ -366,10 +366,6 @@ class C implements A, B {
 
 @reflectiveTest
 class TopLevelInferenceTest extends BaseAnalysisDriverTest {
-  void addFile(String path, String code) {
-    provider.newFile(_p(path), code);
-  }
-
   test_initializer_additive() async {
     var library = await _encodeDecodeLibrary(r'''
 var vPlusIntInt = 1 + 2;
@@ -501,8 +497,8 @@ var uFuture = () async => await fFuture();
 ''');
     checkElementText(library, r'''
 import 'dart:async';
-() → Future<int> uValue;
-() → Future<int> uFuture;
+Future<int> Function() uValue;
+Future<int> Function() uFuture;
 int fValue() {}
 Future<int> fFuture() async {}
 ''');
@@ -664,40 +660,99 @@ num b1;
 ''');
   }
 
-  test_initializer_extractProperty() async {
-    var library = await _encodeDecodeLibrary(r'''
+  test_initializer_extractProperty_explicitlyTyped_differentLibraryCycle() async {
+    newFile('/a.dart', content: r'''
 class C {
-  bool b;
+  int f = 0;
 }
-C f() => null;
-var x = f().b;
+''');
+    var library = await _encodeDecodeLibrary(r'''
+import 'a.dart';
+var x = new C().f;
 ''');
     checkElementText(library, r'''
-class C {
-  bool b;
-}
-bool x;
-C f() {}
+import 'a.dart';
+int x;
 ''');
   }
 
-  test_initializer_extractProperty_inOtherLibraryCycle() async {
-    addFile('/a.dart', r'''
-import 'b.dart';
+  test_initializer_extractProperty_explicitlyTyped_sameLibrary() async {
+    var library = await _encodeDecodeLibrary(r'''
+class C {
+  int f = 0;
+}
 var x = new C().f;
 ''');
-    addFile('/b.dart', r'''
+    checkElementText(library, r'''
+class C {
+  int f;
+}
+int x;
+''');
+  }
+
+  test_initializer_extractProperty_explicitlyTyped_sameLibraryCycle() async {
+    newFile('/a.dart', content: r'''
+import 'test.dart'; // just do make it part of the library cycle
+class C {
+  int f = 0;
+}
+''');
+    var library = await _encodeDecodeLibrary(r'''
+import 'a.dart';
+var x = new C().f;
+''');
+    checkElementText(library, r'''
+import 'a.dart';
+int x;
+''');
+  }
+
+  test_initializer_extractProperty_implicitlyTyped_differentLibraryCycle() async {
+    newFile('/a.dart', content: r'''
 class C {
   var f = 0;
 }
 ''');
     var library = await _encodeDecodeLibrary(r'''
 import 'a.dart';
-var t1 = x;
+var x = new C().f;
 ''');
     checkElementText(library, r'''
 import 'a.dart';
-int t1;
+int x;
+''');
+  }
+
+  test_initializer_extractProperty_implicitlyTyped_sameLibrary() async {
+    var library = await _encodeDecodeLibrary(r'''
+class C {
+  var f = 0;
+}
+var x = new C().f;
+''');
+    checkElementText(library, r'''
+class C {
+  int f;
+}
+dynamic x;
+''');
+  }
+
+  test_initializer_extractProperty_implicitlyTyped_sameLibraryCycle() async {
+    newFile('/a.dart', content: r'''
+import 'test.dart'; // just do make it part of the library cycle
+class C {
+  var f = 0;
+}
+''');
+    var library = await _encodeDecodeLibrary(r'''
+import 'a.dart';
+var x = new C().f;
+''');
+    checkElementText(library, r'''
+import 'a.dart';
+dynamic x;
 ''');
   }
 
@@ -790,15 +845,14 @@ var v_async_returnFuture = () async => vFuture;
     checkElementText(library, r'''
 import 'dart:async';
 Future<int> vFuture;
-() → int v_noParameters_inferredReturnType;
-(String) → int v_hasParameter_withType_inferredReturnType;
-(String) → String v_hasParameter_withType_returnParameter;
-() → Future<int> v_async_returnValue;
-() → Future<int> v_async_returnFuture;
+int Function() v_noParameters_inferredReturnType;
+int Function(String) v_hasParameter_withType_inferredReturnType;
+String Function(String) v_hasParameter_withType_returnParameter;
+Future<int> Function() v_async_returnValue;
+Future<int> Function() v_async_returnFuture;
 ''');
   }
 
-  @failingTest
   test_initializer_functionExpressionInvocation_noTypeParameters() async {
     var library = await _encodeDecodeLibrary(r'''
 var v = (() => 42)();
@@ -863,14 +917,14 @@ class A {
   String instanceClassMethod(int p) {}
 }
 int topLevelVariable;
-(int) → String r_topLevelFunction;
+String Function(int) r_topLevelFunction;
 int r_topLevelVariable;
 int r_topLevelGetter;
 int r_staticClassVariable;
 int r_staticGetter;
-(int) → String r_staticClassMethod;
+String Function(int) r_staticClassMethod;
 A instanceOfA;
-(int) → String r_instanceClassMethod;
+String Function(int) r_instanceClassMethod;
 int get topLevelGetter {}
 String topLevelFunction(int p) {}
 ''');
@@ -1984,12 +2038,12 @@ class B extends A<int> {
     checkElementText(library, r'''
 typedef F<T> = dynamic Function();
 class A<T> {
-  () → dynamic get x {}
-  List<() → dynamic> get y {}
+  dynamic Function() get x {}
+  List<dynamic Function()> get y {}
 }
 class B extends A<int> {
-  () → dynamic get x {}
-  List<() → dynamic> get y {}
+  dynamic Function() get x {}
+  List<dynamic Function()> get y {}
 }
 ''');
   }
@@ -2533,8 +2587,7 @@ class C implements B<int, String> {
   }
 
   test_method_OK_single_private_linkThroughOtherLibraryOfCycle() async {
-    String path = _p('/other.dart');
-    provider.newFile(path, r'''
+    newFile('/other.dart', content: r'''
 import 'test.dart';
 class B extends A2 {}
 ''');
@@ -2629,11 +2682,21 @@ class C extends A implements B {
   }
 
   Future<LibraryElement> _encodeDecodeLibrary(String text) async {
-    String path = _p('/test.dart');
-    provider.newFile(path, text);
+    String path = convertPath('/test.dart');
+    newFile(path, content: text);
     UnitElementResult result = await driver.getUnitElement(path);
     return result.element.library;
   }
+}
 
-  String _p(String path) => provider.convertPath(path);
+@reflectiveTest
+class TopLevelInferenceTestWithSpread extends TopLevelInferenceTest {
+  @override
+  List<String> get enabledExperiments => [EnableString.spread_collections];
+
+  @override
+  @failingTest
+  test_initializer_literal_map_untyped_empty() async {
+    fail('times out.');
+  }
 }

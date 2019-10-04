@@ -3,17 +3,16 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:expect/expect.dart';
-import 'package:meta/dart2js.dart';
 
-/*class: A:checks=[$isFunction],functionType,instance*/
+/*class: A:checks=[],instance*/
 class A {
   call() {}
 }
 
-@noInline
+@pragma('dart2js:noInline')
 test(o) => o is Function;
 
 main() {
-  Expect.isTrue(test(new A()));
+  Expect.isFalse(test(new A()));
   Expect.isFalse(test(null));
 }

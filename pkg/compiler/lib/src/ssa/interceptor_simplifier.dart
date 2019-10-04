@@ -5,35 +5,34 @@
 import '../common_elements.dart' show CommonElements;
 import '../constants/values.dart';
 import '../elements/entities.dart';
+import '../inferrer/abstract_value_domain.dart';
 import '../js_backend/interceptor_data.dart';
-import '../types/abstract_value_domain.dart';
 import '../universe/selector.dart' show Selector;
 import '../world.dart' show JClosedWorld;
 import 'nodes.dart';
 import 'optimize.dart';
 
-/**
- * This phase simplifies interceptors in multiple ways:
- *
- * 1) If the interceptor is for an object whose type is known, it
- * tries to use a constant interceptor instead.
- *
- * 2) Interceptors are specialized based on the selector it is used with.
- *
- * 3) If we know the object is not intercepted, we just use the object
- * instead.
- *
- * 4) Single use interceptors at dynamic invoke sites are replaced with 'one
- * shot interceptors' which are synthesized static helper functions that fetch
- * the interceptor and then call the method.  This saves code size and makes the
- * receiver of an intercepted call a candidate for being generated at use site.
- *
- * 5) Some HIs operations on an interceptor are replaced with a HIs version that
- * uses 'instanceof' rather than testing a type flag.
- *
- */
+/// This phase simplifies interceptors in multiple ways:
+///
+/// 1) If the interceptor is for an object whose type is known, it
+/// tries to use a constant interceptor instead.
+///
+/// 2) Interceptors are specialized based on the selector it is used with.
+///
+/// 3) If we know the object is not intercepted, we just use the object
+/// instead.
+///
+/// 4) Single use interceptors at dynamic invoke sites are replaced with 'one
+/// shot interceptors' which are synthesized static helper functions that fetch
+/// the interceptor and then call the method.  This saves code size and makes the
+/// receiver of an intercepted call a candidate for being generated at use site.
+///
+/// 5) Some HIs operations on an interceptor are replaced with a HIs version that
+/// uses 'instanceof' rather than testing a type flag.
+///
 class SsaSimplifyInterceptors extends HBaseVisitor
     implements OptimizationPhase {
+  @override
   final String name = "SsaSimplifyInterceptors";
   final JClosedWorld _closedWorld;
   final ClassEntity _enclosingClass;
@@ -48,11 +47,13 @@ class SsaSimplifyInterceptors extends HBaseVisitor
   AbstractValueDomain get _abstractValueDomain =>
       _closedWorld.abstractValueDomain;
 
+  @override
   void visitGraph(HGraph graph) {
     this._graph = graph;
     visitDominatorTree(graph);
   }
 
+  @override
   void visitBasicBlock(HBasicBlock node) {
     currentBlock = node;
 
@@ -67,8 +68,10 @@ class SsaSimplifyInterceptors extends HBaseVisitor
     }
   }
 
+  @override
   bool visitInstruction(HInstruction instruction) => false;
 
+  @override
   bool visitInvoke(HInvoke invoke) {
     if (!invoke.isInterceptedCall) return false;
     dynamic interceptor = invoke.inputs[0];
@@ -82,8 +85,6 @@ class SsaSimplifyInterceptors extends HBaseVisitor
     // the interceptor is already available in a local variable, but it is
     // possible that all uses can be rewritten to use different constants.
 
-    // TODO(sra): Also do self-interceptor rewrites on a per-use basis.
-
     HInstruction constant = tryComputeConstantInterceptor(
         invoke.inputs[1], interceptor.interceptedClasses);
     if (constant != null) {
@@ -92,32 +93,29 @@ class SsaSimplifyInterceptors extends HBaseVisitor
     return false;
   }
 
-  bool canUseSelfForInterceptor(
-      HInstruction receiver, Set<ClassEntity> interceptedClasses) {
-    if (receiver.canBePrimitive(_abstractValueDomain)) {
+  bool canUseSelfForInterceptor(HInstruction receiver,
+      {Set<ClassEntity> interceptedClasses}) {
+    if (receiver.isPrimitive(_abstractValueDomain).isPotentiallyTrue) {
       // Primitives always need interceptors.
       return false;
     }
-    if (receiver.canBeNull(_abstractValueDomain) &&
-        interceptedClasses.contains(_commonElements.jsNullClass)) {
-      // Need the JSNull interceptor.
-      return false;
+    if (receiver.isNull(_abstractValueDomain).isPotentiallyTrue) {
+      if (interceptedClasses == null ||
+          interceptedClasses.contains(_commonElements.jsNullClass)) {
+        // Need the JSNull interceptor.
+        return false;
+      }
     }
 
     // All intercepted classes extend `Interceptor`, so if the receiver can't be
     // a class extending `Interceptor` then it can be called directly.
-    return !_abstractValueDomain.canBeInterceptor(receiver.instructionType);
+    return _abstractValueDomain
+        .isInterceptor(receiver.instructionType)
+        .isDefinitelyFalse;
   }
 
   HInstruction tryComputeConstantInterceptor(
       HInstruction input, Set<ClassEntity> interceptedClasses) {
-    if (input == _graph.explicitReceiverParameter) {
-      // If `explicitReceiverParameter` is set it means the current method is an
-      // interceptor method, and `this` is the interceptor.  The caller just did
-      // `getInterceptor(foo).currentMethod(foo)` to enter the current method.
-      return _graph.thisInstruction;
-    }
-
     ClassEntity constantInterceptor = tryComputeConstantInterceptorFromType(
         input.instructionType, interceptedClasses);
 
@@ -136,21 +134,21 @@ class SsaSimplifyInterceptors extends HBaseVisitor
 
   ClassEntity tryComputeConstantInterceptorFromType(
       AbstractValue type, Set<ClassEntity> interceptedClasses) {
-    if (_abstractValueDomain.canBeNull(type)) {
-      if (_abstractValueDomain.isNull(type)) {
+    if (_abstractValueDomain.isNull(type).isPotentiallyTrue) {
+      if (_abstractValueDomain.isNull(type).isDefinitelyTrue) {
         return _commonElements.jsNullClass;
       }
-    } else if (_abstractValueDomain.isIntegerOrNull(type)) {
+    } else if (_abstractValueDomain.isIntegerOrNull(type).isDefinitelyTrue) {
       return _commonElements.jsIntClass;
-    } else if (_abstractValueDomain.isDoubleOrNull(type)) {
+    } else if (_abstractValueDomain.isDoubleOrNull(type).isDefinitelyTrue) {
       return _commonElements.jsDoubleClass;
-    } else if (_abstractValueDomain.isBooleanOrNull(type)) {
+    } else if (_abstractValueDomain.isBooleanOrNull(type).isDefinitelyTrue) {
       return _commonElements.jsBoolClass;
-    } else if (_abstractValueDomain.isStringOrNull(type)) {
+    } else if (_abstractValueDomain.isStringOrNull(type).isDefinitelyTrue) {
       return _commonElements.jsStringClass;
-    } else if (_abstractValueDomain.isArray(type)) {
+    } else if (_abstractValueDomain.isArray(type).isDefinitelyTrue) {
       return _commonElements.jsArrayClass;
-    } else if (_abstractValueDomain.isNumberOrNull(type) &&
+    } else if (_abstractValueDomain.isNumberOrNull(type).isDefinitelyTrue &&
         !interceptedClasses.contains(_commonElements.jsIntClass) &&
         !interceptedClasses.contains(_commonElements.jsDoubleClass)) {
       // If the method being intercepted is not defined in [int] or [double] we
@@ -191,8 +189,22 @@ class SsaSimplifyInterceptors extends HBaseVisitor
     return result;
   }
 
+  static int useCount(HInstruction user, HInstruction used) =>
+      user.inputs.where((input) => input == used).length;
+
+  @override
   bool visitInterceptor(HInterceptor node) {
-    if (node.isConstant()) return false;
+    if (node.receiver.nonCheck() == _graph.explicitReceiverParameter) {
+      // If `explicitReceiverParameter` is set it means the current method is an
+      // interceptor method, and `this` is the interceptor.  The caller just did
+      // `getInterceptor(foo).currentMethod(foo)` to enter the current method.
+      node.block.rewrite(node, _graph.thisInstruction);
+      return true;
+    }
+
+    rewriteSelfInterceptorUses(node);
+
+    if (node.usedBy.isEmpty) return true;
 
     // Specialize the interceptor with set of classes it intercepts, considering
     // all uses.  (The specialized interceptor has a shorter dispatch chain).
@@ -208,9 +220,6 @@ class SsaSimplifyInterceptors extends HBaseVisitor
     // implement `hashCode`. But in this example, `a.hashCode` is only reached
     // if `a.length` succeeds, which is indicated by the hashCode receiver being
     // a HTypeKnown instruction.
-
-    int useCount(HInstruction user, HInstruction used) =>
-        user.inputs.where((input) => input == used).length;
 
     Set<ClassEntity> interceptedClasses;
     HInstruction dominator = findDominator(node.usedBy);
@@ -282,18 +291,6 @@ class SsaSimplifyInterceptors extends HBaseVisitor
 
     HInstruction receiver = node.receiver;
 
-    // TODO(sra): We should consider each use individually and then all uses
-    // together.  Each use might permit a different rewrite due to a refined
-    // receiver type.  Self-interceptor rewrites are always beneficial since the
-    // receiver is live at a invocation.  Constant-interceptor rewrites are only
-    // guaranteed to be beneficial if they can eliminate the need for the
-    // interceptor or reduce the uses to one that can be simplified with a
-    // one-shot interceptor or optimized is-check.
-
-    if (canUseSelfForInterceptor(receiver, interceptedClasses)) {
-      return rewriteToUseSelfAsInterceptor(node, receiver);
-    }
-
     // Try computing a constant interceptor.
     HInstruction constantInterceptor =
         tryComputeConstantInterceptor(receiver, interceptedClasses);
@@ -311,12 +308,18 @@ class SsaSimplifyInterceptors extends HBaseVisitor
     // `NoSuchMethodError`s, and if the receiver was not null we would have a
     // constant interceptor `C`.  Then we can use `(receiver && C)` for the
     // interceptor.
-    if (receiver.canBeNull(_abstractValueDomain)) {
+    if (receiver.isNull(_abstractValueDomain).isPotentiallyTrue) {
       if (!interceptedClasses.contains(_commonElements.jsNullClass)) {
         // Can use `(receiver && C)` only if receiver is either null or truthy.
-        if (!(receiver.canBePrimitiveNumber(_abstractValueDomain) ||
-            receiver.canBePrimitiveBoolean(_abstractValueDomain) ||
-            receiver.canBePrimitiveString(_abstractValueDomain))) {
+        if (!(receiver
+                .isPrimitiveNumber(_abstractValueDomain)
+                .isPotentiallyTrue ||
+            receiver
+                .isPrimitiveBoolean(_abstractValueDomain)
+                .isPotentiallyTrue ||
+            receiver
+                .isPrimitiveString(_abstractValueDomain)
+                .isPotentiallyTrue)) {
           ClassEntity interceptorClass = tryComputeConstantInterceptorFromType(
               _abstractValueDomain.excludeNull(receiver.instructionType),
               interceptedClasses);
@@ -367,7 +370,7 @@ class SsaSimplifyInterceptors extends HBaseVisitor
         HOneShotInterceptor oneShotInterceptor = new HOneShotInterceptor(
             _abstractValueDomain,
             user.selector,
-            user.mask,
+            user.receiverType,
             inputs,
             user.instructionType,
             user.typeArguments,
@@ -381,35 +384,75 @@ class SsaSimplifyInterceptors extends HBaseVisitor
     return false;
   }
 
-  bool rewriteToUseSelfAsInterceptor(HInterceptor node, HInstruction receiver) {
-    for (HInstruction user in node.usedBy.toList()) {
-      if (user is HIs) {
-        user.changeUse(node, receiver);
-      } else {
-        // Use the potentially self-argument as new receiver. Note that the
-        // self-argument could potentially have a tighter type than the
-        // receiver which was the input to the interceptor.
-        assert(user.inputs[0] == node);
-        assert(receiver.nonCheck() == user.inputs[1].nonCheck());
-        user.changeUse(node, user.inputs[1]);
+  void rewriteSelfInterceptorUses(HInterceptor node) {
+    HInstruction receiver = node.receiver;
+
+    // At instructions that use the interceptor and its receiver, the receiver
+    // might be refined at the use site.
+
+    //     dynamic x = ...
+    //     if (x is Mumble) {
+    //       print(x.length);  // Self-interceptor here.
+    //     } else {
+    //       print(x.length);  //
+    //     }
+
+    finishInvoke(HInvoke invoke, Selector selector) {
+      HInstruction callReceiver = invoke.getDartReceiver(_closedWorld);
+      if (receiver.nonCheck() == callReceiver.nonCheck()) {
+        Set<ClassEntity> interceptedClasses = _interceptorData
+            .getInterceptedClassesOn(selector.name, _closedWorld);
+
+        if (canUseSelfForInterceptor(callReceiver,
+            interceptedClasses: interceptedClasses)) {
+          invoke.changeUse(node, callReceiver);
+        }
       }
     }
-    return false;
+
+    for (HInstruction user in node.usedBy.toList()) {
+      if (user is HIs) {
+        if (user.interceptor == node) {
+          HInstruction expression = user.expression;
+          if (canUseSelfForInterceptor(expression)) {
+            user.changeUse(node, expression);
+          }
+        }
+      } else if (user is HInvokeDynamic) {
+        if (user.isCallOnInterceptor(_closedWorld) &&
+            node == user.inputs[0] &&
+            useCount(user, node) == 1) {
+          finishInvoke(user, user.selector);
+        }
+      } else if (user is HInvokeSuper) {
+        if (user.isCallOnInterceptor(_closedWorld) &&
+            node == user.inputs[0] &&
+            useCount(user, node) == 1) {
+          finishInvoke(user, user.selector);
+        }
+      } else {
+        // TODO(sra): Are there other paired uses of the receiver and
+        // interceptor where we can make use of a strengthened receiver?
+      }
+    }
   }
 
+  @override
   bool visitOneShotInterceptor(HOneShotInterceptor node) {
+    // 'Undo' the one-shot transformation if the receiver has a constant
+    // interceptor.
     HInstruction constant =
         tryComputeConstantInterceptor(node.inputs[1], node.interceptedClasses);
 
     if (constant == null) return false;
 
     Selector selector = node.selector;
-    AbstractValue mask = node.mask;
+    AbstractValue receiverType = node.receiverType;
     HInstruction instruction;
     if (selector.isGetter) {
       instruction = new HInvokeDynamicGetter(
           selector,
-          mask,
+          receiverType,
           node.element,
           <HInstruction>[constant, node.inputs[1]],
           true,
@@ -418,7 +461,7 @@ class SsaSimplifyInterceptors extends HBaseVisitor
     } else if (selector.isSetter) {
       instruction = new HInvokeDynamicSetter(
           selector,
-          mask,
+          receiverType,
           node.element,
           <HInstruction>[constant, node.inputs[1], node.inputs[2]],
           true,
@@ -427,7 +470,7 @@ class SsaSimplifyInterceptors extends HBaseVisitor
     } else {
       List<HInstruction> inputs = new List<HInstruction>.from(node.inputs);
       inputs[0] = constant;
-      instruction = new HInvokeDynamicMethod(selector, mask, inputs,
+      instruction = new HInvokeDynamicMethod(selector, receiverType, inputs,
           node.instructionType, node.typeArguments, node.sourceInformation,
           isIntercepted: true);
     }

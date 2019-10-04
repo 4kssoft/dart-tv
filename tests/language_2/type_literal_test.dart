@@ -21,8 +21,23 @@ class Box<T> {
 
 class G<A, B> {}
 
+/// A typedef that defines a non-generic function type.
 typedef int Func(bool b);
-typedef int GenericFunc<T>(T t);
+
+/// Semantically identical to [Func], but using the Dart 2 syntax.
+typedef Func2 = int Function(bool);
+
+/// A typedef that defines a generic function type.
+typedef GenericFunc = int Function<T>(T);
+
+/// A typedef with a type paramter that defines a non-generic function type.
+typedef int GenericTypedef<T>(T t);
+
+/// Semantically identical to [GenericTypedef], but using the Dart 2 syntax.
+typedef GenericTypedef2<T> = int Function(T);
+
+/// A typedef with a type paramter that defines a generic function type.
+typedef GenericTypedefAndFunc<S> = S Function<T>(T);
 
 main() {
   // Primitive types.
@@ -38,23 +53,32 @@ main() {
   testType(Foo, "Foo");
 
   // Generic classes.
-  testType(Box, "Box", "<dynamic>");
+  testType(Box, ["Box", "Box<dynamic>"]);
   testType(new Box<Foo>().typeArg, "Foo");
   testType(new Box<dynamic>().typeArg, "dynamic");
   testType(new Box<Box<Foo>>().typeArg, "Box<Foo>");
-  testType(G, "G", "<dynamic, dynamic>");
+  testType(G, ["G", "G<dynamic, dynamic>"]);
   testType(new Box<G<int, String>>().typeArg, "G<int, String>");
 
   // Typedef.
-  testType(Func, "Func");
-  testType(GenericFunc, "GenericFunc", "<dynamic>");
-  testType(new Box<GenericFunc<int>>().typeArg, "GenericFunc<int>");
+  testType(Func, ["Func", "(bool) => int"]);
+  testType(Func2, ["Func2", "(bool) => int"]);
+  testType(GenericTypedef,
+      ["GenericTypedef", "GenericTypedef<dynamic>", "(dynamic) => int"]);
+  testType(GenericTypedef2,
+      ["GenericTypedef2", "GenericTypedef2<dynamic>", "(dynamic) => int"]);
+  testType(new Box<GenericTypedef<int>>().typeArg,
+      ["GenericTypedef<int>", "(int) => int"]);
+  testType(GenericFunc, ["GenericFunc", "<T>(T) => int", "<T1>(T1) => int"]);
+  testType(GenericTypedefAndFunc, [
+    "GenericTypedefAndFunc",
+    "GenericTypedefAndFunc<dynamic>",
+    "<T>(T) => dynamic",
+    "<T1>(T1) => dynamic",
+  ]);
 
   // Literals are canonicalized.
-  Expect.identical(Foo, Foo);
-  Expect.identical(Box, Box);
-  Expect.identical(new Box<Foo>().typeArg, new Box<Foo>().typeArg);
-  Expect.identical(Func, Func);
+  // See type_literal_canonicalization_test.dart
 
   // Static member uses are not type literals.
   Foo.property = "value";
@@ -70,15 +94,19 @@ main() {
   Expect.equals("result", prefix.Foo.method());
 }
 
-void testType(Type type, String string, [String genericArgs]) {
-  if (genericArgs != null) {
-    var s = type.toString();
-    Expect.isTrue(
-        s == string || s == '$string$genericArgs',
-        'type `$type`.toString() should be `$string`, '
-        'optionally with $genericArgs suffix.');
-  } else {
-    Expect.equals(string, type.toString());
-  }
+void testType(Type type, Object expectedToStringValues) {
   Expect.isTrue(type is Type);
+  String text = type.toString();
+
+  // dart2js minified names should be tagged. We can still test types that don't
+  // contain minified names.
+  if (text.contains('minified:')) return;
+
+  if (expectedToStringValues is List) {
+    Expect.isTrue(expectedToStringValues.contains(text),
+        'type `$type`.toString() should be one of: $expectedToStringValues.');
+  } else {
+    var string = expectedToStringValues as String;
+    Expect.equals(string, text);
+  }
 }

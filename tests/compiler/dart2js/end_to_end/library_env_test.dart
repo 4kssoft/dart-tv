@@ -8,7 +8,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import '../memory_source_file_helper.dart';
+import '../helpers/memory_source_file_helper.dart';
 
 import "package:async_helper/async_helper.dart";
 
@@ -18,50 +18,42 @@ import 'package:compiler/src/null_compiler_output.dart' show NullCompilerOutput;
 
 import 'package:compiler/src/options.dart' show CompilerOptions;
 
+import 'package:compiler/src/commandline_options.dart';
+
 import 'package:compiler/src/io/source_file.dart' show Binary;
 
 import 'package:compiler/compiler_new.dart'
     show CompilerInput, CompilerDiagnostics, Input, InputKind;
 
-const String clientPlatform = r'''
-[dart-spec]
-spec: 3rd edition.
-
-[features]
-# No extra features
-
-[libraries]
-mock.client: mock1.dart
-mock.shared: mock3.dart
-collection: collection/collection.dart
-html: html/dart2js/html_dart2js.dart
-''';
-
-const String serverPlatform = r'''
-[dart-spec]
-spec: 3rd edition.
-
-[features]
-# No extra features
-
-[libraries]
-mock.server: mock2.dart
-mock.shared: mock3.dart
-collection: collection/collection.dart
-io: io/io.dart
+const String librariesJson = r'''
+{
+ "dart2js": {
+   "libraries": {
+    "mock.client": {"uri": "mock1.dart"},
+    "mock.shared": {"uri": "mock3.dart"},
+    "collection": {"uri": "collection/collection.dart"},
+    "html": {"uri": "html/dart2js/html_dart2js.dart"}
+   }
+ },
+ "dart2js_server": {
+   "libraries": {
+    "mock.server": {"uri": "mock2.dart"},
+    "mock.shared": {"uri": "mock3.dart"},
+    "collection": {"uri": "collection/collection.dart"},
+    "io": {"uri": "io/io.dart"}
+   }
+ }
+}
 ''';
 
 class DummyCompilerInput implements CompilerInput {
   const DummyCompilerInput();
 
+  @override
   Future<Input> readFromUri(Uri uri,
       {InputKind inputKind: InputKind.UTF8}) async {
-    if (uri.toString().endsWith("dart_client.platform")) {
-      return new Binary(uri, clientPlatform.codeUnits);
-    } else if (uri.toString().endsWith("dart_server.platform")) {
-      return new Binary(uri, serverPlatform.codeUnits);
-    } else if (uri.path.endsWith(".dill")) {
-      return new Binary(uri, new File.fromUri(uri).readAsBytesSync());
+    if (uri.path.endsWith("libraries.json")) {
+      return new Binary(uri, librariesJson.codeUnits);
     } else {
       throw "should not be needed $uri";
     }
@@ -71,6 +63,7 @@ class DummyCompilerInput implements CompilerInput {
 class DummyCompilerDiagnostics implements CompilerDiagnostics {
   const DummyCompilerDiagnostics();
 
+  @override
   report(code, uri, begin, end, text, kind) {
     throw "should not be needed";
   }
@@ -79,14 +72,15 @@ class DummyCompilerDiagnostics implements CompilerDiagnostics {
 final platformDir = Uri.parse(Platform.resolvedExecutable).resolve('.');
 
 class CustomCompiler extends CompilerImpl {
-  CustomCompiler(options, environment)
+  CustomCompiler(List<String> options, Map<String, String> environment)
       : super(
             const DummyCompilerInput(),
             const NullCompilerOutput(),
             const DummyCompilerDiagnostics(),
             CompilerOptions.parse(
                 ['--platform-binaries=$platformDir']..addAll(options),
-                libraryRoot: Uri.base.resolve("sdk/"))
+                librariesSpecificationUri:
+                    Uri.base.resolve("sdk/lib/libraries.json"))
               ..environment = environment);
 }
 
@@ -108,7 +102,7 @@ runTest() async {
   Expect.equals(null, compiler.fromEnvironment("dart.library.mock.server"));
   Expect.equals(null, compiler.fromEnvironment("dart.library.io"));
 
-  compiler = new CustomCompiler(['--categories=Server'], {});
+  compiler = new CustomCompiler([Flags.serverMode], {});
 
   await compiler.setupSdk();
 

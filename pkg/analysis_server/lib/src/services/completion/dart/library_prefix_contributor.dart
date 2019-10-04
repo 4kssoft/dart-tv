@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -22,18 +22,18 @@ class LibraryPrefixContributor extends DartCompletionContributor {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     if (!request.includeIdentifiers) {
-      return EMPTY_LIST;
+      return const <CompletionSuggestion>[];
     }
 
     List<ImportElement> imports = request.libraryElement.imports;
     if (imports == null) {
-      return EMPTY_LIST;
+      return const <CompletionSuggestion>[];
     }
 
     List<CompletionSuggestion> suggestions = <CompletionSuggestion>[];
     for (ImportElement element in imports) {
       String completion = element.prefix?.name;
-      if (completion != null && completion.length > 0) {
+      if (completion != null && completion.isNotEmpty) {
         LibraryElement libElem = element.importedLibrary;
         if (libElem != null) {
           CompletionSuggestion suggestion = createSuggestion(libElem,

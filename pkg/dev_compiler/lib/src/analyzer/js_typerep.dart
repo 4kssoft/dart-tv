@@ -2,28 +2,28 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer/dart/element/element.dart' show ClassElement;
-import 'package:analyzer/src/generated/engine.dart' show AnalysisContext;
+import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer/src/generated/resolver.dart' show TypeProvider;
-import 'package:analyzer/src/generated/type_system.dart'
-    show StrongTypeSystemImpl;
+import 'package:analyzer/src/generated/type_system.dart' show Dart2TypeSystem;
+
 import '../compiler/js_typerep.dart';
-import 'element_helpers.dart' show getClass;
+import 'driver.dart';
+import 'type_utilities.dart';
 
 class JSTypeRep extends SharedJSTypeRep<DartType> {
-  final StrongTypeSystemImpl rules;
+  final Dart2TypeSystem rules;
   final TypeProvider types;
 
   final ClassElement _jsBool;
   final ClassElement _jsNumber;
   final ClassElement _jsString;
 
-  JSTypeRep(this.rules, AnalysisContext c)
-      : types = c.typeProvider,
-        _jsBool = getClass(c, 'dart:_interceptors', 'JSBool'),
-        _jsString = getClass(c, 'dart:_interceptors', 'JSString'),
-        _jsNumber = getClass(c, 'dart:_interceptors', 'JSNumber');
+  JSTypeRep(this.rules, LinkedAnalysisDriver driver)
+      : types = driver.typeProvider,
+        _jsBool = driver.getClass('dart:_interceptors', 'JSBool'),
+        _jsString = driver.getClass('dart:_interceptors', 'JSString'),
+        _jsNumber = driver.getClass('dart:_interceptors', 'JSNumber');
 
   @override
   JSType typeFor(DartType type) {
@@ -56,9 +56,9 @@ class JSTypeRep extends SharedJSTypeRep<DartType> {
   InterfaceType getImplementationType(DartType t) {
     var rep = typeFor(t);
     // Number, String, and Bool are final
-    if (rep == JSType.jsNumber) return _jsNumber.type;
-    if (rep == JSType.jsBoolean) return _jsBool.type;
-    if (rep == JSType.jsString) return _jsString.type;
+    if (rep == JSType.jsNumber) return getLegacyRawClassType(_jsNumber);
+    if (rep == JSType.jsBoolean) return getLegacyRawClassType(_jsBool);
+    if (rep == JSType.jsString) return getLegacyRawClassType(_jsString);
     return null;
   }
 }

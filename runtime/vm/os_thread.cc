@@ -19,23 +19,28 @@ OSThread* OSThread::thread_list_head_ = NULL;
 Mutex* OSThread::thread_list_lock_ = NULL;
 bool OSThread::creation_enabled_ = false;
 
+#if defined(HAS_C11_THREAD_LOCAL)
+thread_local ThreadState* OSThread::current_vm_thread_ = NULL;
+#endif
+
 OSThread::OSThread()
     : BaseThread(true),
       id_(OSThread::GetCurrentThreadId()),
 #if defined(DEBUG)
       join_id_(kInvalidThreadJoinId),
 #endif
-#ifndef PRODUCT
+#ifdef SUPPORT_TIMELINE
       trace_id_(OSThread::GetCurrentThreadTraceId()),
 #endif
       name_(NULL),
-      timeline_block_lock_(new Mutex()),
+      timeline_block_lock_(),
       timeline_block_(NULL),
       thread_list_next_(NULL),
       thread_interrupt_disabled_(1),  // Thread interrupts disabled by default.
       log_(new class Log()),
       stack_base_(0),
       stack_limit_(0),
+      stack_headroom_(0),
       thread_(NULL) {
   // Try to get accurate stack bounds from pthreads, etc.
   if (!GetCurrentStackBounds(&stack_limit_, &stack_base_)) {
@@ -43,11 +48,14 @@ OSThread::OSThread()
     RefineStackBoundsFromSP(GetCurrentStackPointer());
   }
 
+  stack_headroom_ = CalculateHeadroom(stack_base_ - stack_limit_);
+
   ASSERT(stack_base_ != 0);
   ASSERT(stack_limit_ != 0);
   ASSERT(stack_base_ > stack_limit_);
   ASSERT(stack_base_ > GetCurrentStackPointer());
   ASSERT(stack_limit_ < GetCurrentStackPointer());
+  RELEASE_ASSERT(HasStackHeadroom());
 }
 
 OSThread* OSThread::CreateOSThread() {
@@ -71,13 +79,12 @@ OSThread::~OSThread() {
   RemoveThreadFromList(this);
   delete log_;
   log_ = NULL;
-  if (FLAG_support_timeline) {
-    if (Timeline::recorder() != NULL) {
-      Timeline::recorder()->FinishBlock(timeline_block_);
-    }
+#if defined(SUPPORT_TIMELINE)
+  if (Timeline::recorder() != NULL) {
+    Timeline::recorder()->FinishBlock(timeline_block_);
   }
+#endif
   timeline_block_ = NULL;
-  delete timeline_block_lock_;
   free(name_);
 }
 
@@ -132,15 +139,17 @@ static void DeleteThread(void* thread) {
   delete reinterpret_cast<OSThread*>(thread);
 }
 
-void OSThread::InitOnce() {
+void OSThread::Init() {
   // Allocate the global OSThread lock.
-  ASSERT(thread_list_lock_ == NULL);
-  thread_list_lock_ = new Mutex();
+  if (thread_list_lock_ == NULL) {
+    thread_list_lock_ = new Mutex();
+  }
   ASSERT(thread_list_lock_ != NULL);
 
   // Create the thread local key.
-  ASSERT(thread_key_ == kUnsetThreadLocalKey);
-  thread_key_ = CreateThreadLocal(DeleteThread);
+  if (thread_key_ == kUnsetThreadLocalKey) {
+    thread_key_ = CreateThreadLocal(DeleteThread);
+  }
   ASSERT(thread_key_ != kUnsetThreadLocalKey);
 
   // Enable creation of OSThread structures in the VM.
@@ -208,7 +217,7 @@ void OSThread::EnableOSThreadCreation() {
   creation_enabled_ = true;
 }
 
-OSThread* OSThread::GetOSThreadFromThread(Thread* thread) {
+OSThread* OSThread::GetOSThreadFromThread(ThreadState* thread) {
   ASSERT(thread->os_thread() != NULL);
   return thread->os_thread();
 }
@@ -269,8 +278,18 @@ void OSThread::RemoveThreadFromList(OSThread* thread) {
   }
 }
 
-void OSThread::SetCurrent(OSThread* current) {
-  OSThread::SetThreadLocal(thread_key_, reinterpret_cast<uword>(current));
+void OSThread::SetCurrentTLS(BaseThread* value) {
+  // Provides thread-local destructors.
+  SetThreadLocal(thread_key_, reinterpret_cast<uword>(value));
+
+#if defined(HAS_C11_THREAD_LOCAL)
+  // Allows the C compiler more freedom to optimize.
+  if ((value != NULL) && !value->is_os_thread()) {
+    current_vm_thread_ = static_cast<Thread*>(value);
+  } else {
+    current_vm_thread_ = NULL;
+  }
+#endif
 }
 
 OSThreadIterator::OSThreadIterator() {

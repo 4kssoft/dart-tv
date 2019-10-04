@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -41,7 +41,7 @@ class AnalysisOptionsProvider {
   /// The given [root] directory will be searched first. If no file is found and
   /// if [crawlUp] is `true`, then enclosing directories will be searched.
   File getOptionsFile(Folder root, {bool crawlUp: false}) {
-    Resource resource = null;
+    Resource resource;
     for (Folder folder = root; folder != null; folder = folder.parent) {
       resource = folder.getChild(AnalysisEngine.ANALYSIS_OPTIONS_FILE);
       if (resource.exists) {

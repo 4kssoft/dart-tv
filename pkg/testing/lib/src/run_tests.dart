@@ -18,13 +18,7 @@ import 'test_root.dart' show TestRoot;
 
 import 'zone_helper.dart' show runGuarded;
 
-import 'log.dart'
-    show
-        enableVerboseOutput,
-        isVerbose,
-        logMessage,
-        logSuiteComplete,
-        logTestComplete;
+import 'log.dart' show enableVerboseOutput, isVerbose, StdoutLogger;
 
 import 'run.dart' show SuiteRunner, runProgram;
 
@@ -82,6 +76,12 @@ class CommandLine {
     String configurationPath;
     if (configurationPaths.length == 1) {
       configurationPath = configurationPaths.single;
+      File file = new File(configurationPath);
+      if (await file.exists()) {
+        // If [configurationPath] exists as a file, use the absolute URI. This
+        // handles absolute paths on Windows.
+        configurationPath = file.absolute.uri.toString();
+      }
     } else {
       configurationPath = "testing.json";
       if (!await new File(configurationPath).exists()) {
@@ -109,7 +109,8 @@ class CommandLine {
         }
       }
     }
-    logMessage("Reading configuration file '$configurationPath'.");
+    const StdoutLogger()
+        .logMessage("Reading configuration file '$configurationPath'.");
     Uri configuration =
         await Isolate.resolvePackageUri(Uri.base.resolve(configurationPath));
     if (configuration == null ||
@@ -171,18 +172,21 @@ Future<void> runTests(Map<String, Function> tests) =>
     withErrorHandling<void>(() async {
       int completed = 0;
       for (String name in tests.keys) {
+        const StdoutLogger()
+            .logTestStart(completed, 0, tests.length, null, null);
         StringBuffer sb = new StringBuffer();
         try {
           await runGuarded(() {
             print("Running test $name");
             return tests[name]();
           }, printLineOnStdout: sb.writeln);
-          logMessage(sb);
+          const StdoutLogger().logMessage(sb);
         } catch (e) {
           print(sb);
           rethrow;
         }
-        logTestComplete(++completed, 0, tests.length, null, null);
+        const StdoutLogger()
+            .logTestComplete(++completed, 0, tests.length, null, null);
       }
-      logSuiteComplete();
+      const StdoutLogger().logSuiteComplete();
     });

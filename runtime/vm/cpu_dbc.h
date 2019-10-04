@@ -5,6 +5,10 @@
 #ifndef RUNTIME_VM_CPU_DBC_H_
 #define RUNTIME_VM_CPU_DBC_H_
 
+#if !defined(RUNTIME_VM_CPU_H_)
+#error Do not include cpu_dbc.h directly; use cpu.h instead.
+#endif
+
 #include "vm/allocation.h"
 #include "vm/simulator.h"
 
@@ -12,7 +16,7 @@ namespace dart {
 
 class HostCPUFeatures : public AllStatic {
  public:
-  static void InitOnce();
+  static void Init();
   static void Cleanup();
 
   static const char* hardware() {
@@ -29,7 +33,7 @@ class HostCPUFeatures : public AllStatic {
 
 class TargetCPUFeatures : public AllStatic {
  public:
-  static void InitOnce() { HostCPUFeatures::InitOnce(); }
+  static void Init() { HostCPUFeatures::Init(); }
   static void Cleanup() { HostCPUFeatures::Cleanup(); }
 
   static const char* hardware() { return CPU::Id(); }

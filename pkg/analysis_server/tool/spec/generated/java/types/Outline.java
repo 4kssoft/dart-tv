@@ -1,9 +1,9 @@
 /*
- * Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+ * Copyright (c) 2019, the Dart project authors. Please see the AUTHORS file
  * for details. All rights reserved. Use of this source code is governed by a
  * BSD-style license that can be found in the LICENSE file.
  *
- * This file has been automatically generated.  Please do not edit it manually.
+ * This file has been automatically generated. Please do not edit it manually.
  * To regenerate the file, use the script "pkg/analysis_server/tool/spec/generate_files".
  */
 package org.dartlang.analysis.server.protocol;
@@ -103,9 +103,11 @@ public class Outline {
     Element element = Element.fromJson(elementObject);
     int offset = outlineObject.get("offset").getAsInt();
     int length = outlineObject.get("length").getAsInt();
+    int codeOffset = outlineObject.get("codeOffset").getAsInt();
+    int codeLength = outlineObject.get("codeLength").getAsInt();
 
     // create outline object
-    Outline outline = new Outline(parent, element, offset, length);
+    Outline outline = new Outline(parent, element, offset, length, codeOffset, codeLength);
 
     // compute children recursively
     List<Outline> childrenList = Lists.newArrayList();

@@ -2,40 +2,16 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-// VMOptions=--optimization-counter-threshold=100
+// OtherResources=appjit_cha_deopt_test_body.dart
+// VMOptions=--optimization-counter-threshold=100 --deterministic
 
 // Verify that app-jit snapshot contains dependencies between classes and CHA
 // optimized code.
 
 import 'dart:async';
-import 'dart:io';
-
-import 'package:expect/expect.dart';
-import 'package:path/path.dart' as p;
+import 'dart:io' show Platform;
 
 import 'snapshot_test_helper.dart';
 
-const snapshotName = 'app.jit';
-
-Future<void> main() async {
-  final Directory temp = Directory.systemTemp.createTempSync();
-  final snapshotPath = p.join(temp.path, 'app.jit');
-  final testPath = Platform.script
-      .toFilePath()
-      .replaceAll(new RegExp(r'_test.dart$'), '_test_body.dart');
-
-  await temp.create();
-  try {
-    final trainingResult = await runDartBinary('TRAINING RUN', [
-      '--snapshot=$snapshotPath',
-      '--snapshot-kind=app-jit',
-      testPath,
-      '--train'
-    ]);
-    expectOutput("OK(Trained)", trainingResult);
-    final runResult = await runDartBinary('RUN FROM SNAPSHOT', [snapshotPath]);
-    expectOutput("OK(Run)", runResult);
-  } finally {
-    await temp.delete(recursive: true);
-  }
-}
+Future<void> main() =>
+    runAppJitTest(Platform.script.resolve('appjit_cha_deopt_test_body.dart'));

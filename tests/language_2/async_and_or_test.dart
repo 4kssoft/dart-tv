@@ -1,11 +1,12 @@
 // Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
+import "dart:async";
 import "package:expect/expect.dart";
 import "package:async_helper/async_helper.dart";
 
-@NoInline()
-@AssumeDynamic()
+@pragma('dart2js:noInline')
+@pragma('dart2js:assumeDynamic')
 confuse(x) {
   return x;
 }
@@ -34,15 +35,15 @@ traceB(x) {
   return x;
 }
 
-testEvaluation(void fn()) async {
+testEvaluation(Future<void> fn()) async {
   trace = "";
   await fn();
 }
 
 test2() async {
   await testEvaluation(() async {
-    Expect
-        .isFalse(await confuse(traceA(false)) && await confuse(traceB(false)));
+    Expect.isFalse(
+        await confuse(traceA(false)) && await confuse(traceB(false)));
     Expect.equals("a", trace);
   });
   await testEvaluation(() async {
@@ -59,8 +60,8 @@ test2() async {
   });
 
   await testEvaluation(() async {
-    Expect
-        .isFalse(await confuse(traceA(false)) || await confuse(traceB(false)));
+    Expect.isFalse(
+        await confuse(traceA(false)) || await confuse(traceB(false)));
     Expect.equals("ab", trace);
   });
   await testEvaluation(() async {

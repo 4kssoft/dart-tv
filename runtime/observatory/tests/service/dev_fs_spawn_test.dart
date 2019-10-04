@@ -1,7 +1,6 @@
 // Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-// VMOptions=--error_on_bad_type --error_on_bad_override
 
 import 'dart:async';
 import 'dart:convert';
@@ -119,7 +118,7 @@ main(args, msg) {
       if (event.kind == ServiceEvent.kIsolateSpawn) {
         expect(event.spawnToken, equals('mySpawnToken0'));
         expect(event.isolate, isNotNull);
-        expect(event.isolate.name, equals('devfs_file0.dart:main()'));
+        expect(event.isolate.name, equals('main'));
         completer.complete(event.isolate);
         sub.cancel();
       }
@@ -148,7 +147,7 @@ main(args, msg) {
       if (event.kind == ServiceEvent.kIsolateSpawn) {
         expect(event.spawnToken, equals('mySpawnToken1'));
         expect(event.isolate, isNotNull);
-        expect(event.isolate.name, equals('devfs_file1.dart:main()'));
+        expect(event.isolate.name, equals('main'));
         completer.complete(event.isolate);
         sub.cancel();
       }
@@ -178,7 +177,7 @@ main(args, msg) {
       if (event.kind == ServiceEvent.kIsolateSpawn) {
         expect(event.spawnToken, equals('mySpawnToken2'));
         expect(event.isolate, isNotNull);
-        expect(event.isolate.name, equals('devfs_file2.dart:main()'));
+        expect(event.isolate.name, equals('main'));
         completer.complete(event.isolate);
         sub.cancel();
       }

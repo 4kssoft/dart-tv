@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -9,6 +9,7 @@ import 'package:analyzer/error/error.dart' as analyzer;
 import 'package:analyzer/exception/exception.dart' as analyzer;
 import 'package:analyzer/source/error_processor.dart' as analyzer;
 import 'package:analyzer/src/dart/element/element.dart' as analyzer;
+import 'package:analyzer/src/diagnostic/diagnostic.dart' as analyzer;
 import 'package:analyzer/src/error/codes.dart' as analyzer;
 import 'package:analyzer/src/generated/engine.dart' as analyzer;
 import 'package:analyzer/src/generated/source.dart' as analyzer;
@@ -57,16 +58,48 @@ class AnalyzerConverterTest extends AbstractContextTest {
     expect(pluginError.type, converter.convertErrorType(errorCode.type));
   }
 
-  analyzer.AnalysisError createError(int offset) => new analyzer.AnalysisError(
-      source, offset, 5, analyzer.CompileTimeErrorCode.AWAIT_IN_WRONG_CONTEXT);
+  analyzer.AnalysisError createError(int offset, {String contextMessage}) {
+    List<analyzer.DiagnosticMessageImpl> contextMessages = [];
+    if (contextMessage != null) {
+      contextMessages.add(analyzer.DiagnosticMessageImpl(
+          filePath: source.fullName,
+          offset: 53,
+          length: 7,
+          message: contextMessage));
+    }
+    return new analyzer.AnalysisError(
+        source,
+        offset,
+        5,
+        analyzer.CompileTimeErrorCode.AWAIT_IN_WRONG_CONTEXT,
+        null,
+        contextMessages);
+  }
 
   @override
   void setUp() {
     super.setUp();
-    source = provider
-        .newFile(provider.convertPath('/foo/bar.dart'), '')
-        .createSource();
-    testFile = provider.convertPath('/test.dart');
+    source = newFile('/foo/bar.dart').createSource();
+    testFile = convertPath('/test.dart');
+  }
+
+  test_convertAnalysisError_contextMessages() {
+    analyzer.AnalysisError analyzerError =
+        createError(13, contextMessage: 'here');
+    analyzer.LineInfo lineInfo = new analyzer.LineInfo([0, 10, 20]);
+    analyzer.ErrorSeverity severity = analyzer.ErrorSeverity.WARNING;
+
+    plugin.AnalysisError pluginError = converter.convertAnalysisError(
+        analyzerError,
+        lineInfo: lineInfo,
+        severity: severity);
+    assertError(pluginError, analyzerError,
+        startColumn: 4, startLine: 2, severity: severity);
+    expect(pluginError.contextMessages, hasLength(1));
+    plugin.DiagnosticMessage message = pluginError.contextMessages[0];
+    expect(message.message, 'here');
+    expect(message.location.offset, 53);
+    expect(message.location.length, 7);
   }
 
   test_convertAnalysisError_lineInfo_noSeverity() {
@@ -187,7 +220,8 @@ abstract class _A {}
 class B<K, V> {}''');
     analyzer.CompilationUnit unit = await resolveLibraryUnit(source);
     {
-      analyzer.ClassElement engineElement = findElementInUnit(unit, '_A');
+      analyzer.ClassElement engineElement =
+          findElementInUnit(unit, '_A') as analyzer.ClassElement;
       // create notification Element
       plugin.Element element = converter.convertElement(engineElement);
       expect(element.kind, plugin.ElementKind.CLASS);
@@ -209,7 +243,8 @@ class B<K, V> {}''');
               plugin.Element.FLAG_PRIVATE);
     }
     {
-      analyzer.ClassElement engineElement = findElementInUnit(unit, 'B');
+      analyzer.ClassElement engineElement =
+          findElementInUnit(unit, 'B') as analyzer.ClassElement;
       // create notification Element
       plugin.Element element = converter.convertElement(engineElement);
       expect(element.kind, plugin.ElementKind.CLASS);
@@ -226,7 +261,7 @@ class A {
 }''');
     analyzer.CompilationUnit unit = await resolveLibraryUnit(source);
     analyzer.ConstructorElement engineElement =
-        findElementInUnit(unit, 'myConstructor');
+        findElementInUnit(unit, 'myConstructor') as analyzer.ConstructorElement;
     // create notification Element
     plugin.Element element = converter.convertElement(engineElement);
     expect(element.kind, plugin.ElementKind.CONSTRUCTOR);
@@ -264,7 +299,8 @@ enum _E1 { one, two }
 enum E2 { three, four }''');
     analyzer.CompilationUnit unit = await resolveLibraryUnit(source);
     {
-      analyzer.ClassElement engineElement = findElementInUnit(unit, '_E1');
+      analyzer.ClassElement engineElement =
+          findElementInUnit(unit, '_E1') as analyzer.ClassElement;
       expect(engineElement.hasDeprecated, isTrue);
       // create notification Element
       plugin.Element element = converter.convertElement(engineElement);
@@ -286,7 +322,8 @@ enum E2 { three, four }''');
               plugin.Element.FLAG_PRIVATE);
     }
     {
-      analyzer.ClassElement engineElement = findElementInUnit(unit, 'E2');
+      analyzer.ClassElement engineElement =
+          findElementInUnit(unit, 'E2') as analyzer.ClassElement;
       // create notification Element
       plugin.Element element = converter.convertElement(engineElement);
       expect(element.kind, plugin.ElementKind.ENUM);
@@ -303,7 +340,8 @@ enum _E1 { one, two }
 enum E2 { three, four }''');
     analyzer.CompilationUnit unit = await resolveLibraryUnit(source);
     {
-      analyzer.FieldElement engineElement = findElementInUnit(unit, 'one');
+      analyzer.FieldElement engineElement =
+          findElementInUnit(unit, 'one') as analyzer.FieldElement;
       // create notification Element
       plugin.Element element = converter.convertElement(engineElement);
       expect(element.kind, plugin.ElementKind.ENUM_CONSTANT);
@@ -327,7 +365,8 @@ enum E2 { three, four }''');
           plugin.Element.FLAG_CONST | plugin.Element.FLAG_STATIC);
     }
     {
-      analyzer.FieldElement engineElement = findElementInUnit(unit, 'three');
+      analyzer.FieldElement engineElement =
+          findElementInUnit(unit, 'three') as analyzer.FieldElement;
       // create notification Element
       plugin.Element element = converter.convertElement(engineElement);
       expect(element.kind, plugin.ElementKind.ENUM_CONSTANT);
@@ -347,7 +386,7 @@ enum E2 { three, four }''');
     }
     {
       analyzer.FieldElement engineElement =
-          unit.element.enums[1].getField('index');
+          unit.declaredElement.enums[1].getField('index');
       // create notification Element
       plugin.Element element = converter.convertElement(engineElement);
       expect(element.kind, plugin.ElementKind.FIELD);
@@ -366,7 +405,7 @@ enum E2 { three, four }''');
     }
     {
       analyzer.FieldElement engineElement =
-          unit.element.enums[1].getField('values');
+          unit.declaredElement.enums[1].getField('values');
 
       // create notification Element
       plugin.Element element = converter.convertElement(engineElement);
@@ -393,7 +432,8 @@ class A {
   static const myField = 42;
 }''');
     analyzer.CompilationUnit unit = await resolveLibraryUnit(source);
-    analyzer.FieldElement engineElement = findElementInUnit(unit, 'myField');
+    analyzer.FieldElement engineElement =
+        findElementInUnit(unit, 'myField') as analyzer.FieldElement;
     // create notification Element
     plugin.Element element = converter.convertElement(engineElement);
     expect(element.kind, plugin.ElementKind.FIELD);
@@ -407,11 +447,7 @@ class A {
       expect(location.startColumn, 16);
     }
     expect(element.parameters, isNull);
-    if (previewDart2) {
-      expect(element.returnType, 'int');
-    } else {
-      expect(element.returnType, 'dynamic');
-    }
+    expect(element.returnType, 'int');
     expect(
         element.flags, plugin.Element.FLAG_CONST | plugin.Element.FLAG_STATIC);
   }
@@ -422,7 +458,7 @@ typedef int F<T>(String x);
 ''');
     analyzer.CompilationUnit unit = await resolveLibraryUnit(source);
     analyzer.FunctionTypeAliasElement engineElement =
-        findElementInUnit(unit, 'F');
+        findElementInUnit(unit, 'F') as analyzer.FunctionTypeAliasElement;
     // create notification Element
     plugin.Element element = converter.convertElement(engineElement);
     expect(element.kind, plugin.ElementKind.FUNCTION_TYPE_ALIAS);
@@ -441,6 +477,31 @@ typedef int F<T>(String x);
     expect(element.flags, 0);
   }
 
+  test_convertElement_genericTypeAlias_function() async {
+    analyzer.Source source = addSource(testFile, '''
+typedef F<T> = int Function(String x);
+''');
+    analyzer.CompilationUnit unit = await resolveLibraryUnit(source);
+    analyzer.FunctionTypeAliasElement engineElement =
+        findElementInUnit(unit, 'F') as analyzer.FunctionTypeAliasElement;
+    // create notification Element
+    plugin.Element element = converter.convertElement(engineElement);
+    expect(element.kind, plugin.ElementKind.FUNCTION_TYPE_ALIAS);
+    expect(element.name, 'F');
+    expect(element.typeParameters, '<T>');
+    {
+      plugin.Location location = element.location;
+      expect(location.file, testFile);
+      expect(location.offset, 8);
+      expect(location.length, 'F'.length);
+      expect(location.startLine, 1);
+      expect(location.startColumn, 9);
+    }
+    expect(element.parameters, '(String x)');
+    expect(element.returnType, 'int');
+    expect(element.flags, 0);
+  }
+
   test_convertElement_getter() async {
     analyzer.Source source = addSource(testFile, '''
 class A {
@@ -448,7 +509,8 @@ class A {
 }''');
     analyzer.CompilationUnit unit = await resolveLibraryUnit(source);
     analyzer.PropertyAccessorElement engineElement =
-        findElementInUnit(unit, 'myGetter', analyzer.ElementKind.GETTER);
+        findElementInUnit(unit, 'myGetter', analyzer.ElementKind.GETTER)
+            as analyzer.PropertyAccessorElement;
     // create notification Element
     plugin.Element element = converter.convertElement(engineElement);
     expect(element.kind, plugin.ElementKind.GETTER);
@@ -474,7 +536,8 @@ class A {
   }
 }''');
     analyzer.CompilationUnit unit = await resolveLibraryUnit(source);
-    analyzer.MethodElement engineElement = findElementInUnit(unit, 'myMethod');
+    analyzer.MethodElement engineElement =
+        findElementInUnit(unit, 'myMethod') as analyzer.MethodElement;
     // create notification Element
     plugin.Element element = converter.convertElement(engineElement);
     expect(element.kind, plugin.ElementKind.METHOD);
@@ -499,7 +562,8 @@ class A {
 }''');
     analyzer.CompilationUnit unit = await resolveLibraryUnit(source);
     analyzer.PropertyAccessorElement engineElement =
-        findElementInUnit(unit, 'mySetter', analyzer.ElementKind.SETTER);
+        findElementInUnit(unit, 'mySetter', analyzer.ElementKind.SETTER)
+            as analyzer.PropertyAccessorElement;
     // create notification Element
     plugin.Element element = converter.convertElement(engineElement);
     expect(element.kind, plugin.ElementKind.SETTER);
@@ -576,7 +640,8 @@ myLabel:
   }
 }''');
     analyzer.CompilationUnit unit = await resolveLibraryUnit(source);
-    analyzer.LabelElement engineElement = findElementInUnit(unit, 'myLabel');
+    analyzer.LabelElement engineElement =
+        findElementInUnit(unit, 'myLabel') as analyzer.LabelElement;
     // create notification Element
     plugin.Element element = converter.convertElement(engineElement);
     expect(element.kind, plugin.ElementKind.LABEL);

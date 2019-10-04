@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -19,7 +19,6 @@ class WhileStatementTest extends PartialCodeTest {
           'keyword',
           'while',
           [
-            ParserErrorCode.EXPECTED_TOKEN,
             ParserErrorCode.EXPECTED_TOKEN,
             ParserErrorCode.MISSING_IDENTIFIER,
             ParserErrorCode.MISSING_IDENTIFIER,
@@ -71,27 +70,32 @@ class WhileStatementTest extends PartialCodeTest {
         new TestDescriptor(
           'keyword',
           'while',
-          [
-            ParserErrorCode.EXPECTED_TOKEN,
-            ParserErrorCode.MISSING_IDENTIFIER,
-            ParserErrorCode.EXPECTED_TOKEN
-          ],
+          [ParserErrorCode.MISSING_IDENTIFIER, ParserErrorCode.EXPECTED_TOKEN],
           "while (_s_)",
           failing: ['break', 'continue'],
         ),
         new TestDescriptor(
           'leftParen',
           'while (',
-          [ParserErrorCode.MISSING_IDENTIFIER, ParserErrorCode.EXPECTED_TOKEN],
+          [ParserErrorCode.MISSING_IDENTIFIER, ScannerErrorCode.EXPECTED_TOKEN],
           "while (_s_)",
-          allFailing: true,
+          failing: [
+            'assert',
+            'block',
+            'break',
+            'continue',
+            'labeled',
+            'localFunctionNonVoid',
+            'localFunctionVoid',
+            'return'
+          ],
         ),
         new TestDescriptor(
           'condition',
           'while (a',
-          [ParserErrorCode.EXPECTED_TOKEN],
+          [ScannerErrorCode.EXPECTED_TOKEN],
           "while (a)",
-          allFailing: true,
+          failing: ['break', 'continue'],
         ),
       ],
       PartialCodeTest.statementSuffixes,

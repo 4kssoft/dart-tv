@@ -13,17 +13,19 @@ enum FunctionKind {
   constructor,
   implicitGetter,
   implicitSetter,
-  implicitStaticFinalGetter,
+  implicitStaticGetter,
+  fieldInitializer,
   irregexpFunction,
-  staticInitializer,
   methodExtractor,
   noSuchMethodDispatcher,
   invokeFieldDispatcher,
   collected,
   native,
+  ffiTrampoline,
   stub,
   tag,
-  signatureFunction
+  signatureFunction,
+  dynamicInvocationForwarder
 }
 
 bool isSyntheticFunction(FunctionKind kind) {
@@ -84,6 +86,9 @@ abstract class ServiceFunction extends Object implements FunctionRef {
 
   /// [optional]
   CodeRef get unoptimizedCode;
+
+  /// [optional]
+  CodeRef get bytecode;
 
   /// [optional]
   FieldRef get field;

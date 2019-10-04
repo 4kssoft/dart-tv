@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -7,10 +7,7 @@ import 'package:analyzer/source/error_processor.dart';
 import 'package:analyzer/src/analysis_options/analysis_options_provider.dart';
 import 'package:analyzer/src/context/context.dart';
 import 'package:analyzer/src/error/codes.dart';
-import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/task/options.dart';
-import 'package:plugin/manager.dart';
-import 'package:plugin/plugin.dart';
 import 'package:test/test.dart';
 import 'package:yaml/yaml.dart';
 
@@ -18,8 +15,8 @@ import '../generated/test_support.dart';
 import '../src/util/yaml_test.dart';
 
 main() {
-  AnalysisError invalid_assignment =
-      new AnalysisError(new TestSource(), 0, 1, HintCode.INVALID_ASSIGNMENT, [
+  AnalysisError invalid_assignment = new AnalysisError(
+      new TestSource(), 0, 1, StaticTypeWarningCode.INVALID_ASSIGNMENT, [
     ['x'],
     ['y']
   ]);
@@ -39,17 +36,10 @@ main() {
     ['x']
   ]);
 
-  AnalysisError non_bool_operand = new AnalysisError(
-      new TestSource(), 0, 1, StaticTypeWarningCode.NON_BOOL_OPERAND, [
-    ['x']
-  ]);
-
   // We in-line a lint code here in order to avoid adding a dependency on the
   // linter package.
   AnalysisError annotate_overrides = new AnalysisError(
       new TestSource(), 0, 1, new LintCode('annotate_overrides', ''));
-
-  oneTimeSetup();
 
   setUp(() {
     context = new TestContext();
@@ -68,16 +58,7 @@ analyzer:
       expect(getProcessor(invalid_assignment).severity, ErrorSeverity.ERROR);
       expect(getProcessor(missing_return).severity, isNull);
       expect(getProcessor(unused_local_variable), isNull);
-      expect(getProcessor(use_of_void_result),
-          context.analysisOptions.strongMode ? isNotNull : isNull);
-    });
-
-    test('upgrades static type warnings to errors in strong mode', () {
-      configureOptions('''
-analyzer:
-  strong-mode: true
-''');
-      expect(getProcessor(non_bool_operand).severity, ErrorSeverity.ERROR);
+      expect(getProcessor(use_of_void_result), isNull);
     });
 
     test('does not upgrade other warnings to errors in strong mode', () {
@@ -175,12 +156,5 @@ void configureOptions(String options) {
 
 ErrorProcessor getProcessor(AnalysisError error) =>
     ErrorProcessor.getProcessor(context.analysisOptions, error);
-
-void oneTimeSetup() {
-  List<Plugin> plugins = <Plugin>[];
-  plugins.addAll(AnalysisEngine.instance.requiredPlugins);
-  ExtensionManager manager = new ExtensionManager();
-  manager.processPlugins(plugins);
-}
 
 class TestContext extends AnalysisContextImpl {}

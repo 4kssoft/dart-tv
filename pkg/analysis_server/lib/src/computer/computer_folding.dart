@@ -1,4 +1,4 @@
-// Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -105,120 +105,152 @@ class DartUnitFoldingComputer {
 /**
  * An AST visitor for [DartUnitFoldingComputer].
  */
-class _DartUnitFoldingComputerVisitor extends RecursiveAstVisitor<Object> {
+class _DartUnitFoldingComputerVisitor extends RecursiveAstVisitor<void> {
   final DartUnitFoldingComputer _computer;
+
   _DartUnitFoldingComputerVisitor(this._computer);
 
   @override
-  Object visitBlockFunctionBody(BlockFunctionBody node) {
-    _computer._addRegion(node.block.leftBracket.end,
-        node.block.rightBracket.offset, FoldingKind.FUNCTION_BODY);
-    return super.visitBlockFunctionBody(node);
+  void visitAssertInitializer(AssertInitializer node) {
+    _computer._addRegion(node.leftParenthesis.end, node.rightParenthesis.offset,
+        FoldingKind.INVOCATION);
+    super.visitAssertInitializer(node);
   }
 
   @override
-  Object visitClassDeclaration(ClassDeclaration node) {
+  void visitAssertStatement(AssertStatement node) {
+    _computer._addRegion(node.leftParenthesis.end, node.rightParenthesis.offset,
+        FoldingKind.INVOCATION);
+    super.visitAssertStatement(node);
+  }
+
+  @override
+  void visitBlockFunctionBody(BlockFunctionBody node) {
+    _computer._addRegion(node.block.leftBracket.end,
+        node.block.rightBracket.offset, FoldingKind.FUNCTION_BODY);
+    super.visitBlockFunctionBody(node);
+  }
+
+  @override
+  void visitClassDeclaration(ClassDeclaration node) {
     _computer._addRegionForAnnotations(node.metadata);
     _computer._addRegion(
         node.leftBracket.end, node.rightBracket.offset, FoldingKind.CLASS_BODY);
-    return super.visitClassDeclaration(node);
+    super.visitClassDeclaration(node);
   }
 
   @override
-  Object visitComment(Comment node) {
+  void visitComment(Comment node) {
     if (node.isDocumentation) {
       _computer._addRegion(
           node.offset, node.end, FoldingKind.DOCUMENTATION_COMMENT);
     }
-    return super.visitComment(node);
+    super.visitComment(node);
   }
 
   @override
-  Object visitConstructorDeclaration(ConstructorDeclaration node) {
+  void visitConstructorDeclaration(ConstructorDeclaration node) {
     _computer._addRegionForAnnotations(node.metadata);
-    return super.visitConstructorDeclaration(node);
+    super.visitConstructorDeclaration(node);
   }
 
   @override
-  Object visitExportDirective(ExportDirective node) {
+  void visitExportDirective(ExportDirective node) {
     _computer._recordDirective(node);
-    return super.visitExportDirective(node);
+    super.visitExportDirective(node);
   }
 
   @override
-  Object visitFieldDeclaration(FieldDeclaration node) {
+  void visitExtensionDeclaration(ExtensionDeclaration node) {
     _computer._addRegionForAnnotations(node.metadata);
-    return super.visitFieldDeclaration(node);
+    _computer._addRegion(
+        node.leftBracket.end, node.rightBracket.offset, FoldingKind.CLASS_BODY);
+    super.visitExtensionDeclaration(node);
   }
 
   @override
-  Object visitFunctionDeclaration(FunctionDeclaration node) {
+  void visitFieldDeclaration(FieldDeclaration node) {
     _computer._addRegionForAnnotations(node.metadata);
-    return super.visitFunctionDeclaration(node);
+    super.visitFieldDeclaration(node);
   }
 
   @override
-  Object visitFunctionExpressionInvocation(FunctionExpressionInvocation node) {
+  void visitFunctionDeclaration(FunctionDeclaration node) {
+    _computer._addRegionForAnnotations(node.metadata);
+    super.visitFunctionDeclaration(node);
+  }
+
+  @override
+  void visitFunctionExpressionInvocation(FunctionExpressionInvocation node) {
     _computer._addRegion(node.argumentList.leftParenthesis.end,
         node.argumentList.rightParenthesis.offset, FoldingKind.INVOCATION);
-    return super.visitFunctionExpressionInvocation(node);
+    super.visitFunctionExpressionInvocation(node);
   }
 
   @override
-  visitImportDirective(ImportDirective node) {
+  void visitImportDirective(ImportDirective node) {
     _computer._recordDirective(node);
-    return super.visitImportDirective(node);
+    super.visitImportDirective(node);
   }
 
   @override
-  Object visitInstanceCreationExpression(InstanceCreationExpression node) {
+  void visitInstanceCreationExpression(InstanceCreationExpression node) {
     _computer._addRegion(node.argumentList.leftParenthesis.end,
         node.argumentList.rightParenthesis.offset, FoldingKind.INVOCATION);
-    return super.visitInstanceCreationExpression(node);
+    super.visitInstanceCreationExpression(node);
   }
 
   @override
-  Object visitLibraryDirective(LibraryDirective node) {
+  void visitLibraryDirective(LibraryDirective node) {
     _computer._recordDirective(node);
-    return super.visitLibraryDirective(node);
+    super.visitLibraryDirective(node);
   }
 
   @override
-  Object visitListLiteral(ListLiteral node) {
+  void visitListLiteral(ListLiteral node) {
     _computer._addRegion(
         node.leftBracket.end, node.rightBracket.offset, FoldingKind.LITERAL);
-    return super.visitListLiteral(node);
+    super.visitListLiteral(node);
   }
 
   @override
-  Object visitMapLiteral(MapLiteral node) {
-    _computer._addRegion(
-        node.leftBracket.end, node.rightBracket.offset, FoldingKind.LITERAL);
-    return super.visitMapLiteral(node);
-  }
-
-  @override
-  Object visitMethodDeclaration(MethodDeclaration node) {
+  void visitMethodDeclaration(MethodDeclaration node) {
     _computer._addRegionForAnnotations(node.metadata);
-    return super.visitMethodDeclaration(node);
+    super.visitMethodDeclaration(node);
   }
 
   @override
-  Object visitMethodInvocation(MethodInvocation node) {
+  void visitMethodInvocation(MethodInvocation node) {
     _computer._addRegion(node.argumentList.leftParenthesis.end,
         node.argumentList.rightParenthesis.offset, FoldingKind.INVOCATION);
-    return super.visitMethodInvocation(node);
+    super.visitMethodInvocation(node);
   }
 
   @override
-  Object visitPartDirective(PartDirective node) {
-    _computer._recordDirective(node);
-    return super.visitPartDirective(node);
+  void visitMixinDeclaration(MixinDeclaration node) {
+    _computer._addRegionForAnnotations(node.metadata);
+    // TODO(brianwilkerson) Define `FoldingKind.MIXIN_BODY`?
+    _computer._addRegion(
+        node.leftBracket.end, node.rightBracket.offset, FoldingKind.CLASS_BODY);
+    super.visitMixinDeclaration(node);
   }
 
   @override
-  Object visitPartOfDirective(PartOfDirective node) {
+  void visitPartDirective(PartDirective node) {
     _computer._recordDirective(node);
-    return super.visitPartOfDirective(node);
+    super.visitPartDirective(node);
+  }
+
+  @override
+  void visitPartOfDirective(PartOfDirective node) {
+    _computer._recordDirective(node);
+    super.visitPartOfDirective(node);
+  }
+
+  @override
+  void visitSetOrMapLiteral(SetOrMapLiteral node) {
+    _computer._addRegion(
+        node.leftBracket.end, node.rightBracket.offset, FoldingKind.LITERAL);
+    super.visitSetOrMapLiteral(node);
   }
 }

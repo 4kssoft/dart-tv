@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -6,6 +6,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:analysis_server/src/services/correction/status.dart';
+import 'package:analysis_server/src/services/linter/lint_names.dart';
 import 'package:analysis_server/src/services/refactoring/extract_local.dart';
 import 'package:analysis_server/src/services/refactoring/refactoring.dart';
 import 'package:analyzer_plugin/protocol/protocol_common.dart';
@@ -52,6 +53,28 @@ main() {
         expectedMessage: "The name 'res' is already used in the scope.");
   }
 
+  test_checkInitialCondition_false_outOfRange_length() async {
+    await indexTestUnit('''
+main() {
+  print(1 + 2);
+}
+''');
+    _createRefactoring(0, 1 << 20);
+    RefactoringStatus status = await refactoring.checkAllConditions();
+    assertRefactoringStatus(status, RefactoringProblemSeverity.FATAL);
+  }
+
+  test_checkInitialCondition_outOfRange_offset() async {
+    await indexTestUnit('''
+main() {
+  print(1 + 2);
+}
+''');
+    _createRefactoring(-10, 20);
+    RefactoringStatus status = await refactoring.checkAllConditions();
+    assertRefactoringStatus(status, RefactoringProblemSeverity.FATAL);
+  }
+
   test_checkInitialConditions_assignmentLeftHandSize() async {
     await indexTestUnit('''
 main() {
@@ -68,10 +91,11 @@ main() {
 
   test_checkInitialConditions_namePartOfDeclaration_function() async {
     await indexTestUnit('''
-main() {
+void main() {
+  void foo() {}
 }
 ''');
-    _createRefactoringWithSuffix('main', '()');
+    _createRefactoringWithSuffix('foo', '()');
     // check conditions
     RefactoringStatus status = await refactoring.checkAllConditions();
     assertRefactoringStatus(status, RefactoringProblemSeverity.FATAL,
@@ -99,7 +123,7 @@ main() {
 ''');
     _createRefactoringForString('abc');
     // check conditions
-    _assertInitialConditions_fatal_selection();
+    await _assertInitialConditions_fatal_selection();
   }
 
   test_checkInitialConditions_notPartOfFunction() async {
@@ -695,6 +719,71 @@ main() {
     expect(refactoring.names, unorderedEquals(['helloBob', 'bob']));
   }
 
+  test_isAvailable_false_notPartOfFunction() async {
+    await indexTestUnit('''
+var v = 1 + 2;
+''');
+    _createRefactoringForString('1 + 2');
+    expect(refactoring.isAvailable(), isFalse);
+  }
+
+  test_isAvailable_true() async {
+    await indexTestUnit('''
+main() {
+  print(1 + 2);
+}
+''');
+    _createRefactoringForString('1 + 2');
+    expect(refactoring.isAvailable(), isTrue);
+  }
+
+  test_lint_prefer_final_locals() async {
+    createAnalysisOptionsFile(lints: [LintNames.prefer_final_locals]);
+    await indexTestUnit('''
+main() {
+  print(1 + 2);
+}
+''');
+    _createRefactoringForString('1 + 2');
+    // apply refactoring
+    return _assertSuccessfulRefactoring('''
+main() {
+  final res = 1 + 2;
+  print(res);
+}
+''');
+  }
+
+  test_occurrences_differentName_samePrefix() async {
+    await indexTestUnit('''
+void main(A a) {
+  if (a.foo != 1) {
+  } else if (a.foo2 != 2) {
+  }
+}
+
+class A {
+  int foo;
+  int foo2;
+}
+''');
+    _createRefactoringWithSuffix('a.foo', ' != 1');
+    // apply refactoring
+    await _assertSuccessfulRefactoring('''
+void main(A a) {
+  var res = a.foo;
+  if (res != 1) {
+  } else if (a.foo2 != 2) {
+  }
+}
+
+class A {
+  int foo;
+  int foo2;
+}
+''');
+  }
+
   test_occurrences_differentVariable() async {
     await indexTestUnit('''
 main() {
@@ -932,6 +1021,7 @@ main() {
 ''');
   }
 
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/33992')
   test_singleExpression_hasParseError_expectedSemicolon() async {
     verifyNoTestUnitErrors = false;
     await indexTestUnit('''
@@ -1302,7 +1392,8 @@ main() {
   }
 
   void _createRefactoring(int offset, int length) {
-    refactoring = new ExtractLocalRefactoring(testUnit, offset, length);
+    refactoring =
+        new ExtractLocalRefactoring(testAnalysisResult, offset, length);
     refactoring.name = 'res';
   }
 

@@ -3,35 +3,8 @@
 # BSD-style license that can be found in the LICENSE file.
 
 [ $compiler == dart2js ]
-unsorted/invocation_errors_test: Pass
 unsorted/nsm_dispatcher_test: Skip # The test uses Symbol without MirrorsUsed
 unsorted/simple_literal_test/01: Skip # The test expects error for large integer literal.
-unsorted/super_initializer_test: Skip
 
 [ !$fasta ]
 unsorted/loop_test: Skip # This test uses optional new/const.
-
-[ $compiler != app_jitk && $compiler != dartk && $compiler != dartkp && $runtime != none ]
-unsorted/types_test: RuntimeError
-
-[ $compiler == dart2analyzer && $runtime == none ]
-unsorted/super_mixin_test: CompileTimeError
-
-[ $compiler == dart2analyzer && $strong ]
-*: Skip # Issue 28649
-
-[ $compiler == dart2js && $fasta ]
-unsorted/super_mixin_test: RuntimeError
-unsorted/try_finally_test: Crash
-
-[ $compiler == dart2js && $fasta && $host_checked ]
-unsorted/super_mixin_test: Crash
-
-[ $compiler == dart2js && !$fasta ]
-unsorted/super_mixin_test: CompileTimeError
-
-[ $compiler != dartk && $compiler != dartkp && !$strong ]
-unsorted/invocation_errors_test/00: MissingCompileTimeError # This test has been tuned for dart 2.
-
-[ $runtime == dart_precompiled && $minified ]
-unsorted/symbol_literal_test: Skip # Expects unobfuscated Symbol.toString.

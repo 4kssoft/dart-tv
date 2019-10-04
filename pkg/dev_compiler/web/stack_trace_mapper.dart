@@ -23,7 +23,7 @@
 library stack_trace_mapper;
 
 import 'package:js/js.dart';
-import 'package:path/path.dart' as path;
+import 'package:path/path.dart' as p;
 import 'source_map_stack_trace.dart';
 import 'package:source_maps/source_maps.dart';
 import 'package:source_span/source_span.dart';
@@ -59,17 +59,18 @@ external String _stringify(dynamic json);
 /// The unparsed data for the source maps must still be loaded before
 /// LazyMapping is used.
 class LazyMapping extends Mapping {
-  MappingBundle _bundle = new MappingBundle();
+  MappingBundle _bundle = MappingBundle();
   SourceMapProvider _provider;
 
   LazyMapping(this._provider);
 
   List toJson() => _bundle.toJson();
 
+  @override
   SourceMapSpan spanFor(int line, int column,
       {Map<String, SourceFile> files, String uri}) {
     if (uri == null) {
-      throw new ArgumentError.notNull('uri');
+      throw ArgumentError.notNull('uri');
     }
 
     if (!_bundle.containsMapping(uri)) {
@@ -79,7 +80,7 @@ class LazyMapping extends Mapping {
         var mapping = parse(strMap) as SingleMapping;
         mapping
           ..targetUrl = uri
-          ..sourceRoot = '${path.dirname(uri)}/';
+          ..sourceRoot = '${p.dirname(uri)}/';
         _bundle.addMapping(mapping);
       }
     }
@@ -101,19 +102,19 @@ String mapper(String rawStackTrace) {
   if (_mapping == null) {
     // This should not happen if the user has waited for the ReadyCallback
     // to start the application.
-    throw new StateError('Source maps are not done loading.');
+    throw StateError('Source maps are not done loading.');
   }
-  var trace = new Trace.parse(rawStackTrace);
+  var trace = Trace.parse(rawStackTrace);
   return mapStackTrace(_mapping, trace, roots: roots).toString();
 }
 
 void setSourceMapProvider(SourceMapProvider provider) {
-  _mapping = new LazyMapping(provider);
+  _mapping = LazyMapping(provider);
 }
 
-main() {
+void main() {
   // Register with DDC.
-  dartStackTraceUtility = new DartStackTraceUtility(
+  dartStackTraceUtility = DartStackTraceUtility(
       mapper: allowInterop(mapper),
       setSourceMapProvider: allowInterop(setSourceMapProvider));
 }

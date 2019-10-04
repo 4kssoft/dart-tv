@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -9,9 +9,8 @@
  */
 import 'dart:convert';
 
-import 'package:analyzer/src/codegen/html.dart';
-import 'package:analyzer/src/codegen/tools.dart';
-import 'package:front_end/src/codegen/tools.dart';
+import 'package:analysis_tool/html.dart';
+import 'package:analysis_tool/tools.dart';
 import 'package:html/dom.dart' as dom;
 
 import 'api.dart';
@@ -162,7 +161,7 @@ class ApiMappings extends HierarchicalApiVisitor {
 /**
  * Helper methods for creating HTML elements.
  */
-abstract class HtmlMixin {
+mixin HtmlMixin {
   void anchor(String id, void callback()) {
     element('a', {'name': id}, callback);
   }
@@ -241,7 +240,7 @@ class ToHtmlVisitor extends HierarchicalApiVisitor
    * If [force] is true, then a section is inserted even if the payload is
    * null.
    */
-  void describePayload(TypeObject subType, String name, {bool force: false}) {
+  void describePayload(TypeObject subType, String name, {bool force = false}) {
     if (force || subType != null) {
       h4(() {
         write(name);
@@ -263,14 +262,14 @@ class ToHtmlVisitor extends HierarchicalApiVisitor
       link('domain_${domain.name}', () => write('\u2191'));
       write(')');
     });
-    if (domain.requests.length > 0) {
+    if (domain.requests.isNotEmpty) {
       element('div', {'class': 'subindex'}, () {
         generateRequestsIndex(domain.requests);
-        if (domain.notifications.length > 0) {
+        if (domain.notifications.isNotEmpty) {
           generateNotificationsIndex(domain.notifications);
         }
       });
-    } else if (domain.notifications.length > 0) {
+    } else if (domain.notifications.isNotEmpty) {
       element('div', {'class': 'subindex'}, () {
         generateNotificationsIndex(domain.notifications);
       });
@@ -287,7 +286,7 @@ class ToHtmlVisitor extends HierarchicalApiVisitor
     h3(() => write('Domains'));
     for (var domain in api.domains) {
       if (domain.experimental ||
-          (domain.requests.length == 0 && domain.notifications == 0)) {
+          (domain.requests.isEmpty && domain.notifications.isEmpty)) {
         continue;
       }
       generateDomainIndex(domain);
@@ -441,7 +440,7 @@ class ToHtmlVisitor extends HierarchicalApiVisitor
    * Copy the contents of the given HTML element, translating the special
    * elements that define the API appropriately.
    */
-  void translateHtml(dom.Element html, {bool squashParagraphs: false}) {
+  void translateHtml(dom.Element html, {bool squashParagraphs = false}) {
     for (dom.Node node in html.nodes) {
       if (node is dom.Element) {
         if (squashParagraphs && node.localName == 'p') {
@@ -669,6 +668,9 @@ class ToHtmlVisitor extends HierarchicalApiVisitor
 
   @override
   void visitTypeObjectField(TypeObjectField typeObjectField) {
+    if (typeObjectField.experimental) {
+      return;
+    }
     dt('field', () {
       b(() {
         if (typeObjectField.deprecated) {
@@ -737,7 +739,7 @@ class TypeVisitor extends HierarchicalApiVisitor
    */
   final bool short;
 
-  TypeVisitor(Api api, {this.fieldsToBold, this.short: false}) : super(api);
+  TypeVisitor(Api api, {this.fieldsToBold, this.short = false}) : super(api);
 
   @override
   void visitTypeEnum(TypeEnum typeEnum) {

@@ -1,11 +1,10 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:async';
 
 import 'package:analyzer/dart/ast/ast.dart';
-import 'package:analyzer/dart/ast/standard_resolution_map.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer/file_system/file_system.dart';
@@ -21,7 +20,7 @@ import 'package:analyzer_plugin/utilities/completion/completion_core.dart';
  * Plugin developers should extend this function and primarily
  * overload `computeSuggestions` (if needed).
  */
-class InheritedReferenceContributor extends Object
+class InheritedReferenceContributor
     with ElementSuggestionBuilder
     implements CompletionContributor {
   @override
@@ -40,7 +39,7 @@ class InheritedReferenceContributor extends Object
    * call on `computeSuggestionsForClass`.
    */
   @override
-  Future<Null> computeSuggestions(
+  Future<void> computeSuggestions(
       DartCompletionRequest request, CompletionCollector collector) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
@@ -51,18 +50,18 @@ class InheritedReferenceContributor extends Object
       return;
     }
     ClassDeclaration classDecl = _enclosingClass(target);
-    if (classDecl == null || classDecl.element == null) {
+    if (classDecl == null || classDecl.declaredElement == null) {
       return;
     }
     containingLibrary = request.result.libraryElement;
-    _computeSuggestionsForClass2(collector, target,
-        resolutionMap.elementDeclaredByClassDeclaration(classDecl), optype);
+    _computeSuggestionsForClass2(
+        collector, target, classDecl.declaredElement, optype);
   }
 
   /**
    * Clients should not overload this function.
    */
-  Future<Null> computeSuggestionsForClass(
+  Future<void> computeSuggestionsForClass(
     DartCompletionRequest request,
     CompletionCollector collector,
     ClassElement classElement, {
@@ -82,10 +81,10 @@ class InheritedReferenceContributor extends Object
     }
     if (classElement == null) {
       ClassDeclaration classDecl = _enclosingClass(target);
-      if (classDecl == null || classDecl.element == null) {
+      if (classDecl == null || classDecl.declaredElement == null) {
         return;
       }
-      classElement = resolutionMap.elementDeclaredByClassDeclaration(classDecl);
+      classElement = classDecl.declaredElement;
     }
     containingLibrary = request.result.libraryElement;
     _computeSuggestionsForClass2(collector, target, classElement, optype,
@@ -131,7 +130,7 @@ class InheritedReferenceContributor extends Object
         : CompletionSuggestionKind.INVOCATION;
 
     if (!skipChildClass) {
-      _addSuggestionsForType(classElement.type, optype,
+      _addSuggestionsForType(classElement.thisType, optype,
           isFunctionalArgument: isFunctionalArgument);
     }
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -21,9 +21,8 @@ class SwitchStatementTest extends PartialCodeTest {
               'keyword',
               'switch',
               [
-                ParserErrorCode.EXPECTED_TOKEN,
                 ParserErrorCode.MISSING_IDENTIFIER,
-                ParserErrorCode.EXPECTED_TOKEN,
+                ParserErrorCode.EXPECTED_BODY,
                 ParserErrorCode.EXPECTED_TOKEN
               ],
               "switch (_s_) {}",
@@ -33,19 +32,26 @@ class SwitchStatementTest extends PartialCodeTest {
               'switch (',
               [
                 ParserErrorCode.MISSING_IDENTIFIER,
-                ParserErrorCode.EXPECTED_TOKEN,
+                ParserErrorCode.EXPECTED_BODY,
                 ScannerErrorCode.EXPECTED_TOKEN
               ],
               "switch (_s_) {}",
-              failing: allExceptEof),
+              failing: [
+                'assert',
+                'block',
+                'labeled',
+                'localFunctionNonVoid',
+                'localFunctionVoid',
+                'return'
+              ]),
           new TestDescriptor(
               'expression',
               'switch (a',
-              [ParserErrorCode.EXPECTED_TOKEN, ScannerErrorCode.EXPECTED_TOKEN],
+              [ParserErrorCode.EXPECTED_BODY, ScannerErrorCode.EXPECTED_TOKEN],
               "switch (a) {}",
-              failing: allExceptEof),
+              failing: ['block']),
           new TestDescriptor('rightParen', 'switch (a)',
-              [ParserErrorCode.EXPECTED_TOKEN], "switch (a) {}",
+              [ParserErrorCode.EXPECTED_BODY], "switch (a) {}",
               failing: ['block']),
           new TestDescriptor('leftBrace', 'switch (a) {',
               [ScannerErrorCode.EXPECTED_TOKEN], "switch (a) {}",

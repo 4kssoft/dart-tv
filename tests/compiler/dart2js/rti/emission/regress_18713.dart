@@ -4,7 +4,7 @@
 
 import "package:expect/expect.dart";
 
-/*class: T:checks=[]*/
+/*class: T:checks=[],indirectInstance*/
 class T<X> {
   final Type tType = X;
   Type get getTType => X;
@@ -19,8 +19,8 @@ class S<Y> {
 /*class: TS:checks=[$asS0,$asT],instance*/
 class TS<A, B> = T<A> with S<B>;
 
-@NoInline()
-@AssumeDynamic()
+@pragma('dart2js:noInline')
+@pragma('dart2js:assumeDynamic')
 dyn(x) => x;
 
 main() {

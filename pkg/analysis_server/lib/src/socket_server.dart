@@ -1,17 +1,25 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analysis_server/protocol/protocol.dart';
 import 'package:analysis_server/protocol/protocol_generated.dart';
 import 'package:analysis_server/src/analysis_server.dart';
+import 'package:analysis_server/src/analysis_server_abstract.dart';
 import 'package:analysis_server/src/channel/channel.dart';
+import 'package:analysis_server/src/server/detachable_filesystem_manager.dart';
 import 'package:analysis_server/src/server/diagnostic_server.dart';
+import 'package:analysis_server/src/utilities/request_statistics.dart';
 import 'package:analyzer/file_system/physical_file_system.dart';
 import 'package:analyzer/instrumentation/instrumentation.dart';
 import 'package:analyzer/src/generated/sdk.dart';
 import 'package:analyzer/src/plugin/resolver_provider.dart';
-import 'package:analyzer/src/source/pub_package_map_provider.dart';
+
+abstract class AbstractSocketServer {
+  AnalysisServerOptions get analysisServerOptions;
+  AbstractAnalysisServer get analysisServer;
+  DiagnosticServer get diagnosticServer;
+}
 
 /**
  * Instances of the class [SocketServer] implement the common parts of
@@ -19,7 +27,7 @@ import 'package:analyzer/src/source/pub_package_map_provider.dart';
  * the SocketServer is to manage the lifetime of the AnalysisServer and to
  * encode and decode the JSON messages exchanged with the client.
  */
-class SocketServer {
+class SocketServer implements AbstractSocketServer {
   final AnalysisServerOptions analysisServerOptions;
 
   /**
@@ -27,11 +35,12 @@ class SocketServer {
    */
   final DartSdkManager sdkManager;
 
-  final DartSdk defaultSdk;
   final InstrumentationService instrumentationService;
+  final RequestStatisticsHelper requestStatistics;
   final DiagnosticServer diagnosticServer;
   final ResolverProvider fileResolverProvider;
   final ResolverProvider packageResolverProvider;
+  final DetachableFileSystemManager detachableFileSystemManager;
 
   /**
    * The analysis server that was created when a client established a
@@ -42,11 +51,12 @@ class SocketServer {
   SocketServer(
       this.analysisServerOptions,
       this.sdkManager,
-      this.defaultSdk,
       this.instrumentationService,
+      this.requestStatistics,
       this.diagnosticServer,
       this.fileResolverProvider,
-      this.packageResolverProvider);
+      this.packageResolverProvider,
+      this.detachableFileSystemManager);
 
   /**
    * Create an analysis server which will communicate with the client using the
@@ -77,14 +87,17 @@ class SocketServer {
     }
 
     analysisServer = new AnalysisServer(
-        serverChannel,
-        resourceProvider,
-        new PubPackageMapProvider(resourceProvider, defaultSdk),
-        analysisServerOptions,
-        sdkManager,
-        instrumentationService,
-        diagnosticServer: diagnosticServer,
-        fileResolverProvider: fileResolverProvider,
-        packageResolverProvider: packageResolverProvider);
+      serverChannel,
+      resourceProvider,
+      analysisServerOptions,
+      sdkManager,
+      instrumentationService,
+      requestStatistics: requestStatistics,
+      diagnosticServer: diagnosticServer,
+      fileResolverProvider: fileResolverProvider,
+      packageResolverProvider: packageResolverProvider,
+      detachableFileSystemManager: detachableFileSystemManager,
+    );
+    detachableFileSystemManager?.setAnalysisServer(analysisServer);
   }
 }

@@ -9,10 +9,10 @@ import 'package:compiler/src/common.dart';
 import 'package:compiler/src/compiler.dart';
 import 'package:compiler/src/diagnostics/diagnostic_listener.dart';
 import 'package:compiler/src/elements/entities.dart';
-import 'package:compiler/src/js_backend/backend.dart';
-import 'package:compiler/src/kernel/element_map.dart';
-import 'package:compiler/src/kernel/kernel_backend_strategy.dart';
-import 'package:compiler/src/ssa/builder_kernel.dart' as kernel;
+import 'package:compiler/src/js_model/element_map.dart';
+import 'package:compiler/src/js_model/js_strategy.dart';
+import 'package:compiler/src/js_model/js_world.dart';
+import 'package:compiler/src/ssa/builder_kernel.dart';
 import 'package:compiler/src/universe/world_impact.dart';
 import 'package:compiler/src/universe/use.dart';
 import 'package:kernel/ast.dart' as ir;
@@ -20,19 +20,50 @@ import '../equivalence/id_equivalence.dart';
 import '../equivalence/id_equivalence_helper.dart';
 
 main(List<String> args) {
-  JavaScriptBackend.cacheCodegenImpactForTesting = true;
   asyncTest(() async {
     Directory dataDir = new Directory.fromUri(Platform.script.resolve('data'));
-    await checkTests(dataDir, computeMemberIrInlinings, args: args);
+    await checkTests(dataDir, const InliningDataComputer(), args: args);
   });
 }
 
-abstract class ComputeValueMixin<T> {
-  JavaScriptBackend get backend;
+class InliningDataComputer extends DataComputer<String> {
+  const InliningDataComputer();
 
-  ConstructorBodyEntity getConstructorBody(ConstructorEntity constructor);
+  /// Compute type inference data for [member] from kernel based inference.
+  ///
+  /// Fills [actualMap] with the data.
+  @override
+  void computeMemberData(Compiler compiler, MemberEntity member,
+      Map<Id, ActualData<String>> actualMap,
+      {bool verbose: false}) {
+    JsClosedWorld closedWorld = compiler.backendClosedWorldForTesting;
+    JsToElementMap elementMap = closedWorld.elementMap;
+    MemberDefinition definition = elementMap.getMemberDefinition(member);
+    new InliningIrComputer(compiler.reporter, actualMap, elementMap, member,
+            compiler.backendStrategy, closedWorld.closureDataLookup)
+        .run(definition.node);
+  }
 
-  String getTooDifficultReason(MemberEntity member);
+  @override
+  DataInterpreter<String> get dataValidator => const StringDataInterpreter();
+}
+
+/// AST visitor for computing inference data for a member.
+class InliningIrComputer extends IrDataExtractor<String> {
+  final JsBackendStrategy _backendStrategy;
+  final JsToElementMap _elementMap;
+  final ClosureData _closureDataLookup;
+  final InlineDataCache _inlineDataCache;
+
+  InliningIrComputer(
+      DiagnosticReporter reporter,
+      Map<Id, ActualData<String>> actualMap,
+      this._elementMap,
+      MemberEntity member,
+      this._backendStrategy,
+      this._closureDataLookup)
+      : this._inlineDataCache = new InlineDataCache(enableUserAssertions: true),
+        super(reporter, actualMap);
 
   String getMemberValue(MemberEntity member) {
     if (member is FunctionEntity) {
@@ -41,7 +72,7 @@ abstract class ComputeValueMixin<T> {
         constructorBody = getConstructorBody(member);
       }
       List<String> inlinedIn = <String>[];
-      backend.codegenImpactsForTesting
+      _backendStrategy.codegenImpactsForTesting
           .forEach((MemberEntity user, WorldImpact impact) {
         for (StaticUse use in impact.staticUses) {
           if (use.kind == StaticUseKind.INLINING) {
@@ -62,67 +93,50 @@ abstract class ComputeValueMixin<T> {
         }
       });
       StringBuffer sb = new StringBuffer();
-      String tooDifficultReason = getTooDifficultReason(member);
+      String tooDifficultReason1 = getTooDifficultReasonForbidLoops(member);
+      String tooDifficultReason2 = getTooDifficultReasonAllowLoops(member);
       inlinedIn.sort();
-      if (tooDifficultReason != null) {
-        sb.write(tooDifficultReason);
-        if (inlinedIn.isNotEmpty) {
-          sb.write(',[${inlinedIn.join(',')}]');
-        }
-      } else {
-        sb.write('[${inlinedIn.join(',')}]');
+      String sep = '';
+      if (tooDifficultReason1 != null) {
+        sb.write(sep);
+        sb.write(tooDifficultReason1);
+        sep = ',';
+      }
+      if (tooDifficultReason2 != null &&
+          tooDifficultReason2 != tooDifficultReason1) {
+        sb.write(sep);
+        sb.write('(allowLoops)');
+        sb.write(tooDifficultReason2);
+        sep = ',';
+      }
+      if (inlinedIn.isNotEmpty || sep == '') {
+        sb.write(sep);
+        sb.write('[');
+        sb.write(inlinedIn.join(','));
+        sb.write(']');
       }
       return sb.toString();
     }
     return null;
   }
-}
-
-/// Compute type inference data for [member] from kernel based inference.
-///
-/// Fills [actualMap] with the data.
-void computeMemberIrInlinings(
-    Compiler compiler, MemberEntity member, Map<Id, ActualData> actualMap,
-    {bool verbose: false}) {
-  KernelBackendStrategy backendStrategy = compiler.backendStrategy;
-  KernelToElementMapForBuilding elementMap = backendStrategy.elementMap;
-  MemberDefinition definition = elementMap.getMemberDefinition(member);
-  new InliningIrComputer(
-          compiler.reporter,
-          actualMap,
-          elementMap,
-          member,
-          compiler.backend,
-          backendStrategy.closureDataLookup as ClosureDataLookup<ir.Node>)
-      .run(definition.node);
-}
-
-/// AST visitor for computing inference data for a member.
-class InliningIrComputer extends IrDataExtractor
-    with ComputeValueMixin<ir.Node> {
-  final JavaScriptBackend backend;
-  final KernelToElementMapForBuilding _elementMap;
-  final ClosureDataLookup<ir.Node> _closureDataLookup;
-
-  InliningIrComputer(
-      DiagnosticReporter reporter,
-      Map<Id, ActualData> actualMap,
-      this._elementMap,
-      MemberEntity member,
-      this.backend,
-      this._closureDataLookup)
-      : super(reporter, actualMap);
 
   ConstructorBodyEntity getConstructorBody(ConstructorEntity constructor) {
     return _elementMap
         .getConstructorBody(_elementMap.getMemberDefinition(constructor).node);
   }
 
-  @override
-  String getTooDifficultReason(MemberEntity member) {
+  String getTooDifficultReasonForbidLoops(MemberEntity member) {
     if (member is! FunctionEntity) return null;
-    return kernel.InlineWeeder.cannotBeInlinedReason(_elementMap, member, null,
-        enableUserAssertions: true);
+    return _inlineDataCache
+        .getInlineData(_elementMap, member)
+        .cannotBeInlinedReason();
+  }
+
+  String getTooDifficultReasonAllowLoops(MemberEntity member) {
+    if (member is! FunctionEntity) return null;
+    return _inlineDataCache
+        .getInlineData(_elementMap, member)
+        .cannotBeInlinedReason(allowLoops: true);
   }
 
   @override

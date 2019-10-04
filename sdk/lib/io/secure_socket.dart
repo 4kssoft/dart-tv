@@ -46,13 +46,31 @@ abstract class SecureSocket implements Socket {
       bool onBadCertificate(X509Certificate certificate),
       List<String> supportedProtocols,
       Duration timeout}) {
-    return RawSecureSocket
-        .connect(host, port,
+    return RawSecureSocket.connect(host, port,
             context: context,
             onBadCertificate: onBadCertificate,
             supportedProtocols: supportedProtocols,
             timeout: timeout)
         .then((rawSocket) => new SecureSocket._(rawSocket));
+  }
+
+  /// Like [connect], but returns a [Future] that completes with a
+  /// [ConnectionTask] that can be cancelled if the [SecureSocket] is no
+  /// longer needed.
+  static Future<ConnectionTask<SecureSocket>> startConnect(host, int port,
+      {SecurityContext context,
+      bool onBadCertificate(X509Certificate certificate),
+      List<String> supportedProtocols}) {
+    return RawSecureSocket.startConnect(host, port,
+            context: context,
+            onBadCertificate: onBadCertificate,
+            supportedProtocols: supportedProtocols)
+        .then((rawState) {
+      Future<SecureSocket> socket =
+          rawState.socket.then((rawSocket) => new SecureSocket._(rawSocket));
+      return new ConnectionTask<SecureSocket>._(
+          socket: socket, onCancel: rawState._onCancel);
+    });
   }
 
   /**
@@ -74,6 +92,11 @@ abstract class SecureSocket implements Socket {
    * the [socket] will be used. The [host] can be either a [String] or
    * an [InternetAddress].
    *
+   * [supportedProtocols] is an optional list of protocols (in decreasing
+   * order of preference) to use during the ALPN protocol negotiation with the
+   * server.  Example values are "http/1.1" or "h2".  The selected protocol
+   * can be obtained via [SecureSocket.selectedProtocol].
+   *
    * Calling this function will _not_ cause a DNS host lookup. If the
    * [host] passed is a [String] the [InternetAddress] for the
    * resulting [SecureSocket] will have the passed in [host] as its
@@ -86,14 +109,16 @@ abstract class SecureSocket implements Socket {
   static Future<SecureSocket> secure(Socket socket,
       {host,
       SecurityContext context,
-      bool onBadCertificate(X509Certificate certificate)}) {
+      bool onBadCertificate(X509Certificate certificate),
+      @Since("2.6") List<String> supportedProtocols}) {
     return ((socket as dynamic /*_Socket*/)._detachRaw() as Future)
         .then<RawSecureSocket>((detachedRaw) {
       return RawSecureSocket.secure(detachedRaw[0] as RawSocket,
           subscription: detachedRaw[1] as StreamSubscription<RawSocketEvent>,
           host: host,
           context: context,
-          onBadCertificate: onBadCertificate);
+          onBadCertificate: onBadCertificate,
+          supportedProtocols: supportedProtocols);
     }).then<SecureSocket>((raw) => new SecureSocket._(raw));
   }
 
@@ -215,6 +240,26 @@ abstract class RawSecureSocket implements RawSocket {
     });
   }
 
+  /// Like [connect], but returns a [Future] that completes with a
+  /// [ConnectionTask] that can be cancelled if the [RawSecureSocket] is no
+  /// longer needed.
+  static Future<ConnectionTask<RawSecureSocket>> startConnect(host, int port,
+      {SecurityContext context,
+      bool onBadCertificate(X509Certificate certificate),
+      List<String> supportedProtocols}) {
+    return RawSocket.startConnect(host, port)
+        .then((ConnectionTask<RawSocket> rawState) {
+      Future<RawSecureSocket> socket = rawState.socket.then((rawSocket) {
+        return secure(rawSocket,
+            context: context,
+            onBadCertificate: onBadCertificate,
+            supportedProtocols: supportedProtocols);
+      });
+      return new ConnectionTask<RawSecureSocket>._(
+          socket: socket, onCancel: rawState._onCancel);
+    });
+  }
+
   /**
    * Takes an already connected [socket] and starts client side TLS
    * handshake to make the communication secure. When the returned
@@ -233,6 +278,11 @@ abstract class RawSecureSocket implements RawSocket {
    * for the TLS handshake. If [host] is not passed the host name from
    * the [socket] will be used. The [host] can be either a [String] or
    * an [InternetAddress].
+   *
+   * [supportedProtocols] is an optional list of protocols (in decreasing
+   * order of preference) to use during the ALPN protocol negotiation with the
+   * server.  Example values are "http/1.1" or "h2".  The selected protocol
+   * can be obtained via [SecureSocket.selectedProtocol].
    *
    * Calling this function will _not_ cause a DNS host lookup. If the
    * [host] passed is a [String] the [InternetAddress] for the
@@ -339,7 +389,9 @@ abstract class RawSecureSocket implements RawSocket {
  * X509Certificate represents an SSL certificate, with accessors to
  * get the fields of the certificate.
  */
+@pragma("vm:entry-point")
 abstract class X509Certificate {
+  @pragma("vm:entry-point")
   external factory X509Certificate._();
 
   /// The DER encoded bytes of the certificate.
@@ -420,7 +472,7 @@ class _RawSecureSocket extends Stream<RawSocketEvent>
   bool _filterPending = false;
   bool _filterActive = false;
 
-  _SecureFilter _secureFilter = new _SecureFilter();
+  _SecureFilter _secureFilter = new _SecureFilter._();
   String _selectedProtocol;
 
   static Future<_RawSecureSocket> connect(
@@ -469,9 +521,7 @@ class _RawSecureSocket extends Stream<RawSocketEvent>
       this.requireClientCertificate,
       this.onBadCertificate,
       List<String> supportedProtocols) {
-    if (context == null) {
-      context = SecurityContext.defaultContext;
-    }
+    context ??= SecurityContext.defaultContext;
     _controller = new StreamController<RawSocketEvent>(
         sync: true,
         onListen: _onSubscriptionStateChange,
@@ -543,21 +593,14 @@ class _RawSecureSocket extends Stream<RawSocketEvent>
     if (host is! String && host is! InternetAddress) {
       throw new ArgumentError("host is not a String or an InternetAddress");
     }
-    if (requestedPort is! int) {
-      throw new ArgumentError("requestedPort is not an int");
-    }
+    ArgumentError.checkNotNull(requestedPort, "requestedPort");
     if (requestedPort < 0 || requestedPort > 65535) {
-      throw new ArgumentError("requestedPort is not in the range 0..65535");
+      throw ArgumentError("requestedPort is not in the range 0..65535");
     }
-    if (requestClientCertificate is! bool) {
-      throw new ArgumentError("requestClientCertificate is not a bool");
-    }
-    if (requireClientCertificate is! bool) {
-      throw new ArgumentError("requireClientCertificate is not a bool");
-    }
-    if (onBadCertificate != null && onBadCertificate is! Function) {
-      throw new ArgumentError("onBadCertificate is not null or a Function");
-    }
+    ArgumentError.checkNotNull(
+        requestClientCertificate, "requestClientCertificate");
+    ArgumentError.checkNotNull(
+        requireClientCertificate, "requireClientCertificate");
   }
 
   int get port => _socket.port;
@@ -645,7 +688,7 @@ class _RawSecureSocket extends Stream<RawSocketEvent>
     _scheduleReadEvent();
   }
 
-  List<int> read([int length]) {
+  Uint8List read([int length]) {
     if (length != null && (length is! int || length < 0)) {
       throw new ArgumentError(
           "Invalid length parameter in SecureSocket.read (length: $length)");
@@ -676,8 +719,8 @@ class _RawSecureSocket extends Stream<RawSocketEvent>
       return 0;
     }
     if (_status != connectedStatus) return 0;
-    if (offset == null) offset = 0;
-    if (bytes == null) bytes = data.length - offset;
+    offset ??= 0;
+    bytes ??= data.length - offset;
 
     int written =
         _secureFilter.buffers[writePlaintextId].write(data, offset, bytes);
@@ -703,6 +746,14 @@ class _RawSecureSocket extends Stream<RawSocketEvent>
   bool setOption(SocketOption option, bool enabled) {
     if (_socket == null) return false;
     return _socket.setOption(option, enabled);
+  }
+
+  Uint8List getRawOption(RawSocketOption option) {
+    return _socket?.getRawOption(option);
+  }
+
+  void setRawOption(RawSocketOption option) {
+    _socket?.setRawOption(option);
   }
 
   void _eventDispatcher(RawSocketEvent event) {
@@ -990,8 +1041,7 @@ class _RawSecureSocket extends Stream<RawSocketEvent>
       args[2 * i + 3] = bufs[i].end;
     }
 
-    return _IOService
-        ._dispatch(_IOService.sslProcessFilter, args)
+    return _IOService._dispatch(_IOService.sslProcessFilter, args)
         .then((response) {
       if (response.length == 2) {
         if (wasInHandshake) {
@@ -1070,9 +1120,15 @@ class _RawSecureSocket extends Stream<RawSocketEvent>
  */
 class _ExternalBuffer {
   // This will be an ExternalByteArray, backed by C allocated data.
+  @pragma("vm:entry-point", "set")
   List<int> data;
+
+  @pragma("vm:entry-point")
   int start;
+
+  @pragma("vm:entry-point")
   int end;
+
   final size;
 
   _ExternalBuffer(this.size) {
@@ -1113,14 +1169,14 @@ class _ExternalBuffer {
     return size - end;
   }
 
-  List<int> read(int bytes) {
+  Uint8List read(int bytes) {
     if (bytes == null) {
       bytes = length;
     } else {
       bytes = min(bytes, length);
     }
     if (bytes == 0) return null;
-    List<int> result = new Uint8List(bytes);
+    Uint8List result = new Uint8List(bytes);
     int bytesRead = 0;
     // Loop over zero, one, or two linear data ranges.
     while (bytesRead < bytes) {
@@ -1182,7 +1238,7 @@ class _ExternalBuffer {
 }
 
 abstract class _SecureFilter {
-  external factory _SecureFilter();
+  external factory _SecureFilter._();
 
   void connect(
       String hostName,
@@ -1219,7 +1275,8 @@ class TlsException implements IOException {
   final String message;
   final OSError osError;
 
-  const TlsException([String message = "", OSError osError = null])
+  @pragma("vm:entry-point")
+  const TlsException([String message = "", OSError osError])
       : this._("TlsException", message, osError);
 
   const TlsException._(this.type, this.message, this.osError);
@@ -1227,7 +1284,7 @@ class TlsException implements IOException {
   String toString() {
     StringBuffer sb = new StringBuffer();
     sb.write(type);
-    if (!message.isEmpty) {
+    if (message.isNotEmpty) {
       sb.write(": $message");
       if (osError != null) {
         sb.write(" ($osError)");
@@ -1243,8 +1300,10 @@ class TlsException implements IOException {
  * An exception that happens in the handshake phase of establishing
  * a secure network connection.
  */
+@pragma("vm:entry-point")
 class HandshakeException extends TlsException {
-  const HandshakeException([String message = "", OSError osError = null])
+  @pragma("vm:entry-point")
+  const HandshakeException([String message = "", OSError osError])
       : super._("HandshakeException", message, osError);
 }
 
@@ -1254,6 +1313,7 @@ class HandshakeException extends TlsException {
  * certificate.
  */
 class CertificateException extends TlsException {
-  const CertificateException([String message = "", OSError osError = null])
+  @pragma("vm:entry-point")
+  const CertificateException([String message = "", OSError osError])
       : super._("CertificateException", message, osError);
 }

@@ -6,7 +6,7 @@
 
 #include "include/dart_api.h"
 #include "platform/globals.h"
-#include "vm/os.h"
+#include "platform/syslog.h"
 
 namespace dart {
 
@@ -29,7 +29,7 @@ void DynamicAssertionHelper::Print(const char* format, va_list arguments) {
             sizeof(buffer) - file_and_line_length, format, arguments);
 
   // Print the buffer on stderr and/or syslog.
-  OS::PrintErr("%s\n", buffer);
+  Syslog::PrintErr("%s\n", buffer);
 }
 
 void Assert::Fail(const char* format, ...) {
@@ -39,8 +39,9 @@ void Assert::Fail(const char* format, ...) {
   va_end(arguments);
 
   // Abort right away.
-  NOT_IN_PRODUCT(Dart_DumpNativeStackTrace(NULL));
-  OS::Abort();
+  Dart_DumpNativeStackTrace(NULL);
+  Dart_PrepareToAbort();
+  abort();
 }
 
 void Expect::Fail(const char* format, ...) {

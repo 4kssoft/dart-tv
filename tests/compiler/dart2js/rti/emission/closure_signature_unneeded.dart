@@ -2,22 +2,21 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'package:expect/expect.dart';
-
 /*class: A:checks=[],instance*/
 class A<T> {
-  @NoInline()
+  @pragma('dart2js:noInline')
   m() {
     // TODO(johnniwinther): The signature is not needed since the type isn't a
     // potential subtype of the checked function types.
     return
-        /*kernel.checks=[$signature],instance*/
+
         /*strong.checks=[],instance*/
+        /*omit.checks=[],instance*/
         (T t, String s) {};
   }
 }
 
-@NoInline()
+@pragma('dart2js:noInline')
 test(o) => o is void Function(int);
 
 main() {

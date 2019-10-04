@@ -105,34 +105,35 @@ class Flag {
 
   void Print() {
     if (IsUnrecognized()) {
-      OS::Print("%s: unrecognized\n", name_);
+      OS::PrintErr("%s: unrecognized\n", name_);
       return;
     }
     switch (type_) {
       case kBoolean: {
-        OS::Print("%s: %s (%s)\n", name_, *this->bool_ptr_ ? "true" : "false",
-                  comment_);
+        OS::PrintErr("%s: %s (%s)\n", name_,
+                     *this->bool_ptr_ ? "true" : "false", comment_);
         break;
       }
       case kInteger: {
-        OS::Print("%s: %d (%s)\n", name_, *this->int_ptr_, comment_);
+        OS::PrintErr("%s: %d (%s)\n", name_, *this->int_ptr_, comment_);
         break;
       }
       case kUint64: {
-        OS::Print("%s: %" Pu64 " (%s)\n", name_, *this->uint64_ptr_, comment_);
+        OS::PrintErr("%s: %" Pu64 " (%s)\n", name_, *this->uint64_ptr_,
+                     comment_);
         break;
       }
       case kString: {
         if (*this->charp_ptr_ != NULL) {
-          OS::Print("%s: '%s' (%s)\n", name_, *this->charp_ptr_, comment_);
+          OS::PrintErr("%s: '%s' (%s)\n", name_, *this->charp_ptr_, comment_);
         } else {
-          OS::Print("%s: (null) (%s)\n", name_, comment_);
+          OS::PrintErr("%s: (null) (%s)\n", name_, comment_);
         }
         break;
       }
       case kOptionHandler:
       case kFlagHandler: {
-        OS::Print("%s: (%s)\n", name_, comment_);
+        OS::PrintErr("%s: (%s)\n", name_, comment_);
         break;
       }
       default:
@@ -174,6 +175,11 @@ bool Flags::IsSet(const char* name) {
   Flag* flag = Lookup(name);
   return (flag != NULL) && (flag->type_ == Flag::kBoolean) &&
          (flag->bool_ptr_ != NULL) && (*flag->bool_ptr_ == true);
+}
+
+void Flags::Cleanup() {
+  ASSERT(initialized_);
+  initialized_ = false;
 }
 
 void Flags::AddFlag(Flag* flag) {
@@ -391,8 +397,8 @@ void Flags::Parse(const char* option) {
     // unrecognized flags.
     if (!flag->IsUnrecognized()) {
       if (!SetFlagFromString(flag, argument)) {
-        OS::Print("Ignoring flag: %s is an invalid value for flag %s\n",
-                  argument, name);
+        OS::PrintErr("Ignoring flag: %s is an invalid value for flag %s\n",
+                     argument, name);
       }
     }
   }
@@ -473,7 +479,7 @@ bool Flags::SetFlag(const char* name, const char* value, const char** error) {
 }
 
 void Flags::PrintFlags() {
-  OS::Print("Flag settings:\n");
+  OS::PrintErr("Flag settings:\n");
   for (intptr_t i = 0; i < num_flags_; ++i) {
     flags_[i]->Print();
   }

@@ -11,19 +11,57 @@ import '../common.dart';
 import '../js/js.dart' as js;
 import '../js/js_debug.dart';
 import '../js/js_source_mapping.dart';
+import '../serialization/serialization.dart';
+import '../util/util.dart';
 import 'code_output.dart' show BufferedCodeOutput;
 import 'source_information.dart';
 
 /// [SourceInformation] that consists of an offset position into the source
 /// code.
 class PositionSourceInformation extends SourceInformation {
+  static const String tag = 'source-information';
+
   @override
   final SourceLocation startPosition;
 
   @override
   final SourceLocation innerPosition;
 
-  PositionSourceInformation(this.startPosition, [this.innerPosition]);
+  @override
+  final List<FrameContext> inliningContext;
+
+  PositionSourceInformation(
+      this.startPosition, this.innerPosition, this.inliningContext);
+
+  factory PositionSourceInformation.readFromDataSource(DataSource source) {
+    source.begin(tag);
+    SourceLocation startPosition = source.readCached<SourceLocation>(
+        () => SourceLocation.readFromDataSource(source));
+    SourceLocation innerPosition = source.readCached<SourceLocation>(
+        () => SourceLocation.readFromDataSource(source));
+    List<FrameContext> inliningContext = source.readList(
+        () => FrameContext.readFromDataSource(source),
+        emptyAsNull: true);
+    source.end(tag);
+    return new PositionSourceInformation(
+        startPosition, innerPosition, inliningContext);
+  }
+
+  void writeToDataSinkInternal(DataSink sink) {
+    sink.begin(tag);
+    sink.writeCached(
+        startPosition,
+        (SourceLocation sourceLocation) =>
+            SourceLocation.writeToDataSink(sink, sourceLocation));
+    sink.writeCached(
+        innerPosition,
+        (SourceLocation sourceLocation) =>
+            SourceLocation.writeToDataSink(sink, sourceLocation));
+    sink.writeList(inliningContext,
+        (FrameContext context) => context.writeToDataSink(sink),
+        allowNull: true);
+    sink.end(tag);
+  }
 
   @override
   List<SourceLocation> get sourceLocations {
@@ -46,16 +84,19 @@ class PositionSourceInformation extends SourceInformation {
     return new SourceSpan(uri, offset, offset);
   }
 
+  @override
   int get hashCode {
-    return 0x7FFFFFFF &
-        (startPosition.hashCode * 17 + innerPosition.hashCode * 19);
+    return Hashing.listHash(
+        inliningContext, Hashing.objectsHash(startPosition, innerPosition));
   }
 
+  @override
   bool operator ==(other) {
     if (identical(this, other)) return true;
-    if (other is! PositionSourceInformation) return false;
-    return startPosition == other.startPosition &&
-        innerPosition == other.innerPosition;
+    return other is PositionSourceInformation &&
+        startPosition == other.startPosition &&
+        innerPosition == other.innerPosition &&
+        equalElements(inliningContext, other.inliningContext);
   }
 
   /// Create a textual representation of the source information using [uriText]
@@ -75,6 +116,7 @@ class PositionSourceInformation extends SourceInformation {
     return sb.toString();
   }
 
+  @override
   String get shortText {
     if (startPosition != null) {
       return _computeText(startPosition.sourceUri.pathSegments.last);
@@ -83,6 +125,7 @@ class PositionSourceInformation extends SourceInformation {
     }
   }
 
+  @override
   String toString() {
     if (startPosition != null) {
       return _computeText('${startPosition.sourceUri}');
@@ -92,8 +135,8 @@ class PositionSourceInformation extends SourceInformation {
   }
 }
 
-abstract class AbstractPositionSourceInformationStrategy<T>
-    implements JavaScriptSourceInformationStrategy<T> {
+abstract class AbstractPositionSourceInformationStrategy
+    implements JavaScriptSourceInformationStrategy {
   const AbstractPositionSourceInformationStrategy();
 
   @override
@@ -149,6 +192,7 @@ class CodePosition {
     }
   }
 
+  @override
   String toString() {
     return 'CodePosition(start=$startPosition,'
         'end=$endPosition,closing=$closingPosition)';
@@ -175,6 +219,7 @@ class CodePositionRecorder implements CodePositionMap {
     _codePositionMap[node] = codePosition;
   }
 
+  @override
   CodePosition operator [](js.Node node) => _codePositionMap[node];
 }
 
@@ -275,22 +320,27 @@ class PositionSourceInformationProcessor extends SourceInformationProcessor {
   final SourceInformationReader reader;
   CodePositionMap codePositionMap;
   List<TraceListener> traceListeners;
+  InliningTraceListener inliningListener;
 
   PositionSourceInformationProcessor(SourceMapperProvider provider, this.reader,
       [Coverage coverage]) {
     codePositionMap = coverage != null
         ? new CodePositionCoverage(codePositionRecorder, coverage)
         : codePositionRecorder;
+    var sourceMapper = provider.createSourceMapper(id);
     traceListeners = [
-      new PositionTraceListener(provider.createSourceMapper(id), reader)
+      new PositionTraceListener(sourceMapper, reader),
+      inliningListener = new InliningTraceListener(sourceMapper, reader),
     ];
     if (coverage != null) {
       traceListeners.add(new CoverageListener(coverage, reader));
     }
   }
 
+  @override
   void process(js.Node node, BufferedCodeOutput code) {
     new JavaScriptTracer(codePositionMap, reader, traceListeners).apply(node);
+    inliningListener?.finish();
   }
 
   @override
@@ -368,10 +418,92 @@ abstract class NodeToSourceInformationMixin {
   }
 }
 
+/// [TraceListener] that register inlining context-data with a [SourceMapper].
+class InliningTraceListener extends TraceListener
+    with NodeToSourceInformationMixin {
+  final SourceMapper sourceMapper;
+  @override
+  final SourceInformationReader reader;
+  final Map<int, List<FrameContext>> _frames = {};
+
+  InliningTraceListener(this.sourceMapper, this.reader);
+
+  @override
+  void onStep(js.Node node, Offset offset, StepKind kind) {
+    SourceInformation sourceInformation = computeSourceInformation(node);
+    if (sourceInformation == null) return;
+    // TODO(sigmund): enable this assertion.
+    // assert(offset.value != null, "Expected a valid offset: $node $offset");
+    if (offset.value == null) return;
+
+    // TODO(sigmund): enable this assertion
+    //assert(_frames[offset.value] == null,
+    //     "Expect a single entry per offset: $offset $node");
+    if (_frames[offset.value] != null) return;
+
+    // During tracing we only collect information per offset because the tracer
+    // visits nodes in tree order. We'll later sort the data by offset before
+    // registering the frame data with [SourceMapper].
+    if (kind == StepKind.FUN_EXIT) {
+      _frames[offset.value] = null;
+    } else {
+      _frames[offset.value] = sourceInformation.inliningContext;
+    }
+  }
+
+  /// Converts the inlining context data collected during tracing into push/pop
+  /// stack operations that will be emitted with the source-map files.
+  void finish() {
+    List<FrameContext> lastInliningContext;
+    for (var offset in _frames.keys.toList()..sort()) {
+      var newInliningContext = _frames[offset];
+
+      // Note: this relies on the invariant that, when we built the inlining
+      // context lists during SSA, we kept lists identical whenever there were
+      // no inlining changes.
+      if (lastInliningContext == newInliningContext) continue;
+
+      bool isEmpty = false;
+      int popCount = 0;
+      List<FrameContext> pushes = const [];
+      if (newInliningContext == null) {
+        popCount = lastInliningContext.length;
+        isEmpty = true;
+      } else if (lastInliningContext == null) {
+        pushes = newInliningContext;
+      } else {
+        int min = newInliningContext.length;
+        if (min > lastInliningContext.length) min = lastInliningContext.length;
+        // Determine the total number of common frames, to produce the minimal
+        // set of pop and push operations.
+        int i = 0;
+        for (i = 0; i < min; i++) {
+          if (!identical(newInliningContext[i], lastInliningContext[i])) break;
+        }
+        isEmpty = i == 0;
+        popCount = lastInliningContext.length - i;
+        if (i < newInliningContext.length) {
+          pushes = newInliningContext.sublist(i);
+        }
+      }
+      lastInliningContext = newInliningContext;
+
+      while (popCount-- > 0) {
+        sourceMapper.registerPop(offset, isEmpty: popCount == 0 && isEmpty);
+      }
+      for (FrameContext push in pushes) {
+        sourceMapper.registerPush(offset,
+            getSourceLocation(push.callInformation), push.inlinedMethodName);
+      }
+    }
+  }
+}
+
 /// [TraceListener] that register [SourceLocation]s with a [SourceMapper].
 class PositionTraceListener extends TraceListener
     with NodeToSourceInformationMixin {
   final SourceMapper sourceMapper;
+  @override
   final SourceInformationReader reader;
 
   PositionTraceListener(this.sourceMapper, this.reader);
@@ -462,6 +594,7 @@ class PositionTraceListener extends TraceListener
             CallPosition.getSemanticPositionForCall(node);
         registerPosition(callPosition.sourcePositionKind);
         break;
+      case StepKind.ACCESS:
       case StepKind.NEW:
       case StepKind.RETURN:
       case StepKind.BREAK:
@@ -549,18 +682,18 @@ class CallPosition {
   /// (@ marks the current JavaScript position and ^ point to the mapped Dart
   /// code position.)
   static CallPosition getSemanticPositionForCall(js.Call node) {
-    if (node.target is js.PropertyAccess) {
-      js.PropertyAccess access = node.target;
+    js.Expression access = js.undefer(node.target);
+    if (access is js.PropertyAccess) {
       js.Node target = access;
       bool pureAccess = false;
       while (target is js.PropertyAccess) {
         js.PropertyAccess targetAccess = target;
-        if (targetAccess.receiver is js.VariableUse ||
-            targetAccess.receiver is js.This) {
+        js.Node receiver = js.undefer(targetAccess.receiver);
+        if (receiver is js.VariableUse || receiver is js.This) {
           pureAccess = true;
           break;
         } else {
-          target = targetAccess.receiver;
+          target = receiver;
         }
       }
       if (pureAccess) {
@@ -574,19 +707,19 @@ class CallPosition {
         return new CallPosition(
             access.selector, CodePositionKind.START, SourcePositionKind.INNER);
       }
-    } else if (node.target is js.VariableUse || node.target is js.This) {
+    } else if (access is js.VariableUse || access is js.This) {
       // m()   this()
       // ^     ^
       return new CallPosition(
           node, CodePositionKind.START, SourcePositionKind.START);
-    } else if (node.target is js.Fun ||
-        node.target is js.New ||
-        node.target is js.NamedFunction) {
+    } else if (access is js.Fun ||
+        access is js.New ||
+        access is js.NamedFunction) {
       // function(){}()  new Function("...")()   function foo(){}()
       //             ^                      ^                    ^
       return new CallPosition(
           node.target, CodePositionKind.END, SourcePositionKind.INNER);
-    } else if (node.target is js.Binary || node.target is js.Call) {
+    } else if (access is js.Binary || access is js.Call) {
       // (0,a)()   m()()
       //      ^       ^
       return new CallPosition(
@@ -664,6 +797,7 @@ class Offset {
 
   int get value => subexpressionOffset;
 
+  @override
   String toString() {
     return 'Offset[statementOffset=$statementOffset,'
         'leftToRightOffset=$leftToRightOffset,'
@@ -684,6 +818,7 @@ enum StepKind {
   FUN_EXIT,
   CALL,
   NEW,
+  ACCESS,
   RETURN,
   BREAK,
   CONTINUE,
@@ -907,7 +1042,10 @@ class JavaScriptTracer extends js.BaseVisitor {
   @override
   visitNew(js.New node) {
     visit(node.target);
+    int oldPosition = offsetPosition;
+    offsetPosition = null;
     visitList(node.arguments);
+    offsetPosition = oldPosition;
     if (offsetPosition == null) {
       // Use the syntax offset if this is not the first subexpression.
       offsetPosition = getSyntaxOffset(node);
@@ -920,6 +1058,18 @@ class JavaScriptTracer extends js.BaseVisitor {
   @override
   visitAccess(js.PropertyAccess node) {
     visit(node.receiver);
+    notifyStep(
+        node,
+        // Technically we'd like to use the offset of the `.` in the property
+        // access, but the js_ast doesn't expose it. Since this is only used to
+        // search backwards for inlined frames, we use the receiver's END offset
+        // instead as an approximation. Note that the END offset points one
+        // character after the end of the node, so it is likely always the
+        // offset we want.
+        getOffsetForNode(
+            node, getSyntaxOffset(node.receiver, kind: CodePositionKind.END)),
+        StepKind.ACCESS);
+    steps.add(node);
     visit(node.selector);
   }
 
@@ -1156,6 +1306,11 @@ class JavaScriptTracer extends js.BaseVisitor {
     statementOffset = null;
   }
 
+  @override
+  visitDeferredExpression(js.DeferredExpression node) {
+    visit(node.value);
+  }
+
   Offset getOffsetForNode(js.Node node, int codeOffset) {
     if (codeOffset == null) {
       CodePosition codePosition = codePositions[node];
@@ -1265,12 +1420,14 @@ class Coverage {
     return sb.toString();
   }
 
+  @override
   String toString() => getCoverageReport();
 }
 
 /// [TraceListener] that registers [onStep] callbacks with [coverage].
 class CoverageListener extends TraceListener with NodeToSourceInformationMixin {
   final Coverage coverage;
+  @override
   final SourceInformationReader reader;
 
   CoverageListener(this.coverage, this.reader);

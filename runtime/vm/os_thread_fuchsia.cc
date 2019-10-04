@@ -12,9 +12,7 @@
 #include <errno.h>  // NOLINT
 #include <zircon/status.h>
 #include <zircon/syscalls.h>
-#include <zircon/syscalls/object.h>
 #include <zircon/threads.h>
-#include <zircon/tls.h>
 #include <zircon/types.h>
 
 #include "platform/address_sanitizer.h"
@@ -57,7 +55,7 @@ namespace dart {
 
 static void ComputeTimeSpecMicros(struct timespec* ts, int64_t micros) {
   // time in nanoseconds.
-  zx_time_t now = zx_clock_get(ZX_CLOCK_MONOTONIC);
+  zx_time_t now = zx_clock_get_monotonic();
   zx_time_t target = now + (micros * kNanosecondsPerMicrosecond);
   int64_t secs = target / kNanosecondsPerSecond;
   int64_t nanos = target - (secs * kNanosecondsPerSecond);
@@ -175,7 +173,7 @@ ThreadId OSThread::GetCurrentThreadId() {
   return info.koid;
 }
 
-#ifndef PRODUCT
+#ifdef SUPPORT_TIMELINE
 ThreadId OSThread::GetCurrentThreadTraceId() {
   return pthread_self();
 }

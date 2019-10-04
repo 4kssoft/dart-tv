@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -29,7 +29,7 @@ class TypeMemberContributor implements CompletionContributor {
    * call on `computeSuggestionsWithEntryPoint`.
    */
   @override
-  Future<Null> computeSuggestions(
+  Future<void> computeSuggestions(
       DartCompletionRequest request, CompletionCollector collector) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
@@ -51,7 +51,7 @@ class TypeMemberContributor implements CompletionContributor {
   /**
    * Clients should not overload this function.
    */
-  Future<Null> computeSuggestionsWithEntryPoint(DartCompletionRequest request,
+  Future<void> computeSuggestionsWithEntryPoint(DartCompletionRequest request,
       CompletionCollector collector, AstNode entryPoint) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
@@ -107,7 +107,7 @@ class TypeMemberContributor implements CompletionContributor {
       LibraryElement containingLibrary,
       Expression expression) {
     if (expression is Identifier) {
-      Element element = expression.bestElement;
+      Element element = expression.staticElement;
       if (element is ClassElement) {
         // Suggestions provided by StaticMemberContributor
         return;
@@ -119,12 +119,12 @@ class TypeMemberContributor implements CompletionContributor {
     }
 
     // Determine the target expression's type
-    DartType type = expression.bestType;
-    if (type.isDynamic) {
+    DartType type = expression.staticType;
+    if (type == null || type.isDynamic) {
       // If the expression does not provide a good type
       // then attempt to get a better type from the element
       if (expression is Identifier) {
-        Element elem = expression.bestElement;
+        Element elem = expression.staticElement;
         if (elem is FunctionTypedElement) {
           type = elem.returnType;
         } else if (elem is ParameterElement) {
@@ -151,7 +151,7 @@ class TypeMemberContributor implements CompletionContributor {
       // Determine the name of the containing method because
       // the most likely completion is a super expression with same name
       MethodDeclaration containingMethod =
-          expression.getAncestor((p) => p is MethodDeclaration);
+          expression.thisOrAncestorOfType<MethodDeclaration>();
       if (containingMethod != null) {
         SimpleIdentifier id = containingMethod.name;
         if (id != null) {
@@ -159,7 +159,7 @@ class TypeMemberContributor implements CompletionContributor {
         }
       }
     }
-    if (type.isDynamic) {
+    if (type == null || type.isDynamic) {
       // Suggest members from object if target is "dynamic"
       type = request.result.typeProvider.objectType;
     }
@@ -211,6 +211,9 @@ class _LocalBestTypeVisitor extends LocalDeclarationVisitor {
   }
 
   @override
+  void declaredExtension(ExtensionDeclaration declaration) {}
+
+  @override
   void declaredField(FieldDeclaration fieldDecl, VariableDeclaration varDecl) {
     if (varDecl.name.name == targetName) {
       // Type provided by the element in computeFull above
@@ -241,6 +244,17 @@ class _LocalBestTypeVisitor extends LocalDeclarationVisitor {
   }
 
   @override
+  void declaredGenericTypeAlias(GenericTypeAlias declaration) {
+    if (declaration.name.name == targetName) {
+      TypeAnnotation typeName = declaration.functionType.returnType;
+      if (typeName != null) {
+        typeFound = typeName.type;
+      }
+      finished();
+    }
+  }
+
+  @override
   void declaredLabel(Label label, bool isCaseLabel) {
     if (label.label.name == targetName) {
       // no type
@@ -251,7 +265,7 @@ class _LocalBestTypeVisitor extends LocalDeclarationVisitor {
   @override
   void declaredLocalVar(SimpleIdentifier name, TypeAnnotation type) {
     if (name.name == targetName) {
-      typeFound = name.bestType;
+      typeFound = name.staticType;
       finished();
     }
   }

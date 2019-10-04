@@ -21,11 +21,12 @@ class DFE {
   // Call Init before Dart_Initialize to prevent races between the
   // different isolates.
   void Init();
+  void Init(int target_abi_version);
 
   char* frontend_filename() const { return frontend_filename_; }
 
   void set_frontend_filename(const char* name) {
-    if (frontend_filename_ != NULL) {
+    if (frontend_filename_ != nullptr) {
       free(frontend_filename_);
     }
     frontend_filename_ = strdup(name);
@@ -33,6 +34,11 @@ class DFE {
   }
   void set_use_dfe(bool value = true) { use_dfe_ = value; }
   bool UseDartFrontend() const { return use_dfe_; }
+
+  void set_use_incremental_compiler(bool value) {
+    use_incremental_compiler_ = value;
+  }
+  bool use_incremental_compiler() const { return use_incremental_compiler_; }
 
   // Returns the platform binary file name if the path to
   // kernel binaries was set using SetKernelBinaries.
@@ -52,7 +58,6 @@ class DFE {
   // Compiles specified script.
   // Returns result from compiling the script.
   Dart_KernelCompilationResult CompileScript(const char* script_uri,
-                                             bool strong,
                                              bool incremental,
                                              const char* package_config);
 
@@ -65,7 +70,6 @@ class DFE {
                             intptr_t* kernel_buffer_size,
                             char** error,
                             int* exit_code,
-                            bool strong,
                             const char* package_config);
 
   // Reads the script kernel file if specified 'script_uri' is a kernel file.
@@ -75,7 +79,7 @@ class DFE {
                   uint8_t** kernel_buffer,
                   intptr_t* kernel_buffer_size) const;
 
-  static bool KernelServiceDillAvailable();
+  bool KernelServiceDillAvailable() const;
 
   // Tries to read [script_uri] as a Kernel IR file.
   // Returns `true` if successful and sets [kernel_file] and [kernel_length]
@@ -93,18 +97,26 @@ class DFE {
   bool CanUseDartFrontend() const;
 
   void LoadPlatform(const uint8_t** kernel_buffer,
-                    intptr_t* kernel_buffer_size,
-                    bool strong = false);
+                    intptr_t* kernel_buffer_size);
   void LoadKernelService(const uint8_t** kernel_service_buffer,
                          intptr_t* kernel_service_buffer_size);
 
  private:
   bool use_dfe_;
+  bool use_incremental_compiler_;
   char* frontend_filename_;
+  const uint8_t* kernel_service_dill_;
+  intptr_t kernel_service_dill_size_;
+  const uint8_t* platform_strong_dill_for_compilation_;
+  intptr_t platform_strong_dill_for_compilation_size_;
+  const uint8_t* platform_strong_dill_for_execution_;
+  intptr_t platform_strong_dill_for_execution_size_;
 
   // Kernel binary specified on the cmd line.
   uint8_t* application_kernel_buffer_;
   intptr_t application_kernel_buffer_size_;
+
+  bool InitKernelServiceAndPlatformDills(int target_abi_version);
 
   DISALLOW_COPY_AND_ASSIGN(DFE);
 };

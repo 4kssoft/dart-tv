@@ -10,7 +10,7 @@ import 'package:compiler/src/elements/entities.dart';
 import 'package:compiler/src/inferrer/typemasks/masks.dart';
 import 'package:compiler/src/world.dart';
 import 'type_mask_test_helper.dart';
-import '../memory_compiler.dart';
+import '../helpers/memory_compiler.dart';
 
 TypeMask nullType;
 TypeMask objectType;
@@ -54,7 +54,9 @@ class Pair {
   final first;
   final second;
   Pair(this.first, this.second);
+  @override
   int get hashCode => first.hashCode * 47 + second.hashCode;
+  @override
   bool operator ==(other) =>
       other is Pair &&
       identical(first, other.first) &&
@@ -739,7 +741,6 @@ void testRegressions(JClosedWorld closedWorld) {
 
 void main() {
   asyncTest(() async {
-    print('--test from kernel------------------------------------------------');
     await runTests();
   });
 }
@@ -748,7 +749,9 @@ runTests() async {
   CompilationResult result = await runCompiler(memorySourceFiles: {
     'main.dart': r'''
     import 'dart:collection';
-    class AList<E> extends ListBase<E> {}
+    class AList<E> extends ListBase<E> {
+      noSuchMethod(_) {}
+    }
     main() {
       print('${0}${true}${null}${0.5}${[]}${{}}');
       print('${"".split("")}${new RegExp('')}');

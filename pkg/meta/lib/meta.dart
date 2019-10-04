@@ -11,11 +11,11 @@
 /// of a function that's been marked `@deprecated`, or it might display the
 /// function's name differently.
 ///
-/// For information on installing and importing this library, see the
-/// [meta package on pub.dartlang.org] (http://pub.dartlang.org/packages/meta).
-/// For examples of using annotations, see
-/// [Metadata](https://www.dartlang.org/docs/dart-up-and-running/ch02.html#metadata)
-/// in the language tour.
+/// For information on installing and importing this library, see the [meta
+/// package on pub.dev](https://pub.dev/packages/meta).  For examples of using
+/// annotations, see
+/// [Metadata](https://dart.dev/guides/language/language-tour#metadata) in the
+/// language tour.
 library meta;
 
 /// Used to annotate a function `f`. Indicates that `f` always throws an
@@ -89,8 +89,8 @@ const _Experimental experimental = const _Experimental();
 /// Tools, such as the analyzer, can provide feedback if
 ///
 /// * the annotation is associated with anything other than a method, or
-/// * the annotation is associated with a method that has this annotation that
-///   can return anything other than a newly allocated object or `null`.
+/// * a method that has this annotation can return anything other than a newly
+///   allocated object or `null`.
 const _Factory factory = const _Factory();
 
 /// Used to annotate a class `C`. Indicates that `C` and all subtypes of `C`
@@ -149,10 +149,10 @@ const _Literal literal = const _Literal();
 ///   without invoking the overridden method.
 const _MustCallSuper mustCallSuper = const _MustCallSuper();
 
-/// Used to annotate a class declaration `C`. Indicates that any type arguments
-/// declared on `C` are to be treated as optional.  Tools such as the analyzer
-/// and linter can use this information to suppress warnings that would
-/// otherwise require type arguments to be provided for instances of `C`.
+/// Used to annotate a class, mixin, or extension declaration `C`. Indicates
+/// that any type arguments declared on `C` are to be treated as optional.
+/// Tools such as the analyzer and linter can use this information to suppress
+/// warnings that would otherwise require type arguments on `C` to be provided.
 const _OptionalTypeArgs optionalTypeArgs = const _OptionalTypeArgs();
 
 /// Used to annotate an instance member (method, getter, setter, operator, or
@@ -168,9 +168,10 @@ const _OptionalTypeArgs optionalTypeArgs = const _OptionalTypeArgs();
 /// * the annotation is associated with anything other than an instance member,
 ///   or
 /// * an invocation of a member that has this annotation is used outside of an
-///   instance member defined on a class that extends or mixes in the class in
-///   which the protected member is defined, or that uses a receiver other than
-///   `this`.
+///   instance member defined on a class that extends or mixes in (or a mixin
+///   constrained to) the class in which the protected member is defined.
+/// * an invocation of a member that has this annotation is used within an
+///   instance method, but the receiver is something other than `this`.
 const _Protected protected = const _Protected();
 
 /// Used to annotate a named parameter `p` in a method or function `f`.
@@ -188,7 +189,25 @@ const _Protected protected = const _Protected();
 ///   corresponding to a named parameter that has this annotation.
 const Required required = const Required();
 
+/// Annotation marking a class as not allowed as a super-type.
+///
+/// Classes in the same package as the marked class may extend, implement or
+/// mix-in the annotated class.
+///
+/// Tools, such as the analyzer, can provide feedback if
+///
+/// * the annotation is associated with anything other than a class,
+/// * the annotation is associated with a class `C`, and there is a class or
+///   mixin `D`, which extends, implements, mixes in, or constrains to `C`, and
+///   `C` and `D` are declared in different packages.
+const _Sealed sealed = const _Sealed();
+
 /// Used to annotate a field that is allowed to be overridden in Strong Mode.
+///
+/// Deprecated: Most of strong mode is now the default in 2.0, but the notion of
+/// virtual fields was dropped, so this annotation no longer has any meaning.
+/// Uses of the annotation should be removed.
+@deprecated
 const _Virtual virtual = const _Virtual();
 
 /// Used to annotate an instance member that was made public so that it could be
@@ -198,7 +217,7 @@ const _Virtual virtual = const _Virtual();
 /// Tools, such as the analyzer, can provide feedback if
 ///
 /// * the annotation is associated with a declaration other than a public
-///   instance member in a class, or
+///   instance member in a class or mixin, or
 /// * the member is referenced outside of the defining library.
 const _VisibleForOverriding visibleForOverriding =
     const _VisibleForOverriding();
@@ -209,7 +228,8 @@ const _VisibleForOverriding visibleForOverriding =
 /// Tools, such as the analyzer, can provide feedback if
 ///
 /// * the annotation is associated with a declaration not in the `lib` folder
-///   of a package, or
+///   of a package, or a private declaration, or a declaration in an unnamed
+///   static extension, or
 /// * the declaration is referenced outside of its the defining library or a
 ///   library which is in the `test` folder of the defining package.
 const _VisibleForTesting visibleForTesting = const _VisibleForTesting();
@@ -222,7 +242,7 @@ class Immutable {
   final String reason;
 
   /// Initialize a newly created instance to have the given [reason].
-  const Immutable([this.reason]);
+  const Immutable([this.reason = '']);
 }
 
 /// Used to annotate a named parameter `p` in a method or function `f`.
@@ -241,7 +261,7 @@ class Required {
   final String reason;
 
   /// Initialize a newly created instance to have the given [reason].
-  const Required([this.reason]);
+  const Required([this.reason = '']);
 }
 
 class _AlwaysThrows {
@@ -284,6 +304,11 @@ class _Protected {
   const _Protected();
 }
 
+class _Sealed {
+  const _Sealed();
+}
+
+@deprecated
 class _Virtual {
   const _Virtual();
 }

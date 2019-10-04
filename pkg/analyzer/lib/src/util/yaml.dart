@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -6,6 +6,17 @@ import 'dart:collection';
 
 import 'package:yaml/src/event.dart';
 import 'package:yaml/yaml.dart';
+
+/// Given a [map], return the [YamlNode] associated with the given [key], or
+/// `null` if there is no matching key.
+YamlNode getKey(YamlMap map, String key) {
+  for (YamlNode k in map.nodes.keys) {
+    if (k is YamlScalar && k.value == key) {
+      return k;
+    }
+  }
+  return null;
+}
 
 /// Given a [map], return the value associated with the key whose value matches
 /// the given [key], or `null` if there is no matching key.

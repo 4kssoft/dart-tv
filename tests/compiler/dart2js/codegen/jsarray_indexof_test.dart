@@ -12,17 +12,18 @@ import 'package:compiler/src/elements/entities.dart';
 import 'package:compiler/src/elements/names.dart';
 import 'package:compiler/src/world.dart';
 import 'package:compiler/src/js_emitter/model.dart';
+import 'package:compiler/src/js_model/js_strategy.dart';
 import 'package:compiler/src/js/js.dart' as js;
 import 'package:compiler/src/universe/selector.dart';
 import 'package:expect/expect.dart';
-import '../memory_compiler.dart';
+import '../helpers/memory_compiler.dart';
 import '../helpers/element_lookup.dart';
 import '../helpers/program_lookup.dart';
 
 const String source = '''
 import 'package:expect/expect.dart';
 
-@NoInline()
+@pragma('dart2js:noInline')
 test(o, a) => o.indexOf(a);
 main() {
   test([1, 2, 3], 2);
@@ -32,14 +33,10 @@ main() {
 
 main() {
   asyncTest(() async {
-    print('--test from kernel------------------------------------------------');
-    await runTest([]);
-    print('--test from kernel (trust-type-annotations)-----------------------');
-    await runTest([Flags.trustTypeAnnotations]);
     print('--test from kernel (strong mode)----------------------------------');
-    await runTest([Flags.strongMode]);
-    print('--test from kernel (strong mode, omit-implicit.checks)------------');
-    await runTest([Flags.strongMode, Flags.omitImplicitChecks]);
+    await runTest([]);
+    print('--test from kernel (strong mode, omit-implicit-checks)------------');
+    await runTest([Flags.omitImplicitChecks]);
   });
 }
 
@@ -48,14 +45,15 @@ runTest(List<String> options) async {
       memorySourceFiles: {'main.dart': source}, options: options);
   Expect.isTrue(result.isSuccess);
   Compiler compiler = result.compiler;
+  JsBackendStrategy backendStrategy = compiler.backendStrategy;
   JClosedWorld closedWorld = compiler.backendClosedWorldForTesting;
   MemberEntity jsArrayIndexOf =
       findClassMember(closedWorld, 'JSArray', 'indexOf');
-  ProgramLookup programLookup = new ProgramLookup(result.compiler);
+  ProgramLookup programLookup = new ProgramLookup(backendStrategy);
 
   Selector getLengthSelector = new Selector.getter(const PublicName('length'));
   js.Name getLengthName =
-      compiler.backend.namer.invocationName(getLengthSelector);
+      backendStrategy.namerForTesting.invocationName(getLengthSelector);
 
   Method method = programLookup.getMethod(jsArrayIndexOf);
   int lengthCount = 0;

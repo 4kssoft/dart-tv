@@ -12,7 +12,7 @@ import 'ddc_common.dart';
 
 Future<ChainContext> createContext(
     Chain suite, Map<String, String> environment) async {
-  return new SourceMapContext(environment);
+  return SourceMapContext(environment);
 }
 
 class SourceMapContext extends ChainContextWithCleanupHelper {
@@ -21,21 +21,25 @@ class SourceMapContext extends ChainContextWithCleanupHelper {
 
   List<Step> _steps;
 
+  @override
   List<Step> get steps => _steps ??= <Step>[
         const Setup(),
-        new Compile(new DevCompilerRunner(environment.containsKey("debug"))),
+        Compile(DevCompilerRunner(debugging: environment.containsKey("debug"))),
         const StepWithD8(),
-        new CheckSteps(environment.containsKey("debug")),
+        CheckSteps(environment.containsKey("debug")),
       ];
 
+  @override
   bool debugging() => environment.containsKey("debug");
 }
 
 class DevCompilerRunner implements CompilerRunner {
   final bool debugging;
+  final bool absoluteRoot;
 
-  const DevCompilerRunner([this.debugging = false]);
+  const DevCompilerRunner({this.debugging = false, this.absoluteRoot = true});
 
+  @override
   Future<Null> run(Uri inputFile, Uri outputFile, Uri outWrapperFile) async {
     Uri outDir = outputFile.resolve(".");
     String outputFilename = outputFile.pathSegments.last;
@@ -51,36 +55,38 @@ class DevCompilerRunner implements CompilerRunner {
       "--modules=es6",
       "--dart-sdk-summary=${ddcSdkSummary.path}",
       "--library-root",
-      outDir.toFilePath(),
-      "--module-root",
-      outDir.toFilePath(),
+      absoluteRoot ? "/" : outDir.toFilePath(),
       "-o",
       outputFile.toFilePath(),
       inputFile.toFilePath()
     ];
 
-    var exitCode = compile(args);
+    var result = compile(args);
+    var exitCode = result?.exitCode;
     if (exitCode != 0) {
       throw "Exit code: $exitCode from ddc when running something like "
           "$dartExecutable ${ddc.toFilePath()} "
           "${args.reduce((value, element) => '$value "$element"')}";
     }
 
-    var jsContent = new File.fromUri(outputFile).readAsStringSync();
-    new File.fromUri(outputFile).writeAsStringSync(jsContent.replaceFirst(
-        "from 'dart_sdk'", "from '${uriPathForwardSlashed(jsSdkPath)}'"));
+    var jsContent = File.fromUri(outputFile).readAsStringSync();
+    File.fromUri(outputFile).writeAsStringSync(jsContent.replaceFirst(
+        "from 'dart_sdk.js'", "from '${uriPathForwardSlashed(jsSdkPath)}'"));
 
     if (debugging) {
       createHtmlWrapper(
           sdkJsFile, outputFile, jsContent, outputFilename, outDir);
     }
 
-    var inputFileName = inputFile.pathSegments.last;
-    var inputFileNameNoExt =
-        inputFileName.substring(0, inputFileName.lastIndexOf("."));
-    new File.fromUri(outWrapperFile).writeAsStringSync(
+    var inputFileName =
+        absoluteRoot ? inputFile.path : inputFile.pathSegments.last;
+    inputFileName = inputFileName.split(":").last;
+    var inputFileNameNoExt = pathToJSIdentifier(
+        inputFileName.substring(0, inputFileName.lastIndexOf(".")));
+    File.fromUri(outWrapperFile).writeAsStringSync(
         getWrapperContent(jsSdkPath, inputFileNameNoExt, outputFilename));
   }
 }
 
-main(List<String> arguments) => runMe(arguments, createContext, "testing.json");
+void main(List<String> arguments) =>
+    runMe(arguments, createContext, configurationPath: "testing.json");

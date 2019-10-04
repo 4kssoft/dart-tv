@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -37,7 +37,6 @@ class DoStatementTest extends PartialCodeTest {
               [
                 ScannerErrorCode.EXPECTED_TOKEN,
                 ParserErrorCode.EXPECTED_TOKEN,
-                ParserErrorCode.EXPECTED_TOKEN,
                 ParserErrorCode.MISSING_IDENTIFIER,
                 ParserErrorCode.EXPECTED_TOKEN,
                 ParserErrorCode.EXPECTED_TOKEN
@@ -48,7 +47,6 @@ class DoStatementTest extends PartialCodeTest {
               'rightBrace',
               'do {}',
               [
-                ParserErrorCode.EXPECTED_TOKEN,
                 ParserErrorCode.EXPECTED_TOKEN,
                 ParserErrorCode.MISSING_IDENTIFIER,
                 ParserErrorCode.EXPECTED_TOKEN,
@@ -62,7 +60,6 @@ class DoStatementTest extends PartialCodeTest {
               [
                 ParserErrorCode.EXPECTED_TOKEN,
                 ParserErrorCode.MISSING_IDENTIFIER,
-                ParserErrorCode.EXPECTED_TOKEN,
                 ParserErrorCode.EXPECTED_TOKEN
               ],
               "do {} while (_s_);"),
@@ -75,13 +72,19 @@ class DoStatementTest extends PartialCodeTest {
                 ScannerErrorCode.EXPECTED_TOKEN
               ],
               "do {} while (_s_);",
-              failing: allExceptEof),
+              failing: [
+                'assert',
+                'block',
+                'labeled',
+                'localFunctionNonVoid',
+                'localFunctionVoid',
+                'return'
+              ]),
           new TestDescriptor(
               'condition',
               'do {} while (a',
               [ParserErrorCode.EXPECTED_TOKEN, ScannerErrorCode.EXPECTED_TOKEN],
-              "do {} while (a);",
-              failing: allExceptEof),
+              "do {} while (a);"),
           new TestDescriptor('rightParen', 'do {} while (a)',
               [ParserErrorCode.EXPECTED_TOKEN], "do {} while (a);"),
         ],

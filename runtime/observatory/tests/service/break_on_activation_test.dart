@@ -1,7 +1,6 @@
 // Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-// VMOptions=--error_on_bad_type --error_on_bad_override
 
 import 'package:observatory/service_io.dart';
 import 'package:unittest/unittest.dart';
@@ -65,7 +64,7 @@ var tests = <IsolateTest>[
     valueOfField(String name) async {
       var field = rootLib.variables.singleWhere((v) => v.name == name);
       await field.load();
-      return field.staticValue;
+      return field.staticValue as Instance;
     }
 
     var r1Ref = await valueOfField('r1');
@@ -109,7 +108,7 @@ var tests = <IsolateTest>[
     valueOfField(String name) async {
       var field = rootLib.variables.singleWhere((v) => v.name == name);
       await field.load();
-      return field.staticValue;
+      return field.staticValue as Instance;
     }
 
     var r1Ref = await valueOfField('r1_named');
@@ -153,7 +152,7 @@ var tests = <IsolateTest>[
     valueOfField(String name) async {
       var field = rootLib.variables.singleWhere((v) => v.name == name);
       await field.load();
-      return field.staticValue;
+      return field.staticValue as Instance;
     }
 
     var r1Ref = await valueOfField('r1');

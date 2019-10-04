@@ -5,7 +5,7 @@
 
 import "package:expect/expect.dart";
 import "package:async_helper/async_helper.dart";
-import '../compiler_helper.dart';
+import '../helpers/compiler_helper.dart';
 
 const String TEST_ONE = r"""
 class A { }
@@ -40,11 +40,14 @@ main() {
 const String TEST_FOUR = r"""
 var g = 0;
 class A {
+  @pragma('dart2js:noElision')
   var x = g++;
 }
 
 class B extends A {
+  @pragma('dart2js:noElision')
   var y = g++;
+  @pragma('dart2js:noElision')
   var z = g++;
 }
 
@@ -55,6 +58,7 @@ main() {
 
 const String TEST_FIVE = r"""
 class A {
+  @pragma('dart2js:noElision')
   var a;
   A(a) : this.a = a {}
 }
@@ -66,14 +70,14 @@ main() {
 
 twoClasses() async {
   String generated = await compileAll(TEST_ONE);
-  Expect.isTrue(generated.contains(new RegExp('A: {[ \n]*"\\^": "Object;"')));
-  Expect.isTrue(generated.contains(new RegExp('B: {[ \n]*"\\^": "Object;"')));
+  Expect.isTrue(generated.contains('A: function A()'));
+  Expect.isTrue(generated.contains('B: function B()'));
 }
 
 subClass() async {
   checkOutput(String generated) {
-    Expect.isTrue(generated.contains(new RegExp('A: {[ \n]*"\\^": "Object;"')));
-    Expect.isTrue(generated.contains(new RegExp('B: {[ \n]*"\\^": "A;"')));
+    Expect.isTrue(generated.contains(RegExp(r'_inherit\(.\.A, .\.Object\)')));
+    Expect.isTrue(generated.contains(RegExp(r'_inherit\(.\.B, .\.A\)')));
   }
 
   checkOutput(await compileAll(TEST_TWO));
@@ -82,13 +86,16 @@ subClass() async {
 
 fieldTest() async {
   String generated = await compileAll(TEST_FOUR);
-  Expect.isTrue(generated
-      .contains(new RegExp('B: {[ \n]*"\\^": "A;y,z,x",[ \n]*static:')));
+  Expect.isTrue(generated.contains(RegExp(r'B: function B\(t0, t1, t2\) {'
+      r'\s*this.y = t0;'
+      r'\s*this.z = t1;'
+      r'\s*this.x = t2;')));
 }
 
 constructor1() async {
   String generated = await compileAll(TEST_FIVE);
-  Expect.isTrue(generated.contains(new RegExp(r"new [$A-Z]+\.A\(a\);")));
+  Expect.isTrue(generated.contains(new RegExp(r"new [$A-Z]+\.A\(a\);")),
+      '--------------------\n$generated\n');
 }
 
 main() {

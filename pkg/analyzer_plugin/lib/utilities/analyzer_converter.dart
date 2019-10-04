@@ -1,9 +1,10 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analyzer/dart/element/element.dart' as analyzer;
 import 'package:analyzer/dart/element/type.dart' as analyzer;
+import 'package:analyzer/diagnostic/diagnostic.dart' as analyzer;
 import 'package:analyzer/error/error.dart' as analyzer;
 import 'package:analyzer/exception/exception.dart' as analyzer;
 import 'package:analyzer/source/error_processor.dart' as analyzer;
@@ -36,11 +37,19 @@ class AnalyzerConverter {
     int startLine = -1;
     int startColumn = -1;
     if (lineInfo != null) {
-      analyzer.CharacterLocation lineLocation = lineInfo.getLocation(offset);
+      analyzer.CharacterLocation lineLocation =
+          lineInfo.getLocation(offset) as analyzer.CharacterLocation;
       if (lineLocation != null) {
         startLine = lineLocation.lineNumber;
         startColumn = lineLocation.columnNumber;
       }
+    }
+    List<plugin.DiagnosticMessage> contextMessages;
+    if (error.contextMessages.isNotEmpty) {
+      contextMessages = error.contextMessages
+          .map((message) =>
+              convertDiagnosticMessage(message, lineInfo: lineInfo))
+          .toList();
     }
     return new plugin.AnalysisError(
         convertErrorSeverity(severity),
@@ -49,6 +58,7 @@ class AnalyzerConverter {
             startLine, startColumn),
         error.message,
         errorCode.name.toLowerCase(),
+        contextMessages: contextMessages,
         correction: error.correction,
         hasFix: true);
   }
@@ -81,6 +91,31 @@ class AnalyzerConverter {
       }
     }
     return serverErrors;
+  }
+
+  /**
+   * Convert the diagnostic [message] from the 'analyzer' package to an analysis
+   * error defined by the plugin API. If a [lineInfo] is provided then the
+   * error's location will have a start line and start column.
+   */
+  plugin.DiagnosticMessage convertDiagnosticMessage(
+      analyzer.DiagnosticMessage message,
+      {analyzer.LineInfo lineInfo}) {
+    String file = message.filePath;
+    int offset = message.offset;
+    int length = message.length;
+    int startLine = -1;
+    int startColumn = -1;
+    if (lineInfo != null) {
+      analyzer.CharacterLocation lineLocation =
+          lineInfo.getLocation(offset) as analyzer.CharacterLocation;
+      if (lineLocation != null) {
+        startLine = lineLocation.lineNumber;
+        startColumn = lineLocation.columnNumber;
+      }
+    }
+    return plugin.DiagnosticMessage(message.message,
+        plugin.Location(file, offset, length, startLine, startColumn));
   }
 
   /**
@@ -125,6 +160,8 @@ class AnalyzerConverter {
     } else if (kind == analyzer.ElementKind.FUNCTION) {
       return plugin.ElementKind.FUNCTION;
     } else if (kind == analyzer.ElementKind.FUNCTION_TYPE_ALIAS) {
+      return plugin.ElementKind.FUNCTION_TYPE_ALIAS;
+    } else if (kind == analyzer.ElementKind.GENERIC_FUNCTION_TYPE) {
       return plugin.ElementKind.FUNCTION_TYPE_ALIAS;
     } else if (kind == analyzer.ElementKind.GETTER) {
       return plugin.ElementKind.GETTER;
@@ -340,7 +377,7 @@ class AnalyzerConverter {
       analyzer.LineInfo lineInfo = unitElement.lineInfo;
       if (lineInfo != null) {
         analyzer.CharacterLocation offsetLocation =
-            lineInfo.getLocation(range.offset);
+            lineInfo.getLocation(range.offset) as analyzer.CharacterLocation;
         startLine = offsetLocation.lineNumber;
         startColumn = offsetLocation.columnNumber;
       }

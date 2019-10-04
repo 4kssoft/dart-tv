@@ -5,16 +5,13 @@
 library tracer;
 
 import '../compiler_new.dart' as api;
-import 'js_backend/namer.dart' show Namer;
 import 'ssa/nodes.dart' as ssa show HGraph;
 import 'ssa/ssa_tracer.dart' show HTracer;
 import 'util/util.dart' show Indentation;
 import 'world.dart' show JClosedWorld;
 
-/**
- * If non-null, we only trace methods whose name match the regexp defined by the
- * given pattern.
- */
+/// If non-null, we only trace methods whose name match the regexp defined by
+/// the given pattern.
 String get TRACE_FILTER_PATTERN =>
     TRACE_FILTER_PATTERN_FROM_ENVIRONMENT ?? TRACE_FILTER_PATTERN_FOR_TEST;
 
@@ -22,18 +19,16 @@ const String TRACE_FILTER_PATTERN_FROM_ENVIRONMENT =
     const String.fromEnvironment("DUMP_IR");
 String TRACE_FILTER_PATTERN_FOR_TEST;
 
-/**
- * Dumps the intermediate representation after each phase in a format
- * readable by IR Hydra.
- */
+/// Dumps the intermediate representation after each phase in a format
+/// readable by IR Hydra.
 class Tracer extends TracerUtil {
   final JClosedWorld closedWorld;
-  final Namer namer;
   bool traceActive = false;
+  @override
   final api.OutputSink output;
   final RegExp traceFilter;
 
-  Tracer(this.closedWorld, this.namer, api.CompilerOutput compilerOutput)
+  Tracer(this.closedWorld, api.CompilerOutput compilerOutput)
       : traceFilter = TRACE_FILTER_PATTERN == null
             ? null
             : new RegExp(TRACE_FILTER_PATTERN),
@@ -58,7 +53,7 @@ class Tracer extends TracerUtil {
   void traceGraph(String name, var irObject) {
     if (!traceActive) return;
     if (irObject is ssa.HGraph) {
-      new HTracer(output, closedWorld, namer).traceGraph(name, irObject);
+      new HTracer(output, closedWorld).traceGraph(name, irObject);
     }
   }
 

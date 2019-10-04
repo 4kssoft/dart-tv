@@ -9,19 +9,23 @@
 #error Do not include assembler_arm64.h directly; use assembler.h instead.
 #endif
 
+#include <functional>
+
 #include "platform/assert.h"
 #include "platform/utils.h"
-#include "vm/constants_arm64.h"
+#include "vm/class_id.h"
+#include "vm/constants.h"
 #include "vm/hash_map.h"
-#include "vm/longjump.h"
-#include "vm/object.h"
 #include "vm/simulator.h"
 
 namespace dart {
 
 // Forward declarations.
+class FlowGraphCompiler;
 class RuntimeEntry;
-class StubEntry;
+class RegisterSet;
+
+namespace compiler {
 
 class Immediate : public ValueObject {
  public:
@@ -105,6 +109,17 @@ class Address : public ValueObject {
     PCOffset,
     Unknown,
   };
+
+  // If we are doing pre-/post-indexing, and the base and result registers are
+  // the same, then the result is unpredictable. This kind of instruction is
+  // actually illegal on some microarchitectures.
+  bool can_writeback_to(Register r) const {
+    if (type() == PreIndex || type() == PostIndex || type() == PairPreIndex ||
+        type() == PairPostIndex) {
+      return base() != r;
+    }
+    return true;
+  }
 
   // Offset is in bytes. For the unsigned imm12 case, we unscale based on the
   // operand size, and assert that offset is aligned accordingly.
@@ -255,8 +270,7 @@ class Address : public ValueObject {
         return kUnsignedWord;
       case kTypedDataInt64ArrayCid:
       case kTypedDataUint64ArrayCid:
-        UNREACHABLE();
-        return kByte;
+        return kDWord;
       case kTypedDataFloat32ArrayCid:
         return kSWord;
       case kTypedDataFloat64ArrayCid:
@@ -423,16 +437,35 @@ class Operand : public ValueObject {
   friend class Assembler;
 };
 
-class Assembler : public ValueObject {
+class Assembler : public AssemblerBase {
  public:
-  explicit Assembler(bool use_far_branches = false);
+  explicit Assembler(ObjectPoolBuilder* object_pool_builder,
+                     bool use_far_branches = false);
   ~Assembler() {}
 
   void PushRegister(Register r) { Push(r); }
   void PopRegister(Register r) { Pop(r); }
 
+  void PushRegisters(const RegisterSet& registers);
+  void PopRegisters(const RegisterSet& registers);
+
+  // Push all registers which are callee-saved according to the ARM64 ABI.
+  void PushNativeCalleeSavedRegisters();
+
+  // Pop all registers which are callee-saved according to the ARM64 ABI.
+  void PopNativeCalleeSavedRegisters();
+
+  void MoveRegister(Register rd, Register rn) {
+    if (rd != rn) {
+      mov(rd, rn);
+    }
+  }
+
   void Drop(intptr_t stack_elements) {
-    add(SP, SP, Operand(stack_elements * kWordSize));
+    ASSERT(stack_elements >= 0);
+    if (stack_elements > 0) {
+      add(SP, SP, Operand(stack_elements * target::kWordSize));
+    }
   }
 
   void Bind(Label* label);
@@ -445,53 +478,17 @@ class Assembler : public ValueObject {
     cmp(value, Operand(TMP));
   }
 
-  // Misc. functionality
-  intptr_t CodeSize() const { return buffer_.Size(); }
-  intptr_t prologue_offset() const { return prologue_offset_; }
-  bool has_single_entry_point() const { return has_single_entry_point_; }
-
-  // Count the fixups that produce a pointer offset, without processing
-  // the fixups.  On ARM64 there are no pointers in code.
-  intptr_t CountPointerOffsets() const { return 0; }
-
-  const ZoneGrowableArray<intptr_t>& GetPointerOffsets() const {
-    ASSERT(buffer_.pointer_offsets().length() == 0);  // No pointers in code.
-    return buffer_.pointer_offsets();
-  }
-
-  ObjectPoolWrapper& object_pool_wrapper() { return object_pool_wrapper_; }
-
-  RawObjectPool* MakeObjectPool() {
-    return object_pool_wrapper_.MakeObjectPool();
-  }
-
   bool use_far_branches() const {
     return FLAG_use_far_branches || use_far_branches_;
   }
 
   void set_use_far_branches(bool b) { use_far_branches_ = b; }
 
-  void FinalizeInstructions(const MemoryRegion& region) {
-    buffer_.FinalizeInstructions(region);
-  }
-
   // Debugging and bringup support.
-  void Breakpoint() { brk(0); }
-  void Stop(const char* message);
-  void Unimplemented(const char* message);
-  void Untested(const char* message);
-  void Unreachable(const char* message);
+  void Breakpoint() override { brk(0); }
+  void Stop(const char* message) override;
 
   static void InitializeMemoryWithBreakpoints(uword data, intptr_t length);
-
-  void Comment(const char* format, ...) PRINTF_ATTRIBUTE(2, 3);
-  static bool EmittingComments();
-
-  const Code::Comments& GetCodeComments() const;
-
-  static const char* RegisterName(Register reg);
-
-  static const char* FpuRegisterName(FpuRegister reg);
 
   void SetPrologueOffset() {
     if (prologue_offset_ == -1) {
@@ -500,6 +497,11 @@ class Assembler : public ValueObject {
   }
 
   void ReserveAlignedFrameSpace(intptr_t frame_space);
+
+  // In debug mode, this generates code to check that:
+  //   FP + kExitLinkSlotFromEntryFp == SP
+  // or triggers breakpoint otherwise.
+  void EmitEntryFrameVerification();
 
   // Instruction pattern from entrypoint is used in Dart frame prologs
   // to set up the frame and save a PC which can be used to figure out the
@@ -511,11 +513,12 @@ class Assembler : public ValueObject {
 
   // Emit data (e.g encoded instruction or immediate) in instruction stream.
   void Emit(int32_t value);
+  void Emit64(int64_t value);
 
   // On some other platforms, we draw a distinction between safe and unsafe
   // smis.
   static bool IsSafe(const Object& object) { return true; }
-  static bool IsSafeSmi(const Object& object) { return object.IsSmi(); }
+  static bool IsSafeSmi(const Object& object) { return target::IsSmi(object); }
 
   // Addition and subtraction.
   // For add and sub, to use CSP for rn, o must be of type Operand::Extend.
@@ -878,12 +881,6 @@ class Assembler : public ValueObject {
       ASSERT(sz == kDoubleWord);
       EmitLoadRegLiteral(LDRpc, rt, a, sz);
     } else {
-      // If we are doing pre-/post-indexing, and the base and result registers
-      // are the same, then the result of the load will be clobbered by the
-      // writeback, which is unlikely to be useful.
-      ASSERT(((a.type() != Address::PreIndex) &&
-              (a.type() != Address::PostIndex)) ||
-             (rt != a.base()));
       if (IsSignedOperand(sz)) {
         EmitLoadStoreReg(LDRS, rt, a, sz);
       } else {
@@ -1274,19 +1271,17 @@ class Assembler : public ValueObject {
   }
   void Push(Register reg) {
     ASSERT(reg != PP);  // Only push PP with TagAndPushPP().
-    str(reg, Address(SP, -1 * kWordSize, Address::PreIndex));
+    str(reg, Address(SP, -1 * target::kWordSize, Address::PreIndex));
   }
   void Pop(Register reg) {
     ASSERT(reg != PP);  // Only pop PP with PopAndUntagPP().
-    ldr(reg, Address(SP, 1 * kWordSize, Address::PostIndex));
+    ldr(reg, Address(SP, 1 * target::kWordSize, Address::PostIndex));
   }
   void PushPair(Register low, Register high) {
-    ASSERT((low != PP) && (high != PP));
-    stp(low, high, Address(SP, -2 * kWordSize, Address::PairPreIndex));
+    stp(low, high, Address(SP, -2 * target::kWordSize, Address::PairPreIndex));
   }
   void PopPair(Register low, Register high) {
-    ASSERT((low != PP) && (high != PP));
-    ldp(low, high, Address(SP, 2 * kWordSize, Address::PairPostIndex));
+    ldp(low, high, Address(SP, 2 * target::kWordSize, Address::PairPostIndex));
   }
   void PushFloat(VRegister reg) {
     fstrs(reg, Address(SP, -1 * kFloatSize, Address::PreIndex));
@@ -1309,16 +1304,17 @@ class Assembler : public ValueObject {
   void TagAndPushPP() {
     // Add the heap object tag back to PP before putting it on the stack.
     add(TMP, PP, Operand(kHeapObjectTag));
-    str(TMP, Address(SP, -1 * kWordSize, Address::PreIndex));
+    str(TMP, Address(SP, -1 * target::kWordSize, Address::PreIndex));
   }
   void TagAndPushPPAndPcMarker() {
     COMPILE_ASSERT(CODE_REG != TMP2);
     // Add the heap object tag back to PP before putting it on the stack.
     add(TMP2, PP, Operand(kHeapObjectTag));
-    stp(TMP2, CODE_REG, Address(SP, -2 * kWordSize, Address::PairPreIndex));
+    stp(TMP2, CODE_REG,
+        Address(SP, -2 * target::kWordSize, Address::PairPreIndex));
   }
   void PopAndUntagPP() {
-    ldr(PP, Address(SP, 1 * kWordSize, Address::PostIndex));
+    ldr(PP, Address(SP, 1 * target::kWordSize, Address::PostIndex));
     sub(PP, PP, Operand(kHeapObjectTag));
     // The caller of PopAndUntagPP() must explicitly allow use of popped PP.
     set_constant_pool_allowed(false);
@@ -1369,21 +1365,26 @@ class Assembler : public ValueObject {
 
   void BranchIfSmi(Register reg, Label* label) { tbz(label, reg, kSmiTag); }
 
-  void Branch(const StubEntry& stub_entry,
+  void Branch(const Code& code,
               Register pp,
-              Patchability patchable = kNotPatchable);
-  void BranchPatchable(const StubEntry& stub_entry);
+              ObjectPoolBuilderEntry::Patchability patchable =
+                  ObjectPoolBuilderEntry::kNotPatchable);
+  void BranchPatchable(const Code& code);
 
-  void BranchLink(const StubEntry& stub_entry,
-                  Patchability patchable = kNotPatchable);
+  void BranchLink(const Code& code,
+                  ObjectPoolBuilderEntry::Patchability patchable =
+                      ObjectPoolBuilderEntry::kNotPatchable);
 
-  void BranchLinkPatchable(const StubEntry& stub_entry);
+  void BranchLinkPatchable(const Code& code) {
+    BranchLink(code, ObjectPoolBuilderEntry::kPatchable);
+  }
   void BranchLinkToRuntime();
+
+  void CallNullErrorShared(bool save_fpu_registers);
 
   // Emit a call that shares its object pool entries with other calls
   // that have the same equivalence marker.
-  void BranchLinkWithEquivalence(const StubEntry& stub_entry,
-                                 const Object& equivalence);
+  void BranchLinkWithEquivalence(const Code& code, const Object& equivalence);
 
   void AddImmediate(Register dest, int64_t imm) {
     AddImmediate(dest, dest, imm);
@@ -1451,15 +1452,27 @@ class Assembler : public ValueObject {
     kValueCanBeSmi,
   };
 
-  // Storing into an object.
+  // Store into a heap object and apply the generational and incremental write
+  // barriers. All stores into heap objects must pass through this function or,
+  // if the value can be proven either Smi or old-and-premarked, its NoBarrier
+  // variants.
+  // Preserves object and value registers.
   void StoreIntoObject(Register object,
                        const Address& dest,
                        Register value,
-                       CanBeSmi can_value_be_smi = kValueCanBeSmi);
+                       CanBeSmi can_value_be_smi = kValueCanBeSmi,
+                       bool lr_reserved = false);
+  void StoreIntoArray(Register object,
+                      Register slot,
+                      Register value,
+                      CanBeSmi can_value_be_smi = kValueCanBeSmi,
+                      bool lr_reserved = false);
+
   void StoreIntoObjectOffset(Register object,
                              int32_t offset,
                              Register value,
-                             CanBeSmi can_value_be_smi = kValueCanBeSmi);
+                             CanBeSmi can_value_be_smi = kValueCanBeSmi,
+                             bool lr_reserved = false);
   void StoreIntoObjectNoBarrier(Register object,
                                 const Address& dest,
                                 Register value);
@@ -1473,6 +1486,11 @@ class Assembler : public ValueObject {
                                       int32_t offset,
                                       const Object& value);
 
+  // Stores a non-tagged value into a heap object.
+  void StoreInternalPointer(Register object,
+                            const Address& dest,
+                            Register value);
+
   // Object pool, loading from pool, etc.
   void LoadPoolPointer(Register pp = PP);
 
@@ -1481,28 +1499,34 @@ class Assembler : public ValueObject {
 
   intptr_t FindImmediate(int64_t imm);
   bool CanLoadFromObjectPool(const Object& object) const;
-  void LoadNativeEntry(Register dst, const ExternalLabel* label);
-  void LoadFunctionFromCalleePool(Register dst,
-                                  const Function& function,
-                                  Register new_pp);
+  void LoadNativeEntry(Register dst,
+                       const ExternalLabel* label,
+                       ObjectPoolBuilderEntry::Patchability patchable);
   void LoadIsolate(Register dst);
   void LoadObject(Register dst, const Object& obj);
   void LoadUniqueObject(Register dst, const Object& obj);
-  void LoadDecodableImmediate(Register reg, int64_t imm);
-  void LoadImmediateFixed(Register reg, int64_t imm);
   void LoadImmediate(Register reg, int64_t imm);
   void LoadDImmediate(VRegister reg, double immd);
+
+  // Load word from pool from the given offset using encoding that
+  // InstructionPattern::DecodeLoadWordFromPool can decode.
+  void LoadWordFromPoolOffset(Register dst, uint32_t offset, Register pp = PP);
+  void LoadDoubleWordFromPoolOffset(Register lower,
+                                    Register upper,
+                                    uint32_t offset);
 
   void PushObject(const Object& object) {
     LoadObject(TMP, object);
     Push(TMP);
   }
+  void PushImmediate(int64_t immediate) {
+    LoadImmediate(TMP, immediate);
+    Push(TMP);
+  }
   void CompareObject(Register reg, const Object& object);
 
   void LoadClassId(Register result, Register object);
-  // Overwrites class_id register.
   void LoadClassById(Register result, Register class_id);
-  void LoadClass(Register result, Register object);
   void CompareClassId(Register object,
                       intptr_t class_id,
                       Register scratch = kNoRegister);
@@ -1516,11 +1540,24 @@ class Assembler : public ValueObject {
   void LeaveFrame();
   void Ret() { ret(LR); }
 
+  // Emit code to transition between generated mode and native mode.
+  //
+  // These require and ensure that CSP and SP are equal and aligned and require
+  // a scratch register (in addition to TMP/TMP2).
+
+  void TransitionGeneratedToNative(Register destination_address,
+                                   Register new_exit_frame,
+                                   Register scratch,
+                                   bool enter_safepoint);
+  void TransitionNativeToGenerated(Register scratch, bool exit_safepoint);
+  void EnterSafepoint(Register scratch);
+  void ExitSafepoint(Register scratch);
+
   void CheckCodePointer();
   void RestoreCodePointer();
 
   void EnterDartFrame(intptr_t frame_size, Register new_pp = kNoRegister);
-  void EnterOsrFrame(intptr_t extra_size, Register new_pp);
+  void EnterOsrFrame(intptr_t extra_size, Register new_pp = kNoRegister);
   void LeaveDartFrame(RestorePP restore_pp = kRestoreCallerPP);
 
   void EnterCallRuntimeFrame(intptr_t frame_size);
@@ -1532,13 +1569,13 @@ class Assembler : public ValueObject {
   void EnterStubFrame();
   void LeaveStubFrame();
 
-  void MonomorphicCheckedEntry();
+  void MonomorphicCheckedEntryJIT();
+  void MonomorphicCheckedEntryAOT();
+  void BranchOnMonomorphicCheckedEntryJIT(Label* label);
 
-  void UpdateAllocationStats(intptr_t cid, Heap::Space space);
+  void UpdateAllocationStats(intptr_t cid);
 
-  void UpdateAllocationStatsWithSize(intptr_t cid,
-                                     Register size_reg,
-                                     Heap::Space space);
+  void UpdateAllocationStatsWithSize(intptr_t cid, Register size_reg);
 
   // If allocation tracing for |cid| is enabled, will jump to |trace| label,
   // which will allocate in the runtime where tracing occurs.
@@ -1548,10 +1585,14 @@ class Assembler : public ValueObject {
   // calls. Jump to 'failure' if the instance cannot be allocated here.
   // Allocated instance is returned in 'instance_reg'.
   // Only the tags field of the object is initialized.
+  // Result:
+  //   * [instance_reg] will contain allocated new-space object
+  //   * [top_reg] will contain Thread::top_offset()
   void TryAllocate(const Class& cls,
                    Label* failure,
                    Register instance_reg,
-                   Register temp_reg);
+                   Register top_reg,
+                   bool tag_result = true);
 
   void TryAllocateArray(intptr_t cid,
                         intptr_t instance_size,
@@ -1560,6 +1601,23 @@ class Assembler : public ValueObject {
                         Register end_address,
                         Register temp1,
                         Register temp2);
+
+  // This emits an PC-relative call of the form "bl <offset>".  The offset
+  // is not yet known and needs therefore relocation to the right place before
+  // the code can be used.
+  //
+  // The neccessary information for the "linker" (i.e. the relocation
+  // information) is stored in [RawCode::static_calls_target_table_]: an entry
+  // of the form
+  //
+  //   (Code::kPcRelativeCall & pc_offset, <target-code>, <target-function>)
+  //
+  // will be used during relocation to fix the offset.
+  //
+  // The provided [offset_into_target] will be added to calculate the final
+  // destination.  It can be used e.g. for calling into the middle of a
+  // function.
+  void GenerateUnRelocatedPcRelativeCall(intptr_t offset_into_target = 0);
 
   Address ElementAddressForIntIndex(bool is_external,
                                     intptr_t cid,
@@ -1592,33 +1650,22 @@ class Assembler : public ValueObject {
                       Register tmp,
                       OperandSize sz);
 
+  static int32_t EncodeImm26BranchOffset(int64_t imm, int32_t instr) {
+    const int32_t imm32 = static_cast<int32_t>(imm);
+    const int32_t off = (((imm32 >> 2) << kImm26Shift) & kImm26Mask);
+    return (instr & ~kImm26Mask) | off;
+  }
+
+  static int64_t DecodeImm26BranchOffset(int32_t instr) {
+    const int32_t off = (((instr & kImm26Mask) >> kImm26Shift) << 6) >> 4;
+    return static_cast<int64_t>(off);
+  }
+
  private:
-  AssemblerBuffer buffer_;  // Contains position independent code.
-  ObjectPoolWrapper object_pool_wrapper_;
-  int32_t prologue_offset_;
-  bool has_single_entry_point_;
   bool use_far_branches_;
-
-  class CodeComment : public ZoneAllocated {
-   public:
-    CodeComment(intptr_t pc_offset, const String& comment)
-        : pc_offset_(pc_offset), comment_(comment) {}
-
-    intptr_t pc_offset() const { return pc_offset_; }
-    const String& comment() const { return comment_; }
-
-   private:
-    intptr_t pc_offset_;
-    const String& comment_;
-
-    DISALLOW_COPY_AND_ASSIGN(CodeComment);
-  };
-
-  GrowableArray<CodeComment*> comments_;
 
   bool constant_pool_allowed_;
 
-  void LoadWordFromPoolOffset(Register dst, uint32_t offset, Register pp = PP);
   void LoadWordFromPoolOffsetFixed(Register dst, uint32_t offset);
 
   void LoadObjectHelper(Register dst, const Object& obj, bool is_unique);
@@ -1747,8 +1794,7 @@ class Assembler : public ValueObject {
   int32_t EncodeImm19BranchOffset(int64_t imm, int32_t instr) {
     if (!CanEncodeImm19BranchOffset(imm)) {
       ASSERT(!use_far_branches());
-      Thread::Current()->long_jump_base()->Jump(1,
-                                                Object::branch_offset_error());
+      BailoutWithBranchOffsetError();
     }
     const int32_t imm32 = static_cast<int32_t>(imm);
     const int32_t off = (((imm32 >> 2) << kImm19Shift) & kImm19Mask);
@@ -1763,8 +1809,7 @@ class Assembler : public ValueObject {
   int32_t EncodeImm14BranchOffset(int64_t imm, int32_t instr) {
     if (!CanEncodeImm14BranchOffset(imm)) {
       ASSERT(!use_far_branches());
-      Thread::Current()->long_jump_base()->Jump(1,
-                                                Object::branch_offset_error());
+      BailoutWithBranchOffsetError();
     }
     const int32_t imm32 = static_cast<int32_t>(imm);
     const int32_t off = (((imm32 >> 2) << kImm14Shift) & kImm14Mask);
@@ -1816,17 +1861,6 @@ class Assembler : public ValueObject {
   int32_t EncodeImm14BranchCondition(Condition cond, int32_t instr) {
     ASSERT(IsTestAndBranch(instr));
     return (instr & ~B24) | (cond == EQ ? B24 : 0);  // tbz : tbnz
-  }
-
-  int32_t EncodeImm26BranchOffset(int64_t imm, int32_t instr) {
-    const int32_t imm32 = static_cast<int32_t>(imm);
-    const int32_t off = (((imm32 >> 2) << kImm26Shift) & kImm26Mask);
-    return (instr & ~kImm26Mask) | off;
-  }
-
-  int64_t DecodeImm26BranchOffset(int32_t instr) {
-    const int32_t off = (((instr & kImm26Mask) >> kImm26Shift) << 6) >> 4;
-    return static_cast<int64_t>(off);
   }
 
   void EmitCompareAndBranchOp(CompareAndBranchOp op,
@@ -2041,6 +2075,9 @@ class Assembler : public ValueObject {
                         Register rt,
                         Address a,
                         OperandSize sz) {
+    // Unpredictable, illegal on some microarchitectures.
+    ASSERT((op != LDR && op != STR && op != LDRS) || a.can_writeback_to(rt));
+
     const int32_t size = Log2OperandSizeBytes(sz);
     const int32_t encoding =
         op | ((size & 0x3) << kSzShift) | Arm64Encode::Rt(rt) | a.encoding();
@@ -2063,6 +2100,10 @@ class Assembler : public ValueObject {
                             Register rt2,
                             Address a,
                             OperandSize sz) {
+    // Unpredictable, illegal on some microarchitectures.
+    ASSERT(a.can_writeback_to(rt) && a.can_writeback_to(rt2));
+    ASSERT(op != LDP || rt != rt2);
+
     ASSERT((sz == kDoubleWord) || (sz == kWord) || (sz == kUnsignedWord));
     ASSERT((rt != CSP) && (rt != R31));
     ASSERT((rt2 != CSP) && (rt2 != R31));
@@ -2236,10 +2277,15 @@ class Assembler : public ValueObject {
                              CanBeSmi can_be_smi,
                              BarrierFilterMode barrier_filter_mode);
 
+  friend class dart::FlowGraphCompiler;
+  std::function<void(Register reg)> generate_invoke_write_barrier_wrapper_;
+  std::function<void()> generate_invoke_array_write_barrier_;
+
   DISALLOW_ALLOCATION();
   DISALLOW_COPY_AND_ASSIGN(Assembler);
 };
 
+}  // namespace compiler
 }  // namespace dart
 
 #endif  // RUNTIME_VM_COMPILER_ASSEMBLER_ASSEMBLER_ARM64_H_

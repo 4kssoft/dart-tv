@@ -33,7 +33,7 @@ import 'package:observatory/src/elements/nav/notify.dart';
 ///   overlapping the related events.
 enum _TimelineView { strict, frame }
 
-class TimelineDashboardElement extends HtmlElement implements Renderable {
+class TimelineDashboardElement extends CustomElement implements Renderable {
   static const tag = const Tag<TimelineDashboardElement>('timeline-dashboard',
       dependencies: const [NavNotifyElement.tag]);
 
@@ -57,8 +57,8 @@ class TimelineDashboardElement extends HtmlElement implements Renderable {
     assert(vm != null);
     assert(repository != null);
     assert(notifications != null);
-    TimelineDashboardElement e = document.createElement(tag.name);
-    e._r = new RenderingScheduler(e, queue: queue);
+    TimelineDashboardElement e = new TimelineDashboardElement.created();
+    e._r = new RenderingScheduler<TimelineDashboardElement>(e, queue: queue);
     e._vm = vm;
     e._repository = repository;
     e._notifications = notifications;
@@ -68,7 +68,7 @@ class TimelineDashboardElement extends HtmlElement implements Renderable {
     return e;
   }
 
-  TimelineDashboardElement.created() : super.created();
+  TimelineDashboardElement.created() : super.created(tag);
 
   @override
   attached() {
@@ -81,7 +81,7 @@ class TimelineDashboardElement extends HtmlElement implements Renderable {
   detached() {
     super.detached();
     _r.disable(notify: true);
-    children = [];
+    children = <Element>[];
   }
 
   IFrameElement _frame;
@@ -95,7 +95,7 @@ class TimelineDashboardElement extends HtmlElement implements Renderable {
       _content = new DivElement()..classes = ['content-centered-big'];
     }
     _frame.src = _makeFrameUrl();
-    _content.children = [
+    _content.children = <Element>[
       new HeadingElement.h2()
         ..nodes = ([new Text("Timeline View")]
           ..addAll(_createButtons())
@@ -105,15 +105,17 @@ class TimelineDashboardElement extends HtmlElement implements Renderable {
             ? 'Logical view of the computation involved in each frame '
                 '(timestamps may not be preserved)'
             : 'Sequence of events generated during the execution '
-            '(timestamps are preserved)')
+                '(timestamps are preserved)')
     ];
     if (children.isEmpty) {
-      children = [
-        navBar([new NavNotifyElement(_notifications, queue: _r.queue)]),
+      children = <Element>[
+        navBar(<Element>[
+          new NavNotifyElement(_notifications, queue: _r.queue).element
+        ]),
         _content,
         new DivElement()
           ..classes = ['iframe']
-          ..children = [_frame]
+          ..children = <Element>[_frame]
       ];
     }
   }
@@ -162,7 +164,7 @@ class TimelineDashboardElement extends HtmlElement implements Renderable {
     return [
       new SpanElement()
         ..classes = ['tab_buttons']
-        ..children = [
+        ..children = <Element>[
           new ButtonElement()
             ..text = 'Frame View'
             ..title = 'Logical view of the computation involved in each frame\n'
@@ -206,8 +208,9 @@ class TimelineDashboardElement extends HtmlElement implements Renderable {
   Future _refresh() async {
     _flags = await _repository.getFlags(vm);
     _r.dirty();
-    final params = new Map.from(await _repository.getIFrameParams(vm));
-    return _postMessage('refresh', params);
+    final traceData =
+        Map<String, dynamic>.from(await _repository.getTimeline(vm));
+    return _postMessage('refresh', traceData);
   }
 
   Future _clear() async {

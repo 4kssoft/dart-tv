@@ -1,6 +1,6 @@
 // Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
-// BSD-style licenset hat can be found in the LICENSE file.
+// BSD-style license that can be found in the LICENSE file.
 
 library dart_scanner.error_token;
 
@@ -15,6 +15,7 @@ import '../fasta_codes.dart'
         templateNonAsciiIdentifier,
         templateNonAsciiWhitespace,
         templateUnmatchedToken,
+        templateUnsupportedOperator,
         templateUnterminatedString;
 
 import '../scanner.dart' show Token, unicodeReplacementCharacter;
@@ -71,11 +72,27 @@ abstract class ErrorToken extends SimpleToken {
   @override
   int get length => 1;
 
-  String get lexeme => throw assertionMessage.message;
+  String get lexeme {
+    String errorMsg = assertionMessage.message;
+
+    // Attempt to include the location which is calling the parser
+    // in an effort to debug https://github.com/dart-lang/sdk/issues/37528
+    RegExp pattern = new RegExp('^#[0-9]* *Parser');
+    List<String> traceLines = StackTrace.current.toString().split('\n');
+    for (int index = traceLines.length - 2; index >= 0; --index) {
+      String line = traceLines[index];
+      if (line.startsWith(pattern)) {
+        errorMsg = '$errorMsg - ${traceLines[index + 1]}';
+        break;
+      }
+    }
+
+    throw errorMsg;
+  }
 
   Message get assertionMessage;
 
-  Code get errorCode => assertionMessage.code;
+  Code<dynamic> get errorCode => assertionMessage.code;
 
   int get character => null;
 
@@ -137,6 +154,20 @@ class AsciiControlCharacterToken extends ErrorToken {
       templateAsciiControlCharacter.withArguments(character);
 }
 
+/// Denotes an operator that is not supported in the Dart language.
+class UnsupportedOperator extends ErrorToken {
+  Token token;
+
+  UnsupportedOperator(this.token, int charOffset) : super(charOffset);
+
+  @override
+  Message get assertionMessage =>
+      templateUnsupportedOperator.withArguments(token);
+
+  @override
+  String toString() => "UnsupportedOperator(${token.lexeme})";
+}
+
 /// Represents an unterminated string.
 class UnterminatedString extends ErrorToken {
   final String start;
@@ -149,8 +180,10 @@ class UnterminatedString extends ErrorToken {
 
   int get charCount => endOffset - charOffset;
 
-  Message get assertionMessage => templateUnterminatedString.withArguments(
-      start, closeQuoteFor(start));
+  int get length => charCount;
+
+  Message get assertionMessage =>
+      templateUnterminatedString.withArguments(start, closeQuoteFor(start));
 }
 
 /// Represents an unterminated token.
@@ -179,6 +212,6 @@ class UnmatchedToken extends ErrorToken {
 
   String toString() => "UnmatchedToken(${begin.lexeme})";
 
-  Message get assertionMessage => templateUnmatchedToken.withArguments(
-      closeBraceFor(begin.lexeme), begin);
+  Message get assertionMessage =>
+      templateUnmatchedToken.withArguments(closeBraceFor(begin.lexeme), begin);
 }

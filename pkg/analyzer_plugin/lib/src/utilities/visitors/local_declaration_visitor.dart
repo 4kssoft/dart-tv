@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -29,11 +29,15 @@ abstract class LocalDeclarationVisitor extends GeneralizingAstVisitor {
 
   void declaredEnum(EnumDeclaration declaration) {}
 
+  void declaredExtension(ExtensionDeclaration declaration);
+
   void declaredField(FieldDeclaration fieldDecl, VariableDeclaration varDecl);
 
   void declaredFunction(FunctionDeclaration declaration);
 
   void declaredFunctionTypeAlias(FunctionTypeAlias declaration);
+
+  void declaredGenericTypeAlias(GenericTypeAlias declaration);
 
   void declaredLabel(Label label, bool isCaseLabel);
 
@@ -41,10 +45,14 @@ abstract class LocalDeclarationVisitor extends GeneralizingAstVisitor {
 
   void declaredMethod(MethodDeclaration declaration);
 
+  void declaredMixin(MixinDeclaration declaration) {}
+
   void declaredParam(SimpleIdentifier name, TypeAnnotation type);
 
   void declaredTopLevelVar(
       VariableDeclarationList varList, VariableDeclaration varDecl);
+
+  void declaredTypeParameter(TypeParameter node) {}
 
   /**
    * Throw an exception indicating that [LocalDeclarationVisitor] should
@@ -98,10 +106,18 @@ abstract class LocalDeclarationVisitor extends GeneralizingAstVisitor {
     node.declarations.forEach((Declaration declaration) {
       if (declaration is ClassDeclaration) {
         declaredClass(declaration);
+        _visitTypeParameters(declaration, declaration.typeParameters);
       } else if (declaration is EnumDeclaration) {
         declaredEnum(declaration);
+      } else if (declaration is ExtensionDeclaration) {
+        declaredExtension(declaration);
+        _visitTypeParameters(declaration, declaration.typeParameters);
       } else if (declaration is FunctionDeclaration) {
         declaredFunction(declaration);
+        _visitTypeParameters(
+          declaration,
+          declaration.functionExpression.typeParameters,
+        );
       } else if (declaration is TopLevelVariableDeclaration) {
         var varList = declaration.variables;
         if (varList != null) {
@@ -111,8 +127,20 @@ abstract class LocalDeclarationVisitor extends GeneralizingAstVisitor {
         }
       } else if (declaration is ClassTypeAlias) {
         declaredClassTypeAlias(declaration);
+        _visitTypeParameters(declaration, declaration.typeParameters);
       } else if (declaration is FunctionTypeAlias) {
         declaredFunctionTypeAlias(declaration);
+        _visitTypeParameters(declaration, declaration.typeParameters);
+      } else if (declaration is GenericTypeAlias) {
+        declaredGenericTypeAlias(declaration);
+        _visitTypeParameters(declaration, declaration.typeParameters);
+        _visitTypeParameters(
+          declaration.functionType,
+          declaration.functionType?.typeParameters,
+        );
+      } else if (declaration is MixinDeclaration) {
+        declaredMixin(declaration);
+        _visitTypeParameters(declaration, declaration.typeParameters);
       }
     });
   }
@@ -124,31 +152,30 @@ abstract class LocalDeclarationVisitor extends GeneralizingAstVisitor {
   }
 
   @override
-  void visitForEachStatement(ForEachStatement node) {
-    SimpleIdentifier id;
-    TypeAnnotation type;
-    DeclaredIdentifier loopVar = node.loopVariable;
-    if (loopVar != null) {
-      id = loopVar.identifier;
-      type = loopVar.type;
-    } else {
-      id = node.identifier;
-      type = null;
-    }
-    if (id != null) {
-      // If there is no loop variable, don't declare it.
-      declaredLocalVar(id, type);
-    }
-    visitNode(node);
-  }
-
-  @override
-  void visitForStatement(ForStatement node) {
-    VariableDeclarationList varList = node.variables;
-    if (varList != null) {
-      varList.variables.forEach((VariableDeclaration varDecl) {
-        declaredLocalVar(varDecl.name, varList.type);
-      });
+  visitForStatement(ForStatement node) {
+    var forLoopParts = node.forLoopParts;
+    if (forLoopParts is ForEachPartsWithDeclaration) {
+      DeclaredIdentifier loopVar = forLoopParts.loopVariable;
+      if (loopVar != null) {
+        SimpleIdentifier id = loopVar.identifier;
+        if (id != null) {
+          // If there is no loop variable, don't declare it.
+          declaredLocalVar(id, loopVar.type);
+        }
+      }
+    } else if (forLoopParts is ForEachPartsWithIdentifier) {
+      SimpleIdentifier id = forLoopParts.identifier;
+      if (id != null) {
+        // If there is no loop variable, don't declare it.
+        declaredLocalVar(id, null);
+      }
+    } else if (forLoopParts is ForPartsWithDeclarations) {
+      VariableDeclarationList varList = forLoopParts.variables;
+      if (varList != null) {
+        varList.variables.forEach((VariableDeclaration varDecl) {
+          declaredLocalVar(varDecl.name, varList.type);
+        });
+      }
     }
     visitNode(node);
   }
@@ -220,6 +247,7 @@ abstract class LocalDeclarationVisitor extends GeneralizingAstVisitor {
         });
       } else if (member is MethodDeclaration) {
         declaredMethod(member);
+        _visitTypeParameters(member, member.typeParameters);
       }
     }
   }
@@ -267,10 +295,24 @@ abstract class LocalDeclarationVisitor extends GeneralizingAstVisitor {
               String name = id.name;
               if (name != null && name.length > 0) {
                 declaredFunction(declaration);
+                _visitTypeParameters(
+                  declaration,
+                  declaration.functionExpression.typeParameters,
+                );
               }
             }
           }
         }
+      }
+    }
+  }
+
+  void _visitTypeParameters(AstNode node, TypeParameterList typeParameters) {
+    if (typeParameters == null) return;
+
+    if (node.offset < offset && offset < node.end) {
+      for (var typeParameter in typeParameters.typeParameters) {
+        declaredTypeParameter(typeParameter);
       }
     }
   }

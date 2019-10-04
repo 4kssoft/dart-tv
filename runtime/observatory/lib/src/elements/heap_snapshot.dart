@@ -9,9 +9,13 @@
 import 'dart:async';
 import 'dart:html';
 import 'dart:math' as Math;
+import 'dart:typed_data';
 import 'package:observatory/models.dart' as M;
+import 'package:observatory/heap_snapshot.dart' as S;
+import 'package:observatory/object_graph.dart';
 import 'package:observatory/src/elements/class_ref.dart';
 import 'package:observatory/src/elements/containers/virtual_tree.dart';
+import 'package:observatory/src/elements/curly_block.dart';
 import 'package:observatory/src/elements/helpers/any_ref.dart';
 import 'package:observatory/src/elements/helpers/nav_bar.dart';
 import 'package:observatory/src/elements/helpers/nav_menu.dart';
@@ -23,16 +27,120 @@ import 'package:observatory/src/elements/nav/notify.dart';
 import 'package:observatory/src/elements/nav/refresh.dart';
 import 'package:observatory/src/elements/nav/top_menu.dart';
 import 'package:observatory/src/elements/nav/vm_menu.dart';
+import 'package:observatory/src/elements/tree_map.dart';
 import 'package:observatory/utils.dart';
 
 enum HeapSnapshotTreeMode {
   dominatorTree,
+  dominatorTreeMap,
   mergedDominatorTree,
+  mergedDominatorTreeMap,
   ownershipTable,
-  groupByClass
+  ownershipTreeMap,
+  classesTable,
+  classesTreeMap,
+  successors,
+  predecessors,
 }
 
-class HeapSnapshotElement extends HtmlElement implements Renderable {
+class DominatorTreeMap extends TreeMap<SnapshotObject> {
+  HeapSnapshotElement element;
+  DominatorTreeMap(this.element);
+
+  int getSize(SnapshotObject node) => node.retainedSize;
+  String getType(SnapshotObject node) => node.klass.name;
+  String getLabel(SnapshotObject node) => node.description;
+  SnapshotObject getParent(SnapshotObject node) => node.parent;
+  Iterable<SnapshotObject> getChildren(SnapshotObject node) => node.children;
+  void onSelect(SnapshotObject node) {
+    element.selection = node.objects;
+    element._r.dirty();
+  }
+
+  void onDetails(SnapshotObject node) {
+    element.selection = node.objects;
+    element._mode = HeapSnapshotTreeMode.successors;
+    element._r.dirty();
+  }
+}
+
+class MergedDominatorTreeMap
+    extends TreeMap<M.HeapSnapshotMergedDominatorNode> {
+  HeapSnapshotElement element;
+  MergedDominatorTreeMap(this.element);
+
+  int getSize(M.HeapSnapshotMergedDominatorNode node) => node.retainedSize;
+  String getType(M.HeapSnapshotMergedDominatorNode node) => node.klass.name;
+  String getLabel(M.HeapSnapshotMergedDominatorNode node) =>
+      (node as dynamic).description;
+  M.HeapSnapshotMergedDominatorNode getParent(
+          M.HeapSnapshotMergedDominatorNode node) =>
+      (node as dynamic).parent;
+  Iterable<M.HeapSnapshotMergedDominatorNode> getChildren(
+          M.HeapSnapshotMergedDominatorNode node) =>
+      node.children;
+  void onSelect(M.HeapSnapshotMergedDominatorNode node) {
+    element.mergedSelection = node;
+    element._r.dirty();
+  }
+
+  void onDetails(M.HeapSnapshotMergedDominatorNode node) {
+    dynamic n = node;
+    element.selection = n.objects;
+    element._mode = HeapSnapshotTreeMode.successors;
+    element._r.dirty();
+  }
+}
+
+// Using `null` to represent the root.
+class ClassesShallowTreeMap extends TreeMap<SnapshotClass> {
+  HeapSnapshotElement element;
+  M.HeapSnapshot snapshot;
+
+  ClassesShallowTreeMap(this.element, this.snapshot);
+
+  int getSize(SnapshotClass node) =>
+      node == null ? snapshot.size : node.shallowSize;
+  String getType(SnapshotClass node) => node == null ? "Classes" : node.name;
+  String getLabel(SnapshotClass node) => node == null
+      ? "${snapshot.classes.length} classes"
+      : "${node.instanceCount} instances of ${node.name}";
+  SnapshotClass getParent(SnapshotClass node) => null;
+  Iterable<SnapshotClass> getChildren(SnapshotClass node) =>
+      node == null ? snapshot.classes : <SnapshotClass>[];
+  void onSelect(SnapshotClass node) {}
+  void onDetails(SnapshotClass node) {
+    element.selection = node.instances.toList();
+    element._mode = HeapSnapshotTreeMode.successors;
+    element._r.dirty();
+  }
+}
+
+// Using `null` to represent the root.
+class ClassesOwnershipTreeMap extends TreeMap<SnapshotClass> {
+  HeapSnapshotElement element;
+  M.HeapSnapshot snapshot;
+
+  ClassesOwnershipTreeMap(this.element, this.snapshot);
+
+  int getSize(SnapshotClass node) =>
+      node == null ? snapshot.size : node.ownedSize;
+  String getType(SnapshotClass node) => node == null ? "classes" : node.name;
+  String getLabel(SnapshotClass node) => node == null
+      ? "${snapshot.classes.length} Classes"
+      : "${node.instanceCount} instances of ${node.name}";
+  SnapshotClass getParent(SnapshotClass node) => null;
+  Iterable<SnapshotClass> getChildren(SnapshotClass node) =>
+      node == null ? snapshot.classes : <SnapshotClass>[];
+  void onSelect(SnapshotClass node) {}
+  void onDetails(SnapshotClass node) {
+    element.selection = node.instances.toList();
+    element._mode = HeapSnapshotTreeMode.successors;
+    element._r.dirty();
+  }
+}
+
+class HeapSnapshotElement extends CustomElement implements Renderable {
   static const tag =
       const Tag<HeapSnapshotElement>('heap-snapshot', dependencies: const [
     ClassRefElement.tag,
@@ -57,13 +165,15 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
   M.HeapSnapshot _snapshot;
   Stream<M.HeapSnapshotLoadingProgressEvent> _progressStream;
   M.HeapSnapshotLoadingProgress _progress;
-  M.HeapSnapshotRoots _roots = M.HeapSnapshotRoots.user;
-  HeapSnapshotTreeMode _mode = HeapSnapshotTreeMode.dominatorTree;
+  HeapSnapshotTreeMode _mode = HeapSnapshotTreeMode.mergedDominatorTreeMap;
 
   M.IsolateRef get isolate => _isolate;
   M.NotificationRepository get notifications => _notifications;
   M.HeapSnapshotRepository get profiles => _snapshots;
   M.VMRef get vm => _vm;
+
+  List<SnapshotObject> selection;
+  M.HeapSnapshotMergedDominatorNode mergedSelection;
 
   factory HeapSnapshotElement(
       M.VM vm,
@@ -79,8 +189,8 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
     assert(notifications != null);
     assert(snapshots != null);
     assert(objects != null);
-    HeapSnapshotElement e = document.createElement(tag.name);
-    e._r = new RenderingScheduler(e, queue: queue);
+    HeapSnapshotElement e = new HeapSnapshotElement.created();
+    e._r = new RenderingScheduler<HeapSnapshotElement>(e, queue: queue);
     e._vm = vm;
     e._isolate = isolate;
     e._events = events;
@@ -90,7 +200,7 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
     return e;
   }
 
-  HeapSnapshotElement.created() : super.created();
+  HeapSnapshotElement.created() : super.created(tag);
 
   @override
   attached() {
@@ -103,22 +213,35 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
   detached() {
     super.detached();
     _r.disable(notify: true);
-    children = [];
+    children = <Element>[];
   }
 
   void render() {
-    final content = [
-      navBar([
-        new NavTopMenuElement(queue: _r.queue),
-        new NavVMMenuElement(_vm, _events, queue: _r.queue),
-        new NavIsolateMenuElement(_isolate, _events, queue: _r.queue),
+    final content = <Element>[
+      navBar(<Element>[
+        new NavTopMenuElement(queue: _r.queue).element,
+        new NavVMMenuElement(_vm, _events, queue: _r.queue).element,
+        new NavIsolateMenuElement(_isolate, _events, queue: _r.queue).element,
         navMenu('heap snapshot'),
-        new NavRefreshElement(queue: _r.queue)
-          ..disabled = M.isHeapSnapshotProgressRunning(_progress?.status)
-          ..onRefresh.listen((e) {
-            _refresh();
-          }),
-        new NavNotifyElement(_notifications, queue: _r.queue)
+        (new NavRefreshElement(queue: _r.queue)
+              ..disabled = M.isHeapSnapshotProgressRunning(_progress?.status)
+              ..onRefresh.listen((e) {
+                _refresh();
+              }))
+            .element,
+        (new NavRefreshElement(label: 'save', queue: _r.queue)
+              ..disabled = M.isHeapSnapshotProgressRunning(_progress?.status)
+              ..onRefresh.listen((e) {
+                _save();
+              }))
+            .element,
+        (new NavRefreshElement(label: 'load', queue: _r.queue)
+              ..disabled = M.isHeapSnapshotProgressRunning(_progress?.status)
+              ..onRefresh.listen((e) {
+                _load();
+              }))
+            .element,
+        new NavNotifyElement(_notifications, queue: _r.queue).element
       ]),
     ];
     if (_progress == null) {
@@ -145,7 +268,7 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
 
   Future _refresh() async {
     _progress = null;
-    _progressStream = _snapshots.get(isolate, roots: _roots, gc: true);
+    _progressStream = _snapshots.get(isolate);
     _r.dirty();
     _progressStream.listen((e) {
       _progress = e.progress;
@@ -160,15 +283,46 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
     }
   }
 
+  _save() async {
+    var blob = new Blob([_snapshot.encoded], 'application/octet-stream');
+    var blobUrl = Url.createObjectUrl(blob);
+    var link = new AnchorElement();
+    link.href = blobUrl;
+    var now = new DateTime.now();
+    link.download = 'dart-heap-${now.year}-${now.month}-${now.day}.bin';
+    link.click();
+  }
+
+  _load() async {
+    var input = new InputElement();
+    input.type = 'file';
+    input.multiple = false;
+    input.onChange.listen((event) {
+      var file = input.files[0];
+      var reader = new FileReader();
+      reader.onLoad.listen((event) async {
+        Uint8List encoded = reader.result;
+        var snapshot = new S.HeapSnapshot();
+        await snapshot.loadProgress(null, encoded).last;
+        _snapshot = snapshot;
+        selection = null;
+        mergedSelection = null;
+        _r.dirty();
+      });
+      reader.readAsArrayBuffer(file);
+    });
+    input.click();
+  }
+
   static List<Element> _createStatusMessage(String message,
       {String description: '', double progress: 0.0}) {
     return [
       new DivElement()
         ..classes = ['content-centered-big']
-        ..children = [
+        ..children = <Element>[
           new DivElement()
             ..classes = ['statusBox', 'shadow', 'center']
-            ..children = [
+            ..children = <Element>[
               new DivElement()
                 ..classes = ['statusMessage']
                 ..text = message,
@@ -191,43 +345,13 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
     var report = <HtmlElement>[
       new DivElement()
         ..classes = ['content-centered-big']
-        ..children = [
+        ..children = <Element>[
           new DivElement()
             ..classes = ['memberList']
-            ..children = [
+            ..children = <Element>[
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
-                  new DivElement()
-                    ..classes = ['memberName']
-                    ..text = 'Refreshed ',
-                  new DivElement()
-                    ..classes = ['memberName']
-                    ..text = Utils.formatDateTime(_snapshot.timestamp)
-                ],
-              new DivElement()
-                ..classes = ['memberItem']
-                ..children = [
-                  new DivElement()
-                    ..classes = ['memberName']
-                    ..text = 'Objects ',
-                  new DivElement()
-                    ..classes = ['memberName']
-                    ..text = '${_snapshot.objects}'
-                ],
-              new DivElement()
-                ..classes = ['memberItem']
-                ..children = [
-                  new DivElement()
-                    ..classes = ['memberName']
-                    ..text = 'References ',
-                  new DivElement()
-                    ..classes = ['memberName']
-                    ..text = '${_snapshot.references}'
-                ],
-              new DivElement()
-                ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
                     ..text = 'Size ',
@@ -237,20 +361,10 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
                 ],
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
-                    ..text = 'Roots ',
-                  new DivElement()
-                    ..classes = ['memberName']
-                    ..children = _createRootsSelect()
-                ],
-              new DivElement()
-                ..classes = ['memberItem']
-                ..children = [
-                  new DivElement()
-                    ..classes = ['memberName']
-                    ..text = 'Analysis ',
+                    ..text = 'View ',
                   new DivElement()
                     ..classes = ['memberName']
                     ..children = _createModeSelect()
@@ -260,11 +374,15 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
     ];
     switch (_mode) {
       case HeapSnapshotTreeMode.dominatorTree:
+        if (selection == null) {
+          selection = _snapshot.root.objects;
+        }
         _tree = new VirtualTreeElement(
             _createDominator, _updateDominator, _getChildrenDominator,
-            items: _getChildrenDominator(_snapshot.dominatorTree),
-            queue: _r.queue);
-        _tree.expand(_snapshot.dominatorTree);
+            items: selection, queue: _r.queue);
+        if (selection.length == 1) {
+          _tree.expand(selection.first);
+        }
         final text = 'In a heap dominator tree, an object X is a parent of '
             'object Y if every path from the root to Y goes through '
             'X. This allows you to find "choke points" that are '
@@ -275,7 +393,36 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
           new DivElement()
             ..classes = ['content-centered-big', 'explanation']
             ..text = text,
-          _tree
+          _tree.element
+        ]);
+        break;
+      case HeapSnapshotTreeMode.dominatorTreeMap:
+        final content = new DivElement();
+        content.style.border = '1px solid black';
+        content.style.width = '100%';
+        content.style.height = '100%';
+        content.text = 'Performing layout...';
+        Timer.run(() {
+          // Generate the treemap after the content div has been added to the
+          // document so that we can ask the browser how much space is
+          // available for treemap layout.
+          if (selection == null) {
+            selection = _snapshot.root.objects;
+          }
+          new DominatorTreeMap(this).showIn(selection.first, content);
+        });
+
+        final text =
+            'Double-click a tile to zoom in. Double-click the outermost tile to zoom out. Right-click a tile to inspect its object.';
+        report.addAll([
+          new DivElement()
+            ..classes = ['content-centered-big', 'explanation']
+            ..text = text,
+          new DivElement()
+            ..classes = ['content-centered-big']
+            ..style.width = '100%'
+            ..style.height = '100%'
+            ..children = [content]
         ]);
         break;
       case HeapSnapshotTreeMode.mergedDominatorTree:
@@ -290,16 +437,45 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
           new DivElement()
             ..classes = ['content-centered-big', 'explanation']
             ..text = text,
-          _tree
+          _tree.element
+        ]);
+        break;
+      case HeapSnapshotTreeMode.mergedDominatorTreeMap:
+        final content = new DivElement();
+        content.style.border = '1px solid black';
+        content.style.width = '100%';
+        content.style.height = '100%';
+        content.text = 'Performing layout...';
+        Timer.run(() {
+          // Generate the treemap after the content div has been added to the
+          // document so that we can ask the browser how much space is
+          // available for treemap layout.
+          if (mergedSelection == null) {
+            mergedSelection = _snapshot.mergedDominatorTree;
+          }
+          new MergedDominatorTreeMap(this).showIn(mergedSelection, content);
+        });
+
+        final text =
+            'Double-click a tile to zoom in. Double-click the outermost tile to zoom out. Right-click a tile to inspect its objects.';
+        report.addAll([
+          new DivElement()
+            ..classes = ['content-centered-big', 'explanation']
+            ..text = text,
+          new DivElement()
+            ..classes = ['content-centered-big']
+            ..style.width = '100%'
+            ..style.height = '100%'
+            ..children = [content]
         ]);
         break;
       case HeapSnapshotTreeMode.ownershipTable:
-        final items = _snapshot.ownershipClasses.toList();
-        items.sort((a, b) => b.size - a.size);
+        final items = _snapshot.classes.where((c) => c.ownedSize > 0).toList();
+        items.sort((a, b) => b.ownedSize - a.ownedSize);
         _tree = new VirtualTreeElement(_createOwnershipClass,
             _updateOwnershipClass, _getChildrenOwnershipClass,
             items: items, queue: _r.queue);
-        _tree.expand(_snapshot.dominatorTree);
+        _tree.expand(_snapshot.root);
         final text = 'An object X is said to "own" object Y if X is the only '
             'object that references Y, or X owns the only object that '
             'references Y. In particular, objects "own" the space of any '
@@ -308,17 +484,99 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
           new DivElement()
             ..classes = ['content-centered-big', 'explanation']
             ..text = text,
-          _tree
+          _tree.element
         ]);
         break;
-      case HeapSnapshotTreeMode.groupByClass:
-        final items = _snapshot.classReferences.toList();
+      case HeapSnapshotTreeMode.ownershipTreeMap:
+        final content = new DivElement();
+        content.style.border = '1px solid black';
+        content.style.width = '100%';
+        content.style.height = '100%';
+        content.text = 'Performing layout...';
+        Timer.run(() {
+          // Generate the treemap after the content div has been added to the
+          // document so that we can ask the browser how much space is
+          // available for treemap layout.
+          new ClassesOwnershipTreeMap(this, _snapshot).showIn(null, content);
+        });
+        final text = 'An object X is said to "own" object Y if X is the only '
+            'object that references Y, or X owns the only object that '
+            'references Y. In particular, objects "own" the space of any '
+            'unshared lists or maps they reference.';
+        report.addAll([
+          new DivElement()
+            ..classes = ['content-centered-big', 'explanation']
+            ..text = text,
+          new DivElement()
+            ..classes = ['content-centered-big']
+            ..style.width = '100%'
+            ..style.height = '100%'
+            ..children = [content]
+        ]);
+        break;
+      case HeapSnapshotTreeMode.successors:
+        if (selection == null) {
+          selection = _snapshot.root.objects;
+        }
+        _tree = new VirtualTreeElement(
+            _createSuccessor, _updateSuccessor, _getChildrenSuccessor,
+            items: selection, queue: _r.queue);
+        if (selection.length == 1) {
+          _tree.expand(selection.first);
+        }
+        final text = '';
+        report.addAll([
+          new DivElement()
+            ..classes = ['content-centered-big', 'explanation']
+            ..text = text,
+          _tree.element
+        ]);
+        break;
+      case HeapSnapshotTreeMode.predecessors:
+        if (selection == null) {
+          selection = _snapshot.root.objects;
+        }
+        _tree = new VirtualTreeElement(
+            _createPredecessor, _updatePredecessor, _getChildrenPredecessor,
+            items: selection, queue: _r.queue);
+        if (selection.length == 1) {
+          _tree.expand(selection.first);
+        }
+        final text = '';
+        report.addAll([
+          new DivElement()
+            ..classes = ['content-centered-big', 'explanation']
+            ..text = text,
+          _tree.element
+        ]);
+        break;
+      case HeapSnapshotTreeMode.classesTable:
+        final items = _snapshot.classes.toList();
         items.sort((a, b) => b.shallowSize - a.shallowSize);
         _tree = new VirtualTreeElement(
-            _createGroup, _updateGroup, _getChildrenGroup,
+            _createClass, _updateClass, _getChildrenClass,
             items: items, queue: _r.queue);
-        _tree.expand(_snapshot.dominatorTree);
-        report.add(_tree);
+        report.add(_tree.element);
+        break;
+      case HeapSnapshotTreeMode.classesTreeMap:
+        final content = new DivElement();
+        content.style.border = '1px solid black';
+        content.style.width = '100%';
+        content.style.height = '100%';
+        content.text = 'Performing layout...';
+        Timer.run(() {
+          // Generate the treemap after the content div has been added to the
+          // document so that we can ask the browser how much space is
+          // available for treemap layout.
+          new ClassesShallowTreeMap(this, _snapshot).showIn(null, content);
+        });
+        report.addAll([
+          new DivElement()
+            ..classes = ['content-centered-big']
+            ..style.width = '100%'
+            ..style.height = '100%'
+            ..children = [content]
+        ]);
         break;
       default:
         break;
@@ -329,7 +587,10 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
   static HtmlElement _createDominator(toggle) {
     return new DivElement()
       ..classes = ['tree-item']
-      ..children = [
+      ..children = <Element>[
+        new SpanElement()
+          ..classes = ['percentage']
+          ..title = 'percentage of heap being retained',
         new SpanElement()
           ..classes = ['size']
           ..title = 'retained size',
@@ -337,17 +598,80 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
         new ButtonElement()
           ..classes = ['expander']
           ..onClick.listen((_) => toggle(autoToggleSingleChildNodes: true)),
+        new SpanElement()..classes = ['name'],
+        new AnchorElement()
+          ..classes = ['link']
+          ..text = "[inspect]",
+        new AnchorElement()
+          ..classes = ['link']
+          ..text = "[incoming]",
+        new AnchorElement()
+          ..classes = ['link']
+          ..text = "[dominator-map]",
+      ];
+  }
+
+  static HtmlElement _createSuccessor(toggle) {
+    return new DivElement()
+      ..classes = ['tree-item']
+      ..children = <Element>[
+        new SpanElement()..classes = ['lines'],
+        new ButtonElement()
+          ..classes = ['expander']
+          ..onClick.listen((_) => toggle(autoToggleSingleChildNodes: true)),
         new SpanElement()
-          ..classes = ['percentage']
-          ..title = 'percentage of heap being retained',
-        new SpanElement()..classes = ['name']
+          ..classes = ['size']
+          ..title = 'retained size',
+        new SpanElement()
+          ..classes = ['edge']
+          ..title = 'name of outgoing field',
+        new SpanElement()..classes = ['name'],
+        new AnchorElement()
+          ..classes = ['link']
+          ..text = "[incoming]",
+        new AnchorElement()
+          ..classes = ['link']
+          ..text = "[dominator-tree]",
+        new AnchorElement()
+          ..classes = ['link']
+          ..text = "[dominator-map]",
+      ];
+  }
+
+  static HtmlElement _createPredecessor(toggle) {
+    return new DivElement()
+      ..classes = ['tree-item']
+      ..children = <Element>[
+        new SpanElement()..classes = ['lines'],
+        new ButtonElement()
+          ..classes = ['expander']
+          ..onClick.listen((_) => toggle(autoToggleSingleChildNodes: true)),
+        new SpanElement()
+          ..classes = ['size']
+          ..title = 'retained size',
+        new SpanElement()
+          ..classes = ['edge']
+          ..title = 'name of incoming field',
+        new SpanElement()..classes = ['name'],
+        new SpanElement()
+          ..classes = ['link']
+          ..text = "[inspect]",
+        new AnchorElement()
+          ..classes = ['link']
+          ..text = "[dominator-tree]",
+        new AnchorElement()
+          ..classes = ['link']
+          ..text = "[dominator-map]",
       ];
   }
 
   static HtmlElement _createMergedDominator(toggle) {
     return new DivElement()
       ..classes = ['tree-item']
-      ..children = [
+      ..children = <Element>[
+        new SpanElement()
+          ..classes = ['percentage']
+          ..title = 'percentage of heap being retained',
         new SpanElement()
           ..classes = ['size']
           ..title = 'retained size',
@@ -355,27 +679,6 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
         new ButtonElement()
           ..classes = ['expander']
           ..onClick.listen((_) => toggle(autoToggleSingleChildNodes: true)),
-        new SpanElement()
-          ..classes = ['percentage']
-          ..title = 'percentage of heap being retained',
-        new SpanElement()..classes = ['name']
-      ];
-  }
-
-  static HtmlElement _createGroup(toggle) {
-    return new DivElement()
-      ..classes = ['tree-item']
-      ..children = [
-        new SpanElement()
-          ..classes = ['size']
-          ..title = 'shallow size',
-        new SpanElement()..classes = ['lines'],
-        new ButtonElement()
-          ..classes = ['expander']
-          ..onClick.listen((_) => toggle(autoToggleSingleChildNodes: true)),
-        new SpanElement()
-          ..classes = ['count']
-          ..title = 'shallow size',
         new SpanElement()..classes = ['name']
       ];
   }
@@ -383,13 +686,34 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
   static HtmlElement _createOwnershipClass(toggle) {
     return new DivElement()
       ..classes = ['tree-item']
-      ..children = [
-        new SpanElement()
-          ..classes = ['size']
-          ..title = 'owned size',
+      ..children = <Element>[
         new SpanElement()
           ..classes = ['percentage']
           ..title = 'percentage of heap owned',
+        new SpanElement()
+          ..classes = ['size']
+          ..title = 'owned size',
+        new SpanElement()..classes = ['name']
+      ];
+  }
+
+  static HtmlElement _createClass(toggle) {
+    return new DivElement()
+      ..classes = ['tree-item']
+      ..children = <Element>[
+        new SpanElement()..classes = ['lines'],
+        new ButtonElement()
+          ..classes = ['expander']
+          ..onClick.listen((_) => toggle(autoToggleSingleChildNodes: true)),
+        new SpanElement()
+          ..classes = ['percentage']
+          ..title = 'percentage of heap owned',
+        new SpanElement()
+          ..classes = ['size']
+          ..title = 'shallow size',
+        new SpanElement()
+          ..classes = ['size']
+          ..title = 'instance count',
         new SpanElement()..classes = ['name']
       ];
   }
@@ -398,12 +722,24 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
   static const int kMinRetainedSize = 4096;
 
   static Iterable _getChildrenDominator(nodeDynamic) {
-    M.HeapSnapshotDominatorNode node = nodeDynamic;
+    SnapshotObject node = nodeDynamic;
     final list = node.children.toList();
     list.sort((a, b) => b.retainedSize - a.retainedSize);
     return list
         .where((child) => child.retainedSize >= kMinRetainedSize)
         .take(kMaxChildren);
+  }
+
+  static Iterable _getChildrenSuccessor(nodeDynamic) {
+    SnapshotObject node = nodeDynamic;
+    final list = node.successors.toList();
+    return list;
+  }
+
+  static Iterable _getChildrenPredecessor(nodeDynamic) {
+    SnapshotObject node = nodeDynamic;
+    final list = node.predecessors.toList();
+    return list;
   }
 
   static Iterable _getChildrenMergedDominator(nodeDynamic) {
@@ -415,150 +751,132 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
         .take(kMaxChildren);
   }
 
-  static Iterable _getChildrenGroup(item) {
-    if (item is M.HeapSnapshotClassReferences) {
-      if (item.inbounds.isNotEmpty || item.outbounds.isNotEmpty) {
-        return [item.inbounds, item.outbounds];
-      }
-    } else if (item is Iterable) {
-      return item.toList()..sort((a, b) => b.shallowSize - a.shallowSize);
-    }
-    return const [];
-  }
-
   static Iterable _getChildrenOwnershipClass(item) {
     return const [];
   }
 
-  void _updateDominator(
-      HtmlElement element, M.HeapSnapshotDominatorNode node, int depth) {
-    element.children[0].text = Utils.formatSize(node.retainedSize);
-    _updateLines(element.children[1].children, depth);
+  static Iterable _getChildrenClass(item) {
+    return const [];
+  }
+
+  void _updateDominator(HtmlElement element, nodeDynamic, int depth) {
+    SnapshotObject node = nodeDynamic;
+    element.children[0].text =
+        Utils.formatPercentNormalized(node.retainedSize * 1.0 / _snapshot.size);
+    element.children[1].text = Utils.formatSize(node.retainedSize);
+    _updateLines(element.children[2].children, depth);
     if (_getChildrenDominator(node).isNotEmpty) {
-      element.children[2].text = _tree.isExpanded(node) ? '▼' : '►';
+      element.children[3].text = _tree.isExpanded(node) ? '▼' : '►';
     } else {
-      element.children[2].text = '';
+      element.children[3].text = '';
     }
-    element.children[3].text =
-        Utils.formatPercentNormalized(node.retainedSize * 1.0 / _snapshot.size);
-    final wrapper = new SpanElement()
-      ..classes = ['name']
-      ..text = 'Loading...';
-    element.children[4] = wrapper;
-    if (node.isStack) {
-      wrapper
-        ..text = ''
-        ..children = [
-          new AnchorElement(href: Uris.debugger(isolate))..text = 'stack frames'
-        ];
-    } else {
-      node.object.then((object) {
-        wrapper
-          ..text = ''
-          ..children = [
-            anyRef(_isolate, object, _objects,
-                queue: _r.queue, expandable: false)
-          ];
-      });
-    }
+    element.children[4].text = node.description;
+    element.children[5].onClick.listen((_) {
+      selection = node.objects;
+      _mode = HeapSnapshotTreeMode.successors;
+      _r.dirty();
+    });
+    element.children[6].onClick.listen((_) {
+      selection = node.objects;
+      _mode = HeapSnapshotTreeMode.predecessors;
+      _r.dirty();
+    });
+    element.children[7].onClick.listen((_) {
+      selection = node.objects;
+      _mode = HeapSnapshotTreeMode.dominatorTreeMap;
+      _r.dirty();
+    });
   }
 
-  void _updateMergedDominator(
-      HtmlElement element, M.HeapSnapshotMergedDominatorNode node, int depth) {
-    element.children[0].text = Utils.formatSize(node.retainedSize);
-    _updateLines(element.children[1].children, depth);
+  void _updateSuccessor(HtmlElement element, nodeDynamic, int depth) {
+    SnapshotObject node = nodeDynamic;
+    _updateLines(element.children[0].children, depth);
+    if (_getChildrenSuccessor(node).isNotEmpty) {
+      element.children[1].text = _tree.isExpanded(node) ? '▼' : '►';
+    } else {
+      element.children[1].text = '';
+    }
+    element.children[2].text = Utils.formatSize(node.retainedSize);
+    element.children[3].text = node.label;
+    element.children[4].text = node.description;
+    element.children[5].onClick.listen((_) {
+      selection = node.objects;
+      _mode = HeapSnapshotTreeMode.predecessors;
+      _r.dirty();
+    });
+    element.children[6].onClick.listen((_) {
+      selection = node.objects;
+      _mode = HeapSnapshotTreeMode.dominatorTree;
+      _r.dirty();
+    });
+    element.children[7].onClick.listen((_) {
+      selection = node.objects;
+      _mode = HeapSnapshotTreeMode.dominatorTreeMap;
+      _r.dirty();
+    });
+  }
+
+  void _updatePredecessor(HtmlElement element, nodeDynamic, int depth) {
+    SnapshotObject node = nodeDynamic;
+    _updateLines(element.children[0].children, depth);
+    if (_getChildrenSuccessor(node).isNotEmpty) {
+      element.children[1].text = _tree.isExpanded(node) ? '▼' : '►';
+    } else {
+      element.children[1].text = '';
+    }
+    element.children[2].text = Utils.formatSize(node.retainedSize);
+    element.children[3].text = node.label;
+    element.children[4].text = node.description;
+    element.children[5].onClick.listen((_) {
+      selection = node.objects;
+      _mode = HeapSnapshotTreeMode.successors;
+      _r.dirty();
+    });
+    element.children[6].onClick.listen((_) {
+      selection = node.objects;
+      _mode = HeapSnapshotTreeMode.dominatorTree;
+      _r.dirty();
+    });
+    element.children[7].onClick.listen((_) {
+      selection = node.objects;
+      _mode = HeapSnapshotTreeMode.dominatorTreeMap;
+      _r.dirty();
+    });
+  }
+
+  void _updateMergedDominator(HtmlElement element, nodeDynamic, int depth) {
+    M.HeapSnapshotMergedDominatorNode node = nodeDynamic;
+    element.children[0].text =
+        Utils.formatPercentNormalized(node.retainedSize * 1.0 / _snapshot.size);
+    element.children[1].text = Utils.formatSize(node.retainedSize);
+    _updateLines(element.children[2].children, depth);
     if (_getChildrenMergedDominator(node).isNotEmpty) {
-      element.children[2].text = _tree.isExpanded(node) ? '▼' : '►';
+      element.children[3].text = _tree.isExpanded(node) ? '▼' : '►';
     } else {
-      element.children[2].text = '';
+      element.children[3].text = '';
     }
+    element.children[4]
+      ..text = '${node.instanceCount} instances of ${node.klass.name}';
+  }
+
+  void _updateOwnershipClass(HtmlElement element, nodeDynamic, int depth) {
+    SnapshotClass node = nodeDynamic;
+    _updateLines(element.children[1].children, depth);
+    element.children[0].text =
+        Utils.formatPercentNormalized(node.ownedSize * 1.0 / _snapshot.size);
+    element.children[1].text = Utils.formatSize(node.ownedSize);
+    element.children[2].text = node.name;
+  }
+
+  void _updateClass(HtmlElement element, nodeDynamic, int depth) {
+    SnapshotClass node = nodeDynamic;
+    _updateLines(element.children[1].children, depth);
+    element.children[2].text =
+        Utils.formatPercentNormalized(node.shallowSize * 1.0 / _snapshot.size);
     element.children[3].text =
-        Utils.formatPercentNormalized(node.retainedSize * 1.0 / _snapshot.size);
-    final wrapper = new SpanElement()
-      ..classes = ['name']
-      ..text = 'Loading...';
-    element.children[4] = wrapper;
-    if (node.isStack) {
-      wrapper
-        ..text = ''
-        ..children = [
-          new AnchorElement(href: Uris.debugger(isolate))..text = 'stack frames'
-        ];
-    } else {
-      node.klass.then((klass) {
-        wrapper
-          ..text = ''
-          ..children = [
-            new SpanElement()..text = '${node.instanceCount} instances of ',
-            anyRef(_isolate, klass, _objects,
-                queue: _r.queue, expandable: false)
-          ];
-      });
-    }
-  }
-
-  void _updateGroup(HtmlElement element, item, int depth) {
-    _updateLines(element.children[1].children, depth);
-    if (item is M.HeapSnapshotClassReferences) {
-      element.children[0].text = Utils.formatSize(item.shallowSize);
-      element.children[2].text = _tree.isExpanded(item) ? '▼' : '►';
-      element.children[3].text = '${item.instances} instances of ';
-      element.children[4] =
-          new ClassRefElement(_isolate, item.clazz, queue: _r.queue)
-            ..classes = ['name'];
-    } else if (item is Iterable) {
-      element.children[0].text = '';
-      if (item.isNotEmpty) {
-        element.children[2].text = _tree.isExpanded(item) ? '▼' : '►';
-      } else {
-        element.children[2].text = '';
-      }
-      element.children[3].text = '';
-      int references = 0;
-      for (var referenceGroup in item) {
-        references += referenceGroup.count;
-      }
-      if (item is Iterable<M.HeapSnapshotClassInbound>) {
-        element.children[4] = new SpanElement()
-          ..classes = ['name']
-          ..text = '$references incoming references';
-      } else {
-        element.children[4] = new SpanElement()
-          ..classes = ['name']
-          ..text = '$references outgoing references';
-      }
-    } else {
-      element.children[0].text = '';
-      element.children[2].text = '';
-      element.children[3].text = '';
-      element.children[4] = new SpanElement()..classes = ['name'];
-      if (item is M.HeapSnapshotClassInbound) {
-        element.children[3].text =
-            '${item.count} references from instances of ';
-        element.children[4].children = [
-          new ClassRefElement(_isolate, item.source, queue: _r.queue)
-        ];
-      } else if (item is M.HeapSnapshotClassOutbound) {
-        element.children[3]..text = '${item.count} references to instances of ';
-        element.children[4].children = [
-          new ClassRefElement(_isolate, item.target, queue: _r.queue)
-        ];
-      }
-    }
-  }
-
-  void _updateOwnershipClass(HtmlElement element, item, int depth) {
-    _updateLines(element.children[1].children, depth);
-    element.children[0].text = Utils.formatSize(item.size);
-    element.children[1].text =
-        Utils.formatPercentNormalized(item.size * 1.0 / _snapshot.size);
-    element.children[2] = new SpanElement()
-      ..classes = ['name']
-      ..children = [
-        new SpanElement()..text = ' instances of ',
-        new ClassRefElement(_isolate, item.clazz, queue: _r.queue)
-          ..classes = ['name']
-      ];
+        Utils.formatSize(node.shallowSize + node.externalSize);
+    element.children[4].text = node.instanceCount.toString();
+    element.children[5].text = node.name;
   }
 
   static _updateLines(List<Element> lines, int n) {
@@ -571,46 +889,30 @@ class HeapSnapshotElement extends HtmlElement implements Renderable {
     }
   }
 
-  static String rootsToString(M.HeapSnapshotRoots roots) {
-    switch (roots) {
-      case M.HeapSnapshotRoots.user:
-        return 'User';
-      case M.HeapSnapshotRoots.vm:
-        return 'VM';
-    }
-    throw new Exception('Unknown HeapSnapshotRoots');
-  }
-
-  List<Element> _createRootsSelect() {
-    var s;
-    return [
-      s = new SelectElement()
-        ..classes = ['roots-select']
-        ..value = rootsToString(_roots)
-        ..children = M.HeapSnapshotRoots.values.map((roots) {
-          return new OptionElement(
-              value: rootsToString(roots), selected: _roots == roots)
-            ..text = rootsToString(roots);
-        }).toList(growable: false)
-        ..onChange.listen((_) {
-          _roots = M.HeapSnapshotRoots.values[s.selectedIndex];
-          _refresh();
-        })
-    ];
-  }
-
   static String modeToString(HeapSnapshotTreeMode mode) {
     switch (mode) {
       case HeapSnapshotTreeMode.dominatorTree:
-        return 'Dominator tree';
+        return 'Dominators (tree)';
+      case HeapSnapshotTreeMode.dominatorTreeMap:
+        return 'Dominators (treemap)';
       case HeapSnapshotTreeMode.mergedDominatorTree:
-        return 'Dominator tree (merged siblings by class)';
+        return 'Dominators (tree, siblings merged by class)';
+      case HeapSnapshotTreeMode.mergedDominatorTreeMap:
+        return 'Dominators (treemap, siblings merged by class)';
       case HeapSnapshotTreeMode.ownershipTable:
-        return 'Ownership table';
-      case HeapSnapshotTreeMode.groupByClass:
-        return 'Group by class';
+        return 'Ownership (table)';
+      case HeapSnapshotTreeMode.ownershipTreeMap:
+        return 'Ownership (treemap)';
+      case HeapSnapshotTreeMode.classesTable:
+        return 'Classes (table)';
+      case HeapSnapshotTreeMode.classesTreeMap:
+        return 'Classes (treemap)';
+      case HeapSnapshotTreeMode.successors:
+        return 'Successors / outgoing references';
+      case HeapSnapshotTreeMode.predecessors:
+        return 'Predecessors / incoming references';
     }
-    throw new Exception('Unknown HeapSnapshotTreeMode');
+    throw new Exception('Unknown HeapSnapshotTreeMode: $mode');
   }
 
   List<Element> _createModeSelect() {

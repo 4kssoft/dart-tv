@@ -461,6 +461,12 @@ class RawSocket {
       {sourceAddress, Duration timeout}) {
     throw new UnsupportedError("RawSocket constructor");
   }
+
+  @patch
+  static Future<ConnectionTask<RawSocket>> startConnect(host, int port,
+      {sourceAddress}) {
+    throw new UnsupportedError("RawSocket constructor");
+  }
 }
 
 @patch
@@ -468,6 +474,12 @@ class Socket {
   @patch
   static Future<Socket> _connect(host, int port,
       {sourceAddress, Duration timeout}) {
+    throw new UnsupportedError("Socket constructor");
+  }
+
+  @patch
+  static Future<ConnectionTask<Socket>> _startConnect(host, int port,
+      {sourceAddress}) {
     throw new UnsupportedError("Socket constructor");
   }
 }
@@ -485,6 +497,14 @@ class RawSynchronousSocket {
   @patch
   static RawSynchronousSocket connectSync(host, int port) {
     throw new UnsupportedError("RawSynchronousSocket.connectSync");
+  }
+}
+
+@patch
+class RawSocketOption {
+  @patch
+  static int _getOptionValue(int key) {
+    throw UnsupportedError("RawSocketOption._getOptionValue");
   }
 }
 
@@ -518,7 +538,7 @@ class X509Certificate {
 class RawDatagramSocket {
   @patch
   static Future<RawDatagramSocket> bind(host, int port,
-      {bool reuseAddress: true}) {
+      {bool reuseAddress: true, bool reusePort: false, int ttl: 1}) {
     throw new UnsupportedError("RawDatagramSocket.bind");
   }
 }
@@ -526,7 +546,7 @@ class RawDatagramSocket {
 @patch
 class _SecureFilter {
   @patch
-  factory _SecureFilter() {
+  factory _SecureFilter._() {
     throw new UnsupportedError("_SecureFilter._SecureFilter");
   }
 }

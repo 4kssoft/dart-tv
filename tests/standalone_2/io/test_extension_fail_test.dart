@@ -36,7 +36,7 @@ String getExtensionPath(String buildDirectory) {
 }
 
 bool checkExitCode(int code) {
-  return ((code == 255) || (code == 253));
+  return ((code == 255) || (code == 254) || (code == 253));
 }
 
 bool checkStdError(String err) {
@@ -88,7 +88,7 @@ Future test(String name, bool checkForBall) async {
       }
     }
   } finally {
-    await tempDirectory.deleteSync(recursive: true);
+    tempDirectory.deleteSync(recursive: true);
   }
 }
 

@@ -21,28 +21,32 @@ namespace bin {
   V(package_root, package_root)                                                \
   V(snapshot, snapshot_filename)                                               \
   V(snapshot_depfile, snapshot_deps_filename)                                  \
+  V(depfile, depfile)                                                          \
+  V(depfile_output_filename, depfile_output_filename)                          \
   V(shared_blobs, shared_blobs_filename)                                       \
-  V(save_obfuscation_map, obfuscation_map_filename)                            \
   V(save_compilation_trace, save_compilation_trace_filename)                   \
   V(load_compilation_trace, load_compilation_trace_filename)                   \
+  V(save_type_feedback, save_type_feedback_filename)                           \
+  V(load_type_feedback, load_type_feedback_filename)                           \
   V(root_certs_file, root_certs_file)                                          \
   V(root_certs_cache, root_certs_cache)                                        \
-  V(namespace, namespc)
+  V(namespace, namespc)                                                        \
+  V(write_service_info, vm_write_service_info_filename)
 
 // As STRING_OPTIONS_LIST but for boolean valued options. The default value is
 // always false, and the presence of the flag switches the value to true.
 #define BOOL_OPTIONS_LIST(V)                                                   \
   V(version, version_option)                                                   \
   V(compile_all, compile_all)                                                  \
-  V(parse_all, parse_all)                                                      \
   V(disable_service_origin_check, vm_service_dev_mode)                         \
+  V(disable_service_auth_codes, vm_service_auth_disabled)                      \
   V(deterministic, deterministic)                                              \
-  V(use_blobs, use_blobs)                                                      \
-  V(obfuscate, obfuscate)                                                      \
   V(trace_loading, trace_loading)                                              \
   V(short_socket_read, short_socket_read)                                      \
   V(short_socket_write, short_socket_write)                                    \
-  V(disable_exit, exit_disabled)
+  V(disable_exit, exit_disabled)                                               \
+  V(preview_dart_2, nop_option)                                                \
+  V(suppress_core_dump, suppress_core_dump)
 
 // Boolean flags that have a short form.
 #define SHORT_BOOL_OPTIONS_LIST(V)                                             \
@@ -60,13 +64,13 @@ namespace bin {
 #define CB_OPTIONS_LIST(V)                                                     \
   V(ProcessEnvironmentOption)                                                  \
   V(ProcessEnableVmServiceOption)                                              \
-  V(ProcessObserveOption)
+  V(ProcessObserveOption)                                                      \
+  V(ProcessAbiVersionOption)
 
 // This enum must match the strings in kSnapshotKindNames in main_options.cc.
 enum SnapshotKind {
   kNone,
-  kScript,
-  kAppAOT,
+  kKernel,
   kAppJIT,
 };
 
@@ -107,13 +111,15 @@ class Options {
   CB_OPTIONS_LIST(CB_OPTIONS_DECL)
 #undef CB_OPTIONS_DECL
 
-  static bool preview_dart_2() { return preview_dart_2_; }
-  static void SetPreviewDart2Options(CommandLineOptions* vm_options);
+  static bool preview_dart_2() { return true; }
 
-  static dart::HashMap* environment() { return environment_; }
+  static dart::SimpleHashMap* environment() { return environment_; }
 
   static const char* vm_service_server_ip() { return vm_service_server_ip_; }
   static int vm_service_server_port() { return vm_service_server_port_; }
+
+  static constexpr int kAbiVersionUnset = -1;
+  static int target_abi_version() { return target_abi_version_; }
 
 #if !defined(DART_PRECOMPILED_RUNTIME)
   static DFE* dfe() { return dfe_; }
@@ -143,8 +149,7 @@ class Options {
   ENUM_OPTIONS_LIST(ENUM_OPTION_DECL)
 #undef ENUM_OPTION_DECL
 
-  static bool preview_dart_2_;
-  static dart::HashMap* environment_;
+  static dart::SimpleHashMap* environment_;
 
 // Frontend argument processing.
 #if !defined(DART_PRECOMPILED_RUNTIME)
@@ -160,6 +165,8 @@ class Options {
                                     int default_port,
                                     const char* default_ip);
 
+  static int target_abi_version_;
+
 #define OPTION_FRIEND(flag, variable) friend class OptionProcessor_##flag;
   STRING_OPTIONS_LIST(OPTION_FRIEND)
   BOOL_OPTIONS_LIST(OPTION_FRIEND)
@@ -174,8 +181,6 @@ class Options {
   friend class OptionProcessor_##flag;
   ENUM_OPTIONS_LIST(ENUM_OPTION_FRIEND)
 #undef ENUM_OPTION_FRIEND
-
-  friend class OptionProcessor_preview_dart_2;
 
   DISALLOW_ALLOCATION();
   DISALLOW_IMPLICIT_CONSTRUCTORS(Options);

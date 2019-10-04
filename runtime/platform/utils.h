@@ -6,6 +6,7 @@
 #define RUNTIME_PLATFORM_UTILS_H_
 
 #include <limits>
+#include <type_traits>
 
 #include "platform/assert.h"
 #include "platform/globals.h"
@@ -149,6 +150,11 @@ class Utils {
   static int CountLeadingZeros(uword x);
   static int CountTrailingZeros(uword x);
 
+  // Computes magic numbers to implement DIV or MOD operator.
+  static void CalculateMagicAndShiftForDivRem(int64_t divisor,
+                                              int64_t* magic,
+                                              int64_t* shift);
+
   // Computes a hash value for the given string.
   static uint32_t StringHash(const char* data, int length);
 
@@ -202,7 +208,14 @@ class Utils {
     return (static_cast<int64_t>(high) << 32) | (low & 0x0ffffffffLL);
   }
 
-  static bool IsDecimalDigit(char c) { return ('0' <= c) && (c <= '9'); }
+  static inline constexpr bool IsAlphaNumeric(uint32_t c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+           IsDecimalDigit(c);
+  }
+
+  static inline constexpr bool IsDecimalDigit(uint32_t c) {
+    return ('0' <= c) && (c <= '9');
+  }
 
   static bool IsHexDigit(char c) {
     return IsDecimalDigit(c) || (('A' <= c) && (c <= 'F')) ||
@@ -286,10 +299,13 @@ class Utils {
   static uint32_t HostToLittleEndian32(uint32_t host_value);
   static uint64_t HostToLittleEndian64(uint64_t host_value);
 
-  static uint32_t BigEndianToHost32(uint32_t be_value) {
-    // Going between Host <-> BE is the same operation for all practical
-    // purposes.
+  // Going between Host <-> LE/BE is the same operation for all practical
+  // purposes.
+  static inline uint32_t BigEndianToHost32(uint32_t be_value) {
     return HostToBigEndian32(be_value);
+  }
+  static inline uint64_t LittleEndianToHost64(uint64_t le_value) {
+    return HostToLittleEndian64(le_value);
   }
 
   static bool DoublesBitEqual(const double a, const double b) {
@@ -337,6 +353,29 @@ class Utils {
     return bit << n;
   }
 
+  // Decode integer in SLEB128 format from |data| and update |byte_index|.
+  template <typename ValueType>
+  static ValueType DecodeSLEB128(const uint8_t* data,
+                                 const intptr_t data_length,
+                                 intptr_t* byte_index) {
+    ASSERT(*byte_index < data_length);
+    uword shift = 0;
+    ValueType value = 0;
+    uint8_t part = 0;
+    do {
+      part = data[(*byte_index)++];
+      value |= static_cast<ValueType>(part & 0x7f) << shift;
+      shift += 7;
+    } while ((part & 0x80) != 0);
+
+    if ((shift < (sizeof(ValueType) * CHAR_BIT)) && ((part & 0x40) != 0)) {
+      using Unsigned = typename std::make_unsigned<ValueType>::type;
+      const Unsigned kMax = std::numeric_limits<Unsigned>::max();
+      value |= static_cast<ValueType>(kMax << shift);
+    }
+    return value;
+  }
+
   static char* StrError(int err, char* buffer, size_t bufsize);
 
   // Not all platforms support strndup.
@@ -362,6 +401,10 @@ class Utils {
   static int SNPrint(char* str, size_t size, const char* format, ...)
       PRINTF_ATTRIBUTE(3, 4);
   static int VSNPrint(char* str, size_t size, const char* format, va_list args);
+
+  // Allocate a string and print formatted output into a malloc'd buffer.
+  static char* SCreate(const char* format, ...) PRINTF_ATTRIBUTE(1, 2);
+  static char* VSCreate(const char* format, va_list args);
 };
 
 }  // namespace dart

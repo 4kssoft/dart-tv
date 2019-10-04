@@ -6,16 +6,16 @@ library dart2js.compiler_base;
 
 import 'dart:async' show Future;
 
-import 'package:front_end/src/fasta/scanner.dart' show StringToken;
+import 'package:front_end/src/api_unstable/dart2js.dart'
+    show clearStringTokenCanonicalizer;
 
 import '../compiler_new.dart' as api;
 import 'backend_strategy.dart';
-import 'common/names.dart' show Selectors;
-import 'common/names.dart' show Uris;
+import 'common/codegen.dart';
+import 'common/names.dart' show Selectors, Uris;
 import 'common/tasks.dart' show CompilerTask, GenericTask, Measurer;
 import 'common/work.dart' show WorkItem;
 import 'common.dart';
-import 'compile_time_constants.dart';
 import 'common_elements.dart' show ElementEnvironment;
 import 'deferred_load.dart' show DeferredLoadTask, OutputUnitData;
 import 'diagnostics/code_location.dart';
@@ -26,22 +26,25 @@ import 'elements/entities.dart';
 import 'enqueue.dart' show Enqueuer, EnqueueTask, ResolutionEnqueuer;
 import 'environment.dart';
 import 'frontend_strategy.dart';
+import 'inferrer/abstract_value_domain.dart' show AbstractValueStrategy;
+import 'inferrer/trivial.dart' show TrivialAbstractValueStrategy;
 import 'inferrer/typemasks/masks.dart' show TypeMaskStrategy;
+import 'inferrer/types.dart'
+    show GlobalTypeInferenceResults, GlobalTypeInferenceTask;
 import 'io/source_information.dart' show SourceInformation;
-import 'js_backend/backend.dart' show JavaScriptBackend;
+import 'js_backend/backend.dart' show CodegenInputs, JavaScriptImpactStrategy;
 import 'js_backend/inferred_data.dart';
-import 'kernel/kernel_backend_strategy.dart';
+import 'js_model/js_strategy.dart';
 import 'kernel/kernel_strategy.dart';
-import 'library_loader.dart' show LibraryLoaderTask, LoadedLibraries;
-import 'null_compiler_output.dart' show NullCompilerOutput, NullSink;
+import 'kernel/loader.dart' show KernelLoaderTask, KernelResult;
+import 'null_compiler_output.dart' show NullCompilerOutput;
 import 'options.dart' show CompilerOptions, DiagnosticOptions;
+import 'serialization/task.dart';
+import 'serialization/strategies.dart';
 import 'ssa/nodes.dart' show HInstruction;
-import 'types/abstract_value_domain.dart' show AbstractValueStrategy;
-import 'types/types.dart' show GlobalTypeInferenceTask;
 import 'universe/selector.dart' show Selector;
-import 'universe/world_builder.dart'
-    show ResolutionWorldBuilder, CodegenWorldBuilder;
-import 'universe/use.dart' show StaticUse, TypeUse;
+import 'universe/codegen_world_builder.dart';
+import 'universe/resolution_world_builder.dart';
 import 'universe/world_impact.dart'
     show ImpactStrategy, WorldImpact, WorldImpactBuilderImpl;
 import 'world.dart' show JClosedWorld, KClosedWorld;
@@ -65,10 +68,9 @@ abstract class Compiler {
   /// Options provided from command-line arguments.
   final CompilerOptions options;
 
-  /**
-   * If true, stop compilation after type inference is complete. Used for
-   * debugging and testing purposes only.
-   */
+  // These internal flags are used to stop compilation after a specific phase.
+  // Used only for debugging and testing purposes only.
+  bool stopAfterClosedWorld = false;
   bool stopAfterTypeInference = false;
 
   /// Output provider from user of Compiler API.
@@ -76,21 +78,13 @@ abstract class Compiler {
 
   api.CompilerOutput get outputProvider => _outputProvider;
 
-  List<Uri> librariesToAnalyzeWhenRun;
-
-  Uri mainLibraryUri;
+  List<CodeLocation> _userCodeLocations = <CodeLocation>[];
 
   JClosedWorld backendClosedWorldForTesting;
 
   DiagnosticReporter get reporter => _reporter;
   Map<Entity, WorldImpact> get impactCache => _impactCache;
   ImpactCacheDeleter get impactCacheDeleter => _impactCacheDeleter;
-
-  // TODO(zarah): Remove this map and incorporate compile-time errors
-  // in the model.
-  /// Tracks elements with compile-time errors.
-  final Map<Entity, List<DiagnosticMessage>> elementsWithCompileTimeErrors =
-      new Map<Entity, List<DiagnosticMessage>>();
 
   final Environment environment;
   // TODO(sigmund): delete once we migrate the rest of the compiler to use
@@ -101,22 +95,18 @@ abstract class Compiler {
   Entity get currentElement => _reporter.currentElement;
 
   List<CompilerTask> tasks;
-  LibraryLoaderTask libraryLoader;
+  KernelLoaderTask kernelLoader;
   GlobalTypeInferenceTask globalInference;
-  JavaScriptBackend backend;
   CodegenWorldBuilder _codegenWorldBuilder;
 
-  AbstractValueStrategy abstractValueStrategy = const TypeMaskStrategy();
+  AbstractValueStrategy abstractValueStrategy;
 
   GenericTask selfTask;
-
-  /// The constant environment for the frontend interpretation of compile-time
-  /// constants.
-  ConstantEnvironment constants;
 
   EnqueueTask enqueuer;
   DeferredLoadTask deferredLoadTask;
   DumpInfoTask dumpInfoTask;
+  SerializationTask serializationTask;
 
   bool get hasCrashed => _reporter.hasCrashed;
 
@@ -144,6 +134,10 @@ abstract class Compiler {
       : this.options = options {
     options.deriveOptions();
     options.validate();
+
+    abstractValueStrategy = options.useTrivialAbstractValueDomain
+        ? const TrivialAbstractValueStrategy()
+        : const TypeMaskStrategy();
     CompilerTask kernelFrontEndTask;
     selfTask = new GenericTask('self', measurer);
     _outputProvider = new _CompilerOutput(this, outputProvider);
@@ -153,45 +147,41 @@ abstract class Compiler {
       _reporter = new CompilerDiagnosticReporter(this, options);
     }
     kernelFrontEndTask = new GenericTask('Front end', measurer);
-    frontendStrategy = new KernelFrontEndStrategy(kernelFrontEndTask, options,
-        reporter, environment, options.kernelInitializedCompilerState);
-    backendStrategy = new KernelBackendStrategy(this);
+    frontendStrategy = new KernelFrontendStrategy(
+        kernelFrontEndTask, options, reporter, environment);
+    backendStrategy = createBackendStrategy();
     _impactCache = <Entity, WorldImpact>{};
     _impactCacheDeleter = new _MapImpactCacheDeleter(_impactCache);
 
-    if (options.verbose) {
-      progress = new ProgressImpl(_reporter);
+    if (options.showInternalProgress) {
+      progress = new InteractiveProgress();
     }
 
-    backend = createBackend();
-    enqueuer = backend.makeEnqueuer();
+    enqueuer = new EnqueueTask(this);
 
     tasks = [
-      libraryLoader =
-          frontendStrategy.createLibraryLoader(provider, reporter, measurer),
+      kernelLoader = new KernelLoaderTask(
+          options, provider, _outputProvider, reporter, measurer),
       kernelFrontEndTask,
       globalInference = new GlobalTypeInferenceTask(this),
-      constants = backend.constantCompilerTask,
       deferredLoadTask = frontendStrategy.createDeferredLoadTask(this),
       // [enqueuer] is created earlier because it contains the resolution world
       // objects needed by other tasks.
       enqueuer,
       dumpInfoTask = new DumpInfoTask(this),
       selfTask,
+      serializationTask = new SerializationTask(
+          options, reporter, provider, outputProvider, measurer),
     ];
 
-    tasks.addAll(backend.tasks);
+    tasks.addAll(backendStrategy.tasks);
   }
 
-  /// Creates the backend.
+  /// Creates the backend strategy.
   ///
-  /// Override this to mock the backend for testing.
-  JavaScriptBackend createBackend() {
-    return new JavaScriptBackend(this,
-        generateSourceMap: options.generateSourceMap,
-        useStartupEmitter: options.useStartupEmitter,
-        useMultiSourceInfo: options.useMultiSourceInfo,
-        useNewSourceInfo: options.useNewSourceInfo);
+  /// Override this to mock the backend strategy for testing.
+  BackendStrategy createBackendStrategy() {
+    return new JsBackendStrategy(this);
   }
 
   ResolutionWorldBuilder get resolutionWorldBuilder =>
@@ -205,9 +195,7 @@ abstract class Compiler {
     return _codegenWorldBuilder;
   }
 
-  bool get analyzeAll => options.analyzeAll || compileAll;
-
-  bool get compileAll => false;
+  CodegenWorld codegenWorldForTesting;
 
   bool get disableTypeInference =>
       options.disableTypeInference || compilationFailed;
@@ -216,11 +204,12 @@ abstract class Compiler {
   //
   // The resulting future will complete with true if the compilation
   // succeeded.
-  Future<bool> run(Uri uri) => selfTask.measureSubtask("Compiler.run", () {
+  Future<bool> run(Uri uri) => selfTask.measureSubtask("run", () {
         measurer.startWallClock();
 
         return new Future.sync(() => runInternal(uri))
-            .catchError((error) => _reporter.onError(uri, error))
+            .catchError((error, StackTrace stackTrace) =>
+                _reporter.onError(uri, error, stackTrace))
             .whenComplete(() {
           measurer.stopWallClock();
         }).then((_) {
@@ -228,38 +217,80 @@ abstract class Compiler {
         });
       });
 
-  /// This method is called when all new libraries loaded through
-  /// [LibraryLoader.loadLibrary] has been loaded and their imports/exports
-  /// have been computed.
-  ///
-  /// [loadedLibraries] contains the newly loaded libraries.
-  ///
-  /// The method returns a [Future] allowing for the loading of additional
-  /// libraries.
-  LoadedLibraries processLoadedLibraries(LoadedLibraries loadedLibraries) {
-    loadedLibraries.forEachLibrary((LibraryEntity library) {
-      backend.setAnnotations(library);
-    });
+  Future runInternal(Uri uri) async {
+    clearState();
+    assert(uri != null);
+    // As far as I can tell, this branch is only used by test code.
+    reporter.log('Compiling $uri (${options.buildId})');
 
-    // TODO(efortuna, sigmund): These validation steps should be done in the
-    // front end for the Kernel path since Kernel doesn't have the notion of
-    // imports (everything has already been resolved). (See
-    // https://github.com/dart-lang/sdk/issues/29368)
-    if (loadedLibraries.containsLibrary(Uris.dart_mirrors)) {
-      reporter.reportWarningMessage(NO_LOCATION_SPANNABLE,
-          MessageKind.MIRRORS_LIBRARY_NOT_SUPPORT_WITH_CFE);
+    if (options.readDataUri != null) {
+      GlobalTypeInferenceResults globalTypeInferenceResults =
+          await serializationTask.deserializeGlobalTypeInference(
+              environment, abstractValueStrategy);
+      if (options.debugGlobalInference) {
+        performGlobalTypeInference(globalTypeInferenceResults.closedWorld);
+        return;
+      }
+      await generateJavaScriptCode(globalTypeInferenceResults);
+    } else {
+      KernelResult result = await kernelLoader.load(uri);
+      reporter.log("Kernel load complete");
+      if (result == null) return;
+      if (compilationFailed) {
+        return;
+      }
+      if (options.cfeOnly) return;
+
+      frontendStrategy.registerLoadedLibraries(result);
+
+      // TODO(efortuna, sigmund): These validation steps should be done in the
+      // front end for the Kernel path since Kernel doesn't have the notion of
+      // imports (everything has already been resolved). (See
+      // https://github.com/dart-lang/sdk/issues/29368)
+      if (result.libraries.contains(Uris.dart_mirrors)) {
+        reporter.reportWarningMessage(NO_LOCATION_SPANNABLE,
+            MessageKind.MIRRORS_LIBRARY_NOT_SUPPORT_WITH_CFE);
+      }
+
+      await compileFromKernel(result.rootLibraryUri, result.libraries);
     }
-    backend.onLibrariesLoaded(frontendStrategy.commonElements, loadedLibraries);
-    return loadedLibraries;
   }
 
-  Future runInternal(Uri uri) async {
-    mainLibraryUri = uri;
-    // TODO(ahe): This prevents memory leaks when invoking the compiler
-    // multiple times. Implement a better mechanism where we can store
-    // such caches in the compiler and get access to them through a
-    // suitably maintained static reference to the current compiler.
-    StringToken.canonicalizer.clear();
+  void generateJavaScriptCode(
+      GlobalTypeInferenceResults globalTypeInferenceResults) async {
+    JClosedWorld closedWorld = globalTypeInferenceResults.closedWorld;
+    backendStrategy.registerJClosedWorld(closedWorld);
+    phase = PHASE_COMPILING;
+    CodegenInputs codegenInputs =
+        backendStrategy.onCodegenStart(globalTypeInferenceResults);
+
+    if (options.readCodegenUri != null) {
+      CodegenResults codegenResults =
+          await serializationTask.deserializeCodegen(
+              backendStrategy, globalTypeInferenceResults, codegenInputs);
+      reporter.log('Compiling methods');
+      runCodegenEnqueuer(codegenResults);
+    } else {
+      reporter.log('Compiling methods');
+      CodegenResults codegenResults = new OnDemandCodegenResults(
+          globalTypeInferenceResults,
+          codegenInputs,
+          backendStrategy.functionCompiler);
+      if (options.writeCodegenUri != null) {
+        serializationTask.serializeCodegen(backendStrategy, codegenResults);
+      } else {
+        runCodegenEnqueuer(codegenResults);
+      }
+    }
+  }
+
+  /// Clear the internal compiler state to prevent memory leaks when invoking
+  /// the compiler multiple times (e.g. in batch mode).
+  // TODO(ahe): implement a better mechanism where we can store
+  // such caches in the compiler and get access to them through a
+  // suitably maintained static reference to the current compiler.
+  void clearState() {
+    clearStringTokenCanonicalizer();
     Selector.canonicalizedValues.clear();
 
     // The selector objects held in static fields must remain canonical.
@@ -268,32 +299,6 @@ abstract class Compiler {
           .putIfAbsent(selector.hashCode, () => <Selector>[])
           .add(selector);
     }
-
-    assert(uri != null || options.analyzeOnly);
-    // As far as I can tell, this branch is only used by test code.
-    if (librariesToAnalyzeWhenRun != null) {
-      await Future.forEach(librariesToAnalyzeWhenRun, (libraryUri) async {
-        reporter.log('Analyzing $libraryUri (${options.buildId})');
-        LoadedLibraries loadedLibraries =
-            await libraryLoader.loadLibrary(libraryUri);
-        processLoadedLibraries(loadedLibraries);
-      });
-    }
-    LibraryEntity mainApp;
-    if (uri != null) {
-      if (options.analyzeOnly) {
-        reporter.log('Analyzing $uri (${options.buildId})');
-      } else {
-        reporter.log('Compiling $uri (${options.buildId})');
-      }
-      LoadedLibraries libraries = await libraryLoader.loadLibrary(uri);
-      // Note: libraries may be null because of errors trying to find files or
-      // parse-time errors (when using `package:front_end` as a loader).
-      if (libraries == null) return;
-      processLoadedLibraries(libraries);
-      mainApp = libraries.rootLibrary;
-    }
-    compileLoadedLibraries(mainApp);
   }
 
   /// Starts the resolution phase, creating the [ResolutionEnqueuer] if not
@@ -307,162 +312,158 @@ abstract class Compiler {
       resolutionEnqueuer = enqueuer.resolution;
     } else {
       resolutionEnqueuer = enqueuer.createResolutionEnqueuer();
-      backend.onResolutionStart();
+      frontendStrategy.onResolutionStart();
     }
     return resolutionEnqueuer;
   }
 
-  /// Performs the compilation when all libraries have been loaded.
-  void compileLoadedLibraries(LibraryEntity rootLibrary) =>
-      selfTask.measureSubtask("Compiler.compileLoadedLibraries", () {
-        ResolutionEnqueuer resolutionEnqueuer = startResolution();
-        WorldImpactBuilderImpl mainImpact = new WorldImpactBuilderImpl();
-        FunctionEntity mainFunction =
-            frontendStrategy.computeMain(rootLibrary, mainImpact);
-
-        // In order to see if a library is deferred, we must compute the
-        // compile-time constants that are metadata.  This means adding
-        // something to the resolution queue.  So we cannot wait with
-        // this until after the resolution queue is processed.
-        deferredLoadTask.beforeResolution(rootLibrary);
-        impactStrategy = backend.createImpactStrategy(
-            supportDeferredLoad: deferredLoadTask.isProgramSplit,
-            supportDumpInfo: options.dumpInfo);
-
-        phase = PHASE_RESOLVING;
-        resolutionEnqueuer.applyImpact(mainImpact);
-        if (analyzeAll) {
-          libraryLoader.libraries.forEach((LibraryEntity library) {
-            reporter.log('Enqueuing ${library.canonicalUri}');
-            resolutionEnqueuer.applyImpact(computeImpactForLibrary(library));
-          });
-        } else if (options.analyzeMain) {
-          if (rootLibrary != null) {
-            resolutionEnqueuer
-                .applyImpact(computeImpactForLibrary(rootLibrary));
-          }
-          if (librariesToAnalyzeWhenRun != null) {
-            for (Uri libraryUri in librariesToAnalyzeWhenRun) {
-              resolutionEnqueuer.applyImpact(computeImpactForLibrary(
-                  libraryLoader.lookupLibrary(libraryUri)));
-            }
-          }
-        }
-        reporter.log('Resolving...');
-
-        processQueue(frontendStrategy.elementEnvironment, resolutionEnqueuer,
-            mainFunction, libraryLoader.libraries,
-            onProgress: showResolutionProgress);
-        backend.onResolutionEnd();
-        resolutionEnqueuer.logSummary(reporter.log);
-
-        _reporter.reportSuppressedMessagesSummary();
-
-        if (compilationFailed) {
-          if (!options.generateCodeWithCompileTimeErrors) {
-            return;
-          }
-          if (mainFunction == null) return;
-          if (!backend
-              .enableCodegenWithErrorsIfSupported(NO_LOCATION_SPANNABLE)) {
-            return;
-          }
-        }
-
-        if (options.analyzeOnly) return;
-        assert(mainFunction != null);
-
-        JClosedWorld closedWorld = closeResolution(mainFunction);
-        backendClosedWorldForTesting = closedWorld;
-        mainFunction = closedWorld.elementEnvironment.mainFunction;
-
-        reporter.log('Inferring types...');
-        InferredDataBuilder inferredDataBuilder = new InferredDataBuilderImpl();
-        backend.processAnnotations(closedWorld, inferredDataBuilder);
-        globalInference.runGlobalTypeInference(
-            mainFunction, closedWorld, inferredDataBuilder);
-
-        if (stopAfterTypeInference) return;
-
-        reporter.log('Compiling...');
-        phase = PHASE_COMPILING;
-
-        Enqueuer codegenEnqueuer = startCodegen(closedWorld);
-        if (compileAll) {
-          libraryLoader.libraries.forEach((LibraryEntity library) {
-            codegenEnqueuer.applyImpact(computeImpactForLibrary(library));
-          });
-        }
-        processQueue(closedWorld.elementEnvironment, codegenEnqueuer,
-            mainFunction, libraryLoader.libraries,
-            onProgress: showCodegenProgress);
-        codegenEnqueuer.logSummary(reporter.log);
-
-        int programSize = backend.assembleProgram(closedWorld);
-
-        if (options.dumpInfo) {
-          dumpInfoTask.reportSize(programSize);
-          dumpInfoTask.dumpInfo(closedWorld);
-        }
-
-        backend.onCodegenEnd();
-
-        checkQueues(resolutionEnqueuer, codegenEnqueuer);
+  JClosedWorld computeClosedWorld(Uri rootLibraryUri, Iterable<Uri> libraries) {
+    ResolutionEnqueuer resolutionEnqueuer = startResolution();
+    for (LibraryEntity library
+        in frontendStrategy.elementEnvironment.libraries) {
+      frontendStrategy.elementEnvironment.forEachClass(library,
+          (ClassEntity cls) {
+        // Register all classes eagerly to optimize closed world computation in
+        // `ClassWorldBuilder.isInheritedInSubtypeOf`.
+        resolutionEnqueuer.worldBuilder.registerClass(cls);
       });
+    }
+    WorldImpactBuilderImpl mainImpact = new WorldImpactBuilderImpl();
+    FunctionEntity mainFunction = frontendStrategy.computeMain(mainImpact);
 
-  Enqueuer startCodegen(JClosedWorld closedWorld) {
-    Enqueuer codegenEnqueuer = enqueuer.createCodegenEnqueuer(closedWorld);
+    // In order to see if a library is deferred, we must compute the
+    // compile-time constants that are metadata.  This means adding
+    // something to the resolution queue.  So we cannot wait with
+    // this until after the resolution queue is processed.
+    deferredLoadTask.beforeResolution(rootLibraryUri, libraries);
+
+    impactStrategy = new JavaScriptImpactStrategy(
+        impactCacheDeleter, dumpInfoTask,
+        supportDeferredLoad: deferredLoadTask.isProgramSplit,
+        supportDumpInfo: options.dumpInfo);
+
+    phase = PHASE_RESOLVING;
+    resolutionEnqueuer.applyImpact(mainImpact);
+    if (options.showInternalProgress) reporter.log('Computing closed world');
+
+    processQueue(
+        frontendStrategy.elementEnvironment, resolutionEnqueuer, mainFunction,
+        onProgress: showResolutionProgress);
+    frontendStrategy.onResolutionEnd();
+    resolutionEnqueuer.logSummary(reporter.log);
+
+    _reporter.reportSuppressedMessagesSummary();
+
+    if (compilationFailed) {
+      return null;
+    }
+
+    assert(mainFunction != null);
+    checkQueue(resolutionEnqueuer);
+
+    JClosedWorld closedWorld = closeResolution(mainFunction);
+    if (retainDataForTesting) {
+      backendClosedWorldForTesting = closedWorld;
+    }
+    return closedWorld;
+  }
+
+  GlobalTypeInferenceResults performGlobalTypeInference(
+      JClosedWorld closedWorld) {
+    FunctionEntity mainFunction = closedWorld.elementEnvironment.mainFunction;
+    reporter.log('Performing global type inference');
+    InferredDataBuilder inferredDataBuilder =
+        new InferredDataBuilderImpl(closedWorld.annotationsData);
+    return globalInference.runGlobalTypeInference(
+        mainFunction, closedWorld, inferredDataBuilder);
+  }
+
+  void runCodegenEnqueuer(CodegenResults codegenResults) {
+    GlobalTypeInferenceResults globalInferenceResults =
+        codegenResults.globalTypeInferenceResults;
+    JClosedWorld closedWorld = globalInferenceResults.closedWorld;
+    CodegenInputs codegenInputs = codegenResults.codegenInputs;
+    Enqueuer codegenEnqueuer = enqueuer.createCodegenEnqueuer(
+        closedWorld, globalInferenceResults, codegenInputs, codegenResults);
     _codegenWorldBuilder = codegenEnqueuer.worldBuilder;
-    codegenEnqueuer.applyImpact(backend.onCodegenStart(
-        closedWorld, _codegenWorldBuilder, backendStrategy.sorter));
-    return codegenEnqueuer;
+
+    FunctionEntity mainFunction = closedWorld.elementEnvironment.mainFunction;
+    processQueue(closedWorld.elementEnvironment, codegenEnqueuer, mainFunction,
+        onProgress: showCodegenProgress);
+    codegenEnqueuer.logSummary(reporter.log);
+    CodegenWorld codegenWorld = codegenWorldBuilder.close();
+    if (retainDataForTesting) {
+      codegenWorldForTesting = codegenWorld;
+    }
+    reporter.log('Emitting JavaScript');
+    int programSize = backendStrategy.assembleProgram(closedWorld,
+        globalInferenceResults.inferredData, codegenInputs, codegenWorld);
+
+    if (options.dumpInfo) {
+      dumpInfoTask.reportSize(programSize);
+      dumpInfoTask.dumpInfo(closedWorld, globalInferenceResults);
+    }
+
+    backendStrategy.onCodegenEnd(codegenInputs);
+
+    checkQueue(codegenEnqueuer);
+  }
+
+  void compileFromKernel(Uri rootLibraryUri, Iterable<Uri> libraries) {
+    _userCodeLocations.add(new CodeLocation(rootLibraryUri));
+    selfTask.measureSubtask("compileFromKernel", () {
+      JClosedWorld closedWorld = selfTask.measureSubtask("computeClosedWorld",
+          () => computeClosedWorld(rootLibraryUri, libraries));
+      if (stopAfterClosedWorld) return;
+      if (closedWorld != null) {
+        GlobalTypeInferenceResults globalInferenceResults =
+            performGlobalTypeInference(closedWorld);
+        if (options.writeDataUri != null) {
+          serializationTask
+              .serializeGlobalTypeInference(globalInferenceResults);
+          return;
+        }
+        if (options.testMode) {
+          SerializationStrategy strategy =
+              const BytesInMemorySerializationStrategy();
+          List<int> irData =
+              strategy.serializeComponent(globalInferenceResults);
+          List worldData = strategy.serializeData(globalInferenceResults);
+          globalInferenceResults = strategy.deserializeData(
+              options,
+              reporter,
+              environment,
+              abstractValueStrategy,
+              strategy.deserializeComponent(irData),
+              worldData);
+        }
+        if (stopAfterTypeInference) return;
+        generateJavaScriptCode(globalInferenceResults);
+      }
+    });
   }
 
   /// Perform the steps needed to fully end the resolution phase.
   JClosedWorld closeResolution(FunctionEntity mainFunction) {
     phase = PHASE_DONE_RESOLVING;
 
-    KClosedWorld closedWorld = resolutionWorldBuilder.closeWorld();
-    OutputUnitData result = deferredLoadTask.run(mainFunction, closedWorld);
-    JClosedWorld closedWorldRefiner =
-        backendStrategy.createJClosedWorld(closedWorld);
-
-    backend.onDeferredLoadComplete(result);
-
-    return closedWorldRefiner;
+    KClosedWorld kClosedWorld = resolutionWorldBuilder.closeWorld(reporter);
+    OutputUnitData result = deferredLoadTask.run(mainFunction, kClosedWorld);
+    JClosedWorld jClosedWorld =
+        backendStrategy.createJClosedWorld(kClosedWorld, result);
+    return jClosedWorld;
   }
 
-  /// Compute the [WorldImpact] for accessing all elements in [library].
-  WorldImpact computeImpactForLibrary(LibraryEntity library) {
-    WorldImpactBuilderImpl impactBuilder = new WorldImpactBuilderImpl();
-
-    void registerStaticUse(MemberEntity element) {
-      impactBuilder.registerStaticUse(new StaticUse.directUse(element));
-    }
-
-    ElementEnvironment elementEnvironment = frontendStrategy.elementEnvironment;
-
-    elementEnvironment.forEachLibraryMember(library, registerStaticUse);
-    elementEnvironment.forEachClass(library, (ClassEntity cls) {
-      impactBuilder.registerTypeUse(
-          new TypeUse.instantiation(elementEnvironment.getRawType(cls)));
-      elementEnvironment.forEachLocalClassMember(cls, registerStaticUse);
-    });
-    return impactBuilder;
-  }
-
-  /**
-   * Empty the [enqueuer] queue.
-   */
+  /// Empty the [enqueuer] queue.
   void emptyQueue(Enqueuer enqueuer, {void onProgress(Enqueuer enqueuer)}) {
-    selfTask.measureSubtask("Compiler.emptyQueue", () {
+    selfTask.measureSubtask("emptyQueue", () {
       enqueuer.forEach((WorkItem work) {
         if (onProgress != null) {
           onProgress(enqueuer);
         }
         reporter.withCurrentElement(
             work.element,
-            () => selfTask.measureSubtask("world.applyImpact", () {
+            () => selfTask.measureSubtask("applyImpact", () {
                   enqueuer.applyImpact(
                       selfTask.measureSubtask("work.run", () => work.run()),
                       impactSource: work.element);
@@ -472,10 +473,14 @@ abstract class Compiler {
   }
 
   void processQueue(ElementEnvironment elementEnvironment, Enqueuer enqueuer,
-      FunctionEntity mainMethod, Iterable<LibraryEntity> libraries,
+      FunctionEntity mainMethod,
       {void onProgress(Enqueuer enqueuer)}) {
-    selfTask.measureSubtask("Compiler.processQueue", () {
-      enqueuer.open(impactStrategy, mainMethod, libraries);
+    selfTask.measureSubtask("processQueue", () {
+      enqueuer.open(
+          impactStrategy,
+          mainMethod,
+          elementEnvironment.libraries
+              .map((LibraryEntity library) => library.canonicalUri));
       progress.startPhase();
       emptyQueue(enqueuer, onProgress: onProgress);
       enqueuer.queueIsClosed = true;
@@ -488,16 +493,11 @@ abstract class Compiler {
     });
   }
 
-  /**
-   * Perform various checks of the queues. This includes checking that
-   * the queues are empty (nothing was added after we stopped
-   * processing the queues). Also compute the number of methods that
-   * were resolved, but not compiled (aka excess resolution).
-   */
-  checkQueues(Enqueuer resolutionEnqueuer, Enqueuer codegenEnqueuer) {
-    for (Enqueuer enqueuer in [resolutionEnqueuer, codegenEnqueuer]) {
-      enqueuer.checkQueueIsEmpty();
-    }
+  /// Perform various checks of the queue. This includes checking that the
+  /// queues are empty (nothing was added after we stopped processing the
+  /// queues).
+  checkQueue(Enqueuer enqueuer) {
+    enqueuer.checkQueueIsEmpty();
   }
 
   void showResolutionProgress(Enqueuer enqueuer) {
@@ -541,7 +541,6 @@ abstract class Compiler {
     if (markCompilationAsFailed(message, kind)) {
       compilationFailed = true;
     }
-    registerCompileTimeError(currentElement, message);
   }
 
   /// Helper for determining whether the current element is declared within
@@ -573,27 +572,9 @@ abstract class Compiler {
     if (element == null) return assumeInUserCode;
     Uri libraryUri = _uriFromElement(element);
     if (libraryUri == null) return false;
-    Iterable<CodeLocation> userCodeLocations =
-        computeUserCodeLocations(assumeInUserCode: assumeInUserCode);
-    return userCodeLocations.any(
+    if (_userCodeLocations.isEmpty && assumeInUserCode) return true;
+    return _userCodeLocations.any(
         (CodeLocation codeLocation) => codeLocation.inSameLocation(libraryUri));
-  }
-
-  Iterable<CodeLocation> computeUserCodeLocations(
-      {bool assumeInUserCode: false}) {
-    List<CodeLocation> userCodeLocations = <CodeLocation>[];
-    if (mainLibraryUri != null) {
-      userCodeLocations.add(new CodeLocation(mainLibraryUri));
-    }
-    if (librariesToAnalyzeWhenRun != null) {
-      userCodeLocations.addAll(
-          librariesToAnalyzeWhenRun.map((Uri uri) => new CodeLocation(uri)));
-    }
-    if (userCodeLocations.isEmpty && assumeInUserCode) {
-      // Assume in user code since [mainApp] has not been set yet.
-      userCodeLocations.add(const AnyLocation());
-    }
-    return userCodeLocations;
   }
 
   /// Return a canonical URI for the source of [element].
@@ -624,27 +605,6 @@ abstract class Compiler {
     }
     return null;
   }
-
-  /// Returns [true] if a compile-time error has been reported for element.
-  bool elementHasCompileTimeError(Entity element) {
-    return elementsWithCompileTimeErrors.containsKey(element);
-  }
-
-  /// Associate [element] with a compile-time error [message].
-  void registerCompileTimeError(Entity element, DiagnosticMessage message) {
-    // The information is only needed if [generateCodeWithCompileTimeErrors].
-    if (options.generateCodeWithCompileTimeErrors) {
-      if (element == null) {
-        // Record as global error.
-        // TODO(zarah): Extend element model to represent compile-time
-        // errors instead of using a map.
-        element = frontendStrategy.elementEnvironment.mainFunction;
-      }
-      elementsWithCompileTimeErrors
-          .putIfAbsent(element, () => <DiagnosticMessage>[])
-          .add(message);
-    }
-  }
 }
 
 class _CompilerOutput implements api.CompilerOutput {
@@ -658,15 +618,15 @@ class _CompilerOutput implements api.CompilerOutput {
   api.OutputSink createOutputSink(
       String name, String extension, api.OutputType type) {
     if (_compiler.compilationFailed) {
-      if (!_compiler.options.generateCodeWithCompileTimeErrors ||
-          _compiler.options.testMode) {
-        // Disable output in test mode: The build bot currently uses the time
-        // stamp of the generated file to determine whether the output is
-        // up-to-date.
-        return NullSink.outputProvider(name, extension, type);
-      }
+      // Ensure that we don't emit output when the compilation has failed.
+      return const NullCompilerOutput().createOutputSink(name, extension, type);
     }
     return _userOutput.createOutputSink(name, extension, type);
+  }
+
+  @override
+  api.BinaryOutputSink createBinarySink(Uri uri) {
+    return _userOutput.createBinarySink(uri);
   }
 }
 
@@ -678,6 +638,7 @@ class SuppressionInfo {
 
 class CompilerDiagnosticReporter extends DiagnosticReporter {
   final Compiler compiler;
+  @override
   final DiagnosticOptions options;
 
   Entity _currentElement;
@@ -695,6 +656,7 @@ class CompilerDiagnosticReporter extends DiagnosticReporter {
 
   Entity get currentElement => _currentElement;
 
+  @override
   DiagnosticMessage createMessage(Spannable spannable, MessageKind messageKind,
       [Map arguments = const {}]) {
     SourceSpan span = spanFromSpannable(spannable);
@@ -703,22 +665,26 @@ class CompilerDiagnosticReporter extends DiagnosticReporter {
     return new DiagnosticMessage(span, spannable, message);
   }
 
+  @override
   void reportError(DiagnosticMessage message,
       [List<DiagnosticMessage> infos = const <DiagnosticMessage>[]]) {
     reportDiagnosticInternal(message, infos, api.Diagnostic.ERROR);
   }
 
+  @override
   void reportWarning(DiagnosticMessage message,
       [List<DiagnosticMessage> infos = const <DiagnosticMessage>[]]) {
     reportDiagnosticInternal(message, infos, api.Diagnostic.WARNING);
   }
 
+  @override
   void reportHint(DiagnosticMessage message,
       [List<DiagnosticMessage> infos = const <DiagnosticMessage>[]]) {
     reportDiagnosticInternal(message, infos, api.Diagnostic.HINT);
   }
 
   @deprecated
+  @override
   void reportInfo(Spannable node, MessageKind messageKind,
       [Map arguments = const {}]) {
     reportDiagnosticInternal(createMessage(node, messageKind, arguments),
@@ -767,13 +733,6 @@ class CompilerDiagnosticReporter extends DiagnosticReporter {
     if (kind == api.Diagnostic.ERROR ||
         kind == api.Diagnostic.CRASH ||
         (options.fatalWarnings && kind == api.Diagnostic.WARNING)) {
-      Entity errorElement;
-      if (message.spannable is Entity) {
-        errorElement = message.spannable;
-      } else {
-        errorElement = currentElement;
-      }
-      compiler.registerCompileTimeError(errorElement, message);
       compiler.fatalDiagnosticReported(message, infos, kind);
     }
   }
@@ -781,11 +740,10 @@ class CompilerDiagnosticReporter extends DiagnosticReporter {
   @override
   bool get hasReportedError => compiler.compilationFailed;
 
-  /**
-   * Perform an operation, [f], returning the return value from [f].  If an
-   * error occurs then report it as having occurred during compilation of
-   * [element].  Can be nested.
-   */
+  /// Perform an operation, [f], returning the return value from [f].  If an
+  /// error occurs then report it as having occurred during compilation of
+  /// [element].  Can be nested.
+  @override
   withCurrentElement(Entity element, f()) {
     Entity old = currentElement;
     _currentElement = element;
@@ -839,6 +797,7 @@ class CompilerDiagnosticReporter extends DiagnosticReporter {
     throw 'No error location.';
   }
 
+  @override
   SourceSpan spanFromSpannable(Spannable spannable) {
     if (spannable == CURRENT_ELEMENT_SPANNABLE) {
       spannable = currentElement;
@@ -859,6 +818,7 @@ class CompilerDiagnosticReporter extends DiagnosticReporter {
     }
   }
 
+  @override
   internalError(Spannable spannable, reason) {
     String message = tryToString(reason);
     reportDiagnosticInternal(
@@ -893,6 +853,7 @@ class CompilerDiagnosticReporter extends DiagnosticReporter {
     return element != null ? element : currentElement;
   }
 
+  @override
   void log(message) {
     Message msg = MessageTemplate.TEMPLATES[MessageKind.GENERIC]
         .message({'text': '$message'});
@@ -908,7 +869,7 @@ class CompilerDiagnosticReporter extends DiagnosticReporter {
     }
   }
 
-  onError(Uri uri, error) {
+  onError(Uri uri, error, StackTrace stackTrace) {
     try {
       if (!hasCrashed) {
         hasCrashed = true;
@@ -926,7 +887,7 @@ class CompilerDiagnosticReporter extends DiagnosticReporter {
     } catch (doubleFault) {
       // Ignoring exceptions in exception handling.
     }
-    throw error;
+    return new Future.error(error, stackTrace);
   }
 
   @override
@@ -960,15 +921,15 @@ class _MapImpactCacheDeleter implements ImpactCacheDeleter {
   final Map<Entity, WorldImpact> _impactCache;
   _MapImpactCacheDeleter(this._impactCache);
 
-  bool retainCachesForTesting = false;
-
+  @override
   void uncacheWorldImpact(Entity element) {
-    if (retainCachesForTesting) return;
+    if (retainDataForTesting) return;
     _impactCache.remove(element);
   }
 
+  @override
   void emptyCache() {
-    if (retainCachesForTesting) return;
+    if (retainDataForTesting) return;
     _impactCache.clear();
   }
 }
@@ -976,7 +937,11 @@ class _MapImpactCacheDeleter implements ImpactCacheDeleter {
 class _EmptyEnvironment implements Environment {
   const _EmptyEnvironment();
 
+  @override
   String valueOf(String key) => null;
+
+  @override
+  Map<String, String> toMap() => const {};
 }
 
 /// Interface for showing progress during compilation.
@@ -999,6 +964,7 @@ class ProgressImpl implements Progress {
 
   ProgressImpl(this._reporter);
 
+  @override
   void showProgress(String prefix, int count, String suffix) {
     if (_stopwatch.elapsedMilliseconds > 500) {
       _reporter.log('$prefix$count$suffix');
@@ -1006,7 +972,40 @@ class ProgressImpl implements Progress {
     }
   }
 
+  @override
   void startPhase() {
     _stopwatch.reset();
+  }
+}
+
+/// Progress implementations that prints progress to the [DiagnosticReporter]
+/// with 500ms intervals using escape sequences to keep the progress data on a
+/// single line.
+class InteractiveProgress implements Progress {
+  final Stopwatch _stopwatchPhase = new Stopwatch()..start();
+  final Stopwatch _stopwatchInterval = new Stopwatch()..start();
+  @override
+  void startPhase() {
+    print('');
+    _stopwatchPhase.reset();
+    _stopwatchInterval.reset();
+  }
+
+  @override
+  void showProgress(String prefix, int count, String suffix) {
+    if (_stopwatchInterval.elapsedMilliseconds > 500) {
+      var time = _stopwatchPhase.elapsedMilliseconds / 1000;
+      var rate = count / _stopwatchPhase.elapsedMilliseconds;
+      var s = new StringBuffer('\x1b[1A\x1b[K') // go up and clear the line.
+        ..write('\x1b[48;5;40m\x1b[30m==>\x1b[0m $prefix')
+        ..write(count)
+        ..write('$suffix Elapsed time: ')
+        ..write(time.toStringAsFixed(2))
+        ..write(' s. Rate: ')
+        ..write(rate.toStringAsFixed(2))
+        ..write(' units/ms');
+      print('$s');
+      _stopwatchInterval.reset();
+    }
   }
 }

@@ -10,19 +10,17 @@ import "dart:convert" show JsonEncoder;
 
 import "dart:io" show File, IOSink;
 
-import "package:kernel/ast.dart"
-    show Procedure, Component, DynamicType, DartType, TypeParameter;
-
-import "package:testing/testing.dart"
-    show Chain, ChainContext, Result, Step, TestDescription, runMe;
-
-import "package:yaml/yaml.dart" show YamlMap, YamlList, loadYamlNode;
-
-import "package:front_end/src/api_prototype/front_end.dart"
-    show CompilationMessage, CompilerOptions;
+import "package:front_end/src/api_prototype/compiler_options.dart"
+    show CompilerOptions, DiagnosticMessage;
 
 import "package:front_end/src/api_prototype/memory_file_system.dart"
     show MemoryFileSystem;
+
+import "package:front_end/src/api_prototype/terminal_color_support.dart"
+    show printDiagnosticMessage;
+
+import 'package:front_end/src/base/processed_options.dart'
+    show ProcessedOptions;
 
 import 'package:front_end/src/compute_platform_binaries_location.dart'
     show computePlatformBinariesLocation;
@@ -30,26 +28,38 @@ import 'package:front_end/src/compute_platform_binaries_location.dart'
 import 'package:front_end/src/external_state_snapshot.dart'
     show ExternalStateSnapshot;
 
-import 'package:front_end/src/base/processed_options.dart'
-    show ProcessedOptions;
-
 import 'package:front_end/src/fasta/compiler_context.dart' show CompilerContext;
 
 import 'package:front_end/src/fasta/incremental_compiler.dart'
     show IncrementalCompiler;
 
+import "package:kernel/ast.dart"
+    show Procedure, Component, DynamicType, DartType, TypeParameter;
+
+import 'package:kernel/target/targets.dart' show TargetFlags;
+
 import 'package:kernel/text/ast_to_text.dart' show Printer;
 
-import '../../lib/src/fasta/testing/kernel_chain.dart' show runDiff, openWrite;
+import "package:testing/src/log.dart" show splitLines;
 
-import '../../lib/src/fasta/kernel/utils.dart' show writeComponentToFile;
+import "package:testing/testing.dart"
+    show Chain, ChainContext, Result, Step, TestDescription, runMe;
+
+import 'package:vm/target/vm.dart' show VmTarget;
+
+import "package:yaml/yaml.dart" show YamlMap, YamlList, loadYamlNode;
+
+import '../../lib/src/fasta/kernel/utils.dart'
+    show writeComponentToFile, serializeProcedure;
+
+import '../utils/kernel_chain.dart' show runDiff, openWrite;
 
 const JsonEncoder json = const JsonEncoder.withIndent("  ");
 
 class Context extends ChainContext {
   final CompilerContext compilerContext;
   final ExternalStateSnapshot snapshot;
-  final List<CompilationMessage> errors;
+  final List<DiagnosticMessage> errors;
 
   final List<Step> steps;
 
@@ -75,8 +85,8 @@ class Context extends ChainContext {
     snapshot.restore();
   }
 
-  List<CompilationMessage> takeErrors() {
-    List<CompilationMessage> result = new List<CompilationMessage>.from(errors);
+  List<DiagnosticMessage> takeErrors() {
+    List<DiagnosticMessage> result = new List<DiagnosticMessage>.from(errors);
     errors.clear();
     return result;
   }
@@ -84,16 +94,23 @@ class Context extends ChainContext {
 
 class CompilationResult {
   Procedure compiledProcedure;
-  List<CompilationMessage> errors;
+  List<DiagnosticMessage> errors;
   CompilationResult(this.compiledProcedure, this.errors);
 
   String printResult(Uri entryPoint, Context context) {
     StringBuffer buffer = new StringBuffer();
     buffer.write("Errors: {\n");
     for (var error in errors) {
-      buffer.write("  ");
-      buffer.write("${error.message} (@${error.span.start.offset})");
-      buffer.write("\n");
+      for (String message in error.plainTextFormatted) {
+        for (String line in splitLines(message)) {
+          buffer.write("  ");
+          buffer.write(line);
+        }
+        buffer.write("\n");
+        // TODO(jensj): Ignore context for now.
+        // Remove once we have positions on type parameters.
+        break;
+      }
     }
     buffer.write("}\n");
     if (compiledProcedure == null) {
@@ -110,6 +127,8 @@ class TestCase {
   final TestDescription description;
 
   final Uri entryPoint;
+
+  final Uri import;
 
   final List<String> definitions;
 
@@ -128,6 +147,7 @@ class TestCase {
   TestCase(
       this.description,
       this.entryPoint,
+      this.import,
       this.definitions,
       this.typeDefinitions,
       this.isStaticMethod,
@@ -138,6 +158,7 @@ class TestCase {
   String toString() {
     return "TestCase("
         "$entryPoint, "
+        "$import, "
         "$definitions, "
         "$typeDefinitions,"
         "$library, "
@@ -182,9 +203,9 @@ class MatchProcedureExpectations extends Step<List<TestCase>, Null, Context> {
         if (primary != secondary) {
           return fail(
               null,
-              "Multiple expectations don't match on $test:" +
-                  "\nFirst expectation:\n$actual\n" +
-                  "\nSecond expectation:\n$secondary\n");
+              "Multiple expectations don't match on $test:"
+              "\nFirst expectation:\n$actual\n"
+              "\nSecond expectation:\n$secondary\n");
         }
       }
     }
@@ -228,6 +249,7 @@ class ReadTest extends Step<TestDescription, List<TestCase>, Context> {
     String contents = await new File.fromUri(uri).readAsString();
 
     Uri entryPoint;
+    Uri import;
     List<String> definitions = <String>[];
     List<String> typeDefinitions = <String>[];
     bool isStaticMethod = false;
@@ -246,6 +268,8 @@ class ReadTest extends Step<TestDescription, List<TestCase>, Context> {
 
         if (key == "entry_point") {
           entryPoint = description.uri.resolveUri(Uri.parse(value as String));
+        } else if (key == "import") {
+          import = description.uri.resolveUri(Uri.parse(value as String));
         } else if (key == "position") {
           Uri uri = description.uri.resolveUri(Uri.parse(value as String));
           library = uri.removeFragment();
@@ -263,7 +287,7 @@ class ReadTest extends Step<TestDescription, List<TestCase>, Context> {
           expression = value;
         }
       }
-      var test = new TestCase(description, entryPoint, definitions,
+      var test = new TestCase(description, entryPoint, import, definitions,
           typeDefinitions, isStaticMethod, library, className, expression);
       var result = test.validate();
       if (result != null) {
@@ -280,15 +304,51 @@ class CompileExpression extends Step<List<TestCase>, List<TestCase>, Context> {
 
   String get name => "compile expression";
 
+  // Compile [test.expression], update [test.errors] with results.
+  // As a side effect - verify that generated procedure can be serialized.
+  void compileExpression(TestCase test, IncrementalCompiler compiler,
+      Component component, Context context) async {
+    Map<String, DartType> definitions = {};
+    for (String name in test.definitions) {
+      definitions[name] = new DynamicType();
+    }
+    List<TypeParameter> typeParams = [];
+    for (String name in test.typeDefinitions) {
+      typeParams.add(new TypeParameter(name, new DynamicType()));
+    }
+
+    Procedure compiledProcedure = await compiler.compileExpression(
+        test.expression,
+        definitions,
+        typeParams,
+        "debugExpr",
+        test.library,
+        test.className,
+        test.isStaticMethod);
+    List<DiagnosticMessage> errors = context.takeErrors();
+    test.results.add(new CompilationResult(compiledProcedure, errors));
+    if (compiledProcedure != null) {
+      // Confirm we can serialize generated procedure.
+      component.computeCanonicalNames();
+      List<int> list = serializeProcedure(compiledProcedure);
+      assert(list.length > 0);
+    }
+  }
+
   Future<Result<List<TestCase>>> run(
       List<TestCase> tests, Context context) async {
     for (var test in tests) {
       context.fileSystem.entityForUri(test.entryPoint).writeAsBytesSync(
           await new File.fromUri(test.entryPoint).readAsBytes());
 
+      if (test.import != null) {
+        context.fileSystem.entityForUri(test.import).writeAsBytesSync(
+            await new File.fromUri(test.import).readAsBytes());
+      }
+
       var sourceCompiler = new IncrementalCompiler(context.compilerContext);
       Component component =
-          await sourceCompiler.computeDelta(entryPoint: test.entryPoint);
+          await sourceCompiler.computeDelta(entryPoints: [test.entryPoint]);
       var errors = context.takeErrors();
       if (!errors.isEmpty) {
         return fail(tests, "Couldn't compile entry-point: $errors");
@@ -298,40 +358,23 @@ class CompileExpression extends Step<List<TestCase>, List<TestCase>, Context> {
       File dillFile = new File.fromUri(dillFileUri);
       if (!await dillFile.exists()) {
         await writeComponentToFile(component, dillFileUri);
+        context.fileSystem.entityForUri(dillFileUri).writeAsBytesSync(
+            await new File.fromUri(dillFileUri).readAsBytes());
       }
+      compileExpression(test, sourceCompiler, component, context);
 
       var dillCompiler =
           new IncrementalCompiler(context.compilerContext, dillFileUri);
-      await dillCompiler.computeDelta(entryPoint: test.entryPoint);
+      component =
+          await dillCompiler.computeDelta(entryPoints: [test.entryPoint]);
+      component.computeCanonicalNames();
       await dillFile.delete();
 
       errors = context.takeErrors();
-
       // Since it compiled successfully from source, the bootstrap-from-Dill
       // should also succeed without errors.
       assert(errors.isEmpty);
-
-      Map<String, DartType> definitions = {};
-      for (String name in test.definitions) {
-        definitions[name] = new DynamicType();
-      }
-      List<TypeParameter> typeParams = [];
-      for (String name in test.typeDefinitions) {
-        typeParams.add(new TypeParameter(name, new DynamicType()));
-      }
-
-      for (var compiler in [sourceCompiler, dillCompiler]) {
-        Procedure compiledProcedure = await compiler.compileExpression(
-            test.expression,
-            definitions,
-            typeParams,
-            "debugExpr",
-            test.library,
-            test.className,
-            test.isStaticMethod);
-        var errors = context.takeErrors();
-        test.results.add(new CompilationResult(compiledProcedure, errors));
-      }
+      compileExpression(test, dillCompiler, component, context);
     }
     return new Result.pass(tests);
   }
@@ -345,11 +388,12 @@ Future<Context> createContext(
   final Uri entryPoint = base.resolve("nothing.dart");
 
   /// The custom URI used to locate the dill file in the MemoryFileSystem.
-  final Uri sdkSummary = base.resolve("vm_platform.dill");
+  final Uri sdkSummary = base.resolve("vm_platform_strong.dill");
 
   /// The actual location of the dill file.
   final Uri sdkSummaryFile =
-      computePlatformBinariesLocation().resolve("vm_platform.dill");
+      computePlatformBinariesLocation(forceBuildDir: true)
+          .resolve("vm_platform_strong.dill");
 
   final MemoryFileSystem fs = new MemoryFileSystem(base);
 
@@ -357,27 +401,36 @@ Future<Context> createContext(
       .entityForUri(sdkSummary)
       .writeAsBytesSync(await new File.fromUri(sdkSummaryFile).readAsBytes());
 
-  final List<CompilationMessage> errors = <CompilationMessage>[];
+  final List<DiagnosticMessage> errors = <DiagnosticMessage>[];
 
   final CompilerOptions optionBuilder = new CompilerOptions()
-    ..strongMode = true
-    ..reportMessages = true
+    ..target = new VmTarget(new TargetFlags())
     ..verbose = true
+    ..omitPlatform = true
     ..fileSystem = fs
     ..sdkSummary = sdkSummary
-    ..onError = (CompilationMessage message) {
+    ..onDiagnostic = (DiagnosticMessage message) {
+      printDiagnosticMessage(message, print);
       errors.add(message);
-    };
+    }
+    ..environmentDefines = const {};
 
   final ProcessedOptions options =
-      new ProcessedOptions(optionBuilder, [entryPoint]);
+      new ProcessedOptions(options: optionBuilder, inputs: [entryPoint]);
 
   final ExternalStateSnapshot snapshot =
       new ExternalStateSnapshot(await options.loadSdkSummary(null));
 
-  return new Context(new CompilerContext(options), snapshot, errors,
-      new String.fromEnvironment("updateExpectations") == "true");
+  final bool updateExpectations = environment["updateExpectations"] == "true";
+
+  final CompilerContext compilerContext = new CompilerContext(options);
+
+  // Disable colors to ensure that expectation files are the same across
+  // platforms and independent of stdin/stderr.
+  compilerContext.disableColors();
+
+  return new Context(compilerContext, snapshot, errors, updateExpectations);
 }
 
 main([List<String> arguments = const []]) =>
-    runMe(arguments, createContext, "../../testing.json");
+    runMe(arguments, createContext, configurationPath: "../../testing.json");

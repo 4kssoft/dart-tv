@@ -1,18 +1,17 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
-library analyzer_cli.src.analyzer_impl;
 
 import 'dart:async';
 import 'dart:io';
 
+import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/error/error.dart';
 import 'package:analyzer/exception/exception.dart';
 import 'package:analyzer/src/dart/analysis/driver.dart';
 import 'package:analyzer/src/dart/analysis/file_state.dart';
-import 'package:analyzer/src/generated/engine.dart' hide AnalysisResult;
+import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer/src/generated/source_io.dart';
 import 'package:analyzer/src/generated/utilities_general.dart';
@@ -47,7 +46,7 @@ class AnalyzerImpl {
   final Set<String> files = new Set<String>();
 
   /// All [AnalysisErrorInfo]s in the analyzed library.
-  final List<AnalysisErrorInfo> errorInfos = new List<AnalysisErrorInfo>();
+  final List<ErrorsResult> errorsResults = [];
 
   /// If the file specified on the command line is part of a package, the name
   /// of that package.  Otherwise `null`.  This allows us to analyze the file
@@ -109,8 +108,8 @@ class AnalyzerImpl {
   /// Returns the maximal [ErrorSeverity] of the recorded errors.
   ErrorSeverity computeMaxErrorSeverity() {
     ErrorSeverity status = ErrorSeverity.NONE;
-    for (AnalysisErrorInfo errorInfo in errorInfos) {
-      for (AnalysisError error in errorInfo.errors) {
+    for (ErrorsResult result in errorsResults) {
+      for (AnalysisError error in result.errors) {
         if (_defaultSeverityProcessor(error) == null) {
           continue;
         }
@@ -120,16 +119,15 @@ class AnalyzerImpl {
     return status;
   }
 
-  /// Fills [errorInfos] using [files].
-  Future<Null> prepareErrors() async {
+  /// Fills [errorsResults] using [files].
+  Future<void> prepareErrors() async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     PerformanceTag previous = _prepareErrorsTag.makeCurrent();
     try {
       for (String path in files) {
         ErrorsResult errorsResult = await analysisDriver.getErrors(path);
-        errorInfos.add(new AnalysisErrorInfoImpl(
-            errorsResult.errors, errorsResult.lineInfo));
+        errorsResults.add(errorsResult);
       }
     } finally {
       previous.makeCurrent();
@@ -146,7 +144,7 @@ class AnalyzerImpl {
   /// Setup local fields such as the analysis context for analysis.
   void setupForAnalysis() {
     files.clear();
-    errorInfos.clear();
+    errorsResults.clear();
     Uri libraryUri = libraryFile.uri;
     if (libraryUri.scheme == 'package' && libraryUri.pathSegments.length > 0) {
       _selfPackageName = libraryUri.pathSegments[0];
@@ -171,7 +169,7 @@ class AnalyzerImpl {
 
     // Print errors and performance numbers.
     if (printMode == 1) {
-      formatter.formatErrors(errorInfos);
+      formatter.formatErrors(errorsResults);
     } else if (printMode == 2) {
       _printColdPerf();
     }

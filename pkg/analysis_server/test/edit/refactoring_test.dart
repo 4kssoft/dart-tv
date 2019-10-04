@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -13,7 +13,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import '../analysis_abstract.dart';
 import '../mocks.dart';
-import '../src/utilities/flutter_util.dart' as flutter;
+import '../src/utilities/mock_packages.dart';
 
 main() {
   defineReflectiveSuite(() {
@@ -25,10 +25,7 @@ main() {
     defineReflectiveTests(InlineLocalTest);
     defineReflectiveTests(InlineMethodTest);
     defineReflectiveTests(MoveFileTest);
-    // TODO(brianwilkerson) Re-enable these tests. They were commented out
-    // because they are non-deterministic under the new driver. I suspect that
-    // there is a future that isn't being waited for.
-//    defineReflectiveTests(RenameTest);
+    defineReflectiveTests(RenameTest);
   });
 }
 
@@ -355,6 +352,32 @@ main() {
 ''');
   }
 
+  test_invalidFilePathFormat_notAbsolute() async {
+    var request = new EditGetRefactoringParams(
+            RefactoringKind.EXTRACT_LOCAL_VARIABLE, 'test.dart', 0, 0, true)
+        .toRequest('0');
+    var response = await waitResponse(request);
+    expect(
+      response,
+      isResponseFailure('0', RequestErrorCode.INVALID_FILE_PATH_FORMAT),
+    );
+  }
+
+  test_invalidFilePathFormat_notNormalized() async {
+    var request = new EditGetRefactoringParams(
+            RefactoringKind.EXTRACT_LOCAL_VARIABLE,
+            convertPath('/foo/../bar/test.dart'),
+            0,
+            0,
+            true)
+        .toRequest('0');
+    var response = await waitResponse(request);
+    expect(
+      response,
+      isResponseFailure('0', RequestErrorCode.INVALID_FILE_PATH_FORMAT),
+    );
+  }
+
   test_names() async {
     addTestFile('''
 class TreeItem {}
@@ -415,7 +438,7 @@ main() {
 }
 ''');
 
-    Future<Null> checkUpdate(doUpdate()) async {
+    Future<void> checkUpdate(doUpdate()) async {
       await getRefactoringResult(() {
         return sendStringRequest('1 + 2', 'res', true);
       });
@@ -791,8 +814,7 @@ class GetAvailableRefactoringsTest extends AbstractAnalysisTest {
   List<RefactoringKind> kinds;
 
   void addFlutterPackage() {
-    var libFolder = flutter.configureFlutterPackage(resourceProvider);
-    packageMapProvider.packageMap['flutter'] = [libFolder];
+    var libFolder = MockPackages.instance.addFlutter(resourceProvider);
     // Create .packages in the project.
     newFile(join(projectPath, '.packages'), content: '''
 flutter:${libFolder.toUri()}
@@ -903,6 +925,27 @@ class MyWidget extends StatelessWidget {
     await waitForTasksFinished();
     await getRefactoringsForString('new Text');
     expect(kinds, contains(RefactoringKind.EXTRACT_WIDGET));
+  }
+
+  test_invalidFilePathFormat_notAbsolute() async {
+    var request = new EditGetAvailableRefactoringsParams('test.dart', 0, 0)
+        .toRequest('0');
+    var response = await waitResponse(request);
+    expect(
+      response,
+      isResponseFailure('0', RequestErrorCode.INVALID_FILE_PATH_FORMAT),
+    );
+  }
+
+  test_invalidFilePathFormat_notNormalized() async {
+    var request = new EditGetAvailableRefactoringsParams(
+            convertPath('/foo/../bar/test.dart'), 0, 0)
+        .toRequest('0');
+    var response = await waitResponse(request);
+    expect(
+      response,
+      isResponseFailure('0', RequestErrorCode.INVALID_FILE_PATH_FORMAT),
+    );
   }
 
   Future test_rename_hasElement_class() {
@@ -1293,7 +1336,7 @@ import 'bin/lib.dart';
 @reflectiveTest
 class RenameTest extends _AbstractGetRefactoring_Test {
   Future<Response> sendRenameRequest(String search, String newName,
-      {String id: '0', bool validateOnly: false}) {
+      {String id = '0', bool validateOnly = false}) {
     RenameOptions options = newName != null ? new RenameOptions(newName) : null;
     Request request = new EditGetRefactoringParams(RefactoringKind.RENAME,
             testFile, findOffset(search), 0, validateOnly,
@@ -1354,6 +1397,151 @@ main() {
   new NewName.named();
 }
 ''');
+  }
+
+  test_class_fromFactoryRedirectingConstructor() {
+    addTestFile('''
+class A {
+  A() = Test.named;
+}
+class Test {
+  Test.named() {}
+}
+''');
+    return assertSuccessfulRefactoring(
+      () {
+        return sendRenameRequest('Test.named;', 'NewName');
+      },
+      '''
+class A {
+  A() = NewName.named;
+}
+class NewName {
+  NewName.named() {}
+}
+''',
+      feedbackValidator: (feedback) {
+        RenameFeedback renameFeedback = feedback;
+        expect(renameFeedback.offset, 18);
+        expect(renameFeedback.length, 4);
+      },
+    );
+  }
+
+  test_class_fromInstanceCreation() {
+    addTestFile('''
+class Test {
+  Test() {}
+}
+main() {
+  new Test();
+}
+''');
+    return assertSuccessfulRefactoring(
+      () {
+        return sendRenameRequest('Test();', 'NewName');
+      },
+      '''
+class NewName {
+  NewName() {}
+}
+main() {
+  new NewName();
+}
+''',
+      feedbackValidator: (feedback) {
+        RenameFeedback renameFeedback = feedback;
+        expect(renameFeedback.offset, 42);
+        expect(renameFeedback.length, 4);
+      },
+    );
+  }
+
+  test_class_fromInstanceCreation_namedConstructor() {
+    addTestFile('''
+class Test {
+  Test.named() {}
+}
+main() {
+  new Test.named();
+}
+''');
+    return assertSuccessfulRefactoring(
+      () {
+        return sendRenameRequest('Test.named();', 'NewName');
+      },
+      '''
+class NewName {
+  NewName.named() {}
+}
+main() {
+  new NewName.named();
+}
+''',
+      feedbackValidator: (feedback) {
+        RenameFeedback renameFeedback = feedback;
+        expect(renameFeedback.offset, 48);
+        expect(renameFeedback.length, 4);
+      },
+    );
+  }
+
+  test_class_fromInstanceCreation_onNew() {
+    addTestFile('''
+class Test {
+  Test() {}
+}
+main() {
+  new Test();
+}
+''');
+    return assertSuccessfulRefactoring(
+      () {
+        return sendRenameRequest('new Test();', 'NewName');
+      },
+      '''
+class NewName {
+  NewName() {}
+}
+main() {
+  new NewName();
+}
+''',
+      feedbackValidator: (feedback) {
+        RenameFeedback renameFeedback = feedback;
+        expect(renameFeedback.offset, 42);
+        expect(renameFeedback.length, 4);
+      },
+    );
+  }
+
+  test_class_fromInstanceCreation_onNew_namedConstructor() {
+    addTestFile('''
+class Test {
+  Test.named() {}
+}
+main() {
+  new Test.named();
+}
+''');
+    return assertSuccessfulRefactoring(
+      () {
+        return sendRenameRequest('new Test.named();', 'NewName');
+      },
+      '''
+class NewName {
+  NewName.named() {}
+}
+main() {
+  new NewName.named();
+}
+''',
+      feedbackValidator: (feedback) {
+        RenameFeedback renameFeedback = feedback;
+        expect(renameFeedback.offset, 48);
+        expect(renameFeedback.length, 4);
+      },
+    );
   }
 
   test_class_options_fatalError() {
@@ -1592,18 +1780,18 @@ class A {
 ''');
   }
 
-  test_constructor_fromFactoryRedirectingConstructor_onClassName() {
+  test_constructor_fromFactoryRedirectingConstructor() {
     addTestFile('''
 class A {
-  A() = B;
+  A() = B.test;
 }
 class B {
-  B() {}
+  B.test() {}
 }
 ''');
     return assertSuccessfulRefactoring(
       () {
-        return sendRenameRequest('B;', 'newName');
+        return sendRenameRequest('test;', 'newName');
       },
       '''
 class A {
@@ -1615,8 +1803,8 @@ class B {
 ''',
       feedbackValidator: (feedback) {
         RenameFeedback renameFeedback = feedback;
-        expect(renameFeedback.offset, -1);
-        expect(renameFeedback.length, 0);
+        expect(renameFeedback.offset, 20);
+        expect(renameFeedback.length, 4);
       },
     );
   }
@@ -1646,64 +1834,6 @@ main() {
         RenameFeedback renameFeedback = feedback;
         expect(renameFeedback.offset, 43);
         expect(renameFeedback.length, 4);
-      },
-    );
-  }
-
-  test_constructor_fromInstanceCreation_default_onClassName() {
-    addTestFile('''
-class A {
-  A() {}
-}
-main() {
-  new A();
-}
-''');
-    return assertSuccessfulRefactoring(
-      () {
-        return sendRenameRequest('A();', 'newName');
-      },
-      '''
-class A {
-  A.newName() {}
-}
-main() {
-  new A.newName();
-}
-''',
-      feedbackValidator: (feedback) {
-        RenameFeedback renameFeedback = feedback;
-        expect(renameFeedback.offset, -1);
-        expect(renameFeedback.length, 0);
-      },
-    );
-  }
-
-  test_constructor_fromInstanceCreation_default_onNew() {
-    addTestFile('''
-class A {
-  A() {}
-}
-main() {
-  new A();
-}
-''');
-    return assertSuccessfulRefactoring(
-      () {
-        return sendRenameRequest('new A();', 'newName');
-      },
-      '''
-class A {
-  A.newName() {}
-}
-main() {
-  new A.newName();
-}
-''',
-      feedbackValidator: (feedback) {
-        RenameFeedback renameFeedback = feedback;
-        expect(renameFeedback.offset, -1);
-        expect(renameFeedback.length, 0);
       },
     );
   }

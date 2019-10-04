@@ -1,4 +1,4 @@
-// Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -13,12 +13,15 @@ import 'package:analysis_server/src/services/refactoring/refactoring_internal.da
 import 'package:analysis_server/src/services/search/element_visitors.dart';
 import 'package:analysis_server/src/services/search/search_engine.dart';
 import 'package:analysis_server/src/utilities/flutter.dart';
-import 'package:analyzer/analyzer.dart';
-import 'package:analyzer/dart/analysis/session.dart';
+import 'package:analyzer/dart/analysis/features.dart';
+import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/ast/ast.dart';
+import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/element/element.dart';
+import 'package:analyzer/dart/element/nullability_suffix.dart';
 import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer/src/dart/analysis/session_helper.dart';
+import 'package:analyzer/src/dart/ast/utilities.dart';
 import 'package:analyzer/src/generated/java_core.dart';
 import 'package:analyzer/src/generated/source.dart' show SourceRange;
 import 'package:analyzer_plugin/utilities/change_builder/change_builder_dart.dart';
@@ -28,18 +31,16 @@ import 'package:analyzer_plugin/utilities/range_factory.dart';
 class ExtractWidgetRefactoringImpl extends RefactoringImpl
     implements ExtractWidgetRefactoring {
   final SearchEngine searchEngine;
+  final ResolvedUnitResult resolveResult;
   final AnalysisSessionHelper sessionHelper;
-  final CompilationUnit unit;
   final int offset;
   final int length;
 
-  CompilationUnitElement unitElement;
-  LibraryElement libraryElement;
   CorrectionUtils utils;
+  Flutter flutter;
 
   ClassElement classBuildContext;
   ClassElement classKey;
-  ClassElement classStatefulWidget;
   ClassElement classStatelessWidget;
   ClassElement classWidget;
   PropertyAccessorElement accessorRequired;
@@ -73,18 +74,23 @@ class ExtractWidgetRefactoringImpl extends RefactoringImpl
   /// and [_method] parameters.
   List<_Parameter> _parameters = [];
 
-  ExtractWidgetRefactoringImpl(this.searchEngine, AnalysisSession session,
-      this.unit, this.offset, this.length)
-      : sessionHelper = new AnalysisSessionHelper(session) {
-    unitElement = unit.element;
-    libraryElement = unitElement.library;
-    utils = new CorrectionUtils(unit);
+  ExtractWidgetRefactoringImpl(
+      this.searchEngine, this.resolveResult, this.offset, this.length)
+      : sessionHelper = new AnalysisSessionHelper(resolveResult.session) {
+    utils = new CorrectionUtils(resolveResult);
+    flutter = Flutter.of(resolveResult);
   }
 
   @override
   String get refactoringName {
     return 'Extract Widget';
   }
+
+  FeatureSet get _featureSet {
+    return resolveResult.unit.featureSet;
+  }
+
+  bool get _isNonNullable => _featureSet.isEnabled(Feature.non_nullable);
 
   @override
   Future<RefactoringStatus> checkFinalConditions() async {
@@ -107,7 +113,7 @@ class ExtractWidgetRefactoringImpl extends RefactoringImpl
     }
 
     AstNode astNode = _expression ?? _method ?? _statements.first;
-    _enclosingUnitMember = astNode.getAncestor((n) {
+    _enclosingUnitMember = astNode.thisOrAncestorMatching((n) {
       return n is CompilationUnitMember && n.parent is CompilationUnit;
     });
 
@@ -126,7 +132,7 @@ class ExtractWidgetRefactoringImpl extends RefactoringImpl
 
     // Check for duplicate declarations.
     if (!result.hasFatalError) {
-      visitLibraryTopLevelElements(libraryElement, (element) {
+      visitLibraryTopLevelElements(resolveResult.libraryElement, (element) {
         if (hasDisplayName(element, name)) {
           String message = format(
               "Library already declares {0} with name '{1}'.",
@@ -144,9 +150,8 @@ class ExtractWidgetRefactoringImpl extends RefactoringImpl
   Future<SourceChange> createChange() async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
-    String file = unitElement.source.fullName;
     var changeBuilder = new DartChangeBuilder(sessionHelper.session);
-    await changeBuilder.addFileEdit(file, (builder) {
+    await changeBuilder.addFileEdit(resolveResult.path, (builder) {
       if (_expression != null) {
         builder.addReplacement(range.node(_expression), (builder) {
           _writeWidgetInstantiation(builder);
@@ -172,12 +177,10 @@ class ExtractWidgetRefactoringImpl extends RefactoringImpl
     return !_checkSelection().hasFatalError;
   }
 
-  @override
-  bool requiresPreview() => false;
-
   /// Checks if [offset] is a widget creation expression that can be extracted.
   RefactoringStatus _checkSelection() {
-    AstNode node = new NodeLocator(offset, offset + length).searchWithin(unit);
+    AstNode node = new NodeLocator(offset, offset + length)
+        .searchWithin(resolveResult.unit);
 
     // Treat single ReturnStatement as its expression.
     if (node is ReturnStatement) {
@@ -185,12 +188,12 @@ class ExtractWidgetRefactoringImpl extends RefactoringImpl
     }
 
     // Find the enclosing class.
-    _enclosingClassNode = node?.getAncestor((n) => n is ClassDeclaration);
-    _enclosingClassElement = _enclosingClassNode?.element;
+    _enclosingClassNode = node?.thisOrAncestorOfType<ClassDeclaration>();
+    _enclosingClassElement = _enclosingClassNode?.declaredElement;
 
     // new MyWidget(...)
-    InstanceCreationExpression newExpression = identifyNewExpression(node);
-    if (isWidgetCreation(newExpression)) {
+    var newExpression = flutter.identifyNewExpression(node);
+    if (flutter.isWidgetCreation(newExpression)) {
       _expression = newExpression;
       return new RefactoringStatus();
     }
@@ -208,7 +211,7 @@ class ExtractWidgetRefactoringImpl extends RefactoringImpl
       if (statements.isNotEmpty) {
         var lastStatement = statements.last;
         if (lastStatement is ReturnStatement &&
-            isWidgetExpression(lastStatement.expression)) {
+            flutter.isWidgetExpression(lastStatement.expression)) {
           _statements = statements;
           _statementsRange = range.startEnd(statements.first, statements.last);
           return new RefactoringStatus();
@@ -226,7 +229,7 @@ class ExtractWidgetRefactoringImpl extends RefactoringImpl
       }
       if (node is MethodDeclaration) {
         DartType returnType = node.returnType?.type;
-        if (isWidgetType(returnType) && node.body != null) {
+        if (flutter.isWidgetType(returnType) && node.body != null) {
           _method = node;
           return new RefactoringStatus();
         }
@@ -247,10 +250,11 @@ class ExtractWidgetRefactoringImpl extends RefactoringImpl
     Future<ClassElement> getClass(String name) async {
       // TODO(brianwilkerson) Determine whether this await is necessary.
       await null;
-      const uri = 'package:flutter/widgets.dart';
-      var element = await sessionHelper.getClass(uri, name);
+      var element = await sessionHelper.getClass(flutter.widgetsUri, name);
       if (element == null) {
-        result.addFatalError("Unable to find '$name' in $uri");
+        result.addFatalError(
+          "Unable to find '$name' in ${flutter.widgetsUri}",
+        );
       }
       return element;
     }
@@ -268,7 +272,6 @@ class ExtractWidgetRefactoringImpl extends RefactoringImpl
     classBuildContext = await getClass('BuildContext');
     classKey = await getClass('Key');
     classStatelessWidget = await getClass('StatelessWidget');
-    classStatefulWidget = await getClass('StatefulWidget');
     classWidget = await getClass('Widget');
 
     accessorRequired = await getAccessor('package:meta/meta.dart', 'required');
@@ -313,7 +316,7 @@ class ExtractWidgetRefactoringImpl extends RefactoringImpl
         }
         if (parameter is NormalFormalParameter) {
           _parameters.add(new _Parameter(
-              parameter.identifier.name, parameter.element.type,
+              parameter.identifier.name, parameter.declaredElement.type,
               isMethodParameter: true));
         }
       }
@@ -373,12 +376,12 @@ class ExtractWidgetRefactoringImpl extends RefactoringImpl
   /// Replace invocations of the [_method] with instantiations of the new
   /// widget class.
   void _replaceInvocationsWithInstantiations(DartFileEditBuilder builder) {
-    var collector = new _MethodInvocationsCollector(_method.element);
+    var collector = new _MethodInvocationsCollector(_method.declaredElement);
     _enclosingClassNode.accept(collector);
     for (var invocation in collector.invocations) {
       List<Expression> arguments = invocation.argumentList.arguments;
       builder.addReplacement(range.node(invocation), (builder) {
-        builder.write('new $name(');
+        builder.write('$name(');
 
         // Insert field references (as named arguments).
         // Ensure that invocation arguments are named.
@@ -411,7 +414,10 @@ class ExtractWidgetRefactoringImpl extends RefactoringImpl
       builder.writeln();
       builder.writeClassDeclaration(
         name,
-        superclass: classStatelessWidget.type,
+        superclass: classStatelessWidget.instantiate(
+          typeArguments: const [],
+          nullabilitySuffix: NullabilitySuffix.none,
+        ),
         membersWriter: () {
           // Add the constructor.
           builder.write('  ');
@@ -423,7 +429,15 @@ class ExtractWidgetRefactoringImpl extends RefactoringImpl
 
               // Add the required `key` parameter.
               builder.write('    ');
-              builder.writeParameter('key', type: classKey.type);
+              builder.writeParameter(
+                'key',
+                type: classKey.instantiate(
+                  typeArguments: const [],
+                  nullabilitySuffix: _isNonNullable
+                      ? NullabilitySuffix.question
+                      : NullabilitySuffix.star,
+                ),
+              );
               builder.writeln(',');
 
               // Add parameters for fields, local, and method parameters.
@@ -476,9 +490,18 @@ class ExtractWidgetRefactoringImpl extends RefactoringImpl
           builder.write('  ');
           builder.writeFunctionDeclaration(
             'build',
-            returnType: classWidget.type,
+            returnType: classWidget.instantiate(
+              typeArguments: const [],
+              nullabilitySuffix: NullabilitySuffix.none,
+            ),
             parameterWriter: () {
-              builder.writeParameter('context', type: classBuildContext.type);
+              builder.writeParameter(
+                'context',
+                type: classBuildContext.instantiate(
+                  typeArguments: const [],
+                  nullabilitySuffix: NullabilitySuffix.none,
+                ),
+              );
             },
             bodyWriter: () {
               if (_expression != null) {
@@ -522,7 +545,7 @@ class ExtractWidgetRefactoringImpl extends RefactoringImpl
 
   /// Write instantiation of the new widget class.
   void _writeWidgetInstantiation(DartEditBuilder builder) {
-    builder.write('new $name(');
+    builder.write('$name(');
 
     for (var parameter in _parameters) {
       if (parameter != _parameters.first) {
@@ -567,7 +590,7 @@ class _Parameter {
   /// constructor. If the [name] is already public, then the [name].
   String constructorName;
 
-  _Parameter(this.name, this.type, {this.isMethodParameter: false});
+  _Parameter(this.name, this.type, {this.isMethodParameter = false});
 }
 
 class _ParametersCollector extends RecursiveAstVisitor<void> {

@@ -4,7 +4,7 @@
 
 #include "vm/lockers.h"
 #include "platform/assert.h"
-#include "vm/safepoint.h"
+#include "vm/heap/safepoint.h"
 
 namespace dart {
 
@@ -12,6 +12,11 @@ Monitor::WaitResult MonitorLocker::WaitWithSafepointCheck(Thread* thread,
                                                           int64_t millis) {
   ASSERT(thread == Thread::Current());
   ASSERT(thread->execution_state() == Thread::kThreadInVM);
+#if defined(DEBUG)
+  if (no_safepoint_scope_) {
+    thread->DecrementNoSafepointScopeDepth();
+  }
+#endif
   thread->set_execution_state(Thread::kThreadInBlockedState);
   thread->EnterSafepoint();
   Monitor::WaitResult result = monitor_->Wait(millis);
@@ -26,6 +31,11 @@ Monitor::WaitResult MonitorLocker::WaitWithSafepointCheck(Thread* thread,
     monitor_->Enter();
   }
   thread->set_execution_state(Thread::kThreadInVM);
+#if defined(DEBUG)
+  if (no_safepoint_scope_) {
+    thread->IncrementNoSafepointScopeDepth();
+  }
+#endif
   return result;
 }
 
@@ -89,6 +99,24 @@ Monitor::WaitResult SafepointMonitorLocker::Wait(int64_t millis) {
   } else {
     return monitor_->Wait(millis);
   }
+}
+
+ReadRwLocker::ReadRwLocker(ThreadState* thread_state, RwLock* rw_lock)
+    : StackResource(thread_state), rw_lock_(rw_lock) {
+  rw_lock_->EnterRead();
+}
+
+ReadRwLocker::~ReadRwLocker() {
+  rw_lock_->LeaveRead();
+}
+
+WriteRwLocker::WriteRwLocker(ThreadState* thread_state, RwLock* rw_lock)
+    : StackResource(thread_state), rw_lock_(rw_lock) {
+  rw_lock_->EnterWrite();
+}
+
+WriteRwLocker::~WriteRwLocker() {
+  rw_lock_->LeaveWrite();
 }
 
 }  // namespace dart

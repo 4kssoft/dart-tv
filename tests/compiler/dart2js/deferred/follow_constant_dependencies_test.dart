@@ -8,16 +8,18 @@ import 'package:async_helper/async_helper.dart';
 import 'package:compiler/src/compiler.dart';
 import 'package:compiler/src/constants/values.dart';
 import 'package:expect/expect.dart';
-import '../memory_compiler.dart';
+import '../helpers/memory_compiler.dart';
 
 void main() {
   runTest() async {
     CompilationResult result =
         await runCompiler(memorySourceFiles: MEMORY_SOURCE_FILES);
+
     Compiler compiler = result.compiler;
+    var closedWorld = compiler.backendClosedWorldForTesting;
     var outputUnitForConstant =
-        compiler.backend.outputUnitData.outputUnitForConstant;
-    var mainOutputUnit = compiler.backend.outputUnitData.mainOutputUnit;
+        closedWorld.outputUnitData.outputUnitForConstant;
+    var mainOutputUnit = closedWorld.outputUnitData.mainOutputUnit;
     List<ConstantValue> allConstants = [];
 
     addConstantWithDependendencies(ConstantValue c) {
@@ -26,7 +28,7 @@ void main() {
     }
 
     dynamic codegenWorldBuilder = compiler.codegenWorldBuilder;
-    codegenWorldBuilder.compiledConstants
+    codegenWorldBuilder.compiledConstantsForTesting
         .forEach(addConstantWithDependendencies);
     for (String stringValue in ["cA", "cB", "cC"]) {
       StringConstantValue constant =
@@ -59,7 +61,7 @@ void main() {
 // lib1 and lib2 also import lib4 deferred, but lib1 uses lib4.bar1 and lib2
 // uses lib4.bar2.  So two output units should be created for lib4, one for each
 // import.
-const Map MEMORY_SOURCE_FILES = const {
+const Map<String, String> MEMORY_SOURCE_FILES = const {
   "main.dart": """
 import 'lib.dart' deferred as lib;
 

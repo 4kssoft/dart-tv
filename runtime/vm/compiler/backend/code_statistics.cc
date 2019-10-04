@@ -14,7 +14,7 @@ CombinedCodeStatistics::CombinedCodeStatistics() {
   return_const_with_load_field_count_ = 0;
   intptr_t i = 0;
 
-#define DO(type)                                                               \
+#define DO(type, attrs)                                                        \
   entries_[i].name = #type;                                                    \
   entries_[i].bytes = 0;                                                       \
   entries_[i++].count = 0;
@@ -23,7 +23,7 @@ CombinedCodeStatistics::CombinedCodeStatistics() {
 
 #undef DO
 
-#define DO(type)                                                               \
+#define DO(type, attrs)                                                        \
   entries_[i].name = "SlowPath:" #type;                                        \
   entries_[i].bytes = 0;                                                       \
   entries_[i++].count = 0;
@@ -119,7 +119,8 @@ int CombinedCodeStatistics::CompareEntries(const void* a, const void* b) {
   }
 }
 
-CodeStatistics::CodeStatistics(Assembler* assembler) : assembler_(assembler) {
+CodeStatistics::CodeStatistics(compiler::Assembler* assembler)
+    : assembler_(assembler) {
   memset(entries_, 0, CombinedCodeStatistics::kNumEntries * sizeof(Entry));
   instruction_bytes_ = 0;
   unaccounted_bytes_ = 0;

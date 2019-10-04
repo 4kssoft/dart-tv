@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// ignore_for_file: native_function_body_in_non_sdk_code
+
 class Base<T1, T2> {
   T1 t1;
   T2 t2;
@@ -66,6 +68,20 @@ void foo5() {
   new I.test_factory2();
   new I.test_factory2(param: 42);
 }
+
+class J {
+  factory J() native "agent_J";
+}
+
+abstract class K<A, B> {
+  factory K() => new TestTypeArgReuse<A, B>();
+}
+
+class TestTypeArgReuse<P, Q> extends Base<P, Q> implements K<P, Q> {}
+
+foo6() => new List<String>();
+
+foo7(int n) => new List<int>(n);
 
 main() {
   foo1();

@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -32,7 +32,7 @@ class MemberReferencesTest extends AbstractSearchDomainTest {
     return waitForSearchResults();
   }
 
-  test_fields_explicit() async {
+  Future<void> test_fields_explicit() async {
     addTestFile('''
 class A {
   var foo;
@@ -64,7 +64,7 @@ mainUnresolved(a, b) {
     assertHasRef(SearchResultKind.READ, 'foo); // unresolved B', true);
   }
 
-  test_fields_implicit() async {
+  Future<void> test_fields_implicit() async {
     addTestFile('''
 class A {
   get foo => null;
@@ -88,7 +88,7 @@ mainUnresolved(a, b) {
     assertHasRef(SearchResultKind.READ, 'foo); // unresolved B', true);
   }
 
-  test_methods() async {
+  Future<void> test_methods() async {
     addTestFile('''
 class A {
   foo() {}

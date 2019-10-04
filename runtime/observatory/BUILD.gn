@@ -2,81 +2,187 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("../../build/dart/dart_host_sdk_toolchain.gni")
-import("../../build/dart/prebuilt_dart_sdk.gni")
-import("../../build/executable_suffix.gni")
+import("../../build/dart/copy_tree.gni")
+import("../../build/dart/dart_action.gni")
 import("observatory_sources.gni")
 
-# Construct arguments to the observatory tool for finding pub.
-build_deps = []
-build_args = []
-if (!prebuilt_dart_exe_works) {
-  build_deps += [ "../bin:dart_bootstrap($dart_host_toolchain)" ]
+prebuilt_dart2js_action("build_observatory") {
+  visibility = [ ":copy_main_dart_js" ]
 
-  dart_out_dir = get_label_info("../bin:dart_bootstrap($dart_host_toolchain)",
-                                "root_out_dir")
-  dart_bootstrap = rebase_path("$dart_out_dir/dart_bootstrap$executable_suffix")
+  script = "web/main.dart"
 
-  build_args = [
-    "--sdk=True",
-    "--dart-executable",
-    dart_bootstrap,
+  # dart2js produces a .deps file, but it is not in a format that is understood
+  # by ninja, so we explicitly list all the sources here.
+  inputs = [ ".packages" ] + observatory_sources
+
+  output = "$target_gen_dir/observatory/web/main.dart.js"
+  outputs = [
+    output,
   ]
-} else {
-  build_args = [ "--sdk=True" ]
+  if (is_debug) {
+    outputs += [ "$target_gen_dir/observatory/web/main.dart.js.map" ]
+  }
+
+  version_string = exec_script("../../tools/make_version.py",
+                               [
+                                 "--quiet",
+                                 "--no_git_hash",
+                               ],  # Arguments to the script
+                               "trim string",  # Input conversions
+                               [
+                                 "../../tools/VERSION",
+                                 "../tools/utils.py",
+                               ])  # Dependencies
+
+  args = [
+    "-DOBS_VER=${version_string}",
+    "-o",
+    rebase_path(output),
+    "--packages=" + rebase_path(".packages"),
+  ]
+  if (is_debug) {
+    args += [ "--enable-asserts" ]
+  } else {
+    args += [ "--minify" ]
+  }
 }
 
-current_dir = rebase_path(".", "//")
+# The rules here down to "deploy_observatory" copy files into place such that
+# they can be packaged into a tar file. These rules do the following copies:
+#
+# web/* ->
+#     $target_out_dir/observatory/deployed/web
+# $target_gen_dir/observatory/web/main.dart.js ->
+#     $target_out_dir/observatory/deployed/web/main.dart.js
+# ../../third_party/observatory_pub_packages/packages/$PACKAGE/lib/* ->
+#     $target_out_dir/observatory/deployed/web/packages/$PACKAGE
+# lib/* ->
+#     $target_out_dir/observatory/deployed/web/packages/observatory
+#
+# Files matching "observatory_ignore_patterns" are excluded.
 
-action("build_observatory") {
-  deps = build_deps
+# Files matching these patterns are filtered out of the Observatory assets.
+observatory_ignore_patterns = [
+  # "\$sdk", this is the first element concatenated into the string below.
+  "*.concat.js",
+  "*.dart",
+  "*.log",
+  "*.precompiled.js",
+  "*.scriptUrls",
+  "*_buildLogs*",
+  "*~",
+  "CustomElements.*",
+  "HTMLImports.*",
+  "MutationObserver.*",
+  "ShadowDOM.*",
+  "bower.json",
+  "dart_support.*",
+  "interop_support.*",
+  "package.json",
+  "unittest*",
+  "webcomponents-lite.js",
+  "webcomponents.*",
+]
 
-  sources = rebase_path(observatory_sources, "", ".")
+if (!is_debug) {
+  observatory_ignore_patterns += [ "*.map" ]
+}
 
-  inputs = sources + [ rebase_path("dart2js.packages") ]
+# The ignore_patterns entry in the scopes accepted by copy_trees() is a
+# string of comma delimited patterns.
+observatory_ignore_string = "\$sdk"
+foreach(pattern, observatory_ignore_patterns) {
+  observatory_ignore_string = "$observatory_ignore_string,$pattern"
+}
 
-  script = "../../tools/observatory_tool.py"
-  args = build_args + [
-           "--silent=True",
-           "--directory",
-           rebase_path("."),
-           "--command",
-           "build",
-           rebase_path("web/main.dart"),
-           rebase_path("$target_gen_dir/observatory/web/main.dart.js"),
-           rebase_path("dart2js.packages"),
-         ]
+copy_tree_specs = []
 
-  outputs = [
-    "$target_gen_dir/observatory/web/main.dart.js",
+copy_tree_specs += [
+  {
+    target = "copy_web_package"
+    visibility = [ ":deploy_observatory" ]
+    source = "web"
+    dest = "$target_out_dir/observatory/deployed/web"
+    ignore_patterns = observatory_ignore_string
+  },
+]
+
+copy_tree_specs += [
+  {
+    target = "copy_observatory_package"
+    visibility = [ ":deploy_observatory" ]
+    source = "lib"
+    dest = "$target_out_dir/observatory/deployed/web/packages/observatory"
+    ignore_patterns = observatory_ignore_string
+  },
+]
+
+# All the contents of third_party/observatory_pub_packages should be
+# accounted for here. Uncommented entries are those packages that have
+# files that pass the observatory_ignore_patterns filters.
+observatory_pub_packages = [
+  "browser",
+  "charted",
+  "intl",
+
+  # Dependent packages that have no files that pass the above filter.
+  # "collection",
+  # "logging",
+  # "matcher",
+  # "meta",
+  # "observable",
+  # "path",
+  # "quiver",
+  # "stack_trace",
+  # "usage",
+
+  # Only needed for testing.
+  # "unittest",
+]
+
+foreach(package, observatory_pub_packages) {
+  copy_tree_specs += [
+    {
+      target = "copy_${package}_package"
+      visibility = [ ":deploy_observatory" ]
+      source =
+          "../../third_party/observatory_pub_packages/packages/$package/lib"
+      dest = "$target_out_dir/observatory/deployed/web/packages/$package"
+      ignore_patterns = observatory_ignore_string
+    },
   ]
 }
 
-action("deploy_observatory") {
-  deps = [ ":build_observatory" ] + build_deps
+# This is not a rule, rather, it generates rules with names of the form:
+#   "copy_$package_package" for the packages in observatory_pub_packages.
+copy_trees("copy_observatory_packages") {
+  sources = copy_tree_specs
+}
 
-  script = "../../tools/observatory_tool.py"
-
-  inputs = [
-    script,
+copy("copy_main_dart_js") {
+  visibility = [ ":deploy_observatory" ]
+  deps = [
+    ":build_observatory",
+  ]
+  sources = [
     "$target_gen_dir/observatory/web/main.dart.js",
   ]
-
-  args = build_args + [
-           "--silent=True",
-           "--directory",
-           rebase_path("$target_out_dir/observatory"),
-           "--command",
-           "deploy",
-           rebase_path("$target_out_dir/observatory/deployed"),
-           rebase_path("web"),
-           rebase_path("lib"),
-           rebase_path("$target_gen_dir/observatory/web/main.dart.js"),
-           rebase_path("../../third_party/observatory_pub_packages/packages"),
-         ]
-
+  if (is_debug) {
+    sources += [ "$target_gen_dir/observatory/web/main.dart.js.map" ]
+  }
   outputs = [
-    "$target_out_dir/observatory/deployed/web/main.dart.js",
+    "$target_out_dir/observatory/deployed/web/{{source_file_part}}",
+  ]
+}
+
+group("deploy_observatory") {
+  deps = [
+    ":copy_browser_package",
+    ":copy_charted_package",
+    ":copy_intl_package",
+    ":copy_main_dart_js",
+    ":copy_observatory_package",
+    ":copy_web_package",
   ]
 }
 
@@ -88,10 +194,6 @@ template("observatory_archive") {
   action(target_name) {
     deps = [
       ":deploy_observatory",
-    ]
-
-    inputs = [
-      "$target_out_dir/observatory/deployed/web/main.dart.js",
     ]
 
     output_name = target_name

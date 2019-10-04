@@ -1,10 +1,11 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/error/error.dart';
 import 'package:analyzer/source/line_info.dart';
-import 'package:analyzer/src/generated/engine.dart';
+import 'package:analyzer/src/dart/analysis/driver_based_analysis_context.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer_cli/src/ansi.dart';
 import 'package:analyzer_cli/src/options.dart';
@@ -109,8 +110,10 @@ class CLIError implements Comparable<CLIError> {
   final int line;
   final int column;
   final String message;
+  final List<ContextMessage> contextMessages;
   final String errorCode;
   final String correction;
+  final String url;
 
   CLIError({
     this.severity,
@@ -119,8 +122,10 @@ class CLIError implements Comparable<CLIError> {
     this.line,
     this.column,
     this.message,
+    this.contextMessages,
     this.errorCode,
     this.correction,
+    this.url,
   });
 
   @override
@@ -159,6 +164,14 @@ class CLIError implements Comparable<CLIError> {
   }
 }
 
+class ContextMessage {
+  final String filePath;
+  final String message;
+  final int line;
+  final int column;
+  ContextMessage(this.filePath, this.message, this.line, this.column);
+}
+
 /// Helper for formatting [AnalysisError]s.
 ///
 /// The two format options are a user consumable format and a machine consumable
@@ -179,19 +192,18 @@ abstract class ErrorFormatter {
   void flush();
 
   void formatError(
-      Map<AnalysisError, LineInfo> errorToLine, AnalysisError error);
+      Map<AnalysisError, ErrorsResult> errorToLine, AnalysisError error);
 
-  void formatErrors(List<AnalysisErrorInfo> errorInfos) {
-    stats.unfilteredCount += errorInfos.length;
+  void formatErrors(List<ErrorsResult> results) {
+    stats.unfilteredCount += results.length;
 
     List<AnalysisError> errors = new List<AnalysisError>();
-    Map<AnalysisError, LineInfo> errorToLine =
-        new Map<AnalysisError, LineInfo>();
-    for (AnalysisErrorInfo errorInfo in errorInfos) {
-      for (AnalysisError error in errorInfo.errors) {
+    Map<AnalysisError, ErrorsResult> errorToLine = {};
+    for (ErrorsResult result in results) {
+      for (AnalysisError error in result.errors) {
         if (_computeSeverity(error) != null) {
           errors.add(error);
-          errorToLine[error] = errorInfo.lineInfo;
+          errorToLine[error] = result;
         }
       }
     }
@@ -211,7 +223,7 @@ class HumanErrorFormatter extends ErrorFormatter {
   AnsiLogger ansi;
 
   // This is a Set in order to de-dup CLI errors.
-  Set<CLIError> batchedErrors = new Set();
+  final Set<CLIError> batchedErrors = new Set();
 
   HumanErrorFormatter(
       StringSink out, CommandLineOptions options, AnalysisStats stats,
@@ -236,22 +248,32 @@ class HumanErrorFormatter extends ErrorFormatter {
         stats.hintCount++;
       }
 
-      // warning • 'foo' is not a bar at lib/foo.dart:1:2 • foo_warning
+      // warning • 'foo' is not a bar. • lib/foo.dart:1:2 • foo_warning
       String issueColor = (error.isError == ErrorSeverity.ERROR ||
               error.isWarning == ErrorSeverity.WARNING)
           ? ansi.red
           : '';
       out.write('  $issueColor${error.severity}${ansi.none} '
           '${ansi.bullet} ${ansi.bold}${error.message}${ansi.none} ');
-      out.write('at ${error.sourcePath}');
+      out.write('${ansi.bullet} ${error.sourcePath}');
       out.write(':${error.line}:${error.column} ');
       out.write('${ansi.bullet} ${error.errorCode}');
       out.writeln();
 
-      // If verbose, also print any associated correction.
-      if (options.verbose && error.correction != null) {
-        out.writeln(
-            '${' '.padLeft(error.severity.length + 2)}${error.correction}');
+      // If verbose, also print any associated correction and URL.
+      if (options.verbose) {
+        String padding = ' '.padLeft(error.severity.length + 2);
+        for (var message in error.contextMessages) {
+          out.write('$padding${message.message} ');
+          out.write('at ${message.filePath}');
+          out.writeln(':${message.line}:${message.column}');
+        }
+        if (error.correction != null) {
+          out.writeln('$padding${error.correction}');
+        }
+        if (error.url != null) {
+          out.writeln('$padding${error.url}');
+        }
       }
     }
 
@@ -260,9 +282,10 @@ class HumanErrorFormatter extends ErrorFormatter {
   }
 
   void formatError(
-      Map<AnalysisError, LineInfo> errorToLine, AnalysisError error) {
+      Map<AnalysisError, ErrorsResult> errorToLine, AnalysisError error) {
     Source source = error.source;
-    CharacterLocation location = errorToLine[error].getLocation(error.offset);
+    var result = errorToLine[error];
+    var location = result.lineInfo.getLocation(error.offset);
 
     ErrorSeverity severity = _severityProcessor(error);
 
@@ -275,12 +298,7 @@ class HumanErrorFormatter extends ErrorFormatter {
       }
     }
 
-    // warning • 'foo' is not a bar at lib/foo.dart:1:2 • foo_warning
-    String message = error.message;
-    // Remove any terminating '.' from the end of the message.
-    if (message.endsWith('.')) {
-      message = message.substring(0, message.length - 1);
-    }
+    // warning • 'foo' is not a bar. • lib/foo.dart:1:2 • foo_warning
     String sourcePath;
     if (source.uriKind == UriKind.DART_URI) {
       sourcePath = source.uri.toString();
@@ -293,6 +311,17 @@ class HumanErrorFormatter extends ErrorFormatter {
     } else {
       sourcePath = _relative(source.fullName);
     }
+    List<ContextMessage> contextMessages = [];
+    for (var message in error.contextMessages) {
+      var session = result.session.analysisContext;
+      if (session is DriverBasedAnalysisContext) {
+        LineInfo lineInfo =
+            session.driver.getFileSync(message.filePath)?.lineInfo;
+        var location = lineInfo.getLocation(message.offset);
+        contextMessages.add(ContextMessage(message.filePath, message.message,
+            location.lineNumber, location.columnNumber));
+      }
+    }
 
     batchedErrors.add(new CLIError(
       severity: errorType,
@@ -300,9 +329,11 @@ class HumanErrorFormatter extends ErrorFormatter {
       offset: error.offset,
       line: location.lineNumber,
       column: location.columnNumber,
-      message: message,
+      message: error.message,
+      contextMessages: contextMessages,
       errorCode: error.errorCode.name.toLowerCase(),
       correction: error.correction,
+      url: error.errorCode.url,
     ));
   }
 }
@@ -312,6 +343,7 @@ class MachineErrorFormatter extends ErrorFormatter {
   static final int _slashCodeUnit = '\\'.codeUnitAt(0);
   static final int _newline = '\n'.codeUnitAt(0);
   static final int _return = '\r'.codeUnitAt(0);
+  final Set<AnalysisError> _seenErrors = <AnalysisError>{};
 
   MachineErrorFormatter(
       StringSink out, CommandLineOptions options, AnalysisStats stats,
@@ -321,9 +353,13 @@ class MachineErrorFormatter extends ErrorFormatter {
   void flush() {}
 
   void formatError(
-      Map<AnalysisError, LineInfo> errorToLine, AnalysisError error) {
+      Map<AnalysisError, ErrorsResult> errorToLine, AnalysisError error) {
+    // Ensure we don't over-report (#36062).
+    if (!_seenErrors.add(error)) {
+      return;
+    }
     Source source = error.source;
-    CharacterLocation location = errorToLine[error].getLocation(error.offset);
+    var location = errorToLine[error].lineInfo.getLocation(error.offset);
     int length = error.length;
 
     ErrorSeverity severity = _severityProcessor(error);

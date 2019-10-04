@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -281,7 +281,7 @@ main() {
 ''');
     _createRefactoringForStartEndComments();
     return _assertConditionsFatal(
-        "Operation not applicable to a 'for' statement's updaters and body.");
+        "Not all selected statements are enclosed by the same parent statement.");
   }
 
   test_bad_methodName_reference() async {
@@ -296,7 +296,7 @@ main() {
 
   test_bad_namePartOfDeclaration_function() async {
     await indexTestUnit('''
-main() {
+void main() {
 }
 ''');
     _createRefactoringForString('main');
@@ -762,6 +762,28 @@ main() {
     expect(refactoring.createGetter, true);
   }
 
+  test_checkInitialCondition_false_outOfRange_length() async {
+    await indexTestUnit('''
+main() {
+  1 + 2;
+}
+''');
+    _createRefactoring(0, 1 << 20);
+    RefactoringStatus status = await refactoring.checkAllConditions();
+    assertRefactoringStatus(status, RefactoringProblemSeverity.FATAL);
+  }
+
+  test_checkInitialCondition_outOfRange_offset() async {
+    await indexTestUnit('''
+main() {
+  1 + 2;
+}
+''');
+    _createRefactoring(-10, 20);
+    RefactoringStatus status = await refactoring.checkAllConditions();
+    assertRefactoringStatus(status, RefactoringProblemSeverity.FATAL);
+  }
+
   test_checkName() async {
     await indexTestUnit('''
 main() {
@@ -1069,6 +1091,24 @@ class A {
 ''');
     _createRefactoringForString('1 + 2');
     expect(refactoring.refactoringName, 'Extract Method');
+  }
+
+  test_isAvailable_false_functionName() async {
+    await indexTestUnit('''
+void main() {}
+''');
+    _createRefactoringForString('main');
+    expect(refactoring.isAvailable(), isFalse);
+  }
+
+  test_isAvailable_true() async {
+    await indexTestUnit('''
+main() {
+  1 + 2;
+}
+''');
+    _createRefactoringForString('1 + 2');
+    expect(refactoring.isAvailable(), isTrue);
   }
 
   test_names_singleExpression() async {
@@ -1516,10 +1556,10 @@ int res(Foo<String, int> foo, String s) => foo(s);
     await indexTestUnit('''
 import 'asyncLib.dart';
 main() {
-  var a = newFuture();
+  var a = newCompleter();
 }
 ''');
-    _createRefactoringForString('newFuture()');
+    _createRefactoringForString('newCompleter()');
     // apply refactoring
     return _assertSuccessfulRefactoring('''
 import 'asyncLib.dart';
@@ -1528,7 +1568,7 @@ main() {
   var a = res();
 }
 
-Future<int> res() => newFuture();
+Completer<int> res() => newCompleter();
 ''');
   }
 
@@ -2527,7 +2567,7 @@ void res(Object x) {
     await indexTestUnit('''
 import 'asyncLib.dart';
 main() {
-  var v = newFuture();
+  var v = newCompleter();
 // start
   print(v);
 // end
@@ -2539,20 +2579,19 @@ main() {
 import 'asyncLib.dart';
 import 'dart:async';
 main() {
-  var v = newFuture();
+  var v = newCompleter();
 // start
   res(v);
 // end
 }
 
-void res(Future<int> v) {
+void res(Completer<int> v) {
   print(v);
 }
 ''');
   }
 
   test_statements_parameters_localFunction() async {
-    _addLibraryReturningAsync();
     await indexTestUnit('''
 class C {
   int f(int a) {
@@ -2837,10 +2876,10 @@ void res() {
   }
 
   void _addLibraryReturningAsync() {
-    addSource('/project/asyncLib.dart', r'''
-library asyncLib;
+    addSource('/home/test/lib/asyncLib.dart', r'''
 import 'dart:async';
-Future<int> newFuture() => null;
+
+Completer<int> newCompleter() => null;
 ''');
   }
 
@@ -2880,7 +2919,7 @@ Future<int> newFuture() => null;
 
   void _createRefactoring(int offset, int length) {
     refactoring = new ExtractMethodRefactoring(
-        searchEngine, astProvider, testUnit, offset, length);
+        searchEngine, testAnalysisResult, offset, length);
     refactoring.name = 'res';
   }
 

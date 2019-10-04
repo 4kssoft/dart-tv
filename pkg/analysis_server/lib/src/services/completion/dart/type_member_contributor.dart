@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -28,33 +28,33 @@ class TypeMemberContributor extends DartCompletionContributor {
     // Gracefully degrade if the library element is not resolved
     // e.g. detached part file or source change
     if (containingLibrary == null) {
-      return EMPTY_LIST;
+      return const <CompletionSuggestion>[];
     }
 
     // Recompute the target since resolution may have changed it
     Expression expression = request.dotTarget;
     if (expression == null || expression.isSynthetic) {
-      return EMPTY_LIST;
+      return const <CompletionSuggestion>[];
     }
     if (expression is Identifier) {
-      Element elem = expression.bestElement;
+      Element elem = expression.staticElement;
       if (elem is ClassElement) {
         // Suggestions provided by StaticMemberContributor
-        return EMPTY_LIST;
+        return const <CompletionSuggestion>[];
       }
       if (elem is PrefixElement) {
         // Suggestions provided by LibraryMemberContributor
-        return EMPTY_LIST;
+        return const <CompletionSuggestion>[];
       }
     }
 
     // Determine the target expression's type
-    DartType type = expression.bestType;
-    if (type.isDynamic) {
+    DartType type = expression.staticType;
+    if (type == null || type.isDynamic) {
       // If the expression does not provide a good type
       // then attempt to get a better type from the element
       if (expression is Identifier) {
-        Element elem = expression.bestElement;
+        Element elem = expression.staticElement;
         if (elem is FunctionTypedElement) {
           type = elem.returnType;
         } else if (elem is ParameterElement) {
@@ -75,13 +75,17 @@ class TypeMemberContributor extends DartCompletionContributor {
       }
     }
     String containingMethodName;
+    List<InterfaceType> mixins;
+    List<InterfaceType> superclassConstraints;
     if (expression is SuperExpression && type is InterfaceType) {
       // Suggest members from superclass if target is "super"
+      mixins = (type as InterfaceType).mixins;
+      superclassConstraints = (type as InterfaceType).superclassConstraints;
       type = (type as InterfaceType).superclass;
       // Determine the name of the containing method because
       // the most likely completion is a super expression with same name
       MethodDeclaration containingMethod =
-          expression.getAncestor((p) => p is MethodDeclaration);
+          expression.thisOrAncestorOfType<MethodDeclaration>();
       if (containingMethod != null) {
         SimpleIdentifier id = containingMethod.name;
         if (id != null) {
@@ -89,7 +93,7 @@ class TypeMemberContributor extends DartCompletionContributor {
         }
       }
     }
-    if (type.isDynamic) {
+    if (type == null || type.isDynamic) {
       // Suggest members from object if target is "dynamic"
       type = request.objectType;
     }
@@ -97,10 +101,11 @@ class TypeMemberContributor extends DartCompletionContributor {
     // Build the suggestions
     if (type is InterfaceType) {
       _SuggestionBuilder builder = new _SuggestionBuilder(containingLibrary);
-      builder.buildSuggestions(type, containingMethodName);
+      builder.buildSuggestions(type, containingMethodName,
+          mixins: mixins, superclassConstraints: superclassConstraints);
       return builder.suggestions.toList();
     }
-    return EMPTY_LIST;
+    return const <CompletionSuggestion>[];
   }
 }
 
@@ -142,6 +147,9 @@ class _LocalBestTypeVisitor extends LocalDeclarationVisitor {
   }
 
   @override
+  void declaredExtension(ExtensionDeclaration declaration) {}
+
+  @override
   void declaredField(FieldDeclaration fieldDecl, VariableDeclaration varDecl) {
     if (varDecl.name.name == targetName) {
       // Type provided by the element in computeFull above
@@ -172,6 +180,17 @@ class _LocalBestTypeVisitor extends LocalDeclarationVisitor {
   }
 
   @override
+  void declaredGenericTypeAlias(GenericTypeAlias declaration) {
+    if (declaration.name.name == targetName) {
+      TypeAnnotation typeName = declaration.functionType.returnType;
+      if (typeName != null) {
+        typeFound = typeName.type;
+      }
+      finished();
+    }
+  }
+
+  @override
   void declaredLabel(Label label, bool isCaseLabel) {
     if (label.label.name == targetName) {
       // no type
@@ -182,7 +201,7 @@ class _LocalBestTypeVisitor extends LocalDeclarationVisitor {
   @override
   void declaredLocalVar(SimpleIdentifier name, TypeAnnotation type) {
     if (name.name == targetName) {
-      typeFound = name.bestType;
+      typeFound = name.staticType;
       finished();
     }
   }
@@ -220,75 +239,35 @@ class _LocalBestTypeVisitor extends LocalDeclarationVisitor {
  * This class provides suggestions based upon the visible instance members in
  * an interface type.
  */
-class _SuggestionBuilder {
-  /**
-   * Enumerated value indicating that we have not generated any completions for
-   * a given identifier yet.
-   */
-  static const int _COMPLETION_TYPE_NONE = 0;
-
-  /**
-   * Enumerated value indicating that we have generated a completion for a
-   * getter.
-   */
-  static const int _COMPLETION_TYPE_GETTER = 1;
-
-  /**
-   * Enumerated value indicating that we have generated a completion for a
-   * setter.
-   */
-  static const int _COMPLETION_TYPE_SETTER = 2;
-
-  /**
-   * Enumerated value indicating that we have generated a completion for a
-   * field, a method, or a getter/setter pair.
-   */
-  static const int _COMPLETION_TYPE_FIELD_OR_METHOD_OR_GETSET = 3;
-
-  /**
-   * The library containing the unit in which the completion is requested.
-   */
-  final LibraryElement containingLibrary;
-
-  /**
-   * Map indicating, for each possible completion identifier, whether we have
-   * already generated completions for a getter, setter, or both.  The "both"
-   * case also handles the case where have generated a completion for a method
-   * or a field.
-   *
-   * Note: the enumerated values stored in this map are intended to be bitwise
-   * compared.
-   */
-  Map<String, int> _completionTypesGenerated = new HashMap<String, int>();
-
-  /**
-   * Map from completion identifier to completion suggestion
-   */
-  Map<String, CompletionSuggestion> _suggestionMap =
-      <String, CompletionSuggestion>{};
-
-  _SuggestionBuilder(this.containingLibrary);
-
-  Iterable<CompletionSuggestion> get suggestions => _suggestionMap.values;
+class _SuggestionBuilder extends MemberSuggestionBuilder {
+  _SuggestionBuilder(LibraryElement containingLibrary)
+      : super(containingLibrary);
 
   /**
    * Return completion suggestions for 'dot' completions on the given [type].
    * If the 'dot' completion is a super expression, then [containingMethodName]
    * is the name of the method in which the completion is requested.
    */
-  void buildSuggestions(InterfaceType type, String containingMethodName) {
+  void buildSuggestions(InterfaceType type, String containingMethodName,
+      {List<InterfaceType> mixins, List<InterfaceType> superclassConstraints}) {
     // Visit all of the types in the class hierarchy, collecting possible
     // completions.  If multiple elements are found that complete to the same
     // identifier, addSuggestion will discard all but the first (with a few
     // exceptions to handle getter/setter pairs).
     List<InterfaceType> types = _getTypeOrdering(type);
+    if (mixins != null) {
+      types.addAll(mixins);
+    }
+    if (superclassConstraints != null) {
+      types.addAll(superclassConstraints);
+    }
     for (InterfaceType targetType in types) {
       for (MethodElement method in targetType.methods) {
         // Exclude static methods when completion on an instance
         if (!method.isStatic) {
           // Boost the relevance of a super expression
           // calling a method of the same name as the containing method
-          _addSuggestion(method,
+          addSuggestion(method,
               relevance: method.name == containingMethodName
                   ? DART_RELEVANCE_HIGH
                   : DART_RELEVANCE_DEFAULT);
@@ -299,78 +278,13 @@ class _SuggestionBuilder {
           if (propertyAccessor.isSynthetic) {
             // Avoid visiting a field twice
             if (propertyAccessor.isGetter) {
-              _addSuggestion(propertyAccessor.variable);
+              addSuggestion(propertyAccessor.variable);
             }
           } else {
-            _addSuggestion(propertyAccessor);
+            addSuggestion(propertyAccessor);
           }
         }
       }
-    }
-  }
-
-  /**
-   * Add a suggestion based upon the given element, provided that it is not
-   * shadowed by a previously added suggestion.
-   */
-  void _addSuggestion(Element element,
-      {int relevance: DART_RELEVANCE_DEFAULT}) {
-    if (element.isPrivate) {
-      if (element.library != containingLibrary) {
-        // Do not suggest private members for imported libraries
-        return;
-      }
-    }
-    String identifier = element.displayName;
-
-    if (relevance == DART_RELEVANCE_DEFAULT && identifier != null) {
-      // Decrease relevance of suggestions starting with $
-      // https://github.com/dart-lang/sdk/issues/27303
-      if (identifier.startsWith(r'$')) {
-        relevance = DART_RELEVANCE_LOW;
-      }
-    }
-
-    int alreadyGenerated = _completionTypesGenerated.putIfAbsent(
-        identifier, () => _COMPLETION_TYPE_NONE);
-    if (element is MethodElement) {
-      // Anything shadows a method.
-      if (alreadyGenerated != _COMPLETION_TYPE_NONE) {
-        return;
-      }
-      _completionTypesGenerated[identifier] =
-          _COMPLETION_TYPE_FIELD_OR_METHOD_OR_GETSET;
-    } else if (element is PropertyAccessorElement) {
-      if (element.isGetter) {
-        // Getters, fields, and methods shadow a getter.
-        if ((alreadyGenerated & _COMPLETION_TYPE_GETTER) != 0) {
-          return;
-        }
-        _completionTypesGenerated[identifier] |= _COMPLETION_TYPE_GETTER;
-      } else {
-        // Setters, fields, and methods shadow a setter.
-        if ((alreadyGenerated & _COMPLETION_TYPE_SETTER) != 0) {
-          return;
-        }
-        _completionTypesGenerated[identifier] |= _COMPLETION_TYPE_SETTER;
-      }
-    } else if (element is FieldElement) {
-      // Fields and methods shadow a field.  A getter/setter pair shadows a
-      // field, but a getter or setter by itself doesn't.
-      if (alreadyGenerated == _COMPLETION_TYPE_FIELD_OR_METHOD_OR_GETSET) {
-        return;
-      }
-      _completionTypesGenerated[identifier] =
-          _COMPLETION_TYPE_FIELD_OR_METHOD_OR_GETSET;
-    } else {
-      // Unexpected element type; skip it.
-      assert(false);
-      return;
-    }
-    CompletionSuggestion suggestion =
-        createSuggestion(element, relevance: relevance);
-    if (suggestion != null) {
-      _suggestionMap[suggestion.completion] = suggestion;
     }
   }
 
@@ -406,6 +320,7 @@ class _SuggestionBuilder {
       if (nextType.superclass != null) {
         typesToVisit.add(nextType.superclass);
       }
+      typesToVisit.addAll(nextType.superclassConstraints);
       typesToVisit.addAll(nextType.mixins);
     }
     return result;

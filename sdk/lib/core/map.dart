@@ -82,6 +82,10 @@ abstract class Map<K, V> {
   /**
    * Creates an identity map with the default implementation, [LinkedHashMap].
    *
+   * An identity map uses [identical] for equality and [identityHashCode]
+   * for hash codes of keys instead of the intrinsic [Object.==] and
+   * [Object.hashCode] of the keys.
+   *
    * The returned map allows `null` as a key.
    * It iterates in key insertion order.
    */
@@ -166,13 +170,16 @@ abstract class Map<K, V> {
    * then the returned map can be used as a `Map<K2, V2>`.
    */
   static Map<K2, V2> castFrom<K, V, K2, V2>(Map<K, V> source) =>
-      new CastMap<K, V, K2, V2>(source);
+      CastMap<K, V, K2, V2>(source);
 
   /**
    * Creates a new map and adds all entries.
    *
-   * Creates a new map like `new Map<K, V>()` and then adds the key
-   * and value of eacy entry in [entries] in iteration order.
+   * Returns a new `Map<K, V>` where all entries of [entries]
+   * have been added in iteration order.
+   *
+   * If multiple [entries] have the same key,
+   * later occurrences overwrite the earlier ones.
    */
   factory Map.fromEntries(Iterable<MapEntry<K, V>> entries) =>
       <K, V>{}..addEntries(entries);
@@ -192,10 +199,6 @@ abstract class Map<K, V> {
    * `Map<RK, RV>`.
    */
   Map<RK, RV> cast<RK, RV>();
-
-  @Deprecated("Use cast instead.")
-  Map<RK, RV> retype<RK, RV>();
-
   /**
    * Returns true if this map contains the given [value].
    *
@@ -355,7 +358,7 @@ abstract class Map<K, V> {
    *
    * The values are iterated in the order of their corresponding keys.
    * This means that iterating [keys] and [values] in parallel will
-   * provided matching pairs of keys and values.
+   * provide matching pairs of keys and values.
    *
    * The returned iterable has an efficient `length` method based on the
    * [length] of the map. Its [Iterable.contains] method is based on

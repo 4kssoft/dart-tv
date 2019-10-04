@@ -73,6 +73,8 @@ class SocketAddress {
   static intptr_t GetAddrPort(const RawAddr& addr);
   static Dart_Handle ToTypedData(const RawAddr& addr);
   static CObjectUint8Array* ToCObject(const RawAddr& addr);
+  static void SetAddrScope(RawAddr* addr, intptr_t scope_id);
+  static intptr_t GetAddrScope(const RawAddr& addr);
 
  private:
   char as_string_[INET6_ADDRSTRLEN];
@@ -182,6 +184,16 @@ class SocketBase : public AllStatic {
   static bool SetMulticastHops(intptr_t fd, intptr_t protocol, int value);
   static bool GetBroadcast(intptr_t fd, bool* value);
   static bool SetBroadcast(intptr_t fd, bool value);
+  static bool GetOption(intptr_t fd,
+                        int level,
+                        int option,
+                        char* data,
+                        unsigned int* length);
+  static bool SetOption(intptr_t fd,
+                        int level,
+                        int option,
+                        const char* data,
+                        int length);
   static bool JoinMulticast(intptr_t fd,
                             const RawAddr& addr,
                             const RawAddr& interface,

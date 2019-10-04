@@ -4,6 +4,7 @@
 
 #include "vm/program_visitor.h"
 
+#include "vm/code_patcher.h"
 #include "vm/deopt_instructions.h"
 #include "vm/hash_map.h"
 #include "vm/object.h"
@@ -33,7 +34,7 @@ void ProgramVisitor::VisitClasses(ClassVisitor* visitor) {
       }
       visitor->Visit(cls);
     }
-    patches = lib.patch_classes();
+    patches = lib.owned_scripts();
     for (intptr_t j = 0; j < patches.Length(); j++) {
       entry = patches.At(j);
       if (entry.IsClass()) {
@@ -80,8 +81,8 @@ class ClassFunctionVisitor : public ClassVisitor {
     fields_ = cls.fields();
     for (intptr_t j = 0; j < fields_.Length(); j++) {
       field_ ^= fields_.At(j);
-      if (field_.is_static() && field_.HasPrecompiledInitializer()) {
-        function_ ^= field_.PrecompiledInitializer();
+      if (field_.is_static() && field_.HasInitializerFunction()) {
+        function_ = field_.InitializerFunction();
         visitor_->Visit(function_);
       }
     }
@@ -114,6 +115,67 @@ void ProgramVisitor::VisitFunctions(FunctionVisitor* visitor) {
   }
 }
 
+#if !defined(DART_PRECOMPILED_RUNTIME)
+void ProgramVisitor::BindStaticCalls() {
+#if !defined(TARGET_ARCH_DBC)
+  if (FLAG_precompiled_mode) {
+    return;
+  }
+
+  class BindJITStaticCallsVisitor : public FunctionVisitor {
+   public:
+    explicit BindJITStaticCallsVisitor(Zone* zone)
+        : code_(Code::Handle(zone)),
+          table_(Array::Handle(zone)),
+          kind_and_offset_(Smi::Handle(zone)),
+          target_(Object::Handle(zone)),
+          target_code_(Code::Handle(zone)) {}
+
+    void Visit(const Function& function) {
+      if (!function.HasCode()) {
+        return;
+      }
+      code_ = function.CurrentCode();
+      table_ = code_.static_calls_target_table();
+      StaticCallsTable static_calls(table_);
+      for (const auto& view : static_calls) {
+        kind_and_offset_ = view.Get<Code::kSCallTableKindAndOffset>();
+        Code::CallKind kind = Code::KindField::decode(kind_and_offset_.Value());
+        if (kind != Code::kCallViaCode) {
+          continue;
+        }
+        int32_t pc_offset = Code::OffsetField::decode(kind_and_offset_.Value());
+        target_ = view.Get<Code::kSCallTableFunctionTarget>();
+        if (target_.IsNull()) {
+          target_ = view.Get<Code::kSCallTableCodeTarget>();
+          ASSERT(!Code::Cast(target_).IsFunctionCode());
+          // Allocation stub or AllocateContext or AllocateArray or ...
+        } else {
+          const Function& target_func = Function::Cast(target_);
+          if (target_func.HasCode()) {
+            target_code_ = target_func.CurrentCode();
+          } else {
+            target_code_ = StubCode::CallStaticFunction().raw();
+          }
+          uword pc = pc_offset + code_.PayloadStart();
+          CodePatcher::PatchStaticCallAt(pc, code_, target_code_);
+        }
+      }
+    }
+
+   private:
+    Code& code_;
+    Array& table_;
+    Smi& kind_and_offset_;
+    Object& target_;
+    Code& target_code_;
+  };
+
+  BindJITStaticCallsVisitor visitor(Thread::Current()->zone());
+  ProgramVisitor::VisitFunctions(&visitor);
+#endif  // !defined(TARGET_ARCH_DBC)
+}
+
 void ProgramVisitor::ShareMegamorphicBuckets() {
   Thread* thread = Thread::Current();
   Isolate* isolate = thread->isolate();
@@ -129,8 +191,7 @@ void ProgramVisitor::ShareMegamorphicBuckets() {
       zone, Array::New(MegamorphicCache::kEntryLength * capacity, Heap::kOld));
   const Function& handler =
       Function::Handle(zone, MegamorphicCacheTable::miss_handler(isolate));
-  MegamorphicCache::SetEntry(buckets, 0, MegamorphicCache::smi_illegal_cid(),
-                             handler);
+  MegamorphicCache::SetEntry(buckets, 0, Object::smi_illegal_cid(), handler);
 
   for (intptr_t i = 0; i < table.Length(); i++) {
     cache ^= table.At(i);
@@ -151,7 +212,11 @@ class StackMapKeyValueTrait {
 
   static Value ValueOf(Pair kv) { return kv; }
 
-  static inline intptr_t Hashcode(Key key) { return key->PcOffset(); }
+  static inline intptr_t Hashcode(Key key) {
+    intptr_t hash = key->SlowPathBitCount();
+    hash = CombineHashes(hash, key->Length());
+    return FinalizeHash(hash, kBitsPerWord - 1);
+  }
 
   static inline bool IsKeyEqual(Pair pair, Key key) {
     return pair->Equals(*key);
@@ -181,7 +246,7 @@ void ProgramVisitor::DedupStackMaps() {
       code_ = function.CurrentCode();
       stackmaps_ = code_.stackmaps();
       if (stackmaps_.IsNull()) return;
-      for (intptr_t i = 0; i < stackmaps_.Length(); i++) {
+      for (intptr_t i = 1; i < stackmaps_.Length(); i += 2) {
         stackmap_ ^= stackmaps_.At(i);
         stackmap_ = DedupStackMap(stackmap_);
         stackmaps_.SetAt(i, stackmap_);
@@ -248,6 +313,7 @@ void ProgramVisitor::DedupPcDescriptors() {
     explicit DedupPcDescriptorsVisitor(Zone* zone)
         : zone_(zone),
           canonical_pc_descriptors_(),
+          bytecode_(Bytecode::Handle(zone)),
           code_(Code::Handle(zone)),
           pc_descriptor_(PcDescriptors::Handle(zone)) {}
 
@@ -257,6 +323,14 @@ void ProgramVisitor::DedupPcDescriptors() {
     }
 
     void Visit(const Function& function) {
+      bytecode_ = function.bytecode();
+      if (!bytecode_.IsNull() && !bytecode_.InVMIsolateHeap()) {
+        pc_descriptor_ = bytecode_.pc_descriptors();
+        if (!pc_descriptor_.IsNull()) {
+          pc_descriptor_ = DedupPcDescriptor(pc_descriptor_);
+          bytecode_.set_pc_descriptors(pc_descriptor_);
+        }
+      }
       if (!function.HasCode()) {
         return;
       }
@@ -281,6 +355,7 @@ void ProgramVisitor::DedupPcDescriptors() {
    private:
     Zone* zone_;
     PcDescriptorsSet canonical_pc_descriptors_;
+    Bytecode& bytecode_;
     Code& code_;
     PcDescriptors& pc_descriptor_;
   };
@@ -320,7 +395,6 @@ class TypedDataKeyValueTrait {
 
 typedef DirectChainedHashMap<TypedDataKeyValueTrait> TypedDataSet;
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
 void ProgramVisitor::DedupDeoptEntries() {
   class DedupDeoptEntriesVisitor : public FunctionVisitor {
    public:
@@ -377,54 +451,53 @@ void ProgramVisitor::DedupDeoptEntries() {
   DedupDeoptEntriesVisitor visitor(Thread::Current()->zone());
   ProgramVisitor::VisitFunctions(&visitor);
 }
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
 #if defined(DART_PRECOMPILER)
-void ProgramVisitor::DedupCatchEntryStateMaps() {
+void ProgramVisitor::DedupCatchEntryMovesMaps() {
   if (!FLAG_precompiled_mode) {
     return;
   }
-  class DedupCatchEntryStateMapsVisitor : public FunctionVisitor {
+  class DedupCatchEntryMovesMapsVisitor : public FunctionVisitor {
    public:
-    explicit DedupCatchEntryStateMapsVisitor(Zone* zone)
+    explicit DedupCatchEntryMovesMapsVisitor(Zone* zone)
         : zone_(zone),
-          canonical_catch_entry_state_maps_(),
+          canonical_catch_entry_moves_maps_(),
           code_(Code::Handle(zone)),
-          catch_entry_state_maps_(TypedData::Handle(zone)) {}
+          catch_entry_moves_maps_(TypedData::Handle(zone)) {}
 
     void Visit(const Function& function) {
       if (!function.HasCode()) {
         return;
       }
       code_ = function.CurrentCode();
-      catch_entry_state_maps_ = code_.catch_entry_state_maps();
-      catch_entry_state_maps_ =
-          DedupCatchEntryStateMaps(catch_entry_state_maps_);
-      code_.set_catch_entry_state_maps(catch_entry_state_maps_);
+      catch_entry_moves_maps_ = code_.catch_entry_moves_maps();
+      catch_entry_moves_maps_ =
+          DedupCatchEntryMovesMaps(catch_entry_moves_maps_);
+      code_.set_catch_entry_moves_maps(catch_entry_moves_maps_);
     }
 
-    RawTypedData* DedupCatchEntryStateMaps(
-        const TypedData& catch_entry_state_maps) {
-      const TypedData* canonical_catch_entry_state_maps =
-          canonical_catch_entry_state_maps_.LookupValue(
-              &catch_entry_state_maps);
-      if (canonical_catch_entry_state_maps == NULL) {
-        canonical_catch_entry_state_maps_.Insert(
-            &TypedData::ZoneHandle(zone_, catch_entry_state_maps.raw()));
-        return catch_entry_state_maps.raw();
+    RawTypedData* DedupCatchEntryMovesMaps(
+        const TypedData& catch_entry_moves_maps) {
+      const TypedData* canonical_catch_entry_moves_maps =
+          canonical_catch_entry_moves_maps_.LookupValue(
+              &catch_entry_moves_maps);
+      if (canonical_catch_entry_moves_maps == NULL) {
+        canonical_catch_entry_moves_maps_.Insert(
+            &TypedData::ZoneHandle(zone_, catch_entry_moves_maps.raw()));
+        return catch_entry_moves_maps.raw();
       } else {
-        return canonical_catch_entry_state_maps->raw();
+        return canonical_catch_entry_moves_maps->raw();
       }
     }
 
    private:
     Zone* zone_;
-    TypedDataSet canonical_catch_entry_state_maps_;
+    TypedDataSet canonical_catch_entry_moves_maps_;
     Code& code_;
-    TypedData& catch_entry_state_maps_;
+    TypedData& catch_entry_moves_maps_;
   };
 
-  DedupCatchEntryStateMapsVisitor visitor(Thread::Current()->zone());
+  DedupCatchEntryMovesMapsVisitor visitor(Thread::Current()->zone());
   ProgramVisitor::VisitFunctions(&visitor);
 }
 #endif  // !defined(DART_PRECOMPILER)
@@ -562,13 +635,6 @@ void ProgramVisitor::DedupLists() {
           list_ = DedupList(list_);
           code_.set_deopt_info_array(list_);
         }
-#ifndef PRODUCT
-        list_ = code_.await_token_positions();
-        if (!list_.IsNull()) {
-          list_ = DedupList(list_);
-          code_.set_await_token_positions(list_);
-        }
-#endif  // !PRODUCT
         list_ = code_.static_calls_target_table();
         if (!list_.IsNull()) {
           list_ = DedupList(list_);
@@ -584,7 +650,8 @@ void ProgramVisitor::DedupLists() {
         if (FLAG_precompiled_mode) {
           if (!function.IsSignatureFunction() &&
               !function.IsClosureFunction() &&
-              (function.name() != Symbols::Call().raw()) && !list_.InVMHeap()) {
+              (function.name() != Symbols::Call().raw()) &&
+              !list_.InVMIsolateHeap()) {
             // Parameter types not needed for function type tests.
             for (intptr_t i = 0; i < list_.Length(); i++) {
               list_.SetAt(i, Object::dynamic_type());
@@ -599,7 +666,8 @@ void ProgramVisitor::DedupLists() {
       if (!list_.IsNull()) {
         // Preserve parameter names in case of recompilation for the JIT.
         if (FLAG_precompiled_mode) {
-          if (!function.HasOptionalNamedParameters() && !list_.InVMHeap()) {
+          if (!function.HasOptionalNamedParameters() &&
+              !list_.InVMIsolateHeap()) {
             // Parameter names not needed for resolution.
             for (intptr_t i = 0; i < list_.Length(); i++) {
               list_.SetAt(i, Symbols::OptimizedOut());
@@ -612,7 +680,7 @@ void ProgramVisitor::DedupLists() {
     }
 
     RawArray* DedupList(const Array& list) {
-      if (list.InVMHeap()) {
+      if (list.InVMIsolateHeap()) {
         // Avoid using read-only VM objects for de-duplication.
         return list.raw();
       }
@@ -636,6 +704,12 @@ void ProgramVisitor::DedupLists() {
   ProgramVisitor::VisitFunctions(&visitor);
 }
 
+// Traits for comparing two [Instructions] objects for equality, which is
+// implemented as bit-wise equality.
+//
+// This considers two instruction objects to be equal even if they have
+// different static call targets.  Since the static call targets are called via
+// the object pool this is ok.
 class InstructionsKeyValueTrait {
  public:
   // Typedefs needed for the DirectChainedHashMap template.
@@ -655,6 +729,52 @@ class InstructionsKeyValueTrait {
 };
 
 typedef DirectChainedHashMap<InstructionsKeyValueTrait> InstructionsSet;
+
+// Traits for comparing two [Code] objects for equality.
+//
+// It considers two [Code] objects to be equal if
+//
+//   * their [RawInstruction]s are bit-wise equal
+//   * their [RawPcDescriptor]s are the same
+//   * their [RawStackMaps]s are the same
+//   * their static call targets are the same
+#if defined(DART_PRECOMPILER)
+class CodeKeyValueTrait {
+ public:
+  // Typedefs needed for the DirectChainedHashMap template.
+  typedef const Code* Key;
+  typedef const Code* Value;
+  typedef const Code* Pair;
+
+  static Key KeyOf(Pair kv) { return kv; }
+
+  static Value ValueOf(Pair kv) { return kv; }
+
+  static inline intptr_t Hashcode(Key key) { return key->Size(); }
+
+  static inline bool IsKeyEqual(Pair pair, Key key) {
+    if (pair->raw() == key->raw()) return true;
+
+    // Notice we assume that these entries have already been de-duped, so we
+    // can use pointer equality.
+    if (pair->static_calls_target_table() != key->static_calls_target_table()) {
+      return false;
+    }
+    if (pair->pc_descriptors() == key->pc_descriptors()) {
+      return false;
+    }
+    if (pair->stackmaps() == key->stackmaps()) {
+      return false;
+    }
+    if (pair->catch_entry_moves_maps() == key->catch_entry_moves_maps()) {
+      return false;
+    }
+    return Instructions::Equals(pair->instructions(), key->instructions());
+  }
+};
+
+typedef DirectChainedHashMap<CodeKeyValueTrait> CodeSet;
+#endif  // defined(DART_PRECOMPILER)
 
 void ProgramVisitor::DedupInstructions() {
   class DedupInstructionsVisitor : public FunctionVisitor,
@@ -712,27 +832,86 @@ void ProgramVisitor::DedupInstructions() {
   ProgramVisitor::VisitFunctions(&visitor);
 }
 
+void ProgramVisitor::DedupInstructionsWithSameMetadata() {
+#if defined(DART_PRECOMPILER)
+  class DedupInstructionsWithSameMetadataVisitor : public FunctionVisitor,
+                                                   public ObjectVisitor {
+   public:
+    explicit DedupInstructionsWithSameMetadataVisitor(Zone* zone)
+        : zone_(zone),
+          canonical_set_(),
+          code_(Code::Handle(zone)),
+          owner_(Object::Handle(zone)),
+          instructions_(Instructions::Handle(zone)) {}
+
+    void VisitObject(RawObject* obj) {
+      if (obj->IsCode()) {
+        canonical_set_.Insert(&Code::ZoneHandle(zone_, Code::RawCast(obj)));
+      }
+    }
+
+    void Visit(const Function& function) {
+      if (!function.HasCode()) {
+        return;
+      }
+      code_ = function.CurrentCode();
+      instructions_ = DedupOneInstructions(code_);
+      code_.SetActiveInstructions(instructions_);
+      code_.set_instructions(instructions_);
+      function.SetInstructions(code_);  // Update cached entry point.
+    }
+
+    RawInstructions* DedupOneInstructions(const Code& code) {
+      const Code* canonical = canonical_set_.LookupValue(&code);
+      if (canonical == NULL) {
+        canonical_set_.Insert(&Code::ZoneHandle(zone_, code.raw()));
+        return code.instructions();
+      } else {
+        owner_ = code.owner();
+        return canonical->instructions();
+      }
+    }
+
+   private:
+    Zone* zone_;
+    CodeSet canonical_set_;
+    Code& code_;
+    Object& owner_;
+    Instructions& instructions_;
+  };
+
+  DedupInstructionsWithSameMetadataVisitor visitor(Thread::Current()->zone());
+  ProgramVisitor::VisitFunctions(&visitor);
+#endif  // defined(DART_PRECOMPILER)
+}
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+
 void ProgramVisitor::Dedup() {
+#if !defined(DART_PRECOMPILED_RUNTIME)
   Thread* thread = Thread::Current();
   StackZone stack_zone(thread);
   HANDLESCOPE(thread);
 
-  // TODO(rmacnak): Bind static calls whose target has been compiled. Forward
-  // references to disabled code.
+  BindStaticCalls();
   ShareMegamorphicBuckets();
   DedupStackMaps();
   DedupPcDescriptors();
   NOT_IN_PRECOMPILED(DedupDeoptEntries());
 #if defined(DART_PRECOMPILER)
-  DedupCatchEntryStateMaps();
+  DedupCatchEntryMovesMaps();
 #endif
   DedupCodeSourceMaps();
   DedupLists();
 
 #if defined(PRODUCT)
   // Reduces binary size but obfuscates profiler results.
-  DedupInstructions();
+  if (FLAG_precompiled_mode && FLAG_use_bare_instructions) {
+    DedupInstructionsWithSameMetadata();
+  } else {
+    DedupInstructions();
+  }
 #endif
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 }
 
 }  // namespace dart

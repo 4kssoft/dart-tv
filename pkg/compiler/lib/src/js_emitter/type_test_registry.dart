@@ -8,12 +8,11 @@ import '../common.dart';
 import '../common_elements.dart';
 import '../elements/entities.dart';
 import '../js_backend/runtime_types.dart'
-    show
-        RuntimeTypesChecks,
-        RuntimeTypesChecksBuilder,
-        RuntimeTypesSubstitutions;
+    show RuntimeTypesChecks, RuntimeTypesChecksBuilder;
+import '../js_backend/runtime_types_codegen.dart'
+    show RuntimeTypesSubstitutions;
 import '../options.dart';
-import '../universe/world_builder.dart';
+import '../universe/codegen_world_builder.dart';
 
 class TypeTestRegistry {
   final ElementEnvironment _elementEnvironment;
@@ -23,12 +22,10 @@ class TypeTestRegistry {
   Set<ClassEntity> _rtiNeededClasses;
 
   final CompilerOptions _options;
-  final CodegenWorldBuilder _codegenWorldBuilder;
 
   RuntimeTypesChecks _rtiChecks;
 
-  TypeTestRegistry(
-      this._options, this._codegenWorldBuilder, this._elementEnvironment);
+  TypeTestRegistry(this._options, this._elementEnvironment);
 
   RuntimeTypesChecks get rtiChecks {
     assert(
@@ -70,8 +67,8 @@ class TypeTestRegistry {
     addClassesWithSuperclasses(rtiChecks.requiredClasses);
   }
 
-  void computeRequiredTypeChecks(RuntimeTypesChecksBuilder rtiChecksBuilder) {
-    _rtiChecks =
-        rtiChecksBuilder.computeRequiredChecks(_codegenWorldBuilder, _options);
+  void computeRequiredTypeChecks(
+      RuntimeTypesChecksBuilder rtiChecksBuilder, CodegenWorld codegenWorld) {
+    _rtiChecks = rtiChecksBuilder.computeRequiredChecks(codegenWorld, _options);
   }
 }

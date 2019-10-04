@@ -9,7 +9,7 @@ const int _blockSize = 64 * 1024;
 
 class _FileStream extends Stream<List<int>> {
   // Stream controller.
-  StreamController<List<int>> _controller;
+  StreamController<Uint8List> _controller;
 
   // Information about the underlying file.
   String _path;
@@ -28,12 +28,12 @@ class _FileStream extends Stream<List<int>> {
   bool _atEnd = false;
 
   _FileStream(this._path, this._position, this._end) {
-    if (_position == null) _position = 0;
+    _position ??= 0;
   }
 
   _FileStream.forStdin() : _position = 0;
 
-  StreamSubscription<List<int>> listen(void onData(List<int> event),
+  StreamSubscription<Uint8List> listen(void onData(Uint8List event),
       {Function onError, void onDone(), bool cancelOnError}) {
     _setupController();
     return _controller.stream.listen(onData,
@@ -41,7 +41,7 @@ class _FileStream extends Stream<List<int>> {
   }
 
   void _setupController() {
-    _controller = new StreamController<List<int>>(
+    _controller = new StreamController<Uint8List>(
         sync: true,
         onListen: _start,
         onResume: _readBlock,
@@ -207,17 +207,13 @@ class _File extends FileSystemEntity implements File {
   Uint8List _rawPath;
 
   _File(String path) {
-    if (path is! String) {
-      throw new ArgumentError('${Error.safeToString(path)} is not a String');
-    }
+    ArgumentError.checkNotNull(path, 'path');
     _path = path;
     _rawPath = FileSystemEntity._toUtf8Array(path);
   }
 
   _File.fromRawPath(Uint8List rawPath) {
-    if (rawPath == null) {
-      throw new ArgumentError('rawPath cannot be null');
-    }
+    ArgumentError.checkNotNull(rawPath, 'rawPath');
     _rawPath = FileSystemEntity._toNullTerminatedUtf8Array(rawPath);
     _path = FileSystemEntity._toStringFromUtf8Array(rawPath);
   }
@@ -517,10 +513,10 @@ class _File extends FileSystemEntity implements File {
     return new IOSink(consumer, encoding: encoding);
   }
 
-  Future<List<int>> readAsBytes() {
-    Future<List<int>> readDataChunked(RandomAccessFile file) {
+  Future<Uint8List> readAsBytes() {
+    Future<Uint8List> readDataChunked(RandomAccessFile file) {
       var builder = new BytesBuilder(copy: false);
-      var completer = new Completer<List<int>>();
+      var completer = new Completer<Uint8List>();
       void read() {
         file.read(_blockSize).then((data) {
           if (data.length > 0) {
@@ -547,10 +543,10 @@ class _File extends FileSystemEntity implements File {
     });
   }
 
-  List<int> readAsBytesSync() {
+  Uint8List readAsBytesSync() {
     var opened = openSync();
     try {
-      List<int> data;
+      Uint8List data;
       var length = opened.lengthSync();
       if (length == 0) {
         // May be character device, try to read it in chunks.
@@ -745,25 +741,21 @@ class _RandomAccessFile implements RandomAccessFile {
     return result;
   }
 
-  Future<List<int>> read(int bytes) {
-    if (bytes is! int) {
-      throw new ArgumentError(bytes);
-    }
+  Future<Uint8List> read(int bytes) {
+    ArgumentError.checkNotNull(bytes, 'bytes');
     return _dispatch(_IOService.fileRead, [null, bytes]).then((response) {
       if (_isErrorResponse(response)) {
         throw _exceptionFromResponse(response, "read failed", path);
       }
       _resourceInfo.addRead(response[1].length);
-      List<int> result = response[1];
+      Uint8List result = response[1];
       return result;
     });
   }
 
-  List<int> readSync(int bytes) {
+  Uint8List readSync(int bytes) {
     _checkAvailable();
-    if (bytes is! int) {
-      throw new ArgumentError(bytes);
-    }
+    ArgumentError.checkNotNull(bytes, 'bytes');
     var result = _ops.read(bytes);
     if (result is OSError) {
       throw new FileSystemException("readSync failed", path, result);
@@ -815,9 +807,7 @@ class _RandomAccessFile implements RandomAccessFile {
   }
 
   Future<RandomAccessFile> writeByte(int value) {
-    if (value is! int) {
-      throw new ArgumentError(value);
-    }
+    ArgumentError.checkNotNull(value, 'value');
     return _dispatch(_IOService.fileWriteByte, [null, value]).then((response) {
       if (_isErrorResponse(response)) {
         throw _exceptionFromResponse(response, "writeByte failed", path);
@@ -829,9 +819,7 @@ class _RandomAccessFile implements RandomAccessFile {
 
   int writeByteSync(int value) {
     _checkAvailable();
-    if (value is! int) {
-      throw new ArgumentError(value);
-    }
+    ArgumentError.checkNotNull(value, 'value');
     var result = _ops.writeByte(value);
     if (result is OSError) {
       throw new FileSystemException("writeByte failed", path, result);
@@ -895,17 +883,13 @@ class _RandomAccessFile implements RandomAccessFile {
 
   Future<RandomAccessFile> writeString(String string,
       {Encoding encoding: utf8}) {
-    if (encoding is! Encoding) {
-      throw new ArgumentError(encoding);
-    }
+    ArgumentError.checkNotNull(encoding, 'encoding');
     var data = encoding.encode(string);
     return writeFrom(data, 0, data.length);
   }
 
   void writeStringSync(String string, {Encoding encoding: utf8}) {
-    if (encoding is! Encoding) {
-      throw new ArgumentError(encoding);
-    }
+    ArgumentError.checkNotNull(encoding, 'encoding');
     var data = encoding.encode(string);
     writeFromSync(data, 0, data.length);
   }

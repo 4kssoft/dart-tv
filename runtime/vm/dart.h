@@ -24,23 +24,32 @@ class Program;
 
 class Dart : public AllStatic {
  public:
-  static char* InitOnce(const uint8_t* vm_snapshot_data,
-                        const uint8_t* vm_snapshot_instructions,
-                        Dart_IsolateCreateCallback create,
-                        Dart_IsolateShutdownCallback shutdown,
-                        Dart_IsolateCleanupCallback cleanup,
-                        Dart_ThreadExitCallback thread_exit,
-                        Dart_FileOpenCallback file_open,
-                        Dart_FileReadCallback file_read,
-                        Dart_FileWriteCallback file_write,
-                        Dart_FileCloseCallback file_close,
-                        Dart_EntropySource entropy_source,
-                        Dart_GetVMServiceAssetsArchive get_service_assets,
-                        bool start_kernel_isolate);
-  static const char* Cleanup();
+  // Returns null if initialization succeeds, otherwise returns an error message
+  // (caller owns error message and has to free it).
+  static char* Init(const uint8_t* vm_snapshot_data,
+                    const uint8_t* vm_snapshot_instructions,
+                    Dart_IsolateGroupCreateCallback create_group,
+                    Dart_InitializeIsolateCallback initialize_isolate,
+                    Dart_IsolateShutdownCallback shutdown,
+                    Dart_IsolateCleanupCallback cleanup,
+                    Dart_IsolateGroupCleanupCallback cleanup_group,
+                    Dart_ThreadExitCallback thread_exit,
+                    Dart_FileOpenCallback file_open,
+                    Dart_FileReadCallback file_read,
+                    Dart_FileWriteCallback file_write,
+                    Dart_FileCloseCallback file_close,
+                    Dart_EntropySource entropy_source,
+                    Dart_GetVMServiceAssetsArchive get_service_assets,
+                    bool start_kernel_isolate,
+                    Dart_CodeObserver* observer);
+
+  // Returns null if cleanup succeeds, otherwise returns an error message
+  // (caller owns error message and has to free it).
+  static char* Cleanup();
 
   static Isolate* CreateIsolate(const char* name_prefix,
-                                const Dart_IsolateFlags& api_flags);
+                                const Dart_IsolateFlags& api_flags,
+                                IsolateGroup* isolate_group);
 
   // Initialize an isolate, either from a snapshot, from a Kernel binary, or
   // from SDK library sources.  If the snapshot_buffer is non-NULL,
@@ -120,6 +129,7 @@ class Dart : public AllStatic {
  private:
   static void WaitForIsolateShutdown();
   static void WaitForApplicationIsolateShutdown();
+  static bool HasApplicationIsolateLocked();
 
   static Isolate* vm_isolate_;
   static int64_t start_time_micros_;

@@ -2,21 +2,18 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-/// ignore: IMPORT_INTERNAL_LIBRARY
-import 'dart:_js_helper';
-
-/*element: main:[]*/
+/*member: main:[]*/
 main() {
   passMapToNull();
 }
 
-/*element: _passMapToNull:[passMapToNull]*/
+/*member: _passMapToNull:[passMapToNull]*/
 _passMapToNull(f) {
   f({});
 }
 
-/*element: passMapToNull:[]*/
-@NoInline()
+/*member: passMapToNull:[]*/
+@pragma('dart2js:noInline')
 passMapToNull() {
   _passMapToNull(null);
 }

@@ -21,7 +21,6 @@ $!MEMBERS
    */
   @SupportedBrowser(SupportedBrowser.CHROME)
   @SupportedBrowser(SupportedBrowser.FIREFOX)
-  @Experimental()
   gl.RenderingContext getContext3d({alpha: true, depth: true, stencil: false,
     antialias: true, premultipliedAlpha: true, preserveDrawingBuffer: false}) {
 
@@ -83,4 +82,15 @@ $!MEMBERS
    */
   String toDataUrl([String type = 'image/png', num quality]) =>
       _toDataUrl(type, quality);
+
+  @JSName('toBlob')
+  void _toBlob(BlobCallback callback, String type, [Object arguments]) native;
+
+  Future<Blob> toBlob(String type, [Object arguments]) {
+    var completer = new Completer<Blob>();
+      _toBlob((value) {
+        completer.complete(value);
+      }, type, arguments);
+    return completer.future;
+  }
 }

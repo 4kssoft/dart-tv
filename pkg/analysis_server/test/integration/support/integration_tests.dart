@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -16,17 +16,17 @@ import 'package:test/test.dart';
 import 'integration_test_methods.dart';
 import 'protocol_matchers.dart';
 
-const Matcher isBool = const isInstanceOf<bool>();
+const Matcher isBool = const TypeMatcher<bool>();
 
-const Matcher isInt = const isInstanceOf<int>();
+const Matcher isDouble = const TypeMatcher<double>();
+
+const Matcher isInt = const TypeMatcher<int>();
 
 const Matcher isNotification = const MatchesJsonObject(
     'notification', const {'event': isString},
     optionalFields: const {'params': isMap});
 
-const Matcher isObject = isMap;
-
-const Matcher isString = const isInstanceOf<String>();
+const Matcher isString = const TypeMatcher<String>();
 
 final Matcher isResponse = new MatchesJsonObject('response', {'id': isString},
     optionalFields: {'result': anything, 'error': isRequestError});
@@ -41,8 +41,8 @@ Matcher isOneOf(List<Matcher> choiceMatchers) => new _OneOf(choiceMatchers);
 /**
  * Assert that [actual] matches [matcher].
  */
-void outOfTestExpect(actual, matcher,
-    {String reason, skip, bool verbose: false}) {
+void outOfTestExpect(actual, Matcher matcher,
+    {String reason, skip, bool verbose = false}) {
   var matchState = {};
   try {
     if (matcher.matches(actual, matchState)) return;
@@ -159,12 +159,6 @@ abstract class AbstractAnalysisServerIntegrationTest
   }
 
   /**
-   * Whether to run integration tests with the --use-cfe flag.
-   */
-  // TODO(devoncarew): Remove this when --use-cfe goes away.
-  bool get useCFE => false;
-
-  /**
    * Print out any messages exchanged with the server.  If some messages have
    * already been exchanged with the server, they are printed out immediately.
    */
@@ -250,7 +244,7 @@ abstract class AbstractAnalysisServerIntegrationTest
    * then also enable [SERVER_NOTIFICATION_STATUS] notifications so that
    * [analysisFinished] can be used.
    */
-  Future standardAnalysisSetup({bool subscribeStatus: true}) {
+  Future standardAnalysisSetup({bool subscribeStatus = true}) {
     List<Future> futures = <Future>[];
     if (subscribeStatus) {
       futures.add(sendServerSetSubscriptions([ServerService.STATUS]));
@@ -265,12 +259,9 @@ abstract class AbstractAnalysisServerIntegrationTest
   Future startServer({
     int diagnosticPort,
     int servicesPort,
-    bool cfe: false,
   }) {
     return server.start(
-        diagnosticPort: diagnosticPort,
-        servicesPort: servicesPort,
-        useCFE: cfe || useCFE);
+        diagnosticPort: diagnosticPort, servicesPort: servicesPort);
   }
 
   /**
@@ -413,7 +404,7 @@ class MatchesJsonObject extends _RecursiveMatcher {
     }
     if (requiredFields != null) {
       requiredFields.forEach((String key, Matcher valueMatcher) {
-        if (!item.containsKey(key)) {
+        if (!(item as Map).containsKey(key)) {
           mismatches.add((Description mismatchDescription) =>
               mismatchDescription
                   .add('is missing field ')
@@ -571,14 +562,24 @@ class Server {
    */
   void listenToOutput(NotificationProcessor notificationProcessor) {
     _process.stdout
-        .transform((new Utf8Codec()).decoder)
+        .transform(utf8.decoder)
         .transform(new LineSplitter())
         .listen((String line) {
       lastCommunicationTime = currentElapseTime;
       String trimmedLine = line.trim();
-      if (trimmedLine.startsWith('Observatory listening on ')) {
+
+      // Guard against lines like:
+      //   {"event":"server.connected","params":{...}}Observatory listening on ...
+      final String observatoryMessage = 'Observatory listening on ';
+      if (trimmedLine.contains(observatoryMessage)) {
+        trimmedLine = trimmedLine
+            .substring(0, trimmedLine.indexOf(observatoryMessage))
+            .trim();
+      }
+      if (trimmedLine.isEmpty) {
         return;
       }
+
       _recordStdio('<== $trimmedLine');
       var message;
       try {
@@ -664,11 +665,10 @@ class Server {
   Future start({
     int diagnosticPort,
     String instrumentationLogFile,
-    bool profileServer: false,
+    bool profileServer = false,
     String sdkPath,
     int servicesPort,
-    bool useCFE: false,
-    bool useAnalysisHighlight2: false,
+    bool useAnalysisHighlight2 = false,
   }) async {
     if (_process != null) {
       throw new Exception('Process already started');
@@ -711,12 +711,10 @@ class Server {
     } else if (servicesPort != null) {
       arguments.add('--enable-vm-service=$servicesPort');
     }
-    if (Platform.packageRoot != null) {
-      arguments.add('--package-root=${Platform.packageRoot}');
-    }
     if (Platform.packageConfig != null) {
       arguments.add('--packages=${Platform.packageConfig}');
     }
+    arguments.add('--disable-service-auth-codes');
     //
     // Add the server executable.
     //
@@ -738,12 +736,6 @@ class Server {
     if (useAnalysisHighlight2) {
       arguments.add('--useAnalysisHighlight2');
     }
-    if (useCFE) {
-      arguments.add('--use-cfe');
-    }
-    // TODO(devoncarew): We could experiment with instead launching the analysis
-    // server in a separate isolate. This would make it easier to debug the
-    // integration tests, and would likely speed up the tests as well.
     _process = await Process.start(dartBinary, arguments);
     _process.exitCode.then((int code) {
       if (code != 0) {
@@ -755,7 +747,7 @@ class Server {
   /**
    * Deal with bad data received from the server.
    */
-  void _badDataFromServer(String details, {bool silent: false}) {
+  void _badDataFromServer(String details, {bool silent = false}) {
     if (!silent) {
       _recordStdio('BAD DATA FROM SERVER: $details');
     }
@@ -1019,5 +1011,6 @@ abstract class _RecursiveMatcher extends Matcher {
   MismatchDescriber simpleDescription(String description) =>
       (Description mismatchDescription) {
         mismatchDescription.add(description);
+        return mismatchDescription;
       };
 }

@@ -4,7 +4,7 @@
 
 import 'dart:async';
 
-import 'package:unittest/unittest.dart';
+import 'package:async_helper/async_minitest.dart';
 
 main() {
   const ms5 = const Duration(milliseconds: 5);

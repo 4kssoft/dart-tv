@@ -4,6 +4,8 @@
 
 library fasta.library_builder;
 
+import 'package:kernel/ast.dart' show Library, Nullability;
+
 import '../combinator.dart' show Combinator;
 
 import '../problems.dart' show internalProblem, unsupported;
@@ -14,24 +16,31 @@ import '../loader.dart' show Loader;
 
 import '../messages.dart'
     show
+        FormattedMessage,
         LocatedMessage,
         Message,
         templateInternalProblemConstructorNotFound,
         templateInternalProblemNotFoundIn,
         templateInternalProblemPrivateConstructorAccess;
 
+import '../severity.dart' show Severity;
+
 import 'builder.dart'
     show
         ClassBuilder,
-        Declaration,
+        Builder,
+        FieldBuilder,
         ModifierBuilder,
+        NameIterator,
+        NullabilityBuilder,
         PrefixBuilder,
         Scope,
         ScopeBuilder,
         TypeBuilder;
 
-abstract class LibraryBuilder<T extends TypeBuilder, R>
-    extends ModifierBuilder {
+import 'declaration.dart';
+
+abstract class LibraryBuilder extends ModifierBuilder {
   final Scope scope;
 
   final Scope exportScope;
@@ -51,8 +60,35 @@ abstract class LibraryBuilder<T extends TypeBuilder, R>
         exportScopeBuilder = new ScopeBuilder(exportScope),
         super(null, -1, fileUri);
 
+  bool get isSynthetic => false;
+
+  // Deliberately unrelated return type to statically detect more accidental
+  // use until Builder.target is fully retired.
+  UnrelatedTarget get target => unsupported(
+      "LibraryBuilder.target is deprecated. "
+      "Use LibraryBuilder.library instead.",
+      charOffset,
+      fileUri);
+
+  /// Set the langauge version to a specific non-null major and minor version.
+  ///
+  /// If the language version has previously been explicitly set set (i.e. with
+  /// [explicit] set to true), any subsequent call (explicit or not) should be
+  /// ignored.
+  /// Multiple calls with [explicit] set to false should be allowed though.
+  ///
+  /// The main idea is that the .packages file specifies a default language
+  /// version, but that the library can have source code that specifies another
+  /// one which should be supported, but specifying several in code should not
+  /// change anything.
+  ///
+  /// [offset] and [length] refers to the offset and length of the source code
+  /// specifying the language version.
+  void setLanguageVersion(int major, int minor,
+      {int offset: 0, int length, bool explicit});
+
   @override
-  Declaration get parent => null;
+  Builder get parent => null;
 
   bool get isPart => false;
 
@@ -64,50 +100,61 @@ abstract class LibraryBuilder<T extends TypeBuilder, R>
   @override
   int get modifiers => 0;
 
-  @override
-  R get target;
+  /// Returns the [Library] built by this builder.
+  Library get library;
 
-  bool get disableTypeInference => true;
-
+  /// Returns the import uri for the library.
+  ///
+  /// This is the canonical uri for the library, for instance 'dart:core'.
   Uri get uri;
 
-  Declaration addBuilder(String name, Declaration declaration, int charOffset);
+  Iterator<Builder> get iterator {
+    return new LibraryLocalDeclarationIterator(this);
+  }
+
+  NameIterator get nameIterator {
+    return new LibraryLocalDeclarationNameIterator(this);
+  }
+
+  Builder addBuilder(String name, Builder declaration, int charOffset);
 
   void addExporter(
       LibraryBuilder exporter, List<Combinator> combinators, int charOffset) {
     exporters.add(new Export(exporter, this, combinators, charOffset));
   }
 
-  /// See `Loader.addCompileTimeError` for an explanation of the
-  /// arguments passed to this method.
+  /// Add a problem with a severity determined by the severity of the message.
   ///
   /// If [fileUri] is null, it defaults to `this.fileUri`.
-  void addCompileTimeError(
+  ///
+  /// See `Loader.addMessage` for an explanation of the
+  /// arguments passed to this method.
+  FormattedMessage addProblem(
       Message message, int charOffset, int length, Uri fileUri,
-      {bool wasHandled: false, List<LocatedMessage> context}) {
+      {bool wasHandled: false,
+      List<LocatedMessage> context,
+      Severity severity,
+      bool problemOnLibrary: false}) {
     fileUri ??= this.fileUri;
-    loader.addCompileTimeError(message, charOffset, length, fileUri,
-        wasHandled: wasHandled, context: context);
-  }
 
-  /// Add a problem with a severity determined by the severity of the message.
-  void addProblem(Message message, int charOffset, int length, Uri fileUri,
-      {List<LocatedMessage> context}) {
-    fileUri ??= this.fileUri;
-    loader.addProblem(message, charOffset, length, fileUri, context: context);
+    return loader.addProblem(message, charOffset, length, fileUri,
+        wasHandled: wasHandled,
+        context: context,
+        severity: severity,
+        problemOnLibrary: true);
   }
 
   /// Returns true if the export scope was modified.
-  bool addToExportScope(String name, Declaration member) {
+  bool addToExportScope(String name, Builder member, [int charOffset = -1]) {
     if (name.startsWith("_")) return false;
     if (member is PrefixBuilder) return false;
-    Map<String, Declaration> map =
+    Map<String, Builder> map =
         member.isSetter ? exportScope.setters : exportScope.local;
-    Declaration existing = map[name];
+    Builder existing = map[name];
     if (existing == member) return false;
     if (existing != null) {
-      Declaration result = computeAmbiguousDeclaration(
-          name, existing, member, -1,
+      Builder result = computeAmbiguousDeclaration(
+          name, existing, member, charOffset,
           isExport: true);
       map[name] = result;
       return result != existing;
@@ -117,14 +164,15 @@ abstract class LibraryBuilder<T extends TypeBuilder, R>
     return true;
   }
 
-  void addToScope(
-      String name, Declaration member, int charOffset, bool isImport);
+  void addToScope(String name, Builder member, int charOffset, bool isImport);
 
-  Declaration computeAmbiguousDeclaration(
-      String name, Declaration declaration, Declaration other, int charOffset,
+  Builder computeAmbiguousDeclaration(
+      String name, Builder declaration, Builder other, int charOffset,
       {bool isExport: false, bool isImport: false});
 
   int finishDeferredLoadTearoffs() => 0;
+
+  int finishForwarders() => 0;
 
   int finishNativeMethods() => 0;
 
@@ -142,7 +190,7 @@ abstract class LibraryBuilder<T extends TypeBuilder, R>
   /// If [constructorName] is null or the empty string, it's assumed to be an
   /// unnamed constructor. it's an error if [constructorName] starts with
   /// `"_"`, and [bypassLibraryPrivacy] is false.
-  Declaration getConstructor(String className,
+  Builder getConstructor(String className,
       {String constructorName, bool bypassLibraryPrivacy: false}) {
     constructorName ??= "";
     if (constructorName.startsWith("_") && !bypassLibraryPrivacy) {
@@ -152,12 +200,12 @@ abstract class LibraryBuilder<T extends TypeBuilder, R>
           -1,
           null);
     }
-    Declaration cls = (bypassLibraryPrivacy ? scope : exportScope)
+    Builder cls = (bypassLibraryPrivacy ? scope : exportScope)
         .lookup(className, -1, null);
     if (cls is ClassBuilder) {
       // TODO(ahe): This code is similar to code in `endNewExpression` in
       // `body_builder.dart`, try to share it.
-      Declaration constructor =
+      Builder constructor =
           cls.findConstructorOrFactory(constructorName, -1, null, this);
       if (constructor == null) {
         // Fall-through to internal error below.
@@ -171,7 +219,7 @@ abstract class LibraryBuilder<T extends TypeBuilder, R>
     }
     throw internalProblem(
         templateInternalProblemConstructorNotFound.withArguments(
-            "$className::$constructorName", uri),
+            "$className.$constructorName", uri),
         -1,
         null);
   }
@@ -187,27 +235,31 @@ abstract class LibraryBuilder<T extends TypeBuilder, R>
     return 0;
   }
 
-  void becomeCoreLibrary(dynamicType);
-
-  void forEach(void f(String name, Declaration declaration)) {
-    scope.forEach((String name, Declaration declaration) {
-      if (declaration.parent == this) {
-        f(name, declaration);
-      }
-    });
+  void becomeCoreLibrary() {
+    if (scope.local["dynamic"] == null) {
+      addSyntheticDeclarationOfDynamic();
+    }
   }
 
-  /// Don't use for scope lookup. Only use when an element is known to exist
-  /// (and not a setter).
-  Declaration operator [](String name) {
-    return scope.local[name] ??
-        internalProblem(
-            templateInternalProblemNotFoundIn.withArguments(name, "$fileUri"),
-            -1,
-            fileUri);
+  void addSyntheticDeclarationOfDynamic();
+
+  /// Lookups the member [name] declared in this library.
+  ///
+  /// If [required] is `true` and no member is found an internal problem is
+  /// reported.
+  Builder lookupLocalMember(String name, {bool required: false}) {
+    Builder builder = scope.local[name];
+    if (required && builder == null) {
+      internalProblem(
+          templateInternalProblemNotFoundIn.withArguments(
+              name, fullNameForErrors),
+          -1,
+          null);
+    }
+    return builder;
   }
 
-  Declaration lookup(String name, int charOffset, Uri fileUri) {
+  Builder lookup(String name, int charOffset, Uri fileUri) {
     return scope.lookup(name, charOffset, fileUri);
   }
 
@@ -215,5 +267,83 @@ abstract class LibraryBuilder<T extends TypeBuilder, R>
   void applyPatches() {
     if (!isPatch) return;
     unsupported("${runtimeType}.applyPatches", -1, fileUri);
+  }
+
+  void recordAccess(int charOffset, int length, Uri fileUri) {}
+
+  void buildOutlineExpressions() {}
+
+  List<FieldBuilder> takeImplicitlyTypedFields() => null;
+
+  // TODO(38287): Compute the predicate using the library version instead.
+  bool get isNonNullableByDefault => loader.target.enableNonNullable;
+
+  Nullability get nullable {
+    return isNonNullableByDefault ? Nullability.nullable : Nullability.legacy;
+  }
+
+  Nullability get nonNullable {
+    return isNonNullableByDefault
+        ? Nullability.nonNullable
+        : Nullability.legacy;
+  }
+
+  Nullability nullableIfTrue(bool isNullable) {
+    if (isNonNullableByDefault) {
+      return isNullable ? Nullability.nullable : Nullability.nonNullable;
+    }
+    return Nullability.legacy;
+  }
+
+  NullabilityBuilder get nullableBuilder {
+    return isNonNullableByDefault
+        ? const NullabilityBuilder.nullable()
+        : const NullabilityBuilder.omitted();
+  }
+
+  NullabilityBuilder get nonNullableBuilder {
+    return const NullabilityBuilder.omitted();
+  }
+
+  NullabilityBuilder nullableBuilderIfTrue(bool isNullable) {
+    return isNullable
+        ? const NullabilityBuilder.nullable()
+        : const NullabilityBuilder.omitted();
+  }
+}
+
+class LibraryLocalDeclarationIterator implements Iterator<Builder> {
+  final LibraryBuilder library;
+  final Iterator<Builder> iterator;
+
+  LibraryLocalDeclarationIterator(this.library)
+      : iterator = library.scope.iterator;
+
+  Builder get current => iterator.current;
+
+  bool moveNext() {
+    while (iterator.moveNext()) {
+      if (current.parent == library) return true;
+    }
+    return false;
+  }
+}
+
+class LibraryLocalDeclarationNameIterator implements NameIterator {
+  final LibraryBuilder library;
+  final NameIterator iterator;
+
+  LibraryLocalDeclarationNameIterator(this.library)
+      : iterator = library.scope.nameIterator;
+
+  Builder get current => iterator.current;
+
+  String get name => iterator.name;
+
+  bool moveNext() {
+    while (iterator.moveNext()) {
+      if (current.parent == library) return true;
+    }
+    return false;
   }
 }

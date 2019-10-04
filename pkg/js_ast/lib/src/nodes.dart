@@ -62,6 +62,8 @@ abstract class NodeVisitor<T> {
 
   T visitName(Name node);
 
+  T visitParentheses(Parentheses node);
+
   T visitArrayInitializer(ArrayInitializer node);
   T visitArrayHole(ArrayHole node);
   T visitObjectInitializer(ObjectInitializer node);
@@ -165,6 +167,8 @@ class BaseVisitor<T> implements NodeVisitor<T> {
 
   T visitName(Name node) => visitNode(node);
 
+  T visitParentheses(Parentheses node) => visitExpression(node);
+
   T visitArrayInitializer(ArrayInitializer node) => visitExpression(node);
   T visitArrayHole(ArrayHole node) => visitExpression(node);
   T visitObjectInitializer(ObjectInitializer node) => visitExpression(node);
@@ -251,6 +255,8 @@ abstract class NodeVisitor1<R, A> {
   R visitStringConcatenation(StringConcatenation node, A arg);
 
   R visitName(Name node, A arg);
+
+  R visitParentheses(Parentheses node, A arg);
 
   R visitArrayInitializer(ArrayInitializer node, A arg);
   R visitArrayHole(ArrayHole node, A arg);
@@ -365,6 +371,8 @@ class BaseVisitor1<R, A> implements NodeVisitor1<R, A> {
       visitLiteral(node, arg);
 
   R visitName(Name node, A arg) => visitNode(node, arg);
+
+  R visitParentheses(Parentheses node, A arg) => visitExpression(node, arg);
 
   R visitArrayInitializer(ArrayInitializer node, A arg) =>
       visitExpression(node, arg);
@@ -973,7 +981,7 @@ abstract class Declaration implements VariableReference {}
 /// In particular, there is no guarantee that implementations of [compareTo]
 /// will implement some form of lexicographic ordering like [String.compareTo].
 abstract class Name extends Literal
-    implements Declaration, Parameter, Comparable {
+    implements Declaration, Parameter, Comparable<Name> {
   T accept<T>(NodeVisitor<T> visitor) => visitor.visitName(this);
 
   R accept1<R, A>(NodeVisitor1<R, A> visitor, A arg) =>
@@ -1046,7 +1054,12 @@ class LiteralExpression extends Expression {
 class VariableDeclarationList extends Expression {
   final List<VariableInitialization> declarations;
 
-  VariableDeclarationList(this.declarations);
+  /// When pretty-printing a declaration list with multiple declarations over
+  /// several lines, the declarations are usually indented with respect to the
+  /// `var` keyword. Set [indentSplits] to `false` to suppress the indentation.
+  final bool indentSplits;
+
+  VariableDeclarationList(this.declarations, {this.indentSplits = true});
 
   T accept<T>(NodeVisitor<T> visitor) =>
       visitor.visitVariableDeclarationList(this);
@@ -1069,6 +1082,31 @@ class VariableDeclarationList extends Expression {
   VariableDeclarationList _clone() => new VariableDeclarationList(declarations);
 
   int get precedenceLevel => EXPRESSION;
+}
+
+/// Forced parenthesized expression. Pretty-printing will emit parentheses based
+/// on need, so this node is very rarely needed.
+class Parentheses extends Expression {
+  final Expression enclosed;
+
+  Parentheses(this.enclosed);
+
+  T accept<T>(NodeVisitor<T> visitor) => visitor.visitParentheses(this);
+
+  R accept1<R, A>(NodeVisitor1<R, A> visitor, A arg) =>
+      visitor.visitParentheses(this, arg);
+
+  void visitChildren<T>(NodeVisitor<T> visitor) {
+    enclosed.accept(visitor);
+  }
+
+  void visitChildren1<R, A>(NodeVisitor1<R, A> visitor, A arg) {
+    enclosed.accept1(visitor, arg);
+  }
+
+  Parentheses _clone() => new Parentheses(enclosed);
+
+  int get precedenceLevel => PRIMARY;
 }
 
 class Assignment extends Expression {
@@ -1410,7 +1448,7 @@ class Fun extends Expression {
   final Block body;
   final AsyncModifier asyncModifier;
 
-  Fun(this.params, this.body, {this.asyncModifier: const AsyncModifier.sync()});
+  Fun(this.params, this.body, {this.asyncModifier: AsyncModifier.sync});
 
   T accept<T>(NodeVisitor<T> visitor) => visitor.visitFun(this);
 
@@ -1433,27 +1471,26 @@ class Fun extends Expression {
 }
 
 class AsyncModifier {
+  final int index;
   final bool isAsync;
   final bool isYielding;
   final String description;
 
-  const AsyncModifier.sync()
-      : isAsync = false,
-        isYielding = false,
-        description = "sync";
-  const AsyncModifier.async()
-      : isAsync = true,
-        isYielding = false,
-        description = "async";
-  const AsyncModifier.asyncStar()
-      : isAsync = true,
-        isYielding = true,
-        description = "async*";
-  const AsyncModifier.syncStar()
-      : isAsync = false,
-        isYielding = true,
-        description = "sync*";
-  toString() => description;
+  const AsyncModifier(this.index, this.description,
+      {this.isAsync, this.isYielding});
+
+  static const AsyncModifier sync =
+      const AsyncModifier(0, "sync", isAsync: false, isYielding: false);
+  static const AsyncModifier async =
+      const AsyncModifier(1, "async", isAsync: true, isYielding: false);
+  static const AsyncModifier asyncStar =
+      const AsyncModifier(2, "async*", isAsync: true, isYielding: true);
+  static const AsyncModifier syncStar =
+      const AsyncModifier(3, "sync*", isAsync: false, isYielding: true);
+
+  static const List<AsyncModifier> values = [sync, async, asyncStar, syncStar];
+
+  String toString() => description;
 }
 
 class PropertyAccess extends Expression {
@@ -1640,7 +1677,7 @@ class LiteralNumber extends Literal {
 class ArrayInitializer extends Expression {
   final List<Expression> elements;
 
-  ArrayInitializer(this.elements);
+  ArrayInitializer(this.elements) : assert(!elements.contains(null));
 
   T accept<T>(NodeVisitor<T> visitor) => visitor.visitArrayInitializer(this);
 
@@ -1712,10 +1749,11 @@ class ObjectInitializer extends Expression {
 }
 
 class Property extends Node {
-  final Literal name;
+  final Expression name;
   final Expression value;
 
-  Property(this.name, this.value);
+  Property(this.name, this.value)
+      : assert(name is Literal || name is DeferredExpression);
 
   T accept<T>(NodeVisitor<T> visitor) => visitor.visitProperty(this);
 
@@ -1948,4 +1986,10 @@ class Comment extends Statement {
   void visitChildren<T>(NodeVisitor<T> visitor) {}
 
   void visitChildren1<R, A>(NodeVisitor1<R, A> visitor, A arg) {}
+}
+
+/// Returns the value of [node] if it is a [DeferredExpression]. Otherwise
+/// returns the [node] itself.
+Node undefer(Node node) {
+  return node is DeferredExpression ? undefer(node.value) : node;
 }

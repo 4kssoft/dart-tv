@@ -4,16 +4,21 @@
 
 part of masks;
 
-/// A [ContainerTypeMask] is a [TypeMask] for a specific allocation
-/// site of a container (currently only List) that will get specialized
-/// once the [TypeGraphInferrer] phase finds an element type for it.
-class ContainerTypeMask<T> extends AllocationTypeMask<T> {
+/// A [TypeMask] for a specific allocation site of a container (currently only
+/// List) that will get specialized once the [TypeGraphInferrer] phase finds an
+/// element type for it.
+class ContainerTypeMask extends AllocationTypeMask {
+  /// Tag used for identifying serialized [ContainerTypeMask] objects in a
+  /// debugging data stream.
+  static const String tag = 'container-type-mask';
+
+  @override
   final TypeMask forwardTo;
 
-  // The [Node] where this type mask was created.
-  final T allocationNode;
+  @override
+  final ir.Node allocationNode;
 
-  // The [Entity] where this type mask was created.
+  @override
   final MemberEntity allocationElement;
 
   // The element type of this container.
@@ -25,23 +30,55 @@ class ContainerTypeMask<T> extends AllocationTypeMask<T> {
   ContainerTypeMask(this.forwardTo, this.allocationNode, this.allocationElement,
       this.elementType, this.length);
 
+  /// Deserializes a [ContainerTypeMask] object from [source].
+  factory ContainerTypeMask.readFromDataSource(
+      DataSource source, JClosedWorld closedWorld) {
+    source.begin(tag);
+    TypeMask forwardTo = new TypeMask.readFromDataSource(source, closedWorld);
+    ir.TreeNode allocationNode = source.readTreeNodeOrNull();
+    MemberEntity allocationElement = source.readMemberOrNull();
+    TypeMask elementType = new TypeMask.readFromDataSource(source, closedWorld);
+    int length = source.readIntOrNull();
+    source.end(tag);
+    return new ContainerTypeMask(
+        forwardTo, allocationNode, allocationElement, elementType, length);
+  }
+
+  /// Serializes this [ContainerTypeMask] to [sink].
+  @override
+  void writeToDataSink(DataSink sink) {
+    sink.writeEnum(TypeMaskKind.container);
+    sink.begin(tag);
+    forwardTo.writeToDataSink(sink);
+    sink.writeTreeNodeOrNull(allocationNode);
+    sink.writeMemberOrNull(allocationElement);
+    elementType.writeToDataSink(sink);
+    sink.writeIntOrNull(length);
+    sink.end(tag);
+  }
+
+  @override
   TypeMask nullable() {
     return isNullable
         ? this
-        : new ContainerTypeMask<T>(forwardTo.nullable(), allocationNode,
+        : new ContainerTypeMask(forwardTo.nullable(), allocationNode,
             allocationElement, elementType, length);
   }
 
+  @override
   TypeMask nonNullable() {
     return isNullable
-        ? new ContainerTypeMask<T>(forwardTo.nonNullable(), allocationNode,
+        ? new ContainerTypeMask(forwardTo.nonNullable(), allocationNode,
             allocationElement, elementType, length)
         : this;
   }
 
+  @override
   bool get isContainer => true;
+  @override
   bool get isExact => true;
 
+  @override
   bool equalsDisregardNull(other) {
     if (other is! ContainerTypeMask) return false;
     return super.equalsDisregardNull(other) &&
@@ -50,12 +87,14 @@ class ContainerTypeMask<T> extends AllocationTypeMask<T> {
         length == other.length;
   }
 
+  @override
   TypeMask intersection(TypeMask other, JClosedWorld closedWorld) {
     TypeMask forwardIntersection = forwardTo.intersection(other, closedWorld);
     if (forwardIntersection.isEmptyOrNull) return forwardIntersection;
     return forwardIntersection.isNullable ? nullable() : nonNullable();
   }
 
+  @override
   TypeMask union(dynamic other, JClosedWorld closedWorld) {
     if (this == other) {
       return this;
@@ -70,7 +109,7 @@ class ContainerTypeMask<T> extends AllocationTypeMask<T> {
           elementType.union(other.elementType, closedWorld);
       int newLength = (length == other.length) ? length : null;
       TypeMask newForwardTo = forwardTo.union(other.forwardTo, closedWorld);
-      return new ContainerTypeMask<T>(
+      return new ContainerTypeMask(
           newForwardTo,
           allocationNode == other.allocationNode ? allocationNode : null,
           allocationElement == other.allocationElement
@@ -83,13 +122,16 @@ class ContainerTypeMask<T> extends AllocationTypeMask<T> {
     }
   }
 
+  @override
   bool operator ==(other) => super == other;
 
+  @override
   int get hashCode {
     return computeHashCode(
         allocationNode, isNullable, elementType, length, forwardTo);
   }
 
+  @override
   String toString() {
     return 'Container($forwardTo, element: $elementType, length: $length)';
   }

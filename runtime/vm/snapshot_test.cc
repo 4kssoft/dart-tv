@@ -6,6 +6,7 @@
 
 #include "include/dart_tools_api.h"
 #include "platform/assert.h"
+#include "platform/unicode.h"
 #include "vm/class_finalizer.h"
 #include "vm/clustered_snapshot.h"
 #include "vm/dart_api_impl.h"
@@ -16,7 +17,7 @@
 #include "vm/malloc_hooks.h"
 #include "vm/snapshot.h"
 #include "vm/symbols.h"
-#include "vm/unicode.h"
+#include "vm/timer.h"
 #include "vm/unit_test.h"
 
 namespace dart {
@@ -114,12 +115,11 @@ static void CompareDartCObjects(Dart_CObject* first, Dart_CObject* second) {
 static void CheckEncodeDecodeMessage(Dart_CObject* root) {
   // Encode and decode the message.
   ApiMessageWriter writer;
-  Message* message =
+  std::unique_ptr<Message> message =
       writer.WriteCMessage(root, ILLEGAL_PORT, Message::kNormalPriority);
 
-  ApiMessageReader api_reader(message);
+  ApiMessageReader api_reader(message.get());
   Dart_CObject* new_root = api_reader.ReadMessage();
-  delete message;
 
   // Check that the two messages are the same.
   CompareDartCObjects(root, new_root);
@@ -127,92 +127,86 @@ static void CheckEncodeDecodeMessage(Dart_CObject* root) {
 
 static void ExpectEncodeFail(Dart_CObject* root) {
   ApiMessageWriter writer;
-  Message* message =
+  std::unique_ptr<Message> message =
       writer.WriteCMessage(root, ILLEGAL_PORT, Message::kNormalPriority);
-  EXPECT(message == NULL);
+  EXPECT(message == nullptr);
 }
 
-TEST_CASE(SerializeNull) {
+ISOLATE_UNIT_TEST_CASE(SerializeNull) {
   StackZone zone(thread);
 
   // Write snapshot with object content.
   const Object& null_object = Object::Handle();
   MessageWriter writer(true);
-  Message* message =
+  std::unique_ptr<Message> message =
       writer.WriteMessage(null_object, ILLEGAL_PORT, Message::kNormalPriority);
 
   // Read object back from the snapshot.
-  MessageSnapshotReader reader(message, thread);
+  MessageSnapshotReader reader(message.get(), thread);
   const Object& serialized_object = Object::Handle(reader.ReadObject());
   EXPECT(Equals(null_object, serialized_object));
 
   // Read object back from the snapshot into a C structure.
   ApiNativeScope scope;
-  ApiMessageReader api_reader(message);
+  ApiMessageReader api_reader(message.get());
   Dart_CObject* root = api_reader.ReadMessage();
   EXPECT_NOTNULL(root);
   EXPECT_EQ(Dart_CObject_kNull, root->type);
   CheckEncodeDecodeMessage(root);
-
-  delete message;
 }
 
-TEST_CASE(SerializeSmi1) {
+ISOLATE_UNIT_TEST_CASE(SerializeSmi1) {
   StackZone zone(thread);
 
   // Write snapshot with object content.
   const Smi& smi = Smi::Handle(Smi::New(124));
   MessageWriter writer(true);
-  Message* message =
+  std::unique_ptr<Message> message =
       writer.WriteMessage(smi, ILLEGAL_PORT, Message::kNormalPriority);
 
   // Read object back from the snapshot.
-  MessageSnapshotReader reader(message, thread);
+  MessageSnapshotReader reader(message.get(), thread);
   const Object& serialized_object = Object::Handle(reader.ReadObject());
   EXPECT(Equals(smi, serialized_object));
 
   // Read object back from the snapshot into a C structure.
   ApiNativeScope scope;
-  ApiMessageReader api_reader(message);
+  ApiMessageReader api_reader(message.get());
   Dart_CObject* root = api_reader.ReadMessage();
   EXPECT_NOTNULL(root);
   EXPECT_EQ(Dart_CObject_kInt32, root->type);
   EXPECT_EQ(smi.Value(), root->value.as_int32);
   CheckEncodeDecodeMessage(root);
-
-  delete message;
 }
 
-TEST_CASE(SerializeSmi2) {
+ISOLATE_UNIT_TEST_CASE(SerializeSmi2) {
   StackZone zone(thread);
 
   // Write snapshot with object content.
   const Smi& smi = Smi::Handle(Smi::New(-1));
   MessageWriter writer(true);
-  Message* message =
+  std::unique_ptr<Message> message =
       writer.WriteMessage(smi, ILLEGAL_PORT, Message::kNormalPriority);
 
   // Read object back from the snapshot.
-  MessageSnapshotReader reader(message, thread);
+  MessageSnapshotReader reader(message.get(), thread);
   const Object& serialized_object = Object::Handle(reader.ReadObject());
   EXPECT(Equals(smi, serialized_object));
 
   // Read object back from the snapshot into a C structure.
   ApiNativeScope scope;
-  ApiMessageReader api_reader(message);
+  ApiMessageReader api_reader(message.get());
   Dart_CObject* root = api_reader.ReadMessage();
   EXPECT_NOTNULL(root);
   EXPECT_EQ(Dart_CObject_kInt32, root->type);
   EXPECT_EQ(smi.Value(), root->value.as_int32);
   CheckEncodeDecodeMessage(root);
-
-  delete message;
 }
 
 Dart_CObject* SerializeAndDeserializeMint(const Mint& mint) {
   // Write snapshot with object content.
   MessageWriter writer(true);
-  Message* message =
+  std::unique_ptr<Message> message =
       writer.WriteMessage(mint, ILLEGAL_PORT, Message::kNormalPriority);
 
   {
@@ -220,17 +214,16 @@ Dart_CObject* SerializeAndDeserializeMint(const Mint& mint) {
     Thread* thread = Thread::Current();
     StackZone zone(thread);
     // Read object back from the snapshot.
-    MessageSnapshotReader reader(message, thread);
+    MessageSnapshotReader reader(message.get(), thread);
     const Object& serialized_object = Object::Handle(reader.ReadObject());
     EXPECT(serialized_object.IsMint());
   }
 
   // Read object back from the snapshot into a C structure.
-  ApiMessageReader api_reader(message);
+  ApiMessageReader api_reader(message.get());
   Dart_CObject* root = api_reader.ReadMessage();
   EXPECT_NOTNULL(root);
   CheckEncodeDecodeMessage(root);
-  delete message;
   return root;
 }
 
@@ -259,7 +252,7 @@ void CheckMint(int64_t value) {
 #endif
 }
 
-TEST_CASE(SerializeMints) {
+ISOLATE_UNIT_TEST_CASE(SerializeMints) {
   // Min positive mint.
   CheckMint(Smi::kMaxValue + 1);
   // Min positive mint + 1.
@@ -278,43 +271,41 @@ TEST_CASE(SerializeMints) {
   CheckMint(kMinInt64 + 1);
 }
 
-TEST_CASE(SerializeDouble) {
+ISOLATE_UNIT_TEST_CASE(SerializeDouble) {
   StackZone zone(thread);
 
   // Write snapshot with object content.
   const Double& dbl = Double::Handle(Double::New(101.29));
   MessageWriter writer(true);
-  Message* message =
+  std::unique_ptr<Message> message =
       writer.WriteMessage(dbl, ILLEGAL_PORT, Message::kNormalPriority);
 
   // Read object back from the snapshot.
-  MessageSnapshotReader reader(message, thread);
+  MessageSnapshotReader reader(message.get(), thread);
   const Object& serialized_object = Object::Handle(reader.ReadObject());
   EXPECT(Equals(dbl, serialized_object));
 
   // Read object back from the snapshot into a C structure.
   ApiNativeScope scope;
-  ApiMessageReader api_reader(message);
+  ApiMessageReader api_reader(message.get());
   Dart_CObject* root = api_reader.ReadMessage();
   EXPECT_NOTNULL(root);
   EXPECT_EQ(Dart_CObject_kDouble, root->type);
   EXPECT_EQ(dbl.value(), root->value.as_double);
   CheckEncodeDecodeMessage(root);
-
-  delete message;
 }
 
-TEST_CASE(SerializeTrue) {
+ISOLATE_UNIT_TEST_CASE(SerializeTrue) {
   StackZone zone(thread);
 
   // Write snapshot with true object.
   const Bool& bl = Bool::True();
   MessageWriter writer(true);
-  Message* message =
+  std::unique_ptr<Message> message =
       writer.WriteMessage(bl, ILLEGAL_PORT, Message::kNormalPriority);
 
   // Read object back from the snapshot.
-  MessageSnapshotReader reader(message, thread);
+  MessageSnapshotReader reader(message.get(), thread);
   const Object& serialized_object = Object::Handle(reader.ReadObject());
   fprintf(stderr, "%s / %s\n", bl.ToCString(), serialized_object.ToCString());
 
@@ -322,51 +313,47 @@ TEST_CASE(SerializeTrue) {
 
   // Read object back from the snapshot into a C structure.
   ApiNativeScope scope;
-  ApiMessageReader api_reader(message);
+  ApiMessageReader api_reader(message.get());
   Dart_CObject* root = api_reader.ReadMessage();
   EXPECT_NOTNULL(root);
   EXPECT_EQ(Dart_CObject_kBool, root->type);
   EXPECT_EQ(true, root->value.as_bool);
   CheckEncodeDecodeMessage(root);
-
-  delete message;
 }
 
-TEST_CASE(SerializeFalse) {
+ISOLATE_UNIT_TEST_CASE(SerializeFalse) {
   StackZone zone(thread);
 
   // Write snapshot with false object.
   const Bool& bl = Bool::False();
   MessageWriter writer(true);
-  Message* message =
+  std::unique_ptr<Message> message =
       writer.WriteMessage(bl, ILLEGAL_PORT, Message::kNormalPriority);
 
   // Read object back from the snapshot.
-  MessageSnapshotReader reader(message, thread);
+  MessageSnapshotReader reader(message.get(), thread);
   const Object& serialized_object = Object::Handle(reader.ReadObject());
   EXPECT(Equals(bl, serialized_object));
 
   // Read object back from the snapshot into a C structure.
   ApiNativeScope scope;
-  ApiMessageReader api_reader(message);
+  ApiMessageReader api_reader(message.get());
   Dart_CObject* root = api_reader.ReadMessage();
   EXPECT_NOTNULL(root);
   EXPECT_EQ(Dart_CObject_kBool, root->type);
   EXPECT_EQ(false, root->value.as_bool);
   CheckEncodeDecodeMessage(root);
-
-  delete message;
 }
 
-TEST_CASE(SerializeCapability) {
+ISOLATE_UNIT_TEST_CASE(SerializeCapability) {
   // Write snapshot with object content.
   const Capability& capability = Capability::Handle(Capability::New(12345));
   MessageWriter writer(true);
-  Message* message =
+  std::unique_ptr<Message> message =
       writer.WriteMessage(capability, ILLEGAL_PORT, Message::kNormalPriority);
 
   // Read object back from the snapshot.
-  MessageSnapshotReader reader(message, thread);
+  MessageSnapshotReader reader(message.get(), thread);
   Capability& obj = Capability::Handle();
   obj ^= reader.ReadObject();
 
@@ -374,35 +361,33 @@ TEST_CASE(SerializeCapability) {
 
   // Read object back from the snapshot into a C structure.
   ApiNativeScope scope;
-  ApiMessageReader api_reader(message);
+  ApiMessageReader api_reader(message.get());
   Dart_CObject* root = api_reader.ReadMessage();
   EXPECT_NOTNULL(root);
   EXPECT_EQ(Dart_CObject_kCapability, root->type);
   int64_t id = root->value.as_capability.id;
   EXPECT_EQ(12345, id);
   CheckEncodeDecodeMessage(root);
-  delete message;
 }
 
 #define TEST_ROUND_TRIP_IDENTICAL(object)                                      \
   {                                                                            \
     MessageWriter writer(true);                                                \
-    Message* message = writer.WriteMessage(                                    \
+    std::unique_ptr<Message> message = writer.WriteMessage(                    \
         Object::Handle(object), ILLEGAL_PORT, Message::kNormalPriority);       \
-    MessageSnapshotReader reader(message, thread);                             \
+    MessageSnapshotReader reader(message.get(), thread);                       \
     EXPECT(reader.ReadObject() == object);                                     \
-    delete message;                                                            \
   }
 
-TEST_CASE(SerializeSingletons) {
+ISOLATE_UNIT_TEST_CASE(SerializeSingletons) {
   TEST_ROUND_TRIP_IDENTICAL(Object::class_class());
   TEST_ROUND_TRIP_IDENTICAL(Object::type_arguments_class());
   TEST_ROUND_TRIP_IDENTICAL(Object::function_class());
   TEST_ROUND_TRIP_IDENTICAL(Object::field_class());
-  TEST_ROUND_TRIP_IDENTICAL(Object::token_stream_class());
   TEST_ROUND_TRIP_IDENTICAL(Object::script_class());
   TEST_ROUND_TRIP_IDENTICAL(Object::library_class());
   TEST_ROUND_TRIP_IDENTICAL(Object::code_class());
+  TEST_ROUND_TRIP_IDENTICAL(Object::bytecode_class());
   TEST_ROUND_TRIP_IDENTICAL(Object::instructions_class());
   TEST_ROUND_TRIP_IDENTICAL(Object::pc_descriptors_class());
   TEST_ROUND_TRIP_IDENTICAL(Object::exception_handlers_class());
@@ -416,26 +401,25 @@ static void TestString(const char* cstr) {
   // Write snapshot with object content.
   String& str = String::Handle(String::New(cstr));
   MessageWriter writer(true);
-  Message* message =
+  std::unique_ptr<Message> message =
       writer.WriteMessage(str, ILLEGAL_PORT, Message::kNormalPriority);
 
   // Read object back from the snapshot.
-  MessageSnapshotReader reader(message, thread);
+  MessageSnapshotReader reader(message.get(), thread);
   String& serialized_str = String::Handle();
   serialized_str ^= reader.ReadObject();
   EXPECT(str.Equals(serialized_str));
 
   // Read object back from the snapshot into a C structure.
   ApiNativeScope scope;
-  ApiMessageReader api_reader(message);
+  ApiMessageReader api_reader(message.get());
   Dart_CObject* root = api_reader.ReadMessage();
   EXPECT_EQ(Dart_CObject_kString, root->type);
   EXPECT_STREQ(cstr, root->value.as_string);
   CheckEncodeDecodeMessage(root);
-  delete message;
 }
 
-TEST_CASE(SerializeString) {
+ISOLATE_UNIT_TEST_CASE(SerializeString) {
   TestString("This string shall be serialized");
   TestString("æøå");  // This file is UTF-8 encoded.
   const char* data =
@@ -450,7 +434,7 @@ TEST_CASE(SerializeString) {
   // TODO(sgjesse): Add tests with non-BMP characters.
 }
 
-TEST_CASE(SerializeArray) {
+ISOLATE_UNIT_TEST_CASE(SerializeArray) {
   // Write snapshot with object content.
   const int kArrayLength = 10;
   Array& array = Array::Handle(Array::New(kArrayLength));
@@ -460,18 +444,18 @@ TEST_CASE(SerializeArray) {
     array.SetAt(i, smi);
   }
   MessageWriter writer(true);
-  Message* message =
+  std::unique_ptr<Message> message =
       writer.WriteMessage(array, ILLEGAL_PORT, Message::kNormalPriority);
 
   // Read object back from the snapshot.
-  MessageSnapshotReader reader(message, thread);
+  MessageSnapshotReader reader(message.get(), thread);
   Array& serialized_array = Array::Handle();
   serialized_array ^= reader.ReadObject();
   EXPECT(array.CanonicalizeEquals(serialized_array));
 
   // Read object back from the snapshot into a C structure.
   ApiNativeScope scope;
-  ApiMessageReader api_reader(message);
+  ApiMessageReader api_reader(message.get());
   Dart_CObject* root = api_reader.ReadMessage();
   EXPECT_EQ(Dart_CObject_kArray, root->type);
   EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -481,11 +465,9 @@ TEST_CASE(SerializeArray) {
     EXPECT_EQ(i, element->value.as_int32);
   }
   CheckEncodeDecodeMessage(root);
-
-  delete message;
 }
 
-TEST_CASE(SerializeArrayWithTypeArgument) {
+ISOLATE_UNIT_TEST_CASE(SerializeArrayWithTypeArgument) {
   // Write snapshot with object content.
   const int kArrayLength = 10;
   Array& array =
@@ -497,18 +479,18 @@ TEST_CASE(SerializeArrayWithTypeArgument) {
     array.SetAt(i, smi);
   }
   MessageWriter writer(true);
-  Message* message =
+  std::unique_ptr<Message> message =
       writer.WriteMessage(array, ILLEGAL_PORT, Message::kNormalPriority);
 
   // Read object back from the snapshot.
-  MessageSnapshotReader reader(message, thread);
+  MessageSnapshotReader reader(message.get(), thread);
   Array& serialized_array = Array::Handle();
   serialized_array ^= reader.ReadObject();
   EXPECT(array.CanonicalizeEquals(serialized_array));
 
   // Read object back from the snapshot into a C structure.
   ApiNativeScope scope;
-  ApiMessageReader api_reader(message);
+  ApiMessageReader api_reader(message.get());
   Dart_CObject* root = api_reader.ReadMessage();
   EXPECT_EQ(Dart_CObject_kArray, root->type);
   EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -518,8 +500,6 @@ TEST_CASE(SerializeArrayWithTypeArgument) {
     EXPECT_EQ(i, element->value.as_int32);
   }
   CheckEncodeDecodeMessage(root);
-
-  delete message;
 }
 
 TEST_CASE(FailSerializeLargeArray) {
@@ -569,33 +549,31 @@ TEST_CASE(FailSerializeLargeExternalTypedData) {
   ExpectEncodeFail(&root);
 }
 
-TEST_CASE(SerializeEmptyArray) {
+ISOLATE_UNIT_TEST_CASE(SerializeEmptyArray) {
   // Write snapshot with object content.
   const int kArrayLength = 0;
   Array& array = Array::Handle(Array::New(kArrayLength));
   MessageWriter writer(true);
-  Message* message =
+  std::unique_ptr<Message> message =
       writer.WriteMessage(array, ILLEGAL_PORT, Message::kNormalPriority);
 
   // Read object back from the snapshot.
-  MessageSnapshotReader reader(message, thread);
+  MessageSnapshotReader reader(message.get(), thread);
   Array& serialized_array = Array::Handle();
   serialized_array ^= reader.ReadObject();
   EXPECT(array.CanonicalizeEquals(serialized_array));
 
   // Read object back from the snapshot into a C structure.
   ApiNativeScope scope;
-  ApiMessageReader api_reader(message);
+  ApiMessageReader api_reader(message.get());
   Dart_CObject* root = api_reader.ReadMessage();
   EXPECT_EQ(Dart_CObject_kArray, root->type);
   EXPECT_EQ(kArrayLength, root->value.as_array.length);
   EXPECT(root->value.as_array.values == NULL);
   CheckEncodeDecodeMessage(root);
-
-  delete message;
 }
 
-TEST_CASE(SerializeByteArray) {
+ISOLATE_UNIT_TEST_CASE(SerializeByteArray) {
   // Write snapshot with object content.
   const int kTypedDataLength = 256;
   TypedData& typed_data = TypedData::Handle(
@@ -604,18 +582,18 @@ TEST_CASE(SerializeByteArray) {
     typed_data.SetUint8(i, i);
   }
   MessageWriter writer(true);
-  Message* message =
+  std::unique_ptr<Message> message =
       writer.WriteMessage(typed_data, ILLEGAL_PORT, Message::kNormalPriority);
 
   // Read object back from the snapshot.
-  MessageSnapshotReader reader(message, thread);
+  MessageSnapshotReader reader(message.get(), thread);
   TypedData& serialized_typed_data = TypedData::Handle();
   serialized_typed_data ^= reader.ReadObject();
   EXPECT(serialized_typed_data.IsTypedData());
 
   // Read object back from the snapshot into a C structure.
   ApiNativeScope scope;
-  ApiMessageReader api_reader(message);
+  ApiMessageReader api_reader(message.get());
   Dart_CObject* root = api_reader.ReadMessage();
   EXPECT_EQ(Dart_CObject_kTypedData, root->type);
   EXPECT_EQ(kTypedDataLength, root->value.as_typed_data.length);
@@ -623,8 +601,6 @@ TEST_CASE(SerializeByteArray) {
     EXPECT(root->value.as_typed_data.values[i] == i);
   }
   CheckEncodeDecodeMessage(root);
-
-  delete message;
 }
 
 #define TEST_TYPED_ARRAY(darttype, ctype)                                      \
@@ -638,16 +614,15 @@ TEST_CASE(SerializeByteArray) {
       array.Set##darttype((i * scale), i);                                     \
     }                                                                          \
     MessageWriter writer(true);                                                \
-    Message* message =                                                         \
+    std::unique_ptr<Message> message =                                         \
         writer.WriteMessage(array, ILLEGAL_PORT, Message::kNormalPriority);    \
-    MessageSnapshotReader reader(message, thread);                             \
+    MessageSnapshotReader reader(message.get(), thread);                       \
     TypedData& serialized_array = TypedData::Handle();                         \
     serialized_array ^= reader.ReadObject();                                   \
     for (int i = 0; i < kArrayLength; i++) {                                   \
       EXPECT_EQ(static_cast<ctype>(i),                                         \
                 serialized_array.Get##darttype(i* scale));                     \
     }                                                                          \
-    delete message;                                                            \
   }
 
 #define TEST_EXTERNAL_TYPED_ARRAY(darttype, ctype)                             \
@@ -660,19 +635,18 @@ TEST_CASE(SerializeByteArray) {
                                reinterpret_cast<uint8_t*>(data), length));     \
     intptr_t scale = array.ElementSizeInBytes();                               \
     MessageWriter writer(true);                                                \
-    Message* message =                                                         \
+    std::unique_ptr<Message> message =                                         \
         writer.WriteMessage(array, ILLEGAL_PORT, Message::kNormalPriority);    \
-    MessageSnapshotReader reader(message, thread);                             \
-    TypedData& serialized_array = TypedData::Handle();                         \
+    MessageSnapshotReader reader(message.get(), thread);                       \
+    ExternalTypedData& serialized_array = ExternalTypedData::Handle();         \
     serialized_array ^= reader.ReadObject();                                   \
     for (int i = 0; i < length; i++) {                                         \
       EXPECT_EQ(static_cast<ctype>(data[i]),                                   \
                 serialized_array.Get##darttype(i* scale));                     \
     }                                                                          \
-    delete message;                                                            \
   }
 
-TEST_CASE(SerializeTypedArray) {
+ISOLATE_UNIT_TEST_CASE(SerializeTypedArray) {
   TEST_TYPED_ARRAY(Int8, int8_t);
   TEST_TYPED_ARRAY(Uint8, uint8_t);
   TEST_TYPED_ARRAY(Int16, int16_t);
@@ -685,7 +659,7 @@ TEST_CASE(SerializeTypedArray) {
   TEST_TYPED_ARRAY(Float64, double);
 }
 
-TEST_CASE(SerializeExternalTypedArray) {
+ISOLATE_UNIT_TEST_CASE(SerializeExternalTypedArray) {
   TEST_EXTERNAL_TYPED_ARRAY(Int8, int8_t);
   TEST_EXTERNAL_TYPED_ARRAY(Uint8, uint8_t);
   TEST_EXTERNAL_TYPED_ARRAY(Int16, int16_t);
@@ -698,456 +672,30 @@ TEST_CASE(SerializeExternalTypedArray) {
   TEST_EXTERNAL_TYPED_ARRAY(Float64, double);
 }
 
-TEST_CASE(SerializeEmptyByteArray) {
+ISOLATE_UNIT_TEST_CASE(SerializeEmptyByteArray) {
   // Write snapshot with object content.
   const int kTypedDataLength = 0;
   TypedData& typed_data = TypedData::Handle(
       TypedData::New(kTypedDataUint8ArrayCid, kTypedDataLength));
   MessageWriter writer(true);
-  Message* message =
+  std::unique_ptr<Message> message =
       writer.WriteMessage(typed_data, ILLEGAL_PORT, Message::kNormalPriority);
 
   // Read object back from the snapshot.
-  MessageSnapshotReader reader(message, thread);
+  MessageSnapshotReader reader(message.get(), thread);
   TypedData& serialized_typed_data = TypedData::Handle();
   serialized_typed_data ^= reader.ReadObject();
   EXPECT(serialized_typed_data.IsTypedData());
 
   // Read object back from the snapshot into a C structure.
   ApiNativeScope scope;
-  ApiMessageReader api_reader(message);
+  ApiMessageReader api_reader(message.get());
   Dart_CObject* root = api_reader.ReadMessage();
   EXPECT_EQ(Dart_CObject_kTypedData, root->type);
   EXPECT_EQ(Dart_TypedData_kUint8, root->value.as_typed_data.type);
   EXPECT_EQ(kTypedDataLength, root->value.as_typed_data.length);
   EXPECT(root->value.as_typed_data.values == NULL);
   CheckEncodeDecodeMessage(root);
-
-  delete message;
-}
-
-class TestSnapshotWriter : public SnapshotWriter {
- public:
-  static const intptr_t kInitialSize = 64 * KB;
-  explicit TestSnapshotWriter(ReAlloc alloc)
-      : SnapshotWriter(Thread::Current(),
-                       Snapshot::kScript,
-                       alloc,
-                       NULL,
-                       kInitialSize,
-                       &forward_list_,
-                       true /* can_send_any_object */),
-        forward_list_(thread(), kMaxPredefinedObjectIds) {
-    ASSERT(alloc != NULL);
-  }
-  ~TestSnapshotWriter() {}
-
-  // Writes just a script object
-  void WriteScript(const Script& script) { WriteObject(script.raw()); }
-
- private:
-  ForwardList forward_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestSnapshotWriter);
-};
-
-static void GenerateSourceAndCheck(const Script& script) {
-  // Check if we are able to generate the source from the token stream.
-  // Rescan this source and compare the token stream to see if they are
-  // the same.
-  Zone* zone = Thread::Current()->zone();
-  const TokenStream& expected_tokens =
-      TokenStream::Handle(zone, script.tokens());
-  TokenStream::Iterator expected_iterator(zone, expected_tokens,
-                                          TokenPosition::kMinSource,
-                                          TokenStream::Iterator::kAllTokens);
-  const String& str = String::Handle(zone, expected_tokens.GenerateSource());
-  const String& private_key =
-      String::Handle(zone, expected_tokens.PrivateKey());
-  const TokenStream& reconstructed_tokens =
-      TokenStream::Handle(zone, TokenStream::New(str, private_key, false));
-  expected_iterator.SetCurrentPosition(TokenPosition::kMinSource);
-  TokenStream::Iterator reconstructed_iterator(
-      zone, reconstructed_tokens, TokenPosition::kMinSource,
-      TokenStream::Iterator::kAllTokens);
-  Token::Kind expected_kind = expected_iterator.CurrentTokenKind();
-  Token::Kind reconstructed_kind = reconstructed_iterator.CurrentTokenKind();
-  String& expected_literal = String::Handle(zone);
-  String& actual_literal = String::Handle(zone);
-  while (expected_kind != Token::kEOS && reconstructed_kind != Token::kEOS) {
-    EXPECT_EQ(expected_kind, reconstructed_kind);
-    expected_literal ^= expected_iterator.CurrentLiteral();
-    actual_literal ^= reconstructed_iterator.CurrentLiteral();
-    EXPECT_STREQ(expected_literal.ToCString(), actual_literal.ToCString());
-    expected_iterator.Advance();
-    reconstructed_iterator.Advance();
-    expected_kind = expected_iterator.CurrentTokenKind();
-    reconstructed_kind = reconstructed_iterator.CurrentTokenKind();
-  }
-}
-
-TEST_CASE(SerializeScript) {
-  const char* kScriptChars =
-      "class A {\n"
-      "  static bar() { return 42; }\n"
-      "  static fly() { return 5; }\n"
-      "  static s1() { return 'this is a string in the source'; }\n"
-      "  static s2() { return 'this is a \"string\" in the source'; }\n"
-      "  static s3() { return 'this is a \\\'string\\\' in \"the\" source'; }\n"
-      "  static s4() { return 'this \"is\" a \"string\" in \"the\" source'; }\n"
-      "  static ms1() {\n"
-      "    return '''\n"
-      "abc\n"
-      "def\n"
-      "ghi''';\n"
-      "  }\n"
-      "  static ms2() {\n"
-      "    return '''\n"
-      "abc\n"
-      "$def\n"
-      "ghi''';\n"
-      "  }\n"
-      "  static ms3() {\n"
-      "    return '''\n"
-      "a b c\n"
-      "d $d e\n"
-      "g h i''';\n"
-      "  }\n"
-      "  static ms4() {\n"
-      "    return '''\n"
-      "abc\n"
-      "${def}\n"
-      "ghi''';\n"
-      "  }\n"
-      "  static ms5() {\n"
-      "    return '''\n"
-      "a b c\n"
-      "d ${d} e\n"
-      "g h i''';\n"
-      "  }\n"
-      "  static ms6() {\n"
-      "    return '\\t \\n \\x00 \\xFF';\n"
-      "  }\n"
-      "}\n";
-
-  Zone* zone = thread->zone();
-  String& url = String::Handle(zone, String::New("dart-test:SerializeScript"));
-  String& source = String::Handle(zone, String::New(kScriptChars));
-  Script& script =
-      Script::Handle(zone, Script::New(url, source, RawScript::kScriptTag));
-  const String& lib_url = String::Handle(zone, Symbols::New(thread, "TestLib"));
-  Library& lib = Library::Handle(zone, Library::New(lib_url));
-  lib.Register(thread);
-  EXPECT(CompilerTest::TestCompileScript(lib, script));
-
-  // Write snapshot with script content.
-  TestSnapshotWriter writer(&malloc_allocator);
-  writer.WriteScript(script);
-
-  // Read object back from the snapshot.
-  ScriptSnapshotReader reader(writer.buffer(), writer.BytesWritten(), thread);
-  Script& serialized_script = Script::Handle(zone);
-  serialized_script ^= reader.ReadObject();
-
-  // Check if the serialized script object matches the original script.
-  String& expected_literal = String::Handle(zone);
-  String& actual_literal = String::Handle(zone);
-  String& str = String::Handle(zone);
-  str ^= serialized_script.url();
-  EXPECT(url.Equals(str));
-
-  const TokenStream& expected_tokens =
-      TokenStream::Handle(zone, script.tokens());
-  const TokenStream& serialized_tokens =
-      TokenStream::Handle(zone, serialized_script.tokens());
-  const ExternalTypedData& expected_data =
-      ExternalTypedData::Handle(zone, expected_tokens.GetStream());
-  const ExternalTypedData& serialized_data =
-      ExternalTypedData::Handle(zone, serialized_tokens.GetStream());
-  EXPECT_EQ(expected_data.Length(), serialized_data.Length());
-  TokenStream::Iterator expected_iterator(zone, expected_tokens,
-                                          TokenPosition::kMinSource);
-  TokenStream::Iterator serialized_iterator(zone, serialized_tokens,
-                                            TokenPosition::kMinSource);
-  Token::Kind expected_kind = expected_iterator.CurrentTokenKind();
-  Token::Kind serialized_kind = serialized_iterator.CurrentTokenKind();
-  while (expected_kind != Token::kEOS && serialized_kind != Token::kEOS) {
-    EXPECT_EQ(expected_kind, serialized_kind);
-    expected_literal ^= expected_iterator.CurrentLiteral();
-    actual_literal ^= serialized_iterator.CurrentLiteral();
-    EXPECT(expected_literal.Equals(actual_literal));
-    expected_iterator.Advance();
-    serialized_iterator.Advance();
-    expected_kind = expected_iterator.CurrentTokenKind();
-    serialized_kind = serialized_iterator.CurrentTokenKind();
-  }
-
-  // Check if we are able to generate the source from the token stream.
-  // Rescan this source and compare the token stream to see if they are
-  // the same.
-  GenerateSourceAndCheck(serialized_script);
-
-  free(writer.buffer());
-}
-
-#if !defined(PRODUCT)  // Uses mirrors.
-VM_UNIT_TEST_CASE(CanonicalizationInScriptSnapshots) {
-  const char* kScriptChars =
-      "\n"
-      "import 'dart:mirrors';"
-      "import 'dart:isolate';"
-      "void main() {"
-      "  if (reflectClass(MyException).superclass.reflectedType != "
-      "      IsolateSpawnException) {"
-      "    throw new Exception('Canonicalization failure');"
-      "  }"
-      "  if (reflectClass(IsolateSpawnException).reflectedType != "
-      "      IsolateSpawnException) {"
-      "    throw new Exception('Canonicalization failure');"
-      "  }"
-      "}\n"
-      "class MyException extends IsolateSpawnException {}"
-      "\n";
-
-  Dart_Handle result;
-
-  uint8_t* buffer;
-  intptr_t size;
-  intptr_t vm_isolate_snapshot_size;
-  uint8_t* isolate_snapshot = NULL;
-  intptr_t isolate_snapshot_size;
-  uint8_t* full_snapshot = NULL;
-  uint8_t* script_snapshot = NULL;
-
-  bool saved_load_deferred_eagerly_mode = FLAG_load_deferred_eagerly;
-  FLAG_load_deferred_eagerly = true;
-  {
-    // Start an Isolate, and create a full snapshot of it.
-    TestIsolateScope __test_isolate__;
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Write out the script snapshot.
-    result = Dart_CreateSnapshot(NULL, &vm_isolate_snapshot_size,
-                                 &isolate_snapshot, &isolate_snapshot_size);
-    EXPECT_VALID(result);
-    EXPECT(Dart_IsSnapshot(isolate_snapshot, isolate_snapshot_size));
-    full_snapshot = reinterpret_cast<uint8_t*>(malloc(isolate_snapshot_size));
-    memmove(full_snapshot, isolate_snapshot, isolate_snapshot_size);
-    Dart_ExitScope();
-  }
-  FLAG_load_deferred_eagerly = saved_load_deferred_eagerly_mode;
-
-  {
-    // Now Create an Isolate using the full snapshot and load the
-    // script  and execute it.
-    TestCase::CreateTestIsolateFromSnapshot(full_snapshot);
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Create a test library and Load up a test script in it.
-    Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
-
-    EXPECT_VALID(lib);
-
-    // Invoke a function which returns an object.
-    result = Dart_Invoke(lib, NewString("main"), 0, NULL);
-    EXPECT_VALID(result);
-    Dart_ExitScope();
-    Dart_ShutdownIsolate();
-  }
-
-  {
-    // Create an Isolate using the full snapshot, load a script and create
-    // a script snapshot of the script.
-    TestCase::CreateTestIsolateFromSnapshot(full_snapshot);
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Create a test library and Load up a test script in it.
-    TestCase::LoadTestScript(kScriptChars, NULL);
-
-    EXPECT_VALID(Api::CheckAndFinalizePendingClasses(Thread::Current()));
-
-    // Write out the script snapshot.
-    result = Dart_CreateScriptSnapshot(&buffer, &size);
-    EXPECT_VALID(result);
-    EXPECT(Dart_IsSnapshot(buffer, size));
-    script_snapshot = reinterpret_cast<uint8_t*>(malloc(size));
-    memmove(script_snapshot, buffer, size);
-    Dart_ExitScope();
-    Dart_ShutdownIsolate();
-  }
-
-  {
-    // Now Create an Isolate using the full snapshot and load the
-    // script snapshot created above and execute it.
-    TestCase::CreateTestIsolateFromSnapshot(full_snapshot);
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Load the test library from the snapshot.
-    EXPECT(script_snapshot != NULL);
-    result = Dart_LoadScriptFromSnapshot(script_snapshot, size);
-    EXPECT_VALID(result);
-
-    // Invoke a function which returns an object.
-    result = Dart_Invoke(result, NewString("main"), 0, NULL);
-    EXPECT_VALID(result);
-    Dart_ExitScope();
-    Dart_ShutdownIsolate();
-  }
-  free(script_snapshot);
-  free(full_snapshot);
-}
-#endif
-
-VM_UNIT_TEST_CASE(ScriptSnapshotsUpdateSubclasses) {
-  const char* kScriptChars =
-      "class _DebugDuration extends Duration {\n"
-      "  const _DebugDuration() : super(milliseconds: 42);\n"
-      "}\n"
-      "foo(x, y) {\n"
-      "  for (var i = 0; i < 1000000; i++) {\n"
-      "    if (x != y) {\n"
-      "      throw 'Boom!';\n"
-      "    }\n"
-      "  }\n"
-      "}\n"
-      "main() {\n"
-      "  final v = const Duration(milliseconds: 42);\n"
-      "  foo(v, new _DebugDuration());\n"
-      "}\n"
-      "\n";
-
-  Dart_Handle result;
-
-  uint8_t* buffer;
-  intptr_t size;
-  intptr_t vm_isolate_snapshot_size;
-  uint8_t* isolate_snapshot = NULL;
-  intptr_t isolate_snapshot_size;
-  uint8_t* full_snapshot = NULL;
-  uint8_t* script_snapshot = NULL;
-
-#if !defined(PRODUCT)
-  bool saved_load_deferred_eagerly_mode = FLAG_load_deferred_eagerly;
-  FLAG_load_deferred_eagerly = true;
-#endif
-  intptr_t saved_max_polymorphic_checks = FLAG_max_polymorphic_checks;
-  FLAG_max_polymorphic_checks = 0;
-
-  {
-    // Start an Isolate, and create a full snapshot of it.
-    TestIsolateScope __test_isolate__;
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Write out the script snapshot.
-    result = Dart_CreateSnapshot(NULL, &vm_isolate_snapshot_size,
-                                 &isolate_snapshot, &isolate_snapshot_size);
-    EXPECT_VALID(result);
-    EXPECT(Dart_IsSnapshot(isolate_snapshot, isolate_snapshot_size));
-    full_snapshot = reinterpret_cast<uint8_t*>(malloc(isolate_snapshot_size));
-    memmove(full_snapshot, isolate_snapshot, isolate_snapshot_size);
-    Dart_ExitScope();
-  }
-
-  {
-    // Now Create an Isolate using the full snapshot and load the
-    // script  and execute it.
-    TestCase::CreateTestIsolateFromSnapshot(full_snapshot);
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Create a test library and Load up a test script in it.
-    Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
-
-    EXPECT_VALID(lib);
-
-    // Invoke a function which returns an object.
-    result = Dart_Invoke(lib, NewString("main"), 0, NULL);
-    EXPECT_VALID(result);
-    Dart_ExitScope();
-    Dart_ShutdownIsolate();
-  }
-
-  {
-    // Create an Isolate using the full snapshot, load a script and create
-    // a script snapshot of the script.
-    TestCase::CreateTestIsolateFromSnapshot(full_snapshot);
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Create a test library and Load up a test script in it.
-    TestCase::LoadTestScript(kScriptChars, NULL);
-
-    EXPECT_VALID(Api::CheckAndFinalizePendingClasses(Thread::Current()));
-
-    // Write out the script snapshot.
-    result = Dart_CreateScriptSnapshot(&buffer, &size);
-    EXPECT_VALID(result);
-    EXPECT(Dart_IsSnapshot(buffer, size));
-    script_snapshot = reinterpret_cast<uint8_t*>(malloc(size));
-    memmove(script_snapshot, buffer, size);
-    Dart_ExitScope();
-    Dart_ShutdownIsolate();
-  }
-
-  {
-    // Now Create an Isolate using the full snapshot and load the
-    // script snapshot created above and execute it.
-    TestCase::CreateTestIsolateFromSnapshot(full_snapshot);
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Load the test library from the snapshot.
-    EXPECT(script_snapshot != NULL);
-    result = Dart_LoadScriptFromSnapshot(script_snapshot, size);
-    EXPECT_VALID(result);
-
-    // Invoke a function which returns an object.
-    result = Dart_Invoke(result, NewString("main"), 0, NULL);
-    EXPECT_VALID(result);
-    Dart_ExitScope();
-    Dart_ShutdownIsolate();
-  }
-  free(script_snapshot);
-  free(full_snapshot);
-
-  FLAG_max_polymorphic_checks = saved_max_polymorphic_checks;
-#if !defined(PRODUCT)
-  FLAG_load_deferred_eagerly = saved_load_deferred_eagerly_mode;
-#endif
-}
-
-static void IterateScripts(const Library& lib) {
-  const Array& lib_scripts = Array::Handle(lib.LoadedScripts());
-  Script& script = Script::Handle();
-  String& uri = String::Handle();
-  for (intptr_t i = 0; i < lib_scripts.Length(); i++) {
-    script ^= lib_scripts.At(i);
-    EXPECT(!script.IsNull());
-    uri = script.url();
-    OS::Print("Generating source for part: %s\n", uri.ToCString());
-    GenerateSourceAndCheck(script);
-  }
-}
-
-ISOLATE_UNIT_TEST_CASE(GenerateSource) {
-  // Disable stack trace collection for this test as it results in a timeout.
-  bool stack_trace_collection_enabled =
-      MallocHooks::stack_trace_collection_enabled();
-  MallocHooks::set_stack_trace_collection_enabled(false);
-
-  Zone* zone = thread->zone();
-  Isolate* isolate = thread->isolate();
-  const GrowableObjectArray& libs =
-      GrowableObjectArray::Handle(zone, isolate->object_store()->libraries());
-  Library& lib = Library::Handle();
-  String& uri = String::Handle();
-  for (intptr_t i = 0; i < libs.Length(); i++) {
-    lib ^= libs.At(i);
-    EXPECT(!lib.IsNull());
-    uri = lib.url();
-    OS::Print("Generating source for library: %s\n", uri.ToCString());
-    IterateScripts(lib);
-  }
-
-  MallocHooks::set_stack_trace_collection_enabled(
-      stack_trace_collection_enabled);
 }
 
 VM_UNIT_TEST_CASE(FullSnapshot) {
@@ -1184,24 +732,27 @@ VM_UNIT_TEST_CASE(FullSnapshot) {
   {
     TestIsolateScope __test_isolate__;
 
+    // Create a test library and Load up a test script in it.
+    TestCase::LoadTestScript(kScriptChars, NULL);
+
     Thread* thread = Thread::Current();
+    TransitionNativeToVM transition(thread);
     StackZone zone(thread);
     HandleScope scope(thread);
 
-    // Create a test library and Load up a test script in it.
-    TestCase::LoadTestScript(kScriptChars, NULL);
-    EXPECT_VALID(Api::CheckAndFinalizePendingClasses(thread));
+    Dart_Handle result = Api::CheckAndFinalizePendingClasses(thread);
+    {
+      TransitionVMToNative to_native(thread);
+      EXPECT_VALID(result);
+    }
     timer1.Stop();
     OS::PrintErr("Without Snapshot: %" Pd64 "us\n", timer1.TotalElapsedTime());
 
     // Write snapshot with object content.
-    {
-      TransitionNativeToVM transition(thread);
-      FullSnapshotWriter writer(
-          Snapshot::kFull, NULL, &isolate_snapshot_data_buffer,
-          &malloc_allocator, NULL, NULL /* image_writer */);
-      writer.WriteFullSnapshot();
-    }
+    FullSnapshotWriter writer(Snapshot::kFull, NULL,
+                              &isolate_snapshot_data_buffer, &malloc_allocator,
+                              NULL, /*image_writer*/ nullptr);
+    writer.WriteFullSnapshot();
   }
 
   // Now Create another isolate using the snapshot and execute a method
@@ -1223,522 +774,16 @@ VM_UNIT_TEST_CASE(FullSnapshot) {
   Dart_ShutdownIsolate();
   free(isolate_snapshot_data_buffer);
 }
-
-VM_UNIT_TEST_CASE(FullSnapshot1) {
-  // This buffer has to be static for this to compile with Visual Studio.
-  // If it is not static compilation of this file with Visual Studio takes
-  // more than 30 minutes!
-  static const char kFullSnapshotScriptChars[] = {
-#include "snapshot_test.dat"
-  };
-  const char* kScriptChars = kFullSnapshotScriptChars;
-
-  uint8_t* isolate_snapshot_data_buffer;
-
-  // Start an Isolate, load a script and create a full snapshot.
-  Timer timer1(true, "Snapshot_test");
-  timer1.Start();
-  {
-    TestIsolateScope __test_isolate__;
-
-    Thread* thread = Thread::Current();
-    StackZone zone(thread);
-    HandleScope scope(thread);
-
-    // Create a test library and Load up a test script in it.
-    Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
-    EXPECT_VALID(Api::CheckAndFinalizePendingClasses(thread));
-    timer1.Stop();
-    OS::PrintErr("Without Snapshot: %" Pd64 "us\n", timer1.TotalElapsedTime());
-
-    // Write snapshot with object content.
-    {
-      TransitionNativeToVM transition(thread);
-      FullSnapshotWriter writer(
-          Snapshot::kFull, NULL, &isolate_snapshot_data_buffer,
-          &malloc_allocator, NULL, NULL /* image_writer */);
-      writer.WriteFullSnapshot();
-    }
-
-    // Invoke a function which returns an object.
-    Dart_Handle cls = Dart_GetClass(lib, NewString("FieldsTest"));
-    Dart_Handle result = Dart_Invoke(cls, NewString("testMain"), 0, NULL);
-    EXPECT_VALID(result);
-  }
-
-  // Now Create another isolate using the snapshot and execute a method
-  // from the script.
-  Timer timer2(true, "Snapshot_test");
-  timer2.Start();
-  TestCase::CreateTestIsolateFromSnapshot(isolate_snapshot_data_buffer);
-  {
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-    timer2.Stop();
-    OS::PrintErr("From Snapshot: %" Pd64 "us\n", timer2.TotalElapsedTime());
-
-    // Invoke a function which returns an object.
-    Dart_Handle cls = Dart_GetClass(TestCase::lib(), NewString("FieldsTest"));
-    Dart_Handle result = Dart_Invoke(cls, NewString("testMain"), 0, NULL);
-    if (Dart_IsError(result)) {
-      // Print the error.  It is probably an unhandled exception.
-      fprintf(stderr, "%s\n", Dart_GetError(result));
-    }
-    EXPECT_VALID(result);
-    Dart_ExitScope();
-  }
-  Dart_ShutdownIsolate();
-  free(isolate_snapshot_data_buffer);
-}
-
-#ifndef PRODUCT
-
-VM_UNIT_TEST_CASE(ScriptSnapshot) {
-  const char* kLibScriptChars =
-      "library dart_import_lib;"
-      "class LibFields  {"
-      "  LibFields(int i, int j) : fld1 = i, fld2 = j {}"
-      "  int fld1;"
-      "  final int fld2;"
-      "}";
-  const char* kScriptChars =
-      "class TestTrace implements StackTrace {"
-      "  TestTrace();"
-      "  String toString() { return 'my trace'; }"
-      "}"
-      "class Fields  {"
-      "  Fields(int i, int j) : fld1 = i, fld2 = j {}"
-      "  int fld1;"
-      "  final int fld2;"
-      "  static int fld3;"
-      "  static const int fld4 = 10;"
-      "}"
-      "class FieldsTest {"
-      "  static Fields testMain() {"
-      "    Fields obj = new Fields(10, 20);"
-      "    Fields.fld3 = 100;"
-      "    if (obj == null) {"
-      "      throw new Exception('Allocation failure');"
-      "    }"
-      "    if (obj.fld1 != 10) {"
-      "      throw new Exception('fld1 needs to be 10');"
-      "    }"
-      "    if (obj.fld2 != 20) {"
-      "      throw new Exception('fld2 needs to be 20');"
-      "    }"
-      "    if (Fields.fld3 != 100) {"
-      "      throw new Exception('Fields.fld3 needs to be 100');"
-      "    }"
-      "    if (Fields.fld4 != 10) {"
-      "      throw new Exception('Fields.fld4 needs to be 10');"
-      "    }"
-      "    return obj;"
-      "  }"
-      "}";
-  Dart_Handle result;
-
-  uint8_t* buffer;
-  intptr_t size;
-  intptr_t vm_isolate_snapshot_size;
-  uint8_t* isolate_snapshot = NULL;
-  intptr_t isolate_snapshot_size;
-  uint8_t* full_snapshot = NULL;
-  uint8_t* script_snapshot = NULL;
-  intptr_t expected_num_libs;
-  intptr_t actual_num_libs;
-
-  bool saved_load_deferred_eagerly_mode = FLAG_load_deferred_eagerly;
-  FLAG_load_deferred_eagerly = true;
-  {
-    // Start an Isolate, and create a full snapshot of it.
-    TestIsolateScope __test_isolate__;
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Write out the script snapshot.
-    result = Dart_CreateSnapshot(NULL, &vm_isolate_snapshot_size,
-                                 &isolate_snapshot, &isolate_snapshot_size);
-    EXPECT_VALID(result);
-    EXPECT(Dart_IsSnapshot(isolate_snapshot, isolate_snapshot_size));
-    full_snapshot = reinterpret_cast<uint8_t*>(malloc(isolate_snapshot_size));
-    memmove(full_snapshot, isolate_snapshot, isolate_snapshot_size);
-    Dart_ExitScope();
-  }
-  FLAG_load_deferred_eagerly = saved_load_deferred_eagerly_mode;
-
-  // Test for Dart_CreateScriptSnapshot.
-  {
-    // Create an Isolate using the full snapshot, load a script and create
-    // a script snapshot of the script.
-    TestCase::CreateTestIsolateFromSnapshot(full_snapshot);
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Load the library.
-    Dart_Handle import_lib =
-        Dart_LoadLibrary(NewString("dart_import_lib"), Dart_Null(),
-                         NewString(kLibScriptChars), 0, 0);
-    EXPECT_VALID(import_lib);
-
-    // Create a test library and Load up a test script in it.
-    TestCase::LoadTestScript(kScriptChars, NULL);
-
-    EXPECT_VALID(
-        Dart_LibraryImportLibrary(TestCase::lib(), import_lib, Dart_Null()));
-    EXPECT_VALID(Api::CheckAndFinalizePendingClasses(Thread::Current()));
-
-    // Get list of library URLs loaded and save the count.
-    Dart_Handle libs = Dart_GetLibraryIds();
-    EXPECT(Dart_IsList(libs));
-    Dart_ListLength(libs, &expected_num_libs);
-
-    // Write out the script snapshot.
-    result = Dart_CreateScriptSnapshot(&buffer, &size);
-    EXPECT_VALID(result);
-    EXPECT(Dart_IsSnapshot(buffer, size));
-    script_snapshot = reinterpret_cast<uint8_t*>(malloc(size));
-    memmove(script_snapshot, buffer, size);
-    Dart_ExitScope();
-    Dart_ShutdownIsolate();
-  }
-
-  {
-    // Now Create an Isolate using the full snapshot and load the
-    // script snapshot created above and execute it.
-    TestCase::CreateTestIsolateFromSnapshot(full_snapshot);
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Load the test library from the snapshot.
-    EXPECT(script_snapshot != NULL);
-    result = Dart_LoadScriptFromSnapshot(script_snapshot, size);
-    EXPECT_VALID(result);
-
-    // Get list of library URLs loaded and compare with expected count.
-    Dart_Handle libs = Dart_GetLibraryIds();
-    EXPECT(Dart_IsList(libs));
-    Dart_ListLength(libs, &actual_num_libs);
-
-    EXPECT_EQ(expected_num_libs, actual_num_libs);
-
-    // Invoke a function which returns an object.
-    Dart_Handle cls = Dart_GetClass(result, NewString("FieldsTest"));
-    result = Dart_Invoke(cls, NewString("testMain"), 0, NULL);
-    EXPECT_VALID(result);
-    Dart_ExitScope();
-    Dart_ShutdownIsolate();
-  }
-  free(full_snapshot);
-  free(script_snapshot);
-}
-
-VM_UNIT_TEST_CASE(ScriptSnapshot1) {
-  const char* kScriptChars =
-      "class _SimpleNumEnumerable<T extends num> {"
-      "final Iterable<T> _source;"
-      "const _SimpleNumEnumerable(this._source) : super();"
-      "}";
-
-  Dart_Handle result;
-  uint8_t* buffer;
-  intptr_t size;
-  intptr_t vm_isolate_snapshot_size;
-  uint8_t* isolate_snapshot = NULL;
-  intptr_t isolate_snapshot_size;
-  uint8_t* full_snapshot = NULL;
-  uint8_t* script_snapshot = NULL;
-
-  bool saved_load_deferred_eagerly_mode = FLAG_load_deferred_eagerly;
-  FLAG_load_deferred_eagerly = true;
-  bool saved_concurrent_sweep_mode = FLAG_concurrent_sweep;
-  FLAG_concurrent_sweep = false;
-  {
-    // Start an Isolate, and create a full snapshot of it.
-    TestIsolateScope __test_isolate__;
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Write out the script snapshot.
-    result = Dart_CreateSnapshot(NULL, &vm_isolate_snapshot_size,
-                                 &isolate_snapshot, &isolate_snapshot_size);
-    EXPECT_VALID(result);
-    EXPECT(Dart_IsSnapshot(isolate_snapshot, isolate_snapshot_size));
-    full_snapshot = reinterpret_cast<uint8_t*>(malloc(isolate_snapshot_size));
-    memmove(full_snapshot, isolate_snapshot, isolate_snapshot_size);
-    Dart_ExitScope();
-  }
-  FLAG_concurrent_sweep = saved_concurrent_sweep_mode;
-
-  {
-    // Create an Isolate using the full snapshot, load a script and create
-    // a script snapshot of the script.
-    TestCase::CreateTestIsolateFromSnapshot(full_snapshot);
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Create a test library and Load up a test script in it.
-    TestCase::LoadTestScript(kScriptChars, NULL);
-
-    // Write out the script snapshot.
-    result = Dart_CreateScriptSnapshot(&buffer, &size);
-    EXPECT_VALID(result);
-    EXPECT(Dart_IsSnapshot(buffer, size));
-    script_snapshot = reinterpret_cast<uint8_t*>(malloc(size));
-    memmove(script_snapshot, buffer, size);
-    Dart_ExitScope();
-    Dart_ShutdownIsolate();
-  }
-
-  {
-    // Now Create an Isolate using the full snapshot and load the
-    // script snapshot created above and execute it.
-    TestCase::CreateTestIsolateFromSnapshot(full_snapshot);
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Load the test library from the snapshot.
-    EXPECT(script_snapshot != NULL);
-    result = Dart_LoadScriptFromSnapshot(script_snapshot, size);
-    EXPECT_VALID(result);
-    Dart_ExitScope();
-  }
-
-  FLAG_load_deferred_eagerly = saved_load_deferred_eagerly_mode;
-  Dart_ShutdownIsolate();
-  free(full_snapshot);
-  free(script_snapshot);
-}
-
-VM_UNIT_TEST_CASE(ScriptSnapshot2) {
-  // The snapshot of this library is always created in production mode, but
-  // loaded and executed in both production and checked modes.
-  // This test verifies that type information is still contained in the snapshot
-  // although it was created in production mode and that type errors and
-  // compilation errors (for const fields) are correctly reported according to
-  // the execution mode.
-  const char* kLibScriptChars =
-      "library dart_import_lib;"
-      "const String s = 1.0;"
-      "final int i = true;"
-      "bool b;";
-  const char* kScriptChars =
-      "test_s() {"
-      "  s;"
-      "}"
-      "test_i() {"
-      "  i;"
-      "}"
-      "test_b() {"
-      "  b = 0;"
-      "}";
-  Dart_Handle result;
-
-  uint8_t* buffer;
-  intptr_t size;
-  intptr_t vm_isolate_snapshot_size;
-  uint8_t* isolate_snapshot = NULL;
-  intptr_t isolate_snapshot_size;
-  uint8_t* full_snapshot = NULL;
-  uint8_t* script_snapshot = NULL;
-
-  // Force creation of snapshot in production mode.
-  bool saved_enable_type_checks_mode = FLAG_enable_type_checks;
-  NOT_IN_PRODUCT(FLAG_enable_type_checks = false);
-  bool saved_load_deferred_eagerly_mode = FLAG_load_deferred_eagerly;
-  FLAG_load_deferred_eagerly = true;
-  bool saved_concurrent_sweep_mode = FLAG_concurrent_sweep;
-  FLAG_concurrent_sweep = false;
-  {
-    // Start an Isolate, and create a full snapshot of it.
-    TestIsolateScope __test_isolate__;
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Write out the script snapshot.
-    result = Dart_CreateSnapshot(NULL, &vm_isolate_snapshot_size,
-                                 &isolate_snapshot, &isolate_snapshot_size);
-    EXPECT_VALID(result);
-    EXPECT(Dart_IsSnapshot(isolate_snapshot, isolate_snapshot_size));
-    full_snapshot = reinterpret_cast<uint8_t*>(malloc(isolate_snapshot_size));
-    memmove(full_snapshot, isolate_snapshot, isolate_snapshot_size);
-    Dart_ExitScope();
-  }
-  FLAG_concurrent_sweep = saved_concurrent_sweep_mode;
-
-  {
-    // Create an Isolate using the full snapshot, load a script and create
-    // a script snapshot of the script.
-    TestCase::CreateTestIsolateFromSnapshot(full_snapshot);
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Load the library.
-    Dart_Handle import_lib =
-        Dart_LoadLibrary(NewString("dart_import_lib"), Dart_Null(),
-                         NewString(kLibScriptChars), 0, 0);
-    EXPECT_VALID(import_lib);
-
-    // Create a test library and Load up a test script in it.
-    TestCase::LoadTestScript(kScriptChars, NULL);
-
-    EXPECT_VALID(
-        Dart_LibraryImportLibrary(TestCase::lib(), import_lib, Dart_Null()));
-    EXPECT_VALID(Api::CheckAndFinalizePendingClasses(Thread::Current()));
-
-    // Write out the script snapshot.
-    result = Dart_CreateScriptSnapshot(&buffer, &size);
-    EXPECT_VALID(result);
-    EXPECT(Dart_IsSnapshot(buffer, size));
-    script_snapshot = reinterpret_cast<uint8_t*>(malloc(size));
-    memmove(script_snapshot, buffer, size);
-    Dart_ExitScope();
-    Dart_ShutdownIsolate();
-  }
-
-  // Continue in originally saved mode.
-  NOT_IN_PRODUCT(FLAG_enable_type_checks = saved_enable_type_checks_mode);
-  FLAG_load_deferred_eagerly = saved_load_deferred_eagerly_mode;
-
-  {
-    // Now Create an Isolate using the full snapshot and load the
-    // script snapshot created above and execute it.
-    TestCase::CreateTestIsolateFromSnapshot(full_snapshot);
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Load the test library from the snapshot.
-    EXPECT(script_snapshot != NULL);
-    Dart_Handle lib = Dart_LoadScriptFromSnapshot(script_snapshot, size);
-    EXPECT_VALID(lib);
-
-    // Invoke the test_s function.
-    result = Dart_Invoke(lib, NewString("test_s"), 0, NULL);
-    EXPECT(Dart_IsError(result) == saved_enable_type_checks_mode);
-
-    // Invoke the test_i function.
-    result = Dart_Invoke(lib, NewString("test_i"), 0, NULL);
-    EXPECT(Dart_IsError(result) == saved_enable_type_checks_mode);
-
-    // Invoke the test_b function.
-    result = Dart_Invoke(lib, NewString("test_b"), 0, NULL);
-    EXPECT(Dart_IsError(result) == saved_enable_type_checks_mode);
-    Dart_ExitScope();
-  }
-  Dart_ShutdownIsolate();
-  free(full_snapshot);
-  free(script_snapshot);
-}
-
-VM_UNIT_TEST_CASE(MismatchedSnapshotKinds) {
-  const char* kScriptChars = "main() { print('Hello, world!'); }";
-  Dart_Handle result;
-
-  uint8_t* buffer;
-  intptr_t size;
-  intptr_t vm_isolate_snapshot_size;
-  uint8_t* isolate_snapshot = NULL;
-  intptr_t isolate_snapshot_size;
-  uint8_t* full_snapshot = NULL;
-  uint8_t* script_snapshot = NULL;
-
-  bool saved_load_deferred_eagerly_mode = FLAG_load_deferred_eagerly;
-  FLAG_load_deferred_eagerly = true;
-  bool saved_concurrent_sweep_mode = FLAG_concurrent_sweep;
-  FLAG_concurrent_sweep = false;
-  {
-    // Start an Isolate, and create a full snapshot of it.
-    TestIsolateScope __test_isolate__;
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Write out the script snapshot.
-    result = Dart_CreateSnapshot(NULL, &vm_isolate_snapshot_size,
-                                 &isolate_snapshot, &isolate_snapshot_size);
-    EXPECT_VALID(result);
-    EXPECT(Dart_IsSnapshot(isolate_snapshot, isolate_snapshot_size));
-    full_snapshot = reinterpret_cast<uint8_t*>(malloc(isolate_snapshot_size));
-    memmove(full_snapshot, isolate_snapshot, isolate_snapshot_size);
-    Dart_ExitScope();
-  }
-  FLAG_concurrent_sweep = saved_concurrent_sweep_mode;
-  FLAG_load_deferred_eagerly = saved_load_deferred_eagerly_mode;
-
-  {
-    // Create an Isolate using the full snapshot, load a script and create
-    // a script snapshot of the script.
-    TestCase::CreateTestIsolateFromSnapshot(full_snapshot);
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Create a test library and Load up a test script in it.
-    TestCase::LoadTestScript(kScriptChars, NULL);
-
-    EXPECT_VALID(Api::CheckAndFinalizePendingClasses(Thread::Current()));
-
-    // Write out the script snapshot.
-    result = Dart_CreateScriptSnapshot(&buffer, &size);
-    EXPECT_VALID(result);
-    EXPECT(Dart_IsSnapshot(buffer, size));
-    script_snapshot = reinterpret_cast<uint8_t*>(malloc(size));
-    memmove(script_snapshot, buffer, size);
-    Dart_ExitScope();
-    Dart_ShutdownIsolate();
-  }
-
-  {
-    // Use a script snapshot where a full snapshot is expected.
-    char* error = NULL;
-    Dart_Isolate isolate =
-        Dart_CreateIsolate("script-uri", "main", script_snapshot, NULL, NULL,
-                           NULL, NULL, NULL, &error);
-    EXPECT(isolate == NULL);
-    EXPECT(error != NULL);
-    EXPECT_SUBSTRING(
-        "Incompatible snapshot kinds:"
-        " vm 'full', isolate 'script'",
-        error);
-    free(error);
-  }
-
-  {
-    TestCase::CreateTestIsolateFromSnapshot(full_snapshot);
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Use a full snapshot where a script snapshot is expected.
-    Dart_Handle result = Dart_LoadScriptFromSnapshot(full_snapshot, size);
-    EXPECT_ERROR(result,
-                 "Dart_LoadScriptFromSnapshot expects parameter"
-                 " 'buffer' to be a script type snapshot.");
-
-    Dart_ExitScope();
-  }
-  Dart_ShutdownIsolate();
-  free(full_snapshot);
-  free(script_snapshot);
-}
-
-VM_UNIT_TEST_CASE(CheckKernelSnapshot) {
-  intptr_t vm_isolate_snapshot_size;
-  uint8_t* isolate_snapshot = NULL;
-  intptr_t isolate_snapshot_size;
-  uint8_t* full_snapshot = NULL;
-  bool saved_load_deferred_eagerly_mode = FLAG_load_deferred_eagerly;
-  FLAG_load_deferred_eagerly = true;
-  {
-    // Start an Isolate, and create a full snapshot of it.
-    TestIsolateScope __test_isolate__;
-    Dart_EnterScope();  // Start a Dart API scope for invoking API functions.
-
-    // Write out the script snapshot.
-    Dart_Handle result =
-        Dart_CreateSnapshot(NULL, &vm_isolate_snapshot_size, &isolate_snapshot,
-                            &isolate_snapshot_size);
-    EXPECT_VALID(result);
-    full_snapshot = reinterpret_cast<uint8_t*>(malloc(isolate_snapshot_size));
-    memmove(full_snapshot, isolate_snapshot, isolate_snapshot_size);
-    Dart_ExitScope();
-  }
-  FLAG_load_deferred_eagerly = saved_load_deferred_eagerly_mode;
-  bool is_kernel = Dart_IsDart2Snapshot(full_snapshot);
-  EXPECT_EQ(FLAG_strong, is_kernel);
-  free(full_snapshot);
-}
-
-#endif  // !PRODUCT
 
 // Helper function to call a top level Dart function and serialize the result.
-static Message* GetSerialized(Dart_Handle lib, const char* dart_function) {
+static std::unique_ptr<Message> GetSerialized(Dart_Handle lib,
+                                              const char* dart_function) {
   Dart_Handle result;
-  result = Dart_Invoke(lib, NewString(dart_function), 0, NULL);
-  EXPECT_VALID(result);
+  {
+    TransitionVMToNative transition(Thread::Current());
+    result = Dart_Invoke(lib, NewString(dart_function), 0, NULL);
+    EXPECT_VALID(result);
+  }
   Object& obj = Object::Handle(Api::UnwrapHandle(result));
 
   // Serialize the object into a message.
@@ -1758,19 +803,17 @@ static void CheckString(Dart_Handle dart_string, const char* expected) {
   String& str = String::Handle();
   str ^= Api::UnwrapHandle(dart_string);
   MessageWriter writer(false);
-  Message* message =
+  std::unique_ptr<Message> message =
       writer.WriteMessage(str, ILLEGAL_PORT, Message::kNormalPriority);
 
   // Read object back from the snapshot into a C structure.
   ApiNativeScope scope;
-  ApiMessageReader api_reader(message);
+  ApiMessageReader api_reader(message.get());
   Dart_CObject* root = api_reader.ReadMessage();
   EXPECT_NOTNULL(root);
   EXPECT_EQ(Dart_CObject_kString, root->type);
   EXPECT_STREQ(expected, root->value.as_string);
   CheckEncodeDecodeMessage(root);
-
-  delete message;
 }
 
 static void CheckStringInvalid(Dart_Handle dart_string) {
@@ -1778,17 +821,15 @@ static void CheckStringInvalid(Dart_Handle dart_string) {
   String& str = String::Handle();
   str ^= Api::UnwrapHandle(dart_string);
   MessageWriter writer(false);
-  Message* message =
+  std::unique_ptr<Message> message =
       writer.WriteMessage(str, ILLEGAL_PORT, Message::kNormalPriority);
 
   // Read object back from the snapshot into a C structure.
   ApiNativeScope scope;
-  ApiMessageReader api_reader(message);
+  ApiMessageReader api_reader(message.get());
   Dart_CObject* root = api_reader.ReadMessage();
   EXPECT_NOTNULL(root);
   EXPECT_EQ(Dart_CObject_kUnsupported, root->type);
-
-  delete message;
 }
 
 VM_UNIT_TEST_CASE(DartGeneratedMessages) {
@@ -1877,6 +918,7 @@ VM_UNIT_TEST_CASE(DartGeneratedMessages) {
   {
     Thread* thread = Thread::Current();
     CHECK_API_SCOPE(thread);
+    TransitionNativeToVM transition(thread);
     HANDLESCOPE(thread);
 
     {
@@ -1884,18 +926,17 @@ VM_UNIT_TEST_CASE(DartGeneratedMessages) {
       Smi& smi = Smi::Handle();
       smi ^= Api::UnwrapHandle(smi_result);
       MessageWriter writer(false);
-      Message* message =
+      std::unique_ptr<Message> message =
           writer.WriteMessage(smi, ILLEGAL_PORT, Message::kNormalPriority);
 
       // Read object back from the snapshot into a C structure.
       ApiNativeScope scope;
-      ApiMessageReader api_reader(message);
+      ApiMessageReader api_reader(message.get());
       Dart_CObject* root = api_reader.ReadMessage();
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kInt32, root->type);
       EXPECT_EQ(42, root->value.as_int32);
       CheckEncodeDecodeMessage(root);
-      delete message;
     }
     CheckString(ascii_string_result, "Hello, world!");
     CheckString(non_ascii_string_result, "Blåbærgrød");
@@ -1949,13 +990,14 @@ VM_UNIT_TEST_CASE(DartGeneratedListMessages) {
 
   {
     CHECK_API_SCOPE(thread);
+    TransitionNativeToVM transition(thread);
     HANDLESCOPE(thread);
     StackZone zone(thread);
     {
       // Generate a list of nulls from Dart code.
-      Message* message = GetSerialized(lib, "getList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -1963,13 +1005,12 @@ VM_UNIT_TEST_CASE(DartGeneratedListMessages) {
         EXPECT_EQ(Dart_CObject_kNull, root->value.as_array.values[i]->type);
       }
       CheckEncodeDecodeMessage(root);
-      delete message;
     }
     {
       // Generate a list of ints from Dart code.
-      Message* message = GetSerialized(lib, "getIntList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getIntList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -1978,13 +1019,12 @@ VM_UNIT_TEST_CASE(DartGeneratedListMessages) {
         EXPECT_EQ(i, root->value.as_array.values[i]->value.as_int32);
       }
       CheckEncodeDecodeMessage(root);
-      delete message;
     }
     {
       // Generate a list of strings from Dart code.
-      Message* message = GetSerialized(lib, "getStringList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getStringList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -1994,13 +1034,12 @@ VM_UNIT_TEST_CASE(DartGeneratedListMessages) {
         snprintf(buffer, sizeof(buffer), "%d", i);
         EXPECT_STREQ(buffer, root->value.as_array.values[i]->value.as_string);
       }
-      delete message;
     }
     {
       // Generate a list of objects of different types from Dart code.
-      Message* message = GetSerialized(lib, "getMixedList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getMixedList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2019,7 +1058,6 @@ VM_UNIT_TEST_CASE(DartGeneratedListMessages) {
           EXPECT_EQ(Dart_CObject_kNull, root->value.as_array.values[i]->type);
         }
       }
-      delete message;
     }
   }
   Dart_ExitScope();
@@ -2076,13 +1114,14 @@ VM_UNIT_TEST_CASE(DartGeneratedArrayLiteralMessages) {
 
   {
     CHECK_API_SCOPE(thread);
+    TransitionNativeToVM transition(thread);
     HANDLESCOPE(thread);
     StackZone zone(thread);
     {
       // Generate a list of nulls from Dart code.
-      Message* message = GetSerialized(lib, "getList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2090,13 +1129,12 @@ VM_UNIT_TEST_CASE(DartGeneratedArrayLiteralMessages) {
         EXPECT_EQ(Dart_CObject_kNull, root->value.as_array.values[i]->type);
       }
       CheckEncodeDecodeMessage(root);
-      delete message;
     }
     {
       // Generate a list of ints from Dart code.
-      Message* message = GetSerialized(lib, "getIntList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getIntList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2105,13 +1143,12 @@ VM_UNIT_TEST_CASE(DartGeneratedArrayLiteralMessages) {
         EXPECT_EQ(i, root->value.as_array.values[i]->value.as_int32);
       }
       CheckEncodeDecodeMessage(root);
-      delete message;
     }
     {
       // Generate a list of strings from Dart code.
-      Message* message = GetSerialized(lib, "getStringList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getStringList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2121,13 +1158,12 @@ VM_UNIT_TEST_CASE(DartGeneratedArrayLiteralMessages) {
         snprintf(buffer, sizeof(buffer), "%d", i);
         EXPECT_STREQ(buffer, root->value.as_array.values[i]->value.as_string);
       }
-      delete message;
     }
     {
       // Generate a list of lists from Dart code.
-      Message* message = GetSerialized(lib, "getListList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getListList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2141,13 +1177,12 @@ VM_UNIT_TEST_CASE(DartGeneratedArrayLiteralMessages) {
           EXPECT_EQ(j, element->value.as_array.values[j]->value.as_int32);
         }
       }
-      delete message;
     }
     {
       // Generate a list of objects of different types from Dart code.
-      Message* message = GetSerialized(lib, "getMixedList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getMixedList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2243,7 +1278,6 @@ VM_UNIT_TEST_CASE(DartGeneratedArrayLiteralMessages) {
         EXPECT_EQ(Dart_CObject_kInt32, e->type);
         EXPECT_EQ(i + 1, e->value.as_int32);
       }
-      delete message;
     }
   }
   Dart_ExitScope();
@@ -2313,13 +1347,14 @@ VM_UNIT_TEST_CASE(DartGeneratedListMessagesWithBackref) {
 
   {
     CHECK_API_SCOPE(thread);
+    TransitionNativeToVM transition(thread);
     HANDLESCOPE(thread);
     StackZone zone(thread);
     {
       // Generate a list of strings from Dart code.
-      Message* message = GetSerialized(lib, "getStringList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getStringList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2329,13 +1364,12 @@ VM_UNIT_TEST_CASE(DartGeneratedListMessagesWithBackref) {
         EXPECT_EQ(Dart_CObject_kString, element->type);
         EXPECT_STREQ("Hello, world!", element->value.as_string);
       }
-      delete message;
     }
     {
       // Generate a list of medium ints from Dart code.
-      Message* message = GetSerialized(lib, "getMintList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getMintList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2345,13 +1379,12 @@ VM_UNIT_TEST_CASE(DartGeneratedListMessagesWithBackref) {
         EXPECT_EQ(Dart_CObject_kInt64, element->type);
         EXPECT_EQ(DART_INT64_C(0x7FFFFFFFFFFFFFFF), element->value.as_int64);
       }
-      delete message;
     }
     {
       // Generate a list of doubles from Dart code.
-      Message* message = GetSerialized(lib, "getDoubleList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getDoubleList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2365,13 +1398,12 @@ VM_UNIT_TEST_CASE(DartGeneratedListMessagesWithBackref) {
         EXPECT_EQ(Dart_CObject_kDouble, element->type);
         EXPECT_EQ(3.14, element->value.as_double);
       }
-      delete message;
     }
     {
       // Generate a list of Uint8Lists from Dart code.
-      Message* message = GetSerialized(lib, "getTypedDataList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getTypedDataList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2382,13 +1414,13 @@ VM_UNIT_TEST_CASE(DartGeneratedListMessagesWithBackref) {
         EXPECT_EQ(Dart_TypedData_kUint8, element->value.as_typed_data.type);
         EXPECT_EQ(256, element->value.as_typed_data.length);
       }
-      delete message;
     }
     {
       // Generate a list of Uint8List views from Dart code.
-      Message* message = GetSerialized(lib, "getTypedDataViewList");
+      std::unique_ptr<Message> message =
+          GetSerialized(lib, "getTypedDataViewList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2401,13 +1433,12 @@ VM_UNIT_TEST_CASE(DartGeneratedListMessagesWithBackref) {
         EXPECT_EQ(1, element->value.as_typed_data.values[0]);
         EXPECT_EQ(0, element->value.as_typed_data.values[1]);
       }
-      delete message;
     }
     {
       // Generate a list of objects of different types from Dart code.
-      Message* message = GetSerialized(lib, "getMixedList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getMixedList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2430,13 +1461,12 @@ VM_UNIT_TEST_CASE(DartGeneratedListMessagesWithBackref) {
           EXPECT_STREQ(2.72, element->value.as_double);
         }
       }
-      delete message;
     }
     {
       // Generate a list of objects of different types from Dart code.
-      Message* message = GetSerialized(lib, "getSelfRefList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getSelfRefList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2445,7 +1475,6 @@ VM_UNIT_TEST_CASE(DartGeneratedListMessagesWithBackref) {
         EXPECT_EQ(Dart_CObject_kArray, element->type);
         EXPECT_EQ(root, element);
       }
-      delete message;
     }
   }
   Dart_ExitScope();
@@ -2521,13 +1550,14 @@ VM_UNIT_TEST_CASE(DartGeneratedArrayLiteralMessagesWithBackref) {
 
   {
     CHECK_API_SCOPE(thread);
+    TransitionNativeToVM transition(thread);
     HANDLESCOPE(thread);
     StackZone zone(thread);
     {
       // Generate a list of strings from Dart code.
-      Message* message = GetSerialized(lib, "getStringList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getStringList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2537,13 +1567,12 @@ VM_UNIT_TEST_CASE(DartGeneratedArrayLiteralMessagesWithBackref) {
         EXPECT_EQ(Dart_CObject_kString, element->type);
         EXPECT_STREQ("Hello, world!", element->value.as_string);
       }
-      delete message;
     }
     {
       // Generate a list of medium ints from Dart code.
-      Message* message = GetSerialized(lib, "getMintList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getMintList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2553,13 +1582,12 @@ VM_UNIT_TEST_CASE(DartGeneratedArrayLiteralMessagesWithBackref) {
         EXPECT_EQ(Dart_CObject_kInt64, element->type);
         EXPECT_EQ(DART_INT64_C(0x7FFFFFFFFFFFFFFF), element->value.as_int64);
       }
-      delete message;
     }
     {
       // Generate a list of doubles from Dart code.
-      Message* message = GetSerialized(lib, "getDoubleList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getDoubleList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2574,13 +1602,12 @@ VM_UNIT_TEST_CASE(DartGeneratedArrayLiteralMessagesWithBackref) {
         EXPECT_EQ(Dart_CObject_kDouble, element->type);
         EXPECT_EQ(3.14, element->value.as_double);
       }
-      delete message;
     }
     {
       // Generate a list of Uint8Lists from Dart code.
-      Message* message = GetSerialized(lib, "getTypedDataList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getTypedDataList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2591,13 +1618,13 @@ VM_UNIT_TEST_CASE(DartGeneratedArrayLiteralMessagesWithBackref) {
         EXPECT_EQ(Dart_TypedData_kUint8, element->value.as_typed_data.type);
         EXPECT_EQ(256, element->value.as_typed_data.length);
       }
-      delete message;
     }
     {
       // Generate a list of Uint8List views from Dart code.
-      Message* message = GetSerialized(lib, "getTypedDataViewList");
+      std::unique_ptr<Message> message =
+          GetSerialized(lib, "getTypedDataViewList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2610,13 +1637,12 @@ VM_UNIT_TEST_CASE(DartGeneratedArrayLiteralMessagesWithBackref) {
         EXPECT_EQ(1, element->value.as_typed_data.values[0]);
         EXPECT_EQ(0, element->value.as_typed_data.values[1]);
       }
-      delete message;
     }
     {
       // Generate a list of objects of different types from Dart code.
-      Message* message = GetSerialized(lib, "getMixedList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getMixedList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2639,13 +1665,12 @@ VM_UNIT_TEST_CASE(DartGeneratedArrayLiteralMessagesWithBackref) {
           EXPECT_STREQ(2.72, element->value.as_double);
         }
       }
-      delete message;
     }
     {
       // Generate a list of objects of different types from Dart code.
-      Message* message = GetSerialized(lib, "getSelfRefList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getSelfRefList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       EXPECT_EQ(kArrayLength, root->value.as_array.length);
@@ -2654,7 +1679,6 @@ VM_UNIT_TEST_CASE(DartGeneratedArrayLiteralMessagesWithBackref) {
         EXPECT_EQ(Dart_CObject_kArray, element->type);
         EXPECT_EQ(root, element);
       }
-      delete message;
     }
   }
   Dart_ExitScope();
@@ -2751,13 +1775,14 @@ VM_UNIT_TEST_CASE(DartGeneratedListMessagesWithTypedData) {
 
   {
     CHECK_API_SCOPE(thread);
+    TransitionNativeToVM transition(thread);
     HANDLESCOPE(thread);
     StackZone zone(thread);
     {
       // Generate a list of Uint8Lists from Dart code.
-      Message* message = GetSerialized(lib, "getTypedDataList");
+      std::unique_ptr<Message> message = GetSerialized(lib, "getTypedDataList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       struct {
@@ -2778,13 +1803,13 @@ VM_UNIT_TEST_CASE(DartGeneratedListMessagesWithTypedData) {
         i++;
       }
       EXPECT_EQ(i, root->value.as_array.length);
-      delete message;
     }
     {
       // Generate a list of Uint8List views from Dart code.
-      Message* message = GetSerialized(lib, "getTypedDataViewList");
+      std::unique_ptr<Message> message =
+          GetSerialized(lib, "getTypedDataViewList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       struct {
@@ -2818,13 +1843,13 @@ VM_UNIT_TEST_CASE(DartGeneratedListMessagesWithTypedData) {
         i++;
       }
       EXPECT_EQ(i, root->value.as_array.length);
-      delete message;
     }
     {
       // Generate a list of Uint8Lists from Dart code.
-      Message* message = GetSerialized(lib, "getMultipleTypedDataViewList");
+      std::unique_ptr<Message> message =
+          GetSerialized(lib, "getMultipleTypedDataViewList");
       ApiNativeScope scope;
-      Dart_CObject* root = GetDeserialized(message);
+      Dart_CObject* root = GetDeserialized(message.get());
       EXPECT_NOTNULL(root);
       EXPECT_EQ(Dart_CObject_kArray, root->type);
       struct {
@@ -2849,7 +1874,6 @@ VM_UNIT_TEST_CASE(DartGeneratedListMessagesWithTypedData) {
         i++;
       }
       EXPECT_EQ(i, root->value.as_array.length);
-      delete message;
     }
   }
   Dart_ExitScope();
@@ -2951,7 +1975,7 @@ VM_UNIT_TEST_CASE(PostCObject) {
   Dart_ExitScope();
 }
 
-TEST_CASE(OmittedObjectEncodingLength) {
+ISOLATE_UNIT_TEST_CASE(OmittedObjectEncodingLength) {
   StackZone zone(Thread::Current());
   MessageWriter writer(true);
   writer.WriteInlinedObjectHeader(kOmittedObjectId);
@@ -2960,13 +1984,6 @@ TEST_CASE(OmittedObjectEncodingLength) {
   EXPECT_EQ(1, writer.BytesWritten());
 
   free(writer.buffer());
-}
-
-TEST_CASE(IsSnapshotNegative) {
-  EXPECT(!Dart_IsSnapshot(NULL, 0));
-
-  uint8_t buffer[4] = {0, 0, 0, 0};
-  EXPECT(!Dart_IsSnapshot(buffer, ARRAY_SIZE(buffer)));
 }
 
 TEST_CASE(IsKernelNegative) {

@@ -15,16 +15,21 @@ import "package:kernel/ast.dart" show Component;
 import "package:testing/testing.dart"
     show Chain, ChainContext, Result, Step, TestDescription, runMe;
 
+import "package:testing/src/log.dart" show splitLines;
+
 import "package:yaml/yaml.dart" show YamlMap, loadYamlNode;
 
-import "package:front_end/src/api_prototype/front_end.dart"
-    show CompilationMessage, CompilerOptions, Severity;
+import "package:front_end/src/api_prototype/compiler_options.dart"
+    show CompilerOptions, DiagnosticMessage;
 
 import "package:front_end/src/api_prototype/incremental_kernel_generator.dart"
     show IncrementalKernelGenerator;
 
 import "package:front_end/src/api_prototype/memory_file_system.dart"
     show MemoryFileSystem;
+
+import "package:front_end/src/api_prototype/terminal_color_support.dart"
+    show printDiagnosticMessage;
 
 import 'package:front_end/src/compute_platform_binaries_location.dart'
     show computePlatformBinariesLocation;
@@ -40,6 +45,8 @@ import 'package:front_end/src/fasta/compiler_context.dart' show CompilerContext;
 import 'package:front_end/src/fasta/incremental_compiler.dart'
     show IncrementalCompiler;
 
+import 'package:front_end/src/fasta/severity.dart' show Severity;
+
 import "incremental_expectations.dart"
     show IncrementalExpectation, extractJsonExpectations;
 
@@ -54,7 +61,7 @@ final Uri entryPoint = base.resolve("main.dart");
 class Context extends ChainContext {
   final CompilerContext compilerContext;
   final ExternalStateSnapshot snapshot;
-  final List<CompilationMessage> errors;
+  final List<DiagnosticMessage> errors;
 
   final List<Step> steps = const <Step>[
     const ReadTest(),
@@ -79,8 +86,8 @@ class Context extends ChainContext {
     snapshot.restore();
   }
 
-  List<CompilationMessage> takeErrors() {
-    List<CompilationMessage> result = new List<CompilationMessage>.from(errors);
+  List<DiagnosticMessage> takeErrors() {
+    List<DiagnosticMessage> result = new List<DiagnosticMessage>.from(errors);
     errors.clear();
     return result;
   }
@@ -146,15 +153,18 @@ class RunCompilations extends Step<TestCase, TestCase, Context> {
         return edits == 0 ? fail(test, "No sources found") : pass(test);
       }
       var compiler = context.compiler;
-      Component component = await compiler.computeDelta(entryPoint: entryPoint);
-      List<CompilationMessage> errors = context.takeErrors();
+      Component component =
+          await compiler.computeDelta(entryPoints: [entryPoint]);
+      List<DiagnosticMessage> errors = context.takeErrors();
       if (test.expectations[edits].hasCompileTimeError) {
         if (errors.isEmpty) {
           return fail(test, "Compile-time error expected, but none reported");
         }
       } else if (errors.isNotEmpty) {
-        return fail(
-            test, "Unexpected compile-time errors:\n  ${errors.join('\n  ')}");
+        String indentedErrors =
+            splitLines(errors.map((e) => e.ansiFormatted.join("\n")).join("\n"))
+                .join("  ");
+        return fail(test, "Unexpected compile-time errors:\n  $indentedErrors");
       } else if (component.libraries.length < 1) {
         return fail(test, "The compiler detected no changes");
       }
@@ -199,11 +209,12 @@ class TestCase {
 Future<Context> createContext(
     Chain suite, Map<String, String> environment) async {
   /// The custom URI used to locate the dill file in the MemoryFileSystem.
-  final Uri sdkSummary = base.resolve("vm_platform.dill");
+  final Uri sdkSummary = base.resolve("vm_platform_strong.dill");
 
   /// The actual location of the dill file.
   final Uri sdkSummaryFile =
-      computePlatformBinariesLocation().resolve("vm_platform.dill");
+      computePlatformBinariesLocation(forceBuildDir: true)
+          .resolve("vm_platform_strong.dill");
 
   final MemoryFileSystem fs = new MemoryFileSystem(base);
 
@@ -211,23 +222,21 @@ Future<Context> createContext(
       .entityForUri(sdkSummary)
       .writeAsBytesSync(await new File.fromUri(sdkSummaryFile).readAsBytes());
 
-  final List<CompilationMessage> errors = <CompilationMessage>[];
+  final List<DiagnosticMessage> errors = <DiagnosticMessage>[];
 
   final CompilerOptions optionBuilder = new CompilerOptions()
-    ..strongMode = false
-    ..reportMessages = true
     ..verbose = true
     ..fileSystem = fs
     ..sdkSummary = sdkSummary
-    ..onError = (CompilationMessage message) {
-      if (message.severity != Severity.nit &&
-          message.severity != Severity.warning) {
+    ..onDiagnostic = (DiagnosticMessage message) {
+      printDiagnosticMessage(message, print);
+      if (message.severity == Severity.error) {
         errors.add(message);
       }
     };
 
   final ProcessedOptions options =
-      new ProcessedOptions(optionBuilder, [entryPoint]);
+      new ProcessedOptions(options: optionBuilder, inputs: [entryPoint]);
 
   final ExternalStateSnapshot snapshot =
       new ExternalStateSnapshot(await options.loadSdkSummary(null));
@@ -236,4 +245,4 @@ Future<Context> createContext(
 }
 
 main([List<String> arguments = const []]) =>
-    runMe(arguments, createContext, "../../testing.json");
+    runMe(arguments, createContext, configurationPath: "../../testing.json");

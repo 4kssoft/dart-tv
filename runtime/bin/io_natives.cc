@@ -9,6 +9,7 @@
 
 #include "bin/builtin.h"
 #include "bin/dartutils.h"
+#include "bin/socket_base.h"
 #include "include/dart_api.h"
 #include "platform/assert.h"
 
@@ -109,6 +110,7 @@ namespace bin {
   V(Process_ClearSignalHandler, 1)                                             \
   V(ProcessInfo_CurrentRSS, 0)                                                 \
   V(ProcessInfo_MaxRSS, 0)                                                     \
+  V(RawSocketOption_GetOptionValue, 1)                                         \
   V(SecureSocket_Connect, 7)                                                   \
   V(SecureSocket_Destroy, 1)                                                   \
   V(SecureSocket_FilterPointer, 1)                                             \
@@ -127,16 +129,17 @@ namespace bin {
   V(SecurityContext_TrustBuiltinRoots, 1)                                      \
   V(SecurityContext_UseCertificateChainBytes, 3)                               \
   V(ServerSocket_Accept, 2)                                                    \
-  V(ServerSocket_CreateBindListen, 6)                                          \
+  V(ServerSocket_CreateBindListen, 7)                                          \
   V(SocketBase_IsBindError, 2)                                                 \
   V(Socket_Available, 1)                                                       \
-  V(Socket_CreateBindConnect, 4)                                               \
-  V(Socket_CreateBindDatagram, 4)                                              \
-  V(Socket_CreateConnect, 3)                                                   \
+  V(Socket_CreateBindConnect, 5)                                               \
+  V(Socket_CreateBindDatagram, 6)                                              \
+  V(Socket_CreateConnect, 4)                                                   \
   V(Socket_GetPort, 1)                                                         \
   V(Socket_GetRemotePeer, 1)                                                   \
   V(Socket_GetError, 1)                                                        \
   V(Socket_GetOption, 3)                                                       \
+  V(Socket_GetRawOption, 4)                                                    \
   V(Socket_GetSocketId, 1)                                                     \
   V(Socket_GetStdioHandle, 2)                                                  \
   V(Socket_GetType, 1)                                                         \
@@ -146,6 +149,7 @@ namespace bin {
   V(Socket_RecvFrom, 1)                                                        \
   V(Socket_SendTo, 6)                                                          \
   V(Socket_SetOption, 4)                                                       \
+  V(Socket_SetRawOption, 4)                                                    \
   V(Socket_SetSocketId, 3)                                                     \
   V(Socket_WriteList, 4)                                                       \
   V(Stdin_ReadByte, 1)                                                         \
@@ -190,7 +194,7 @@ Dart_NativeFunction IONativeLookup(Dart_Handle name,
                                    bool* auto_setup_scope) {
   const char* function_name = NULL;
   Dart_Handle result = Dart_StringToCString(name, &function_name);
-  DART_CHECK_VALID(result);
+  ASSERT(!Dart_IsError(result));
   ASSERT(function_name != NULL);
   ASSERT(auto_setup_scope != NULL);
   *auto_setup_scope = true;

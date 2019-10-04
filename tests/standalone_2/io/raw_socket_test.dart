@@ -74,6 +74,22 @@ void testSimpleConnect() {
   });
 }
 
+void testCancelConnect() {
+  asyncStart();
+  RawSocket.startConnect(InternetAddress.loopbackIPv4, 0)
+      .then((ConnectionTask<RawSocket> task) {
+    task.cancel();
+    task.socket.then((s) {
+      Expect.fail("Unreachable");
+    }, onError: (e) {
+      Expect.isTrue(e is SocketException);
+      asyncEnd();
+    });
+  }, onError: (e) {
+    Expect.fail("Unreachable");
+  });
+}
+
 void testCloseOneEnd(String toClose) {
   asyncStart();
   Completer serverDone = new Completer();
@@ -459,6 +475,21 @@ void testClosedError() {
   });
 }
 
+void testClosedServer() {
+  asyncStart();
+  RawServerSocket.bind(InternetAddress.loopbackIPv4, 0).then((server) {
+    int port = server.port;
+    server.close().then((_) {
+      RawSocket.connect(InternetAddress.loopbackIPv4, server.port).then((_) {
+        Expect.fail('Connecting to the closed server socket should fail');
+      }, onError: (e) {
+        Expect.isTrue(e is SocketException);
+        asyncEnd();
+      });
+    });
+  });
+}
+
 main() {
   asyncStart();
   testArguments();
@@ -467,6 +498,7 @@ main() {
   testCloseOneEnd("server");
   testInvalidBind();
   testSimpleConnect();
+  testCancelConnect();
   testServerListenAfterConnect();
   testSimpleReadWrite(dropReads: false);
   testSimpleReadWrite(dropReads: true);
@@ -475,5 +507,6 @@ main() {
   testSocketZone();
   testSocketZoneError();
   testClosedError();
+  testClosedServer();
   asyncEnd();
 }

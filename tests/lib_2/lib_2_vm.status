@@ -17,7 +17,8 @@ convert/streamed_conversion_json_utf8_decode_test: Skip # Verification not yet i
 [ $arch == simarm64 && $runtime == vm ]
 convert/utf85_test: Skip # Pass, Slow Issue 20111.
 
-[ $compiler != app_jitk && $compiler != dartk && $runtime == vm ]
+[ $compiler != app_jitk && $compiler != dartk && $compiler != dartkb && $runtime == vm ]
+async/future_or_only_in_async_test/00: MissingCompileTimeError
 convert/streamed_conversion_json_utf8_decode_test: Pass, Slow # Infrequent timeouts.
 html/*: SkipByDesign # dart:html not supported on VM.
 js/datetime_roundtrip_test: CompileTimeError
@@ -34,22 +35,11 @@ mirrors/metadata_nested_constructor_call_test/none: CompileTimeError
 mirrors/mirrors_used*: SkipByDesign # Invalid tests. MirrorsUsed does not have a specification, and dart:mirrors is not required to hide declarations that are not covered by any MirrorsUsed annotation.
 mirrors/native_class_test: SkipByDesign # Imports dart:html
 mirrors/redirecting_factory_different_type_test/01: MissingCompileTimeError
+mirrors/redirecting_factory_test/01: RuntimeError
+mirrors/redirecting_factory_test/none: RuntimeError
 
-[ $compiler != app_jitk && $compiler != dartk && $runtime == vm && !$checked ]
+[ $compiler != app_jitk && $compiler != dartk && $compiler != dartkb && $runtime == vm && !$checked ]
 mirrors/inference_and_no_such_method_test: RuntimeError
-
-[ $compiler != app_jitk && $compiler != dartk && $runtime == vm && $strong ]
-async/future_or_only_in_async_test/00: MissingCompileTimeError
-
-[ $compiler != dartk && $runtime == vm && !$strong ]
-mirrors/reflect_class_test/01: MissingCompileTimeError
-mirrors/reflect_class_test/02: MissingCompileTimeError
-mirrors/reflected_type_classes_test/01: MissingCompileTimeError
-mirrors/reflected_type_classes_test/02: MissingCompileTimeError
-mirrors/reflected_type_classes_test/03: MissingCompileTimeError
-mirrors/reflected_type_test/01: MissingCompileTimeError
-mirrors/reflected_type_test/02: MissingCompileTimeError
-mirrors/reflected_type_test/03: MissingCompileTimeError
 
 [ $runtime == vm && $system == fuchsia ]
 async/first_regression_test: RuntimeError
@@ -59,7 +49,6 @@ async/schedule_microtask3_test: RuntimeError
 async/schedule_microtask5_test: RuntimeError
 async/stream_controller_async_test: RuntimeError
 async/stream_first_where_test: RuntimeError
-async/stream_from_iterable_test: RuntimeError
 async/stream_iterator_test: RuntimeError
 async/stream_join_test: RuntimeError
 async/stream_last_where_test: RuntimeError
@@ -89,9 +78,6 @@ math/rectangle_test: RuntimeError
 mirrors/invocation_fuzz_test: Crash
 mirrors/library_uri_io_test: RuntimeError
 mirrors/library_uri_package_test: RuntimeError
-
-[ $runtime == vm && !$checked && !$strong ]
-mirrors/regress_16321_test/01: MissingCompileTimeError
 
 [ $runtime == vm && ($arch == simarm || $arch == simarmv5te || $arch == simarmv6) ]
 convert/utf85_test: Skip # Pass, Slow Issue 12644.

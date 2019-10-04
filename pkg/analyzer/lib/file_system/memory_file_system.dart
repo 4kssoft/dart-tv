@@ -1,13 +1,11 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
-library analyzer.file_system.memory_file_system;
 
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
-import 'dart:core';
+import 'dart:typed_data';
 
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/src/generated/source_io.dart';
@@ -22,7 +20,7 @@ import 'package:watcher/watcher.dart';
 class MemoryResourceProvider implements ResourceProvider {
   final Map<String, _MemoryResource> _pathToResource =
       new HashMap<String, _MemoryResource>();
-  final Map<String, List<int>> _pathToBytes = new HashMap<String, List<int>>();
+  final Map<String, Uint8List> _pathToBytes = new HashMap<String, Uint8List>();
   final Map<String, int> _pathToTimestamp = new HashMap<String, int>();
   final Map<String, List<StreamController<WatchEvent>>> _pathToWatchers =
       new HashMap<String, List<StreamController<WatchEvent>>>();
@@ -92,14 +90,14 @@ class MemoryResourceProvider implements ResourceProvider {
   }
 
   @override
-  File getFile(String path) => new _MemoryFile(this, path);
+  File getFile(String path) {
+    _ensureAbsoluteAndNormalized(path);
+    return new _MemoryFile(this, path);
+  }
 
   @override
   Folder getFolder(String path) {
-    path = pathContext.normalize(path);
-    if (!pathContext.isAbsolute(path)) {
-      throw new ArgumentError("Path must be absolute : $path");
-    }
+    _ensureAbsoluteAndNormalized(path);
     return new _MemoryFolder(this, path);
   }
 
@@ -115,7 +113,7 @@ class MemoryResourceProvider implements ResourceProvider {
 
   @override
   Resource getResource(String path) {
-    path = pathContext.normalize(path);
+    _ensureAbsoluteAndNormalized(path);
     Resource resource = _pathToResource[path];
     if (resource == null) {
       resource = new _MemoryFile(this, path);
@@ -125,12 +123,13 @@ class MemoryResourceProvider implements ResourceProvider {
 
   @override
   Folder getStateLocation(String pluginId) {
-    return newFolder('/user/home/$pluginId');
+    var path = convertPath('/user/home/$pluginId');
+    return newFolder(path);
   }
 
   void modifyFile(String path, String content) {
     _checkFileAtPath(path);
-    _pathToBytes[path] = utf8.encode(content);
+    _pathToBytes[path] = utf8.encode(content) as Uint8List;
     _pathToTimestamp[path] = nextStamp++;
     _notifyWatchers(path, ChangeType.MODIFY);
   }
@@ -140,7 +139,7 @@ class MemoryResourceProvider implements ResourceProvider {
    * appears in its parent directory, but whose `exists` property is false)
    */
   File newDummyLink(String path) {
-    path = pathContext.normalize(path);
+    _ensureAbsoluteAndNormalized(path);
     newFolder(pathContext.dirname(path));
     _MemoryDummyLink link = new _MemoryDummyLink(this, path);
     _pathToResource[path] = link;
@@ -150,25 +149,25 @@ class MemoryResourceProvider implements ResourceProvider {
   }
 
   File newFile(String path, String content, [int stamp]) {
-    path = pathContext.normalize(path);
+    _ensureAbsoluteAndNormalized(path);
     _MemoryFile file = _newFile(path);
-    _pathToBytes[path] = utf8.encode(content);
+    _pathToBytes[path] = utf8.encode(content) as Uint8List;
     _pathToTimestamp[path] = stamp ?? nextStamp++;
     _notifyWatchers(path, ChangeType.ADD);
     return file;
   }
 
   File newFileWithBytes(String path, List<int> bytes, [int stamp]) {
-    path = pathContext.normalize(path);
+    _ensureAbsoluteAndNormalized(path);
     _MemoryFile file = _newFile(path);
-    _pathToBytes[path] = bytes;
+    _pathToBytes[path] = Uint8List.fromList(bytes);
     _pathToTimestamp[path] = stamp ?? nextStamp++;
     _notifyWatchers(path, ChangeType.ADD);
     return file;
   }
 
   Folder newFolder(String path) {
-    path = pathContext.normalize(path);
+    _ensureAbsoluteAndNormalized(path);
     if (!pathContext.isAbsolute(path)) {
       throw new ArgumentError("Path must be absolute : $path");
     }
@@ -194,11 +193,11 @@ class MemoryResourceProvider implements ResourceProvider {
   }
 
   File updateFile(String path, String content, [int stamp]) {
-    path = pathContext.normalize(path);
+    _ensureAbsoluteAndNormalized(path);
     newFolder(pathContext.dirname(path));
     _MemoryFile file = new _MemoryFile(this, path);
     _pathToResource[path] = file;
-    _pathToBytes[path] = utf8.encode(content);
+    _pathToBytes[path] = utf8.encode(content) as Uint8List;
     _pathToTimestamp[path] = stamp ?? nextStamp++;
     _notifyWatchers(path, ChangeType.MODIFY);
     return file;
@@ -214,6 +213,8 @@ class MemoryResourceProvider implements ResourceProvider {
   }
 
   void _checkFileAtPath(String path) {
+    // TODO(brianwilkerson) Consider throwing a FileSystemException rather than
+    // an ArgumentError.
     _MemoryResource resource = _pathToResource[path];
     if (resource is! _MemoryFile) {
       if (resource == null) {
@@ -225,10 +226,25 @@ class MemoryResourceProvider implements ResourceProvider {
   }
 
   void _checkFolderAtPath(String path) {
+    // TODO(brianwilkerson) Consider throwing a FileSystemException rather than
+    // an ArgumentError.
     _MemoryResource resource = _pathToResource[path];
     if (resource is! _MemoryFolder) {
       throw new ArgumentError(
           'Folder expected at "$path" but ${resource.runtimeType} found');
+    }
+  }
+
+  /**
+   * The file system abstraction supports only absolute and normalized paths.
+   * This method is used to validate any input paths to prevent errors later.
+   */
+  void _ensureAbsoluteAndNormalized(String path) {
+    if (!pathContext.isAbsolute(path)) {
+      throw new ArgumentError("Path must be absolute : $path");
+    }
+    if (pathContext.normalize(path) != path) {
+      throw new ArgumentError("Path must be normalized : $path");
     }
   }
 
@@ -285,7 +301,7 @@ class MemoryResourceProvider implements ResourceProvider {
   void _setFileContent(_MemoryFile file, List<int> bytes) {
     String path = file.path;
     _pathToResource[path] = file;
-    _pathToBytes[path] = bytes;
+    _pathToBytes[path] = Uint8List.fromList(bytes);
     _pathToTimestamp[path] = nextStamp++;
     _notifyWatchers(path, ChangeType.MODIFY);
   }
@@ -342,7 +358,7 @@ class _MemoryDummyLink extends _MemoryResource implements File {
   }
 
   @override
-  List<int> readAsBytesSync() {
+  Uint8List readAsBytesSync() {
     throw new FileSystemException(path, 'File could not be read');
   }
 
@@ -421,8 +437,8 @@ class _MemoryFile extends _MemoryResource implements File {
   }
 
   @override
-  List<int> readAsBytesSync() {
-    List<int> content = _provider._pathToBytes[path];
+  Uint8List readAsBytesSync() {
+    Uint8List content = _provider._pathToBytes[path];
     if (content == null) {
       throw new FileSystemException(path, 'File "$path" does not exist.');
     }
@@ -431,7 +447,7 @@ class _MemoryFile extends _MemoryResource implements File {
 
   @override
   String readAsStringSync() {
-    List<int> content = _provider._pathToBytes[path];
+    Uint8List content = _provider._pathToBytes[path];
     if (content == null) {
       throw new FileSystemException(path, 'File "$path" does not exist.');
     }

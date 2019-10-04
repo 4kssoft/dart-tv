@@ -45,7 +45,7 @@ void test_constants2() {
   print(42);
   print('foo');
   print(A.elem2);
-  print(const [42, 'foo']);
+  print(const [42, 'foo', int]);
   print(const <String, A>{'E2': A.elem2, 'E4': A.elem4});
   print(
       const D(const C(4, 5, 6), const {'foo': 42, 'bar': const B(c2.length)}));
@@ -65,11 +65,28 @@ void test_map_literal<T>(int a, int b, T c) {
 
 void test_symbol() {
   print(#test_symbol);
+  print(#_private_symbol);
 }
 
 void test_type_literal<T>() {
   print(String);
   print(T);
 }
+
+class E<T> {
+  const E();
+}
+
+class F<P, Q> extends E<Map<P, Q>> {
+  const F();
+}
+
+testGenericConstInstance() => const F<int, String>();
+
+typedef GenericFunctionType = X Function<X>(X);
+testGenericFunctionTypeLiteral() => GenericFunctionType;
+
+double fieldWithDoubleLiteralInitializer = 1.0;
+testFieldWithDoubleLiteralInitializer() => fieldWithDoubleLiteralInitializer;
 
 main() {}

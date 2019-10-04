@@ -2,8 +2,9 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-#include "platform/globals.h"
-#if defined(HOST_OS_FUCHSIA) && !defined(PRODUCT)
+#include "vm/globals.h"
+#if defined(HOST_OS_FUCHSIA) && defined(SUPPORT_TIMELINE) &&                   \
+    !defined(FUCHSIA_SDK)
 
 #include <trace-engine/context.h>
 #include <trace-engine/instrumentation.h>
@@ -19,9 +20,10 @@ void TimelineEventFuchsiaRecorder::OnEvent(TimelineEvent* event) {
   if (event == NULL) {
     return;
   }
+  TimelineStream* stream = event->stream_;
   trace_string_ref_t category;
-  trace_context_t* context =
-      trace_acquire_context_for_category("dart", &category);
+  trace_context_t* context = trace_acquire_context_for_category_cached(
+      stream->fuchsia_name(), stream->trace_site(), &category);
   if (context == NULL) {
     return;
   }

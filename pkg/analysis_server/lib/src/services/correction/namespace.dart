@@ -1,9 +1,8 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analyzer/dart/ast/ast.dart';
-import 'package:analyzer/dart/ast/standard_resolution_map.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/src/dart/resolver/scope.dart';
 
@@ -15,15 +14,6 @@ Element getExportedElement(LibraryElement library, String name) {
     return null;
   }
   return getExportNamespaceForLibrary(library)[name];
-}
-
-/**
- * Returns the namespace of the given [ExportElement].
- */
-Map<String, Element> getExportNamespaceForDirective(ExportElement exp) {
-  Namespace namespace =
-      new NamespaceBuilder().createExportNamespaceForDirective(exp);
-  return namespace.definedNames;
 }
 
 /**
@@ -45,8 +35,7 @@ ImportElement getImportElement(SimpleIdentifier prefixNode) {
   if (parent is ImportDirective) {
     return parent.element;
   }
-  ImportElementInfo info = internal_getImportElementInfo(prefixNode);
-  return info?.element;
+  return internal_getImportElementInfo(prefixNode);
 }
 
 /**
@@ -92,7 +81,7 @@ ImportElement internal_getImportElement(
       }
     }
     // no combinators => only possible candidate
-    if (importElement.combinators.length == 0) {
+    if (importElement.combinators.isEmpty) {
       return importElement;
     }
     // OK, we have candidate
@@ -130,31 +119,26 @@ ImportElement internal_getImportElement(
 }
 
 /**
- * Returns the [ImportElementInfo] with the [ImportElement] that is referenced
- * by [prefixNode] with a [PrefixElement], maybe `null`.
+ * Returns the [ImportElement] that is referenced by [prefixNode] with a
+ * [PrefixElement], maybe `null`.
  */
-ImportElementInfo internal_getImportElementInfo(SimpleIdentifier prefixNode) {
-  ImportElementInfo info = new ImportElementInfo();
+ImportElement internal_getImportElementInfo(SimpleIdentifier prefixNode) {
   // prepare environment
   AstNode parent = prefixNode.parent;
-  CompilationUnit unit =
-      prefixNode.getAncestor((node) => node is CompilationUnit);
-  LibraryElement libraryElement =
-      resolutionMap.elementDeclaredByCompilationUnit(unit).library;
+  CompilationUnit unit = prefixNode.thisOrAncestorOfType<CompilationUnit>();
+  LibraryElement libraryElement = unit.declaredElement.library;
   // prepare used element
   Element usedElement = null;
   if (parent is PrefixedIdentifier) {
     PrefixedIdentifier prefixed = parent;
     if (prefixed.prefix == prefixNode) {
       usedElement = prefixed.staticElement;
-      info.periodEnd = prefixed.period.end;
     }
   }
   if (parent is MethodInvocation) {
     MethodInvocation invocation = parent;
     if (invocation.target == prefixNode) {
       usedElement = invocation.methodName.staticElement;
-      info.periodEnd = invocation.operator.end;
     }
   }
   // we need used Element
@@ -164,12 +148,8 @@ ImportElementInfo internal_getImportElementInfo(SimpleIdentifier prefixNode) {
   // find ImportElement
   String prefix = prefixNode.name;
   Map<ImportElement, Set<Element>> importElementsMap = {};
-  info.element = internal_getImportElement(
+  return internal_getImportElement(
       libraryElement, prefix, usedElement, importElementsMap);
-  if (info.element == null) {
-    return null;
-  }
-  return info;
 }
 
 /**
@@ -178,5 +158,4 @@ ImportElementInfo internal_getImportElementInfo(SimpleIdentifier prefixNode) {
  */
 class ImportElementInfo {
   ImportElement element;
-  int periodEnd;
 }

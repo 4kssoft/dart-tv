@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -12,9 +12,6 @@ import '../support/integration_tests.dart';
 main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(OutlineTest);
-    // TODO(scheglov): Restore similar test coverage when the front-end API
-    // allows it.  See https://github.com/dart-lang/sdk/issues/32258.
-    // defineReflectiveTests(OutlineTest_UseCFE);
   });
 }
 
@@ -71,10 +68,4 @@ class Class2 {
       expect(members[4].element.name, equals('setter'));
     });
   }
-}
-
-@reflectiveTest
-class OutlineTest_UseCFE extends OutlineTest {
-  @override
-  bool get useCFE => true;
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -13,7 +13,7 @@ import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import '../../analysis_abstract.dart';
-import '../utilities/flutter_util.dart';
+import '../utilities/mock_packages.dart';
 
 main() {
   defineReflectiveSuite(() {
@@ -66,10 +66,10 @@ class FlutterNotificationOutlineTest extends AbstractAnalysisTest {
   void setUp() {
     super.setUp();
     createProject();
-    flutterFolder = configureFlutterPackage(resourceProvider);
+    flutterFolder = MockPackages.instance.addFlutter(resourceProvider);
   }
 
-  test_children() async {
+  Future<void> test_children() async {
     newFile('$projectPath/.packages', content: '''
 flutter:${flutterFolder.toUri()}
 ''');

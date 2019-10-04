@@ -1,8 +1,8 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 //
-// This file has been automatically generated.  Please do not edit it manually.
+// This file has been automatically generated. Please do not edit it manually.
 // To regenerate the file, use the script
 // "pkg/analysis_server/tool/spec/generate_files".
 
@@ -34,6 +34,8 @@ final Matcher isAddContentOverlay = new LazyMatcher(() => new MatchesJsonObject(
  *   "message": String
  *   "correction": optional String
  *   "code": String
+ *   "url": optional String
+ *   "contextMessages": optional List<DiagnosticMessage>
  *   "hasFix": optional bool
  * }
  */
@@ -46,6 +48,8 @@ final Matcher isAnalysisError =
           "code": isString
         }, optionalFields: {
           "correction": isString,
+          "url": isString,
+          "contextMessages": isListOf(isDiagnosticMessage),
           "hasFix": isBool
         }));
 
@@ -164,6 +168,58 @@ final Matcher isAnalysisStatus = new LazyMatcher(() => new MatchesJsonObject(
     optionalFields: {"analysisTarget": isString}));
 
 /**
+ * AvailableSuggestion
+ *
+ * {
+ *   "label": String
+ *   "declaringLibraryUri": String
+ *   "element": Element
+ *   "defaultArgumentListString": optional String
+ *   "defaultArgumentListTextRanges": optional List<int>
+ *   "parameterNames": optional List<String>
+ *   "parameterTypes": optional List<String>
+ *   "relevanceTags": optional List<AvailableSuggestionRelevanceTag>
+ *   "requiredParameterCount": optional int
+ * }
+ */
+final Matcher isAvailableSuggestion =
+    new LazyMatcher(() => new MatchesJsonObject("AvailableSuggestion", {
+          "label": isString,
+          "declaringLibraryUri": isString,
+          "element": isElement
+        }, optionalFields: {
+          "defaultArgumentListString": isString,
+          "defaultArgumentListTextRanges": isListOf(isInt),
+          "parameterNames": isListOf(isString),
+          "parameterTypes": isListOf(isString),
+          "relevanceTags": isListOf(isAvailableSuggestionRelevanceTag),
+          "requiredParameterCount": isInt
+        }));
+
+/**
+ * AvailableSuggestionRelevanceTag
+ *
+ * String
+ */
+final Matcher isAvailableSuggestionRelevanceTag = isString;
+
+/**
+ * AvailableSuggestionSet
+ *
+ * {
+ *   "id": int
+ *   "uri": String
+ *   "items": List<AvailableSuggestion>
+ * }
+ */
+final Matcher isAvailableSuggestionSet = new LazyMatcher(() =>
+    new MatchesJsonObject("AvailableSuggestionSet", {
+      "id": isInt,
+      "uri": isString,
+      "items": isListOf(isAvailableSuggestion)
+    }));
+
+/**
  * ChangeContentOverlay
  *
  * {
@@ -195,6 +251,16 @@ final Matcher isClosingLabel = new LazyMatcher(() => new MatchesJsonObject(
 final Matcher isCompletionId = isString;
 
 /**
+ * CompletionService
+ *
+ * enum {
+ *   AVAILABLE_SUGGESTION_SETS
+ * }
+ */
+final Matcher isCompletionService =
+    new MatchesEnum("CompletionService", ["AVAILABLE_SUGGESTION_SETS"]);
+
+/**
  * CompletionSuggestion
  *
  * {
@@ -219,7 +285,6 @@ final Matcher isCompletionId = isString;
  *   "hasNamedParameters": optional bool
  *   "parameterName": optional String
  *   "parameterType": optional String
- *   "importUri": optional String
  * }
  */
 final Matcher isCompletionSuggestion =
@@ -245,8 +310,7 @@ final Matcher isCompletionSuggestion =
           "requiredParameterCount": isInt,
           "hasNamedParameters": isBool,
           "parameterName": isString,
-          "parameterType": isString,
-          "importUri": isString
+          "parameterType": isString
         }));
 
 /**
@@ -298,6 +362,42 @@ final Matcher isContextData =
         }));
 
 /**
+ * DartFix
+ *
+ * {
+ *   "name": String
+ *   "description": optional String
+ *   "isRequired": optional bool
+ * }
+ */
+final Matcher isDartFix = new LazyMatcher(() => new MatchesJsonObject(
+    "DartFix", {"name": isString},
+    optionalFields: {"description": isString, "isRequired": isBool}));
+
+/**
+ * DartFixSuggestion
+ *
+ * {
+ *   "description": String
+ *   "location": optional Location
+ * }
+ */
+final Matcher isDartFixSuggestion = new LazyMatcher(() => new MatchesJsonObject(
+    "DartFixSuggestion", {"description": isString},
+    optionalFields: {"location": isLocation}));
+
+/**
+ * DiagnosticMessage
+ *
+ * {
+ *   "message": String
+ *   "location": Location
+ * }
+ */
+final Matcher isDiagnosticMessage = new LazyMatcher(() => new MatchesJsonObject(
+    "DiagnosticMessage", {"message": isString, "location": isLocation}));
+
+/**
  * Element
  *
  * {
@@ -335,6 +435,7 @@ final Matcher isElement =
  *   "codeOffset": int
  *   "codeLength": int
  *   "className": optional String
+ *   "mixinName": optional String
  *   "parameters": optional String
  * }
  */
@@ -350,6 +451,7 @@ final Matcher isElementDeclaration =
           "codeLength": isInt
         }, optionalFields: {
           "className": isString,
+          "mixinName": isString,
           "parameters": isString
         }));
 
@@ -364,6 +466,7 @@ final Matcher isElementDeclaration =
  *   CONSTRUCTOR_INVOCATION
  *   ENUM
  *   ENUM_CONSTANT
+ *   EXTENSION
  *   FIELD
  *   FILE
  *   FUNCTION
@@ -374,6 +477,7 @@ final Matcher isElementDeclaration =
  *   LIBRARY
  *   LOCAL_VARIABLE
  *   METHOD
+ *   MIXIN
  *   PARAMETER
  *   PREFIX
  *   SETTER
@@ -392,6 +496,7 @@ final Matcher isElementKind = new MatchesEnum("ElementKind", [
   "CONSTRUCTOR_INVOCATION",
   "ENUM",
   "ENUM_CONSTANT",
+  "EXTENSION",
   "FIELD",
   "FILE",
   "FUNCTION",
@@ -402,6 +507,7 @@ final Matcher isElementKind = new MatchesEnum("ElementKind", [
   "LIBRARY",
   "LOCAL_VARIABLE",
   "METHOD",
+  "MIXIN",
   "PARAMETER",
   "PREFIX",
   "SETTER",
@@ -454,6 +560,29 @@ final Matcher isExecutionService =
     new MatchesEnum("ExecutionService", ["LAUNCH_DATA"]);
 
 /**
+ * ExistingImport
+ *
+ * {
+ *   "uri": int
+ *   "elements": List<int>
+ * }
+ */
+final Matcher isExistingImport = new LazyMatcher(() => new MatchesJsonObject(
+    "ExistingImport", {"uri": isInt, "elements": isListOf(isInt)}));
+
+/**
+ * ExistingImports
+ *
+ * {
+ *   "elements": ImportedElementSet
+ *   "imports": List<ExistingImport>
+ * }
+ */
+final Matcher isExistingImports = new LazyMatcher(() => new MatchesJsonObject(
+    "ExistingImports",
+    {"elements": isImportedElementSet, "imports": isListOf(isExistingImport)}));
+
+/**
  * FileKind
  *
  * enum {
@@ -486,12 +615,6 @@ final Matcher isFilePath = isString;
  *   "parentAssociationLabel": optional String
  *   "variableName": optional String
  *   "children": optional List<FlutterOutline>
- *   "id": optional int
- *   "isWidgetClass": optional bool
- *   "renderConstructor": optional String
- *   "stateClassName": optional String
- *   "stateOffset": optional int
- *   "stateLength": optional int
  * }
  */
 final Matcher isFlutterOutline =
@@ -508,13 +631,7 @@ final Matcher isFlutterOutline =
           "className": isString,
           "parentAssociationLabel": isString,
           "variableName": isString,
-          "children": isListOf(isFlutterOutline),
-          "id": isInt,
-          "isWidgetClass": isBool,
-          "renderConstructor": isString,
-          "stateClassName": isString,
-          "stateOffset": isInt,
-          "stateLength": isInt
+          "children": isListOf(isFlutterOutline)
         }));
 
 /**
@@ -526,6 +643,8 @@ final Matcher isFlutterOutline =
  *   "literalValueBoolean": optional bool
  *   "literalValueInteger": optional int
  *   "literalValueString": optional String
+ *   "nameLocation": optional Location
+ *   "valueLocation": optional Location
  * }
  */
 final Matcher isFlutterOutlineAttribute =
@@ -535,7 +654,9 @@ final Matcher isFlutterOutlineAttribute =
         }, optionalFields: {
           "literalValueBoolean": isBool,
           "literalValueInteger": isInt,
-          "literalValueString": isString
+          "literalValueString": isString,
+          "nameLocation": isLocation,
+          "valueLocation": isLocation
         }));
 
 /**
@@ -567,6 +688,103 @@ final Matcher isFlutterOutlineKind = new MatchesEnum("FlutterOutlineKind", [
  * }
  */
 final Matcher isFlutterService = new MatchesEnum("FlutterService", ["OUTLINE"]);
+
+/**
+ * FlutterWidgetProperty
+ *
+ * {
+ *   "documentation": optional String
+ *   "expression": optional String
+ *   "id": int
+ *   "isRequired": bool
+ *   "isSafeToUpdate": bool
+ *   "name": String
+ *   "children": optional List<FlutterWidgetProperty>
+ *   "editor": optional FlutterWidgetPropertyEditor
+ *   "value": optional FlutterWidgetPropertyValue
+ * }
+ */
+final Matcher isFlutterWidgetProperty =
+    new LazyMatcher(() => new MatchesJsonObject("FlutterWidgetProperty", {
+          "id": isInt,
+          "isRequired": isBool,
+          "isSafeToUpdate": isBool,
+          "name": isString
+        }, optionalFields: {
+          "documentation": isString,
+          "expression": isString,
+          "children": isListOf(isFlutterWidgetProperty),
+          "editor": isFlutterWidgetPropertyEditor,
+          "value": isFlutterWidgetPropertyValue
+        }));
+
+/**
+ * FlutterWidgetPropertyEditor
+ *
+ * {
+ *   "kind": FlutterWidgetPropertyEditorKind
+ *   "enumItems": optional List<FlutterWidgetPropertyValueEnumItem>
+ * }
+ */
+final Matcher isFlutterWidgetPropertyEditor = new LazyMatcher(() =>
+    new MatchesJsonObject("FlutterWidgetPropertyEditor", {
+      "kind": isFlutterWidgetPropertyEditorKind
+    }, optionalFields: {
+      "enumItems": isListOf(isFlutterWidgetPropertyValueEnumItem)
+    }));
+
+/**
+ * FlutterWidgetPropertyEditorKind
+ *
+ * enum {
+ *   BOOL
+ *   DOUBLE
+ *   ENUM
+ *   ENUM_LIKE
+ *   INT
+ *   STRING
+ * }
+ */
+final Matcher isFlutterWidgetPropertyEditorKind = new MatchesEnum(
+    "FlutterWidgetPropertyEditorKind",
+    ["BOOL", "DOUBLE", "ENUM", "ENUM_LIKE", "INT", "STRING"]);
+
+/**
+ * FlutterWidgetPropertyValue
+ *
+ * {
+ *   "boolValue": optional bool
+ *   "doubleValue": optional double
+ *   "intValue": optional int
+ *   "stringValue": optional String
+ *   "enumValue": optional FlutterWidgetPropertyValueEnumItem
+ *   "expression": optional String
+ * }
+ */
+final Matcher isFlutterWidgetPropertyValue = new LazyMatcher(() =>
+    new MatchesJsonObject("FlutterWidgetPropertyValue", null, optionalFields: {
+      "boolValue": isBool,
+      "doubleValue": isDouble,
+      "intValue": isInt,
+      "stringValue": isString,
+      "enumValue": isFlutterWidgetPropertyValueEnumItem,
+      "expression": isString
+    }));
+
+/**
+ * FlutterWidgetPropertyValueEnumItem
+ *
+ * {
+ *   "libraryUri": String
+ *   "className": String
+ *   "name": String
+ *   "documentation": optional String
+ * }
+ */
+final Matcher isFlutterWidgetPropertyValueEnumItem = new LazyMatcher(() =>
+    new MatchesJsonObject("FlutterWidgetPropertyValueEnumItem",
+        {"libraryUri": isString, "className": isString, "name": isString},
+        optionalFields: {"documentation": isString}));
 
 /**
  * FoldingKind
@@ -842,6 +1060,22 @@ final Matcher isImplementedMember = new LazyMatcher(() => new MatchesJsonObject(
     "ImplementedMember", {"offset": isInt, "length": isInt}));
 
 /**
+ * ImportedElementSet
+ *
+ * {
+ *   "strings": List<String>
+ *   "uris": List<int>
+ *   "names": List<int>
+ * }
+ */
+final Matcher isImportedElementSet = new LazyMatcher(() =>
+    new MatchesJsonObject("ImportedElementSet", {
+      "strings": isListOf(isString),
+      "uris": isListOf(isInt),
+      "names": isListOf(isInt)
+    }));
+
+/**
  * ImportedElements
  *
  * {
@@ -853,6 +1087,32 @@ final Matcher isImplementedMember = new LazyMatcher(() => new MatchesJsonObject(
 final Matcher isImportedElements = new LazyMatcher(() => new MatchesJsonObject(
     "ImportedElements",
     {"path": isFilePath, "prefix": isString, "elements": isListOf(isString)}));
+
+/**
+ * IncludedSuggestionRelevanceTag
+ *
+ * {
+ *   "tag": AvailableSuggestionRelevanceTag
+ *   "relevanceBoost": int
+ * }
+ */
+final Matcher isIncludedSuggestionRelevanceTag = new LazyMatcher(() =>
+    new MatchesJsonObject("IncludedSuggestionRelevanceTag",
+        {"tag": isAvailableSuggestionRelevanceTag, "relevanceBoost": isInt}));
+
+/**
+ * IncludedSuggestionSet
+ *
+ * {
+ *   "id": int
+ *   "relevance": int
+ *   "displayUri": optional String
+ * }
+ */
+final Matcher isIncludedSuggestionSet = new LazyMatcher(() =>
+    new MatchesJsonObject(
+        "IncludedSuggestionSet", {"id": isInt, "relevance": isInt},
+        optionalFields: {"displayUri": isString}));
 
 /**
  * KytheEntry
@@ -894,6 +1154,18 @@ final Matcher isKytheVName =
           "path": isString,
           "language": isString
         }));
+
+/**
+ * LibraryPathSet
+ *
+ * {
+ *   "scope": FilePath
+ *   "libraryPaths": List<FilePath>
+ * }
+ */
+final Matcher isLibraryPathSet = new LazyMatcher(() => new MatchesJsonObject(
+    "LibraryPathSet",
+    {"scope": isFilePath, "libraryPaths": isListOf(isFilePath)}));
 
 /**
  * LinkedEditGroup
@@ -1056,6 +1328,33 @@ final Matcher isOverride =
           "superclassMember": isOverriddenMember,
           "interfaceMembers": isListOf(isOverriddenMember)
         }));
+
+/**
+ * ParameterInfo
+ *
+ * {
+ *   "kind": ParameterKind
+ *   "name": String
+ *   "type": String
+ *   "defaultValue": optional String
+ * }
+ */
+final Matcher isParameterInfo = new LazyMatcher(() => new MatchesJsonObject(
+    "ParameterInfo",
+    {"kind": isParameterKind, "name": isString, "type": isString},
+    optionalFields: {"defaultValue": isString}));
+
+/**
+ * ParameterKind
+ *
+ * enum {
+ *   NAMED
+ *   OPTIONAL
+ *   REQUIRED
+ * }
+ */
+final Matcher isParameterKind =
+    new MatchesEnum("ParameterKind", ["NAMED", "OPTIONAL", "REQUIRED"]);
 
 /**
  * Position
@@ -1226,6 +1525,9 @@ final Matcher isRequestError = new LazyMatcher(() => new MatchesJsonObject(
  *   CONTENT_MODIFIED
  *   DEBUG_PORT_COULD_NOT_BE_OPENED
  *   FILE_NOT_ANALYZED
+ *   FLUTTER_GET_WIDGET_DESCRIPTION_NO_WIDGET
+ *   FLUTTER_SET_WIDGET_PROPERTY_VALUE_INVALID_ID
+ *   FLUTTER_SET_WIDGET_PROPERTY_VALUE_IS_REQUIRED
  *   FORMAT_INVALID_FILE
  *   FORMAT_WITH_ERRORS
  *   GET_ERRORS_INVALID_FILE
@@ -1233,6 +1535,9 @@ final Matcher isRequestError = new LazyMatcher(() => new MatchesJsonObject(
  *   GET_KYTHE_ENTRIES_INVALID_FILE
  *   GET_NAVIGATION_INVALID_FILE
  *   GET_REACHABLE_SOURCES_INVALID_FILE
+ *   GET_SIGNATURE_INVALID_FILE
+ *   GET_SIGNATURE_INVALID_OFFSET
+ *   GET_SIGNATURE_UNKNOWN_FUNCTION
  *   IMPORT_ELEMENTS_INVALID_FILE
  *   INVALID_ANALYSIS_ROOT
  *   INVALID_EXECUTION_CONTEXT
@@ -1246,9 +1551,8 @@ final Matcher isRequestError = new LazyMatcher(() => new MatchesJsonObject(
  *   SERVER_ERROR
  *   SORT_MEMBERS_INVALID_FILE
  *   SORT_MEMBERS_PARSE_ERRORS
- *   UNANALYZED_PRIORITY_FILES
+ *   UNKNOWN_FIX
  *   UNKNOWN_REQUEST
- *   UNKNOWN_SOURCE
  *   UNSUPPORTED_FEATURE
  * }
  */
@@ -1256,6 +1560,9 @@ final Matcher isRequestErrorCode = new MatchesEnum("RequestErrorCode", [
   "CONTENT_MODIFIED",
   "DEBUG_PORT_COULD_NOT_BE_OPENED",
   "FILE_NOT_ANALYZED",
+  "FLUTTER_GET_WIDGET_DESCRIPTION_NO_WIDGET",
+  "FLUTTER_SET_WIDGET_PROPERTY_VALUE_INVALID_ID",
+  "FLUTTER_SET_WIDGET_PROPERTY_VALUE_IS_REQUIRED",
   "FORMAT_INVALID_FILE",
   "FORMAT_WITH_ERRORS",
   "GET_ERRORS_INVALID_FILE",
@@ -1263,6 +1570,9 @@ final Matcher isRequestErrorCode = new MatchesEnum("RequestErrorCode", [
   "GET_KYTHE_ENTRIES_INVALID_FILE",
   "GET_NAVIGATION_INVALID_FILE",
   "GET_REACHABLE_SOURCES_INVALID_FILE",
+  "GET_SIGNATURE_INVALID_FILE",
+  "GET_SIGNATURE_INVALID_OFFSET",
+  "GET_SIGNATURE_UNKNOWN_FUNCTION",
   "IMPORT_ELEMENTS_INVALID_FILE",
   "INVALID_ANALYSIS_ROOT",
   "INVALID_EXECUTION_CONTEXT",
@@ -1276,9 +1586,8 @@ final Matcher isRequestErrorCode = new MatchesEnum("RequestErrorCode", [
   "SERVER_ERROR",
   "SORT_MEMBERS_INVALID_FILE",
   "SORT_MEMBERS_PARSE_ERRORS",
-  "UNANALYZED_PRIORITY_FILES",
+  "UNKNOWN_FIX",
   "UNKNOWN_REQUEST",
-  "UNKNOWN_SOURCE",
   "UNSUPPORTED_FEATURE"
 ]);
 
@@ -1395,13 +1704,41 @@ final Matcher isSearchResultKind = new MatchesEnum("SearchResultKind", [
 ]);
 
 /**
+ * ServerLogEntry
+ *
+ * {
+ *   "time": int
+ *   "kind": ServerLogEntryKind
+ *   "data": String
+ * }
+ */
+final Matcher isServerLogEntry = new LazyMatcher(() => new MatchesJsonObject(
+    "ServerLogEntry",
+    {"time": isInt, "kind": isServerLogEntryKind, "data": isString}));
+
+/**
+ * ServerLogEntryKind
+ *
+ * enum {
+ *   NOTIFICATION
+ *   RAW
+ *   REQUEST
+ *   RESPONSE
+ * }
+ */
+final Matcher isServerLogEntryKind = new MatchesEnum(
+    "ServerLogEntryKind", ["NOTIFICATION", "RAW", "REQUEST", "RESPONSE"]);
+
+/**
  * ServerService
  *
  * enum {
+ *   LOG
  *   STATUS
  * }
  */
-final Matcher isServerService = new MatchesEnum("ServerService", ["STATUS"]);
+final Matcher isServerService =
+    new MatchesEnum("ServerService", ["LOG", "STATUS"]);
 
 /**
  * SourceChange
@@ -1450,6 +1787,25 @@ final Matcher isSourceEdit = new LazyMatcher(() => new MatchesJsonObject(
 final Matcher isSourceFileEdit = new LazyMatcher(() => new MatchesJsonObject(
     "SourceFileEdit",
     {"file": isFilePath, "fileStamp": isInt, "edits": isListOf(isSourceEdit)}));
+
+/**
+ * TokenDetails
+ *
+ * {
+ *   "lexeme": String
+ *   "type": optional String
+ *   "validElementKinds": optional List<String>
+ *   "offset": int
+ * }
+ */
+final Matcher isTokenDetails = new LazyMatcher(() => new MatchesJsonObject(
+        "TokenDetails", {
+      "lexeme": isString,
+      "offset": isInt
+    }, optionalFields: {
+      "type": isString,
+      "validElementKinds": isListOf(isString)
+    }));
 
 /**
  * TypeHierarchyItem
@@ -1674,6 +2030,32 @@ final Matcher isAnalysisGetReachableSourcesResult = new LazyMatcher(() =>
         {"sources": isMapOf(isString, isListOf(isString))}));
 
 /**
+ * analysis.getSignature params
+ *
+ * {
+ *   "file": FilePath
+ *   "offset": int
+ * }
+ */
+final Matcher isAnalysisGetSignatureParams = new LazyMatcher(() =>
+    new MatchesJsonObject(
+        "analysis.getSignature params", {"file": isFilePath, "offset": isInt}));
+
+/**
+ * analysis.getSignature result
+ *
+ * {
+ *   "name": String
+ *   "parameters": List<ParameterInfo>
+ *   "dartdoc": optional String
+ * }
+ */
+final Matcher isAnalysisGetSignatureResult = new LazyMatcher(() =>
+    new MatchesJsonObject("analysis.getSignature result",
+        {"name": isString, "parameters": isListOf(isParameterInfo)},
+        optionalFields: {"dartdoc": isString}));
+
+/**
  * analysis.highlights params
  *
  * {
@@ -1778,14 +2160,8 @@ final Matcher isAnalysisOverridesParams = new LazyMatcher(() =>
 
 /**
  * analysis.reanalyze params
- *
- * {
- *   "roots": optional List<FilePath>
- * }
  */
-final Matcher isAnalysisReanalyzeParams = new LazyMatcher(() =>
-    new MatchesJsonObject("analysis.reanalyze params", null,
-        optionalFields: {"roots": isListOf(isFilePath)}));
+final Matcher isAnalysisReanalyzeParams = isNull;
 
 /**
  * analysis.reanalyze result
@@ -1965,6 +2341,60 @@ final Matcher isAnalyticsSendTimingParams = new LazyMatcher(() =>
 final Matcher isAnalyticsSendTimingResult = isNull;
 
 /**
+ * completion.availableSuggestions params
+ *
+ * {
+ *   "changedLibraries": optional List<AvailableSuggestionSet>
+ *   "removedLibraries": optional List<int>
+ * }
+ */
+final Matcher isCompletionAvailableSuggestionsParams = new LazyMatcher(() =>
+    new MatchesJsonObject("completion.availableSuggestions params", null,
+        optionalFields: {
+          "changedLibraries": isListOf(isAvailableSuggestionSet),
+          "removedLibraries": isListOf(isInt)
+        }));
+
+/**
+ * completion.existingImports params
+ *
+ * {
+ *   "file": FilePath
+ *   "imports": ExistingImports
+ * }
+ */
+final Matcher isCompletionExistingImportsParams = new LazyMatcher(() =>
+    new MatchesJsonObject("completion.existingImports params",
+        {"file": isFilePath, "imports": isExistingImports}));
+
+/**
+ * completion.getSuggestionDetails params
+ *
+ * {
+ *   "file": FilePath
+ *   "id": int
+ *   "label": String
+ *   "offset": int
+ * }
+ */
+final Matcher isCompletionGetSuggestionDetailsParams = new LazyMatcher(() =>
+    new MatchesJsonObject("completion.getSuggestionDetails params",
+        {"file": isFilePath, "id": isInt, "label": isString, "offset": isInt}));
+
+/**
+ * completion.getSuggestionDetails result
+ *
+ * {
+ *   "completion": String
+ *   "change": optional SourceChange
+ * }
+ */
+final Matcher isCompletionGetSuggestionDetailsResult = new LazyMatcher(() =>
+    new MatchesJsonObject(
+        "completion.getSuggestionDetails result", {"completion": isString},
+        optionalFields: {"change": isSourceChange}));
+
+/**
  * completion.getSuggestions params
  *
  * {
@@ -1988,6 +2418,44 @@ final Matcher isCompletionGetSuggestionsResult = new LazyMatcher(() =>
         "completion.getSuggestions result", {"id": isCompletionId}));
 
 /**
+ * completion.listTokenDetails params
+ *
+ * {
+ *   "file": FilePath
+ * }
+ */
+final Matcher isCompletionListTokenDetailsParams = new LazyMatcher(() =>
+    new MatchesJsonObject(
+        "completion.listTokenDetails params", {"file": isFilePath}));
+
+/**
+ * completion.listTokenDetails result
+ *
+ * {
+ *   "tokens": List<TokenDetails>
+ * }
+ */
+final Matcher isCompletionListTokenDetailsResult = new LazyMatcher(() =>
+    new MatchesJsonObject("completion.listTokenDetails result",
+        {"tokens": isListOf(isTokenDetails)}));
+
+/**
+ * completion.registerLibraryPaths params
+ *
+ * {
+ *   "paths": List<LibraryPathSet>
+ * }
+ */
+final Matcher isCompletionRegisterLibraryPathsParams = new LazyMatcher(() =>
+    new MatchesJsonObject("completion.registerLibraryPaths params",
+        {"paths": isListOf(isLibraryPathSet)}));
+
+/**
+ * completion.registerLibraryPaths result
+ */
+final Matcher isCompletionRegisterLibraryPathsResult = isNull;
+
+/**
  * completion.results params
  *
  * {
@@ -1996,6 +2464,10 @@ final Matcher isCompletionGetSuggestionsResult = new LazyMatcher(() =>
  *   "replacementLength": int
  *   "results": List<CompletionSuggestion>
  *   "isLast": bool
+ *   "libraryFile": optional FilePath
+ *   "includedSuggestionSets": optional List<IncludedSuggestionSet>
+ *   "includedElementKinds": optional List<ElementKind>
+ *   "includedSuggestionRelevanceTags": optional List<IncludedSuggestionRelevanceTag>
  * }
  */
 final Matcher isCompletionResultsParams =
@@ -2005,7 +2477,29 @@ final Matcher isCompletionResultsParams =
           "replacementLength": isInt,
           "results": isListOf(isCompletionSuggestion),
           "isLast": isBool
+        }, optionalFields: {
+          "libraryFile": isFilePath,
+          "includedSuggestionSets": isListOf(isIncludedSuggestionSet),
+          "includedElementKinds": isListOf(isElementKind),
+          "includedSuggestionRelevanceTags":
+              isListOf(isIncludedSuggestionRelevanceTag)
         }));
+
+/**
+ * completion.setSubscriptions params
+ *
+ * {
+ *   "subscriptions": List<CompletionService>
+ * }
+ */
+final Matcher isCompletionSetSubscriptionsParams = new LazyMatcher(() =>
+    new MatchesJsonObject("completion.setSubscriptions params",
+        {"subscriptions": isListOf(isCompletionService)}));
+
+/**
+ * completion.setSubscriptions result
+ */
+final Matcher isCompletionSetSubscriptionsResult = isNull;
 
 /**
  * convertGetterToMethod feedback
@@ -2057,6 +2551,50 @@ final Matcher isDiagnosticGetServerPortParams = isNull;
  */
 final Matcher isDiagnosticGetServerPortResult = new LazyMatcher(() =>
     new MatchesJsonObject("diagnostic.getServerPort result", {"port": isInt}));
+
+/**
+ * edit.dartfix params
+ *
+ * {
+ *   "included": List<FilePath>
+ *   "includedFixes": optional List<String>
+ *   "includePedanticFixes": optional bool
+ *   "includeRequiredFixes": optional bool
+ *   "excludedFixes": optional List<String>
+ *   "outputDir": optional FilePath
+ * }
+ */
+final Matcher isEditDartfixParams =
+    new LazyMatcher(() => new MatchesJsonObject("edit.dartfix params", {
+          "included": isListOf(isFilePath)
+        }, optionalFields: {
+          "includedFixes": isListOf(isString),
+          "includePedanticFixes": isBool,
+          "includeRequiredFixes": isBool,
+          "excludedFixes": isListOf(isString),
+          "outputDir": isFilePath
+        }));
+
+/**
+ * edit.dartfix result
+ *
+ * {
+ *   "suggestions": List<DartFixSuggestion>
+ *   "otherSuggestions": List<DartFixSuggestion>
+ *   "hasErrors": bool
+ *   "edits": List<SourceFileEdit>
+ *   "details": optional List<String>
+ * }
+ */
+final Matcher isEditDartfixResult =
+    new LazyMatcher(() => new MatchesJsonObject("edit.dartfix result", {
+          "suggestions": isListOf(isDartFixSuggestion),
+          "otherSuggestions": isListOf(isDartFixSuggestion),
+          "hasErrors": isBool,
+          "edits": isListOf(isSourceFileEdit)
+        }, optionalFields: {
+          "details": isListOf(isString)
+        }));
 
 /**
  * edit.format params
@@ -2136,6 +2674,26 @@ final Matcher isEditGetAvailableRefactoringsParams = new LazyMatcher(() =>
 final Matcher isEditGetAvailableRefactoringsResult = new LazyMatcher(() =>
     new MatchesJsonObject("edit.getAvailableRefactorings result",
         {"kinds": isListOf(isRefactoringKind)}));
+
+/**
+ * edit.getDartfixInfo params
+ *
+ * {
+ * }
+ */
+final Matcher isEditGetDartfixInfoParams = new LazyMatcher(
+    () => new MatchesJsonObject("edit.getDartfixInfo params", null));
+
+/**
+ * edit.getDartfixInfo result
+ *
+ * {
+ *   "fixes": List<DartFix>
+ * }
+ */
+final Matcher isEditGetDartfixInfoResult = new LazyMatcher(() =>
+    new MatchesJsonObject(
+        "edit.getDartfixInfo result", {"fixes": isListOf(isDartFix)}));
 
 /**
  * edit.getFixes params
@@ -2260,22 +2818,24 @@ final Matcher isEditGetStatementCompletionResult = new LazyMatcher(() =>
  * {
  *   "file": FilePath
  *   "elements": List<ImportedElements>
+ *   "offset": optional int
  * }
  */
 final Matcher isEditImportElementsParams = new LazyMatcher(() =>
     new MatchesJsonObject("edit.importElements params",
-        {"file": isFilePath, "elements": isListOf(isImportedElements)}));
+        {"file": isFilePath, "elements": isListOf(isImportedElements)},
+        optionalFields: {"offset": isInt}));
 
 /**
  * edit.importElements result
  *
  * {
- *   "edit": SourceFileEdit
+ *   "edit": optional SourceFileEdit
  * }
  */
 final Matcher isEditImportElementsResult = new LazyMatcher(() =>
-    new MatchesJsonObject(
-        "edit.importElements result", {"edit": isSourceFileEdit}));
+    new MatchesJsonObject("edit.importElements result", null,
+        optionalFields: {"edit": isSourceFileEdit}));
 
 /**
  * edit.isPostfixCompletionApplicable params
@@ -2594,29 +3154,27 @@ final Matcher isExtractWidgetOptions = new LazyMatcher(
     () => new MatchesJsonObject("extractWidget options", {"name": isString}));
 
 /**
- * flutter.getChangeAddForDesignTimeConstructor params
+ * flutter.getWidgetDescription params
  *
  * {
  *   "file": FilePath
  *   "offset": int
  * }
  */
-final Matcher isFlutterGetChangeAddForDesignTimeConstructorParams =
-    new LazyMatcher(() => new MatchesJsonObject(
-        "flutter.getChangeAddForDesignTimeConstructor params",
+final Matcher isFlutterGetWidgetDescriptionParams = new LazyMatcher(() =>
+    new MatchesJsonObject("flutter.getWidgetDescription params",
         {"file": isFilePath, "offset": isInt}));
 
 /**
- * flutter.getChangeAddForDesignTimeConstructor result
+ * flutter.getWidgetDescription result
  *
  * {
- *   "change": SourceChange
+ *   "properties": List<FlutterWidgetProperty>
  * }
  */
-final Matcher isFlutterGetChangeAddForDesignTimeConstructorResult =
-    new LazyMatcher(() => new MatchesJsonObject(
-        "flutter.getChangeAddForDesignTimeConstructor result",
-        {"change": isSourceChange}));
+final Matcher isFlutterGetWidgetDescriptionResult = new LazyMatcher(() =>
+    new MatchesJsonObject("flutter.getWidgetDescription result",
+        {"properties": isListOf(isFlutterWidgetProperty)}));
 
 /**
  * flutter.outline params
@@ -2624,13 +3182,11 @@ final Matcher isFlutterGetChangeAddForDesignTimeConstructorResult =
  * {
  *   "file": FilePath
  *   "outline": FlutterOutline
- *   "instrumentedCode": optional String
  * }
  */
 final Matcher isFlutterOutlineParams = new LazyMatcher(() =>
     new MatchesJsonObject("flutter.outline params",
-        {"file": isFilePath, "outline": isFlutterOutline},
-        optionalFields: {"instrumentedCode": isString}));
+        {"file": isFilePath, "outline": isFlutterOutline}));
 
 /**
  * flutter.setSubscriptions params
@@ -2647,6 +3203,30 @@ final Matcher isFlutterSetSubscriptionsParams = new LazyMatcher(() =>
  * flutter.setSubscriptions result
  */
 final Matcher isFlutterSetSubscriptionsResult = isNull;
+
+/**
+ * flutter.setWidgetPropertyValue params
+ *
+ * {
+ *   "id": int
+ *   "value": optional FlutterWidgetPropertyValue
+ * }
+ */
+final Matcher isFlutterSetWidgetPropertyValueParams = new LazyMatcher(() =>
+    new MatchesJsonObject(
+        "flutter.setWidgetPropertyValue params", {"id": isInt},
+        optionalFields: {"value": isFlutterWidgetPropertyValue}));
+
+/**
+ * flutter.setWidgetPropertyValue result
+ *
+ * {
+ *   "change": SourceChange
+ * }
+ */
+final Matcher isFlutterSetWidgetPropertyValueResult = new LazyMatcher(() =>
+    new MatchesJsonObject(
+        "flutter.setWidgetPropertyValue result", {"change": isSourceChange}));
 
 /**
  * inlineLocalVariable feedback
@@ -2961,6 +3541,16 @@ final Matcher isServerGetVersionParams = isNull;
  */
 final Matcher isServerGetVersionResult = new LazyMatcher(() =>
     new MatchesJsonObject("server.getVersion result", {"version": isString}));
+
+/**
+ * server.log params
+ *
+ * {
+ *   "entry": ServerLogEntry
+ * }
+ */
+final Matcher isServerLogParams = new LazyMatcher(() =>
+    new MatchesJsonObject("server.log params", {"entry": isServerLogEntry}));
 
 /**
  * server.setSubscriptions params

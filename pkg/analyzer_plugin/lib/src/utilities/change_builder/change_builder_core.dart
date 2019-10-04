@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -21,15 +21,15 @@ class ChangeBuilderImpl implements ChangeBuilder {
   String eol = null;
 
   /**
-   * The change that is being built.
-   */
-  final SourceChange _change = new SourceChange('');
-
-  /**
    * A table mapping group ids to the associated linked edit groups.
    */
   final Map<String, LinkedEditGroup> _linkedEditGroups =
       <String, LinkedEditGroup>{};
+
+  /**
+   * The source change selection or `null` if none.
+   */
+  Position _selection;
 
   /**
    * The range of the selection for the change being built, or `null` if there
@@ -44,6 +44,11 @@ class ChangeBuilderImpl implements ChangeBuilder {
   final Set<Position> _lockedPositions = new HashSet<Position>.identity();
 
   /**
+   * A map of absolute normalized path to file edit builder.
+   */
+  final _fileEditBuilders = <String, FileEditBuilderImpl>{};
+
+  /**
    * Initialize a newly created change builder.
    */
   ChangeBuilderImpl();
@@ -53,22 +58,35 @@ class ChangeBuilderImpl implements ChangeBuilder {
 
   @override
   SourceChange get sourceChange {
+    final SourceChange change = new SourceChange('');
+    for (var builder in _fileEditBuilders.values) {
+      if (builder.hasEdits) {
+        change.addFileEdit(builder.fileEdit);
+        builder.finalize();
+      }
+    }
     _linkedEditGroups.forEach((String name, LinkedEditGroup group) {
-      _change.addLinkedEditGroup(group);
+      change.addLinkedEditGroup(group);
     });
-    _linkedEditGroups.clear();
-    return _change;
+    if (_selection != null) {
+      change.selection = _selection;
+    }
+    return change;
   }
 
   @override
-  Future<Null> addFileEdit(
+  Future<void> addFileEdit(
       String path, void buildFileEdit(FileEditBuilder builder)) async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
-    FileEditBuilderImpl builder = await createFileEditBuilder(path);
-    buildFileEdit(builder);
-    _change.addFileEdit(builder.fileEdit);
-    await builder.finalize();
+    FileEditBuilderImpl builder = _fileEditBuilders[path];
+    if (builder == null) {
+      builder = await createFileEditBuilder(path);
+      if (builder != null) {
+        _fileEditBuilders[path] = builder;
+      }
+    }
+    if (builder != null) {
+      buildFileEdit(builder);
+    }
   }
 
   /**
@@ -96,7 +114,7 @@ class ChangeBuilderImpl implements ChangeBuilder {
 
   @override
   void setSelection(Position position) {
-    _change.selection = position;
+    _selection = position;
   }
 
   void _setSelectionRange(SourceRange range) {
@@ -120,9 +138,8 @@ class ChangeBuilderImpl implements ChangeBuilder {
         _updatePosition(position);
       }
     }
-    Position selection = _change.selection;
-    if (selection != null) {
-      _updatePosition(selection);
+    if (_selection != null) {
+      _updatePosition(_selection);
     }
   }
 }
@@ -275,10 +292,17 @@ class FileEditBuilderImpl implements FileEditBuilder {
   FileEditBuilderImpl(this.changeBuilder, String path, int timeStamp)
       : fileEdit = new SourceFileEdit(path, timeStamp);
 
+  /**
+   * Return `true` if this builder has edits to be applied.
+   */
+  bool get hasEdits => fileEdit.edits.isNotEmpty;
+
   @override
   void addDeletion(SourceRange range) {
-    EditBuilderImpl builder = createEditBuilder(range.offset, range.length);
-    _addEdit(builder);
+    if (range.length > 0) {
+      EditBuilderImpl builder = createEditBuilder(range.offset, range.length);
+      _addEditBuilder(builder);
+    }
   }
 
   @override
@@ -287,7 +311,7 @@ class FileEditBuilderImpl implements FileEditBuilder {
     try {
       buildEdit(builder);
     } finally {
-      _addEdit(builder);
+      _addEditBuilder(builder);
     }
   }
 
@@ -305,7 +329,7 @@ class FileEditBuilderImpl implements FileEditBuilder {
     try {
       buildEdit(builder);
     } finally {
-      _addEdit(builder);
+      _addEditBuilder(builder);
     }
   }
 
@@ -315,7 +339,7 @@ class FileEditBuilderImpl implements FileEditBuilder {
     try {
       builder.write(text);
     } finally {
-      _addEdit(builder);
+      _addEditBuilder(builder);
     }
   }
 
@@ -325,7 +349,7 @@ class FileEditBuilderImpl implements FileEditBuilder {
     try {
       builder.write(text);
     } finally {
-      _addEdit(builder);
+      _addEditBuilder(builder);
     }
   }
 
@@ -336,22 +360,49 @@ class FileEditBuilderImpl implements FileEditBuilder {
   /**
    * Finalize the source file edit that is being built.
    */
-  Future<Null> finalize() async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
+  void finalize() {
     // Nothing to do.
+  }
+
+  /**
+   * Replace edits in the [range] with the given [edit].
+   * The [range] is relative to the original code.
+   */
+  void replaceEdits(SourceRange range, SourceEdit edit) {
+    fileEdit.edits.removeWhere((edit) {
+      if (range.contains(edit.offset)) {
+        if (!range.contains(edit.end)) {
+          throw StateError('$edit is not completely in $range');
+        }
+        return true;
+      } else if (range.contains(edit.end)) {
+        throw StateError('$edit is not completely in $range');
+      }
+      return false;
+    });
+
+    _addEdit(edit);
+  }
+
+  /**
+   * Add the edit from the given [edit] to the edits associates with the
+   * current file.
+   */
+  void _addEdit(SourceEdit edit) {
+    fileEdit.add(edit);
+    int delta = _editDelta(edit);
+    changeBuilder._updatePositions(
+        edit.offset + math.max<int>(0, delta), delta);
+    changeBuilder._lockedPositions.clear();
   }
 
   /**
    * Add the edit from the given [builder] to the edits associates with the
    * current file.
    */
-  void _addEdit(EditBuilderImpl builder) {
+  void _addEditBuilder(EditBuilderImpl builder) {
     SourceEdit edit = builder.sourceEdit;
-    fileEdit.add(edit);
-    int delta = _editDelta(edit);
-    changeBuilder._updatePositions(edit.offset + math.max(0, delta), delta);
-    changeBuilder._lockedPositions.clear();
+    _addEdit(edit);
     _captureSelection(builder, edit);
   }
 

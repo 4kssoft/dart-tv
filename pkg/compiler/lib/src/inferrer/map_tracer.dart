@@ -4,8 +4,8 @@
 
 library compiler.src.inferrer.map_tracer;
 
+import '../common/names.dart';
 import '../elements/entities.dart';
-import '../js_backend/backend.dart' show JavaScriptBackend;
 import '../universe/selector.dart' show Selector;
 import 'node_tracer.dart';
 import 'type_graph_nodes.dart';
@@ -43,12 +43,10 @@ class MapTracerVisitor extends TracerVisitor {
 
   MapTracerVisitor(tracedType, inferrer) : super(tracedType, inferrer);
 
-  /**
-   * Returns [true] if the analysis completed successfully, [false]
-   * if it bailed out. In the former case, [keyAssignments] and
-   * [valueAssignments] hold a list of [TypeInformation] nodes that
-   * flow into the key and value types of this map.
-   */
+  /// Returns [true] if the analysis completed successfully, [false]
+  /// if it bailed out. In the former case, [keyAssignments] and
+  /// [valueAssignments] hold a list of [TypeInformation] nodes that
+  /// flow into the key and value types of this map.
   bool run() {
     analyze();
     MapTypeInformation map = tracedType;
@@ -60,19 +58,22 @@ class MapTracerVisitor extends TracerVisitor {
     return false;
   }
 
+  @override
   visitClosureCallSiteTypeInformation(ClosureCallSiteTypeInformation info) {
     bailout('Passed to a closure');
   }
 
+  @override
   visitStaticCallSiteTypeInformation(StaticCallSiteTypeInformation info) {
     super.visitStaticCallSiteTypeInformation(info);
     MemberEntity called = info.calledElement;
     if (inferrer.closedWorld.commonElements.isForeign(called) &&
-        called.name == JavaScriptBackend.JS) {
+        called.name == Identifiers.JS) {
       bailout('Used in JS ${info.debugName}');
     }
   }
 
+  @override
   visitDynamicCallSiteTypeInformation(DynamicCallSiteTypeInformation info) {
     super.visitDynamicCallSiteTypeInformation(info);
     Selector selector = info.selector;

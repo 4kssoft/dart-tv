@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -27,9 +27,8 @@ class ColdAnalysisBenchmark extends Benchmark {
 
   @override
   Future<BenchMarkResult> run({
-    bool quick: false,
-    bool useCFE: false,
-    bool verbose: false,
+    bool quick = false,
+    bool verbose = false,
   }) async {
     if (!quick) {
       deleteServerCache();
@@ -38,13 +37,13 @@ class ColdAnalysisBenchmark extends Benchmark {
     Stopwatch stopwatch = new Stopwatch()..start();
 
     AnalysisServerMemoryUsageTest test = new AnalysisServerMemoryUsageTest();
-    await test.setUp(useCFE: useCFE);
+    await test.setUp();
     await test.subscribeToStatusNotifications();
     await test.sendAnalysisSetAnalysisRoots(getProjectRoots(quick: quick), []);
     await test.analysisFinished;
 
     stopwatch.stop();
-    int usedBytes = test.getMemoryUsage();
+    int usedBytes = await test.getMemoryUsage();
 
     CompoundBenchMarkResult result = new CompoundBenchMarkResult(id);
     result.add('analysis',
@@ -72,9 +71,8 @@ class AnalysisBenchmark extends Benchmark {
 
   @override
   Future<BenchMarkResult> run({
-    bool quick: false,
-    bool useCFE: false,
-    bool verbose: false,
+    bool quick = false,
+    bool verbose = false,
   }) async {
     Stopwatch stopwatch = new Stopwatch()..start();
 
@@ -82,13 +80,13 @@ class AnalysisBenchmark extends Benchmark {
     if (verbose) {
       test.debugStdio();
     }
-    await test.setUp(useCFE: useCFE);
+    await test.setUp();
     await test.subscribeToStatusNotifications();
     await test.sendAnalysisSetAnalysisRoots(getProjectRoots(quick: quick), []);
     await test.analysisFinished;
 
     stopwatch.stop();
-    int usedBytes = test.getMemoryUsage();
+    int usedBytes = await test.getMemoryUsage();
 
     CompoundBenchMarkResult result = new CompoundBenchMarkResult(id);
     result.add('warm-analysis',
@@ -129,7 +127,7 @@ class AnalysisBenchmark extends Benchmark {
       contents = contents.substring(0, index + 1) +
           ' ' +
           contents.substring(index + 1);
-      test.sendAnalysisUpdateContent(
+      await test.sendAnalysisUpdateContent(
           {filePath: new AddContentOverlay(contents)});
       await test.analysisFinished;
     }
@@ -154,10 +152,18 @@ class AnalysisBenchmark extends Benchmark {
     final Stopwatch stopwatch = new Stopwatch()..start();
 
     Future _complete(int offset) async {
+      // Create a new non-broadcast stream and subscribe to
+      // test.onCompletionResults before sending a request.
+      // Otherwise we could skip results which where posted to
+      // test.onCompletionResults after request is sent but
+      // before subscribing to test.onCompletionResults.
+      final completionResults = new StreamController<CompletionResultsParams>();
+      completionResults.sink.addStream(test.onCompletionResults);
+
       CompletionGetSuggestionsResult result =
           await test.sendCompletionGetSuggestions(filePath, offset);
 
-      Future<CompletionResultsParams> future = test.onCompletionResults
+      Future<CompletionResultsParams> future = completionResults.stream
           .where((CompletionResultsParams params) =>
               params.id == result.id && params.isLast)
           .first;

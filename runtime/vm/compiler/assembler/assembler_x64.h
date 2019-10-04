@@ -9,18 +9,21 @@
 #error Do not include assembler_x64.h directly; use assembler.h instead.
 #endif
 
+#include <functional>
+
 #include "platform/assert.h"
 #include "platform/utils.h"
-#include "vm/constants_x64.h"
+#include "vm/constants.h"
 #include "vm/constants_x86.h"
 #include "vm/hash_map.h"
-#include "vm/object.h"
+#include "vm/pointer_tagging.h"
 
 namespace dart {
 
 // Forward declarations.
-class RuntimeEntry;
-class StubEntry;
+class FlowGraphCompiler;
+
+namespace compiler {
 
 class Immediate : public ValueObject {
  public:
@@ -275,9 +278,10 @@ class FieldAddress : public Address {
   }
 };
 
-class Assembler : public ValueObject {
+class Assembler : public AssemblerBase {
  public:
-  explicit Assembler(bool use_far_branches = false);
+  explicit Assembler(ObjectPoolBuilder* object_pool_builder,
+                     bool use_far_branches = false);
 
   ~Assembler() {}
 
@@ -292,8 +296,6 @@ class Assembler : public ValueObject {
   void call(Label* label);
   void call(const ExternalLabel* label);
 
-  static const intptr_t kCallExternalLabelSize = 15;
-
   void pushq(Register reg);
   void pushq(const Address& address) { EmitUnaryL(address, 0xFF, 6); }
   void pushq(const Immediate& imm);
@@ -303,6 +305,13 @@ class Assembler : public ValueObject {
   void popq(const Address& address) { EmitUnaryL(address, 0x8F, 0); }
 
   void setcc(Condition condition, ByteRegister dst);
+
+  void EnterSafepoint();
+  void LeaveSafepoint();
+  void TransitionGeneratedToNative(Register destination_address,
+                                   Register new_exit_frame,
+                                   bool enter_safepoint);
+  void TransitionNativeToGenerated(bool leave_safepoint);
 
 // Register-register, register-address and address-register instructions.
 #define RR(width, name, ...)                                                   \
@@ -325,7 +334,10 @@ class Assembler : public ValueObject {
   REGULAR_INSTRUCTION(test, 0x85)
   REGULAR_INSTRUCTION(xchg, 0x87)
   REGULAR_INSTRUCTION(imul, 0xAF, 0x0F)
+  REGULAR_INSTRUCTION(bsf, 0xBC, 0x0F)
   REGULAR_INSTRUCTION(bsr, 0xBD, 0x0F)
+  REGULAR_INSTRUCTION(popcnt, 0xB8, 0x0F, 0xF3)
+  REGULAR_INSTRUCTION(lzcnt, 0xBD, 0x0F, 0xF3)
 #undef REGULAR_INSTRUCTION
   RA(Q, movsxd, 0x63)
   RR(Q, movsxd, 0x63)
@@ -472,6 +484,10 @@ class Assembler : public ValueObject {
   // for proper unwinding of Dart frames (use --generate_gdb_symbols and -O0).
   void movq(Register dst, Register src) { EmitQ(src, dst, 0x89); }
 
+  void movq(XmmRegister dst, Register src) {
+    EmitQ(dst, src, 0x6E, 0x0F, 0x66);
+  }
+
   void movd(XmmRegister dst, Register src) {
     EmitL(dst, src, 0x6E, 0x0F, 0x66);
   }
@@ -523,6 +539,7 @@ class Assembler : public ValueObject {
 
   void testl(Register reg, const Immediate& imm) { testq(reg, imm); }
   void testb(const Address& address, const Immediate& imm);
+  void testb(const Address& address, Register reg);
 
   void testq(Register reg, const Immediate& imm);
   void TestImmediate(Register dst, const Immediate& imm);
@@ -576,6 +593,7 @@ class Assembler : public ValueObject {
   REGULAR_UNARY(not, 0xF7, 2)
   REGULAR_UNARY(neg, 0xF7, 3)
   REGULAR_UNARY(mul, 0xF7, 4)
+  REGULAR_UNARY(imul, 0xF7, 5)
   REGULAR_UNARY(div, 0xF7, 6)
   REGULAR_UNARY(idiv, 0xF7, 7)
   REGULAR_UNARY(inc, 0xFF, 0)
@@ -628,7 +646,7 @@ class Assembler : public ValueObject {
   void jmp(const Address& address) { EmitUnaryL(address, 0xFF, 4); }
   void jmp(Label* label, bool near = kFarJump);
   void jmp(const ExternalLabel* label);
-  void jmp(const StubEntry& stub_entry);
+  void jmp(const Code& code);
 
   // Issue memory to memory move through a TMP register.
   // TODO(koda): Assert that these are not used for heap objects.
@@ -685,20 +703,23 @@ class Assembler : public ValueObject {
   void LoadUniqueObject(Register dst, const Object& obj);
   void LoadNativeEntry(Register dst,
                        const ExternalLabel* label,
-                       Patchability patchable);
-  void LoadFunctionFromCalleePool(Register dst,
-                                  const Function& function,
-                                  Register new_pp);
-  void JmpPatchable(const StubEntry& stub_entry, Register pp);
-  void Jmp(const StubEntry& stub_entry, Register pp = PP);
-  void J(Condition condition, const StubEntry& stub_entry, Register pp);
-  void CallPatchable(const StubEntry& stub_entry);
-  void Call(const StubEntry& stub_entry);
+                       ObjectPoolBuilderEntry::Patchability patchable);
+  void JmpPatchable(const Code& code, Register pp);
+  void Jmp(const Code& code, Register pp = PP);
+  void J(Condition condition, const Code& code, Register pp);
+  void CallPatchable(const Code& code,
+                     CodeEntryKind entry_kind = CodeEntryKind::kNormal);
+  void Call(const Code& stub_entry);
   void CallToRuntime();
+
+  void CallNullErrorShared(bool save_fpu_registers);
+
   // Emit a call that shares its object pool entries with other calls
   // that have the same equivalence marker.
-  void CallWithEquivalence(const StubEntry& stub_entry,
-                           const Object& equivalence);
+  void CallWithEquivalence(const Code& code,
+                           const Object& equivalence,
+                           CodeEntryKind entry_kind = CodeEntryKind::kNormal);
+
   // Unaware of write barrier (use StoreInto* methods for storing to objects).
   // TODO(koda): Add StackAddress/HeapAddress types to prevent misuse.
   void StoreObject(const Address& dst, const Object& obj);
@@ -710,11 +731,19 @@ class Assembler : public ValueObject {
     kValueCanBeSmi,
   };
 
-  // Destroys value.
+  // Store into a heap object and apply the generational and incremental write
+  // barriers. All stores into heap objects must pass through this function or,
+  // if the value can be proven either Smi or old-and-premarked, its NoBarrier
+  // variants.
+  // Preserves object and value registers.
   void StoreIntoObject(Register object,      // Object we are storing into.
                        const Address& dest,  // Where we are storing into.
                        Register value,       // Value we are storing.
                        CanBeSmi can_be_smi = kValueCanBeSmi);
+  void StoreIntoArray(Register object,  // Object we are storing into.
+                      Register slot,    // Where we are storing into.
+                      Register value,   // Value we are storing.
+                      CanBeSmi can_be_smi = kValueCanBeSmi);
 
   void StoreIntoObjectNoBarrier(Register object,
                                 const Address& dest,
@@ -722,6 +751,11 @@ class Assembler : public ValueObject {
   void StoreIntoObjectNoBarrier(Register object,
                                 const Address& dest,
                                 const Object& value);
+
+  // Stores a non-tagged value into a heap object.
+  void StoreInternalPointer(Register object,
+                            const Address& dest,
+                            Register value);
 
   // Stores a Smi value into a heap object field that always contains a Smi.
   void StoreIntoSmiField(const Address& dest, Register value);
@@ -751,6 +785,13 @@ class Assembler : public ValueObject {
   void LeaveFrame();
   void ReserveAlignedFrameSpace(intptr_t frame_space);
 
+  // In debug mode, generates code to verify that:
+  //   FP + kExitLinkSlotFromFp == SP
+  //
+  // Triggers breakpoint otherwise.
+  // Clobbers RAX.
+  void EmitEntryFrameVerification();
+
   // Create a frame for calling into runtime that preserves all volatile
   // registers.  Frame's RSP is guaranteed to be correctly aligned and
   // frame_space bytes are reserved under it.
@@ -765,11 +806,7 @@ class Assembler : public ValueObject {
 
   // Loading and comparing classes of objects.
   void LoadClassId(Register result, Register object);
-
-  // Overwrites class_id register.
   void LoadClassById(Register result, Register class_id);
-
-  void LoadClass(Register result, Register object);
 
   void CompareClassId(Register object,
                       intptr_t class_id,
@@ -807,36 +844,6 @@ class Assembler : public ValueObject {
     cmpq(value, address);
   }
 
-  void Comment(const char* format, ...) PRINTF_ATTRIBUTE(2, 3);
-  static bool EmittingComments();
-
-  const Code::Comments& GetCodeComments() const;
-
-  // Address of code at offset.
-  uword CodeAddress(intptr_t offset) { return buffer_.Address(offset); }
-
-  intptr_t CodeSize() const { return buffer_.Size(); }
-  intptr_t prologue_offset() const { return prologue_offset_; }
-  bool has_single_entry_point() const { return has_single_entry_point_; }
-
-  // Count the fixups that produce a pointer offset, without processing
-  // the fixups.
-  intptr_t CountPointerOffsets() const { return buffer_.CountPointerOffsets(); }
-
-  const ZoneGrowableArray<intptr_t>& GetPointerOffsets() const {
-    return buffer_.pointer_offsets();
-  }
-
-  ObjectPoolWrapper& object_pool_wrapper() { return object_pool_wrapper_; }
-
-  RawObjectPool* MakeObjectPool() {
-    return object_pool_wrapper_.MakeObjectPool();
-  }
-
-  void FinalizeInstructions(const MemoryRegion& region) {
-    buffer_.FinalizeInstructions(region);
-  }
-
   void RestoreCodePointer();
   void LoadPoolPointer(Register pp = PP);
 
@@ -847,7 +854,7 @@ class Assembler : public ValueObject {
   //   ....
   //   locals space  <=== RSP
   //   saved PP
-  //   pc (used to derive the RawInstruction Object of the dart code)
+  //   code object (used to derive the RawInstruction Object of the dart code)
   //   saved RBP     <=== RBP
   //   ret PC
   //   .....
@@ -859,7 +866,7 @@ class Assembler : public ValueObject {
   //   ...
   //   pushq r15
   //   .....
-  void EnterDartFrame(intptr_t frame_size, Register new_pp);
+  void EnterDartFrame(intptr_t frame_size, Register new_pp = kNoRegister);
   void LeaveDartFrame(RestorePP restore_pp = kRestoreCallerPP);
 
   // Set up a Dart frame for a function compiled for on-stack replacement.
@@ -883,16 +890,14 @@ class Assembler : public ValueObject {
   void EnterStubFrame();
   void LeaveStubFrame();
 
-  void MonomorphicCheckedEntry();
+  void MonomorphicCheckedEntryJIT();
+  void MonomorphicCheckedEntryAOT();
+  void BranchOnMonomorphicCheckedEntryJIT(Label* label);
 
-  void UpdateAllocationStats(intptr_t cid, Heap::Space space);
+  void UpdateAllocationStats(intptr_t cid);
 
-  void UpdateAllocationStatsWithSize(intptr_t cid,
-                                     Register size_reg,
-                                     Heap::Space space);
-  void UpdateAllocationStatsWithSize(intptr_t cid,
-                                     intptr_t instance_size,
-                                     Heap::Space space);
+  void UpdateAllocationStatsWithSize(intptr_t cid, Register size_reg);
+  void UpdateAllocationStatsWithSize(intptr_t cid, intptr_t instance_size);
 
   // If allocation tracing for |cid| is enabled, will jump to |trace| label,
   // which will allocate in the runtime where tracing occurs.
@@ -916,18 +921,28 @@ class Assembler : public ValueObject {
                         Register end_address,
                         Register temp);
 
+  // This emits an PC-relative call of the form "callq *[rip+<offset>]".  The
+  // offset is not yet known and needs therefore relocation to the right place
+  // before the code can be used.
+  //
+  // The neccessary information for the "linker" (i.e. the relocation
+  // information) is stored in [RawCode::static_calls_target_table_]: an entry
+  // of the form
+  //
+  //   (Code::kPcRelativeCall & pc_offset, <target-code>, <target-function>)
+  //
+  // will be used during relocation to fix the offset.
+  //
+  // The provided [offset_into_target] will be added to calculate the final
+  // destination.  It can be used e.g. for calling into the middle of a
+  // function.
+  void GenerateUnRelocatedPcRelativeCall(intptr_t offset_into_target = 0);
+
   // Debugging and bringup support.
-  void Breakpoint() { int3(); }
-  void Stop(const char* message, bool fixed_length_encoding = false);
-  void Unimplemented(const char* message);
-  void Untested(const char* message);
-  void Unreachable(const char* message);
+  void Breakpoint() override { int3(); }
+  void Stop(const char* message) override;
 
   static void InitializeMemoryWithBreakpoints(uword data, intptr_t length);
-
-  static const char* RegisterName(Register reg);
-
-  static const char* FpuRegisterName(FpuRegister reg);
 
   static Address ElementAddressForIntIndex(bool is_external,
                                            intptr_t cid,
@@ -940,39 +955,14 @@ class Assembler : public ValueObject {
                                            Register array,
                                            Register index);
 
-  static Address VMTagAddress() {
-    return Address(THR, Thread::vm_tag_offset());
-  }
+  static Address VMTagAddress();
 
   // On some other platforms, we draw a distinction between safe and unsafe
   // smis.
   static bool IsSafe(const Object& object) { return true; }
-  static bool IsSafeSmi(const Object& object) { return object.IsSmi(); }
+  static bool IsSafeSmi(const Object& object) { return target::IsSmi(object); }
 
  private:
-  AssemblerBuffer buffer_;
-
-  ObjectPoolWrapper object_pool_wrapper_;
-
-  intptr_t prologue_offset_;
-  bool has_single_entry_point_;
-
-  class CodeComment : public ZoneAllocated {
-   public:
-    CodeComment(intptr_t pc_offset, const String& comment)
-        : pc_offset_(pc_offset), comment_(comment) {}
-
-    intptr_t pc_offset() const { return pc_offset_; }
-    const String& comment() const { return comment_; }
-
-   private:
-    intptr_t pc_offset_;
-    const String& comment_;
-
-    DISALLOW_COPY_AND_ASSIGN(CodeComment);
-  };
-
-  GrowableArray<CodeComment*> comments_;
   bool constant_pool_allowed_;
 
   intptr_t FindImmediate(int64_t imm);
@@ -1069,10 +1059,10 @@ class Assembler : public ValueObject {
   // Unaware of write barrier (use StoreInto* methods for storing to objects).
   void MoveImmediate(const Address& dst, const Immediate& imm);
 
-  void ComputeCounterAddressesForCid(intptr_t cid,
-                                     Heap::Space space,
-                                     Address* count_address,
-                                     Address* size_address);
+  friend class dart::FlowGraphCompiler;
+  std::function<void(Register reg)> generate_invoke_write_barrier_wrapper_;
+  std::function<void()> generate_invoke_array_write_barrier_;
+
   DISALLOW_ALLOCATION();
   DISALLOW_COPY_AND_ASSIGN(Assembler);
 };
@@ -1124,6 +1114,7 @@ inline void Assembler::EmitOperandSizeOverride() {
   EmitUint8(0x66);
 }
 
+}  // namespace compiler
 }  // namespace dart
 
 #endif  // RUNTIME_VM_COMPILER_ASSEMBLER_ASSEMBLER_X64_H_

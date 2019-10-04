@@ -1,8 +1,6 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
-library analyzer.src.generated.sdk;
 
 import 'dart:collection';
 
@@ -170,6 +168,21 @@ class LibraryMap {
   List<String> get uris => _libraryMap.keys.toList();
 
   /**
+   * Return info for debugging https://github.com/dart-lang/sdk/issues/35226.
+   */
+  Map<String, Object> debugInfo() {
+    var map = <String, Object>{};
+    for (var uri in _libraryMap.keys) {
+      var lib = _libraryMap[uri];
+      map[uri] = <String, Object>{
+        'path': lib.path,
+        'shortName': lib.shortName,
+      };
+    }
+    return map;
+  }
+
+  /**
    * Return the library with the given 'dart:' [uri], or `null` if the URI does
    * not map to a library.
    */
@@ -267,7 +280,7 @@ class SdkDescription {
   }
 }
 
-class SdkLibrariesReader_LibraryBuilder extends RecursiveAstVisitor<Object> {
+class SdkLibrariesReader_LibraryBuilder extends RecursiveAstVisitor<void> {
   /**
    * The prefix added to the name of a library to form the URI used in code to
    * reference the library.
@@ -353,8 +366,8 @@ class SdkLibrariesReader_LibraryBuilder extends RecursiveAstVisitor<Object> {
   }
 
   @override
-  Object visitMapLiteralEntry(MapLiteralEntry node) {
-    String libraryName = null;
+  void visitMapLiteralEntry(MapLiteralEntry node) {
+    String libraryName;
     Expression key = node.key;
     if (key is SimpleStringLiteral) {
       libraryName = "$_LIBRARY_PREFIX${key.value}";
@@ -394,7 +407,6 @@ class SdkLibrariesReader_LibraryBuilder extends RecursiveAstVisitor<Object> {
       }
       _librariesMap.setLibrary(libraryName, library);
     }
-    return null;
   }
 }
 
@@ -474,7 +486,7 @@ class SdkLibraryImpl implements SdkLibrary {
    * 'lib' directory within the SDK.
    */
   @override
-  String path = null;
+  String path;
 
   /**
    * The name of the category containing the library. Unless otherwise specified

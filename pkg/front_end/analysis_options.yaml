@@ -1,21 +1,20 @@
-# Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+# Copyright (c) 2019, the Dart project authors.  Please see the AUTHORS file
 # for details. All rights reserved. Use of this source code is governed by a
 # BSD-style license that can be found in the LICENSE file.
 
-analyzer:
-  strong-mode: true
-  language:
-    enableSuperMixins: false
-  exclude:
-    - testcases/**
-  errors:
-    # Omits warnings due to missing `@virtual`
-    # TODO(sigmund): enable once #28601 is fixed
-    strong_mode_invalid_field_override: ignore
+include: analysis_options_no_lints.yaml
 
-    # Allow having TODOs in the code
-    todo: ignore
-
-    # Allow deprecated calls (although it would be nice to have a distinction
-    # between internal and external deprecated calls).
-    deprecated_member_use: ignore
+linter:
+  rules:
+    - curly_braces_in_flow_control_structures
+    - prefer_adjacent_string_concatenation
+    - unawaited_futures
+    - recursive_getters
+    - avoid_empty_else
+    - empty_statements
+    - list_remove_unrelated_type
+    - iterable_contains_unrelated_type
+    - valid_regexps
+    - package_api_docs
+    - lines_longer_than_80_chars
+    # - always_specify_types

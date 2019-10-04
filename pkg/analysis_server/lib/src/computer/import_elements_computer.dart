@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -38,7 +38,7 @@ class ImportElementsComputer {
    * The resolution result associated with the defining compilation unit of the
    * library to which imports might be added.
    */
-  final ResolveResult libraryResult;
+  final ResolvedUnitResult libraryResult;
 
   /**
    * Initialize a newly created builder.
@@ -431,7 +431,7 @@ class _InsertionDescription {
   final int offset;
   final int newLinesAfter;
 
-  _InsertionDescription(this.offset, {int before: 0, int after: 0})
+  _InsertionDescription(this.offset, {int before = 0, int after = 0})
       : this.newLinesBefore = before,
         this.newLinesAfter = after;
 }

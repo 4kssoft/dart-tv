@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -11,7 +11,6 @@ import '../support/integration_tests.dart';
 main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(UpdateOptionsTest);
-    defineReflectiveTests(UpdateOptionsTest_UseCFE);
   });
 }
 
@@ -31,24 +30,18 @@ class Foo {
 ''');
     standardAnalysisSetup();
 
-    // ignore: deprecated_member_use
+    // ignore: deprecated_member_use_from_same_package
     await sendAnalysisUpdateOptions(
         new AnalysisOptions()..generateHints = false);
     await sendAnalysisReanalyze();
     await analysisFinished;
     expect(getErrors(pathname), isEmpty);
 
-    // ignore: deprecated_member_use
+    // ignore: deprecated_member_use_from_same_package
     await sendAnalysisUpdateOptions(
         new AnalysisOptions()..generateHints = true);
     await sendAnalysisReanalyze();
     await analysisFinished;
     expect(getErrors(pathname), hasLength(1));
   }
-}
-
-@reflectiveTest
-class UpdateOptionsTest_UseCFE extends UpdateOptionsTest {
-  @override
-  bool get useCFE => true;
 }

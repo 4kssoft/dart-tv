@@ -10,7 +10,7 @@ import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
 import 'package:observatory/src/elements/nav/notify_event.dart';
 import 'package:observatory/src/elements/nav/notify_exception.dart';
 
-class NavNotifyElement extends HtmlElement implements Renderable {
+class NavNotifyElement extends CustomElement implements Renderable {
   static const tag = const Tag<NavNotifyElement>('nav-notify',
       dependencies: const [
         NavNotifyEventElement.tag,
@@ -35,14 +35,14 @@ class NavNotifyElement extends HtmlElement implements Renderable {
       {bool notifyOnPause: true, RenderingQueue queue}) {
     assert(repository != null);
     assert(notifyOnPause != null);
-    NavNotifyElement e = document.createElement(tag.name);
-    e._r = new RenderingScheduler(e, queue: queue);
+    NavNotifyElement e = new NavNotifyElement.created();
+    e._r = new RenderingScheduler<NavNotifyElement>(e, queue: queue);
     e._repository = repository;
     e._notifyOnPause = notifyOnPause;
     return e;
   }
 
-  NavNotifyElement.created() : super.created();
+  NavNotifyElement.created() : super.created(tag);
 
   @override
   void attached() {
@@ -54,18 +54,21 @@ class NavNotifyElement extends HtmlElement implements Renderable {
   @override
   void detached() {
     super.detached();
-    children = [];
+    children = <Element>[];
     _r.disable(notify: true);
     _subscription.cancel();
   }
 
   void render() {
-    children = [
+    children = <Element>[
       new DivElement()
-        ..children = [
+        ..children = <Element>[
           new DivElement()
-            ..children =
-                _repository.list().where(_filter).map(_toElement).toList()
+            ..children = _repository
+                .list()
+                .where(_filter)
+                .map<Element>(_toElement)
+                .toList()
         ]
     ];
   }
@@ -77,14 +80,16 @@ class NavNotifyElement extends HtmlElement implements Renderable {
     return true;
   }
 
-  HtmlElement _toElement(M.Notification notification) {
+  Element _toElement(M.Notification notification) {
     if (notification is M.EventNotification) {
-      return new NavNotifyEventElement(notification.event, queue: _r.queue)
-        ..onDelete.listen((_) => _repository.delete(notification));
+      return (new NavNotifyEventElement(notification.event, queue: _r.queue)
+            ..onDelete.listen((_) => _repository.delete(notification)))
+          .element;
     } else if (notification is M.ExceptionNotification) {
-      return new NavNotifyExceptionElement(notification.exception,
-          stacktrace: notification.stacktrace, queue: _r.queue)
-        ..onDelete.listen((_) => _repository.delete(notification));
+      return (new NavNotifyExceptionElement(notification.exception,
+              stacktrace: notification.stacktrace, queue: _r.queue)
+            ..onDelete.listen((_) => _repository.delete(notification)))
+          .element;
     } else {
       assert(false);
       return new DivElement()..text = 'Invalid Notification Type';

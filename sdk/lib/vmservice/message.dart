@@ -182,12 +182,8 @@ class Message {
       ..[5] = values;
     if (!sendIsolateServiceMessage(sendPort, request)) {
       receivePort.close();
-      _completer.complete(new Response.json({
-        'type': 'ServiceError',
-        'id': '',
-        'kind': 'InternalError',
-        'message': 'could not send message [${serial}] to isolate',
-      }));
+      _completer.complete(new Response.internalError(
+          'could not send message [${serial}] to isolate'));
     }
     return _completer.future;
   }
@@ -245,7 +241,12 @@ class Message {
   }
 
   void _setResponseFromPort(dynamic response) {
-    _completer.complete(new Response.from(response));
+    if (response == null) {
+      // We should only have a null response for Notifications.
+      assert(type == MessageType.Notification);
+      return null;
+    }
+    _completer.complete(Response.from(response));
   }
 
   void setResponse(String response) {

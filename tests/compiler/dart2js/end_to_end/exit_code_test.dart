@@ -10,28 +10,31 @@ import 'package:async_helper/async_helper.dart';
 import 'package:expect/expect.dart';
 
 import 'package:compiler/compiler_new.dart' as api;
+import 'package:compiler/src/backend_strategy.dart';
 import 'package:compiler/src/commandline_options.dart';
 import 'package:compiler/src/common/codegen.dart';
+import 'package:compiler/src/common/work.dart';
 import 'package:compiler/src/compiler.dart';
 import 'package:compiler/src/dart2js.dart' as entry;
 import 'package:compiler/src/diagnostics/diagnostic_listener.dart';
 import 'package:compiler/src/diagnostics/invariant.dart';
 import 'package:compiler/src/diagnostics/messages.dart';
 import 'package:compiler/src/diagnostics/spannable.dart';
-import 'package:compiler/src/apiimpl.dart' as apiimpl;
+import 'package:compiler/src/apiimpl.dart';
 import 'package:compiler/src/elements/entities.dart';
-import 'package:compiler/src/js_backend/js_backend.dart';
-import 'package:compiler/src/library_loader.dart';
+import 'package:compiler/src/js_model/js_strategy.dart';
 import 'package:compiler/src/null_compiler_output.dart';
+import 'package:compiler/src/serialization/serialization.dart';
 import 'package:compiler/src/options.dart' show CompilerOptions;
 import 'package:compiler/src/universe/world_impact.dart';
 import 'package:compiler/src/world.dart';
 import 'diagnostic_reporter_helper.dart';
 
-class TestCompiler extends apiimpl.CompilerImpl {
+class TestCompiler extends CompilerImpl {
   final String testMarker;
   final String testType;
   final Function onTest;
+  @override
   TestDiagnosticReporter reporter;
 
   TestCompiler(
@@ -50,18 +53,14 @@ class TestCompiler extends apiimpl.CompilerImpl {
   }
 
   @override
-  JavaScriptBackend createBackend() {
-    return new TestBackend(this);
+  BackendStrategy createBackendStrategy() {
+    return new TestBackendStrategy(this);
   }
 
+  @override
   Future<bool> run(Uri uri) {
     test('Compiler.run');
     return super.run(uri);
-  }
-
-  LoadedLibraries processLoadedLibraries(LoadedLibraries loadedLibraries) {
-    test('Compiler.processLoadedLibraries');
-    return super.processLoadedLibraries(loadedLibraries);
   }
 
   test(String marker) {
@@ -91,7 +90,8 @@ class TestCompiler extends apiimpl.CompilerImpl {
           break;
         case 'NoSuchMethodError':
           onTest(testMarker, testType);
-          null.foo;
+          dynamic n;
+          n.foo;
           break;
         case '':
           onTest(testMarker, testType);
@@ -101,25 +101,29 @@ class TestCompiler extends apiimpl.CompilerImpl {
   }
 }
 
-class TestBackend extends JavaScriptBackend {
+class TestBackendStrategy extends JsBackendStrategy {
   final TestCompiler compiler;
-  TestBackend(TestCompiler compiler)
+
+  TestBackendStrategy(TestCompiler compiler)
       : this.compiler = compiler,
-        super(compiler,
-            generateSourceMap: compiler.options.generateSourceMap,
-            useStartupEmitter: compiler.options.useStartupEmitter,
-            useMultiSourceInfo: compiler.options.useMultiSourceInfo,
-            useNewSourceInfo: compiler.options.useNewSourceInfo);
+        super(compiler);
 
   @override
-  WorldImpact codegen(CodegenWorkItem work, JClosedWorld closedWorld) {
+  WorldImpact generateCode(
+      WorkItem work,
+      JClosedWorld closedWorld,
+      CodegenResults codegenResults,
+      EntityLookup entityLookup,
+      ComponentLookup componentLookup) {
     compiler.test('Compiler.codegen');
-    return super.codegen(work, closedWorld);
+    return super.generateCode(
+        work, closedWorld, codegenResults, entityLookup, componentLookup);
   }
 }
 
 class TestDiagnosticReporter extends DiagnosticReporterWrapper {
   TestCompiler compiler;
+  @override
   DiagnosticReporter reporter;
 
   @override
@@ -186,8 +190,7 @@ Future testExitCode(
     entry.compileFunc = compile;
 
     List<String> args = new List<String>.from(options)
-      // TODO(sigmund): convert to support the new CFE
-      ..add("--library-root=${Uri.base.resolve('sdk/')}")
+      ..add("--libraries-spec=${Uri.base.resolve('sdk/lib/libraries.json')}")
       ..add("tests/compiler/dart2js/end_to_end/data/exit_code_helper.dart");
     Future result = entry.internalMain(args);
     return result.catchError((e, s) {
@@ -209,7 +212,8 @@ void main() {
 
   entry.enableWriteString = false;
 
-  Map _expectedExitCode({bool beforeRun: false, bool fatalWarnings: false}) {
+  Map<String, int> _expectedExitCode(
+      {bool beforeRun: false, bool fatalWarnings: false}) {
     if (beforeRun) {
       return {
         '': 0,
@@ -236,7 +240,6 @@ void main() {
   final tests = {
     'Compiler': beforeRun,
     'Compiler.run': beforeRun,
-    'Compiler.processLoadedLibraries': beforeRun,
     'Compiler.withCurrentElement': duringRun,
     'Compiler.codegen': duringRun,
   };

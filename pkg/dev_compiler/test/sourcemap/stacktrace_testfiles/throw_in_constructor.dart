@@ -2,9 +2,9 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-main() {
+void main() {
   // ignore: UNUSED_LOCAL_VARIABLE
-  var c = /*ddc.1:main*/ new /*ddk.1:main*/ Class();
+  var /*ddc.1:main*/ c = /*ddk.1:main*/ Class();
 }
 
 class Class {

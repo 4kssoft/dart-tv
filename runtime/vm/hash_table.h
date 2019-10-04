@@ -302,7 +302,7 @@ class HashTable : public ValueObject {
   }
   void UpdateCollisions(intptr_t collisions) const {
     if (KeyTraits::ReportStats()) {
-      if (data_->raw()->IsVMHeapObject()) {
+      if (data_->raw()->InVMIsolateHeap()) {
         return;
       }
       AdjustSmiValueAt(kNumProbesIndex, collisions + 1);
@@ -323,7 +323,7 @@ class HashTable : public ValueObject {
     const intptr_t num25 = NumLT25Collisions();
     const intptr_t num_more = NumGT25Collisions();
     // clang-format off
-    OS::Print("Stats for %s table :\n"
+    OS::PrintErr("Stats for %s table :\n"
               " Size of table = %" Pd ",Number of Occupied entries = %" Pd "\n"
               " Number of Grows = %" Pd "\n"
               " Number of lookups with < 5 collisions = %" Pd "\n"
@@ -715,6 +715,21 @@ class UnorderedHashSet : public HashSet<UnorderedHashTable<KeyTraits, 0> > {
   UnorderedHashSet(Zone* zone, RawArray* data) : BaseSet(zone, data) {}
   UnorderedHashSet(Object* key, Smi* value, Array* data)
       : BaseSet(key, value, data) {}
+
+  void Dump() const {
+    Object& entry = Object::Handle();
+    for (intptr_t i = 0; i < this->data_->Length(); i++) {
+      entry = this->data_->At(i);
+      if (entry.raw() == Object::sentinel().raw() ||
+          entry.raw() == Object::transition_sentinel().raw() || entry.IsSmi()) {
+        // empty, deleted, num_used/num_deleted
+        OS::PrintErr("%" Pd ": %s\n", i, entry.ToCString());
+      } else {
+        intptr_t hash = KeyTraits::Hash(entry);
+        OS::PrintErr("%" Pd ": %" Pd ", %s\n", i, hash, entry.ToCString());
+      }
+    }
+  }
 };
 
 }  // namespace dart

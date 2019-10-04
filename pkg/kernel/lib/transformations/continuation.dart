@@ -15,6 +15,8 @@ import 'async.dart';
 class ContinuationVariables {
   static const awaitJumpVar = ':await_jump_var';
   static const awaitContextVar = ':await_ctx_var';
+  static const asyncStackTraceVar = ':async_stack_trace';
+  static const controllerStreamVar = ':controller_stream';
   static const exceptionParam = ':exception';
   static const stackTraceParam = ':stack_trace';
 
@@ -23,34 +25,31 @@ class ContinuationVariables {
   static String stackTraceVar(int depth) => ':stack_trace$depth';
 }
 
-void transformLibraries(
-    CoreTypes coreTypes, List<Library> libraries, bool syncAsync) {
-  var helper = new HelperNodes.fromCoreTypes(coreTypes);
-  var rewriter = new RecursiveContinuationRewriter(helper, syncAsync);
+void transformLibraries(CoreTypes coreTypes, List<Library> libraries,
+    {bool productMode}) {
+  var helper = new HelperNodes.fromCoreTypes(coreTypes, productMode);
+  var rewriter = new RecursiveContinuationRewriter(helper);
   for (var library in libraries) {
     rewriter.rewriteLibrary(library);
   }
 }
 
-Component transformComponent(
-    CoreTypes coreTypes, Component component, bool syncAsync) {
-  var helper = new HelperNodes.fromCoreTypes(coreTypes);
-  var rewriter = new RecursiveContinuationRewriter(helper, syncAsync);
+Component transformComponent(CoreTypes coreTypes, Component component,
+    {bool productMode}) {
+  var helper = new HelperNodes.fromCoreTypes(coreTypes, productMode);
+  var rewriter = new RecursiveContinuationRewriter(helper);
   return rewriter.rewriteComponent(component);
 }
 
-Procedure transformProcedure(
-    CoreTypes coreTypes, Procedure procedure, bool syncAsync) {
-  var helper = new HelperNodes.fromCoreTypes(coreTypes);
-  var rewriter = new RecursiveContinuationRewriter(helper, syncAsync);
+Procedure transformProcedure(CoreTypes coreTypes, Procedure procedure,
+    {bool productMode}) {
+  var helper = new HelperNodes.fromCoreTypes(coreTypes, productMode);
+  var rewriter = new RecursiveContinuationRewriter(helper);
   return rewriter.visitProcedure(procedure);
 }
 
 class RecursiveContinuationRewriter extends Transformer {
   final HelperNodes helper;
-
-  /// Whether `async` functions should start synchronously.
-  final bool syncAsync;
 
   final VariableDeclaration asyncJumpVariable = new VariableDeclaration(
       ContinuationVariables.awaitJumpVar,
@@ -58,14 +57,14 @@ class RecursiveContinuationRewriter extends Transformer {
   final VariableDeclaration asyncContextVariable =
       new VariableDeclaration(ContinuationVariables.awaitContextVar);
 
-  RecursiveContinuationRewriter(this.helper, this.syncAsync);
+  RecursiveContinuationRewriter(this.helper);
 
   Component rewriteComponent(Component node) {
-    return node.accept(this);
+    return node.accept<TreeNode>(this);
   }
 
   Library rewriteLibrary(Library node) {
-    return node.accept(this);
+    return node.accept<TreeNode>(this);
   }
 
   visitProcedure(Procedure node) {
@@ -76,15 +75,16 @@ class RecursiveContinuationRewriter extends Transformer {
     switch (node.asyncMarker) {
       case AsyncMarker.Sync:
       case AsyncMarker.SyncYielding:
-        node.transformChildren(
-            new RecursiveContinuationRewriter(helper, syncAsync));
+        node.transformChildren(new RecursiveContinuationRewriter(helper));
         return node;
       case AsyncMarker.SyncStar:
-        return new SyncStarFunctionRewriter(helper, node, syncAsync).rewrite();
+        return new SyncStarFunctionRewriter(helper, node).rewrite();
       case AsyncMarker.Async:
-        return new AsyncFunctionRewriter(helper, node, syncAsync).rewrite();
+        return new AsyncFunctionRewriter(helper, node).rewrite();
       case AsyncMarker.AsyncStar:
-        return new AsyncStarFunctionRewriter(helper, node, syncAsync).rewrite();
+        return new AsyncStarFunctionRewriter(helper, node).rewrite();
+      default:
+        return null;
     }
   }
 }
@@ -97,9 +97,8 @@ abstract class ContinuationRewriterBase extends RecursiveContinuationRewriter {
   int capturedTryDepth = 0; // Deepest yield point within a try-block.
   int capturedCatchDepth = 0; // Deepest yield point within a catch-block.
 
-  ContinuationRewriterBase(
-      HelperNodes helper, this.enclosingFunction, bool syncAsync)
-      : super(helper, syncAsync);
+  ContinuationRewriterBase(HelperNodes helper, this.enclosingFunction)
+      : super(helper);
 
   /// Given a container [type], which is an instantiation of the given
   /// [containerClass] extract its element type.
@@ -137,7 +136,7 @@ abstract class ContinuationRewriterBase extends RecursiveContinuationRewriter {
   TreeNode visitTryCatch(TryCatch node) {
     if (node.body != null) {
       ++currentTryDepth;
-      node.body = node.body.accept(this);
+      node.body = node.body.accept<TreeNode>(this);
       node.body?.parent = node;
       --currentTryDepth;
     }
@@ -151,13 +150,13 @@ abstract class ContinuationRewriterBase extends RecursiveContinuationRewriter {
   TreeNode visitTryFinally(TryFinally node) {
     if (node.body != null) {
       ++currentTryDepth;
-      node.body = node.body.accept(this);
+      node.body = node.body.accept<TreeNode>(this);
       node.body?.parent = node;
       --currentTryDepth;
     }
     if (node.finalizer != null) {
       ++currentCatchDepth;
-      node.finalizer = node.finalizer.accept(this);
+      node.finalizer = node.finalizer.accept<TreeNode>(this);
       node.finalizer?.parent = node;
       --currentCatchDepth;
     }
@@ -185,14 +184,13 @@ abstract class ContinuationRewriterBase extends RecursiveContinuationRewriter {
 class SyncStarFunctionRewriter extends ContinuationRewriterBase {
   final VariableDeclaration iteratorVariable;
 
-  SyncStarFunctionRewriter(
-      HelperNodes helper, FunctionNode enclosingFunction, syncAsync)
+  SyncStarFunctionRewriter(HelperNodes helper, FunctionNode enclosingFunction)
       : iteratorVariable = new VariableDeclaration(':iterator')
           ..type = new InterfaceType(helper.syncIteratorClass, [
             ContinuationRewriterBase.elementTypeFrom(
                 helper.iterableClass, enclosingFunction.returnType)
           ]),
-        super(helper, enclosingFunction, syncAsync);
+        super(helper, enclosingFunction);
 
   FunctionNode rewrite() {
     // :sync_op(:iterator) {
@@ -210,7 +208,7 @@ class SyncStarFunctionRewriter extends ContinuationRewriterBase {
         dartAsyncMarker: AsyncMarker.Sync)
       ..fileOffset = enclosingFunction.fileOffset
       ..fileEndOffset = enclosingFunction.fileEndOffset
-      ..returnType = helper.coreTypes.boolClass.rawType;
+      ..returnType = helper.coreTypes.boolLegacyRawType;
 
     final closureFunction =
         new FunctionDeclaration(nestedClosureVariable, function)
@@ -236,13 +234,14 @@ class SyncStarFunctionRewriter extends ContinuationRewriterBase {
     //    :iterator.isYieldEach=
     // and return `true` as long as it did something and `false` when it's done.
     return new Block(<Statement>[
-      enclosingFunction.body.accept(this),
+      enclosingFunction.body.accept<TreeNode>(this),
       new ReturnStatement(new BoolLiteral(false))
+        ..fileOffset = enclosingFunction.fileEndOffset
     ]);
   }
 
   visitYieldStatement(YieldStatement node) {
-    var transformedExpression = node.expression.accept(this);
+    Expression transformedExpression = node.expression.accept<TreeNode>(this);
 
     var statements = <Statement>[];
     if (node.isYieldStar) {
@@ -259,7 +258,8 @@ class SyncStarFunctionRewriter extends ContinuationRewriterBase {
           helper.syncIteratorCurrent)));
     }
 
-    statements.add(createContinuationPoint(new BoolLiteral(true)));
+    statements.add(createContinuationPoint(new BoolLiteral(true))
+      ..fileOffset = node.fileOffset);
     return new Block(statements);
   }
 
@@ -275,7 +275,7 @@ abstract class AsyncRewriterBase extends ContinuationRewriterBase {
   final VariableDeclaration nestedClosureVariable =
       new VariableDeclaration(":async_op");
   final VariableDeclaration stackTraceVariable =
-      new VariableDeclaration(":async_stack_trace");
+      new VariableDeclaration(ContinuationVariables.asyncStackTraceVar);
   final VariableDeclaration thenContinuationVariable =
       new VariableDeclaration(":async_op_then");
   final VariableDeclaration catchErrorContinuationVariable =
@@ -285,9 +285,8 @@ abstract class AsyncRewriterBase extends ContinuationRewriterBase {
 
   ExpressionLifter expressionRewriter;
 
-  AsyncRewriterBase(
-      HelperNodes helper, FunctionNode enclosingFunction, bool syncAsync)
-      : super(helper, enclosingFunction, syncAsync) {}
+  AsyncRewriterBase(HelperNodes helper, FunctionNode enclosingFunction)
+      : super(helper, enclosingFunction) {}
 
   void setupAsyncContinuations(List<Statement> statements) {
     expressionRewriter = new ExpressionLifter(this);
@@ -400,7 +399,7 @@ abstract class AsyncRewriterBase extends ContinuationRewriterBase {
     var saved = statements;
     statements = <Statement>[];
     for (var statement in stmt.statements) {
-      statement.accept(this);
+      statement.accept<TreeNode>(this);
     }
     saved.add(new Block(statements));
     statements = saved;
@@ -416,7 +415,7 @@ abstract class AsyncRewriterBase extends ContinuationRewriterBase {
     var saved = statements;
     statements = <Statement>[];
     for (var statement in stmt.statements) {
-      statement.accept(this);
+      statement.accept<TreeNode>(this);
     }
     saved.add(new Block(statements));
     statements = saved;
@@ -485,7 +484,7 @@ abstract class AsyncRewriterBase extends ContinuationRewriterBase {
   Statement visitDelimited(Statement stmt) {
     var saved = statements;
     statements = <Statement>[];
-    stmt.accept(this);
+    stmt.accept<TreeNode>(this);
     Statement result =
         statements.length == 1 ? statements.first : new Block(statements);
     statements = saved;
@@ -637,7 +636,7 @@ abstract class AsyncRewriterBase extends ContinuationRewriterBase {
 
     // Place the loop variable declarations at the beginning of the body
     // statements and move their initializers to a guarded list of statements.
-    // Add assignments to the loop variables from the previous iteration's temp
+    // Add assignments to the loop variables from the previous iterations temp
     // variables before the updates.
     //
     // temps.first is the flag 'first'.
@@ -699,26 +698,56 @@ abstract class AsyncRewriterBase extends ContinuationRewriterBase {
       //
       //   await for (T variable in <stream-expression>) { ... }
       //
-      // To:
+      // To (in product mode):
       //
       //   {
-      //     _StreamIterator<T> :for-iterator =
-      //         new _StreamIterator<T>(<stream-expression>);
+      //     :stream = <stream-expression>;
+      //     _asyncStarListenHelper(:stream, :async_op);
+      //     _StreamIterator<T> :for-iterator = new _StreamIterator<T>(:stream);
       //     try {
       //       while (await :for-iterator.moveNext()) {
       //         T <variable> = :for-iterator.current;
       //         ...
       //       }
       //     } finally {
-      //       if (:for-iterator._subscription != null) await :for-iterator.cancel();
+      //       if (:for-iterator._subscription != null)
+      //           await :for-iterator.cancel();
+      //     }
+      //   }
+      //
+      // Or (in non-product mode):
+      //
+      //   {
+      //     :stream = <stream-expression>;
+      //     _asyncStarListenHelper(:stream, :async_op);
+      //     _StreamIterator<T> :for-iterator = new _StreamIterator<T>(:stream);
+      //     try {
+      //       while (let _ = _asyncStarMoveNextHelper(:stream) in
+      //           await :for-iterator.moveNext()) {
+      //         T <variable> = :for-iterator.current;
+      //         ...
+      //       }
+      //     } finally {
+      //       if (:for-iterator._subscription != null)
+      //           await :for-iterator.cancel();
       //     }
       //   }
       var valueVariable = stmt.variable;
 
+      var streamVariable =
+          new VariableDeclaration(':stream', initializer: stmt.iterable);
+
+      var asyncStarListenHelper = new ExpressionStatement(new StaticInvocation(
+          helper.asyncStarListenHelper,
+          new Arguments([
+            new VariableGet(streamVariable),
+            new VariableGet(nestedClosureVariable)
+          ])));
+
       var iteratorVariable = new VariableDeclaration(':for-iterator',
           initializer: new ConstructorInvocation(
               helper.streamIteratorConstructor,
-              new Arguments(<Expression>[stmt.iterable],
+              new Arguments(<Expression>[new VariableGet(streamVariable)],
                   types: [valueVariable.type])),
           type: new InterfaceType(
               helper.streamIteratorClass, [valueVariable.type]));
@@ -731,15 +760,32 @@ abstract class AsyncRewriterBase extends ContinuationRewriterBase {
           helper.streamIteratorMoveNext))
         ..fileOffset = stmt.fileOffset;
 
+      Expression whileCondition;
+      if (helper.productMode) {
+        whileCondition = condition;
+      } else {
+        // _asyncStarMoveNextHelper(:stream)
+        var asyncStarMoveNextCall = new StaticInvocation(
+            helper.asyncStarMoveNextHelper,
+            new Arguments([new VariableGet(streamVariable)]))
+          ..fileOffset = stmt.fileOffset;
+
+        // let _ = asyncStarMoveNextCall in (condition)
+        whileCondition = new Let(
+            new VariableDeclaration(null, initializer: asyncStarMoveNextCall),
+            condition);
+      }
+
       // T <variable> = :for-iterator.current;
       valueVariable.initializer = new PropertyGet(
           new VariableGet(iteratorVariable),
           new Name('current'),
-          helper.streamIteratorCurrent);
+          helper.streamIteratorCurrent)
+        ..fileOffset = stmt.bodyOffset;
       valueVariable.initializer.parent = valueVariable;
 
       var whileBody = new Block(<Statement>[valueVariable, stmt.body]);
-      var tryBody = new WhileStatement(condition, whileBody);
+      var tryBody = new WhileStatement(whileCondition, whileBody);
 
       // if (:for-iterator._subscription != null) await :for-iterator.cancel();
       var tryFinalizer = new IfStatement(
@@ -760,8 +806,13 @@ abstract class AsyncRewriterBase extends ContinuationRewriterBase {
 
       var tryFinally = new TryFinally(tryBody, tryFinalizer);
 
-      var block = new Block(<Statement>[iteratorVariable, tryFinally]);
-      block.accept(this);
+      var block = new Block(<Statement>[
+        streamVariable,
+        asyncStarListenHelper,
+        iteratorVariable,
+        tryFinally
+      ]);
+      block.accept<TreeNode>(this);
     } else {
       stmt.iterable = expressionRewriter.rewrite(stmt.iterable, statements)
         ..parent = stmt;
@@ -842,7 +893,7 @@ abstract class AsyncRewriterBase extends ContinuationRewriterBase {
   }
 
   TreeNode visitFunctionDeclaration(FunctionDeclaration stmt) {
-    stmt.function = stmt.function.accept(this)..parent = stmt;
+    stmt.function = stmt.function.accept<TreeNode>(this)..parent = stmt;
     statements.add(stmt);
     return null;
   }
@@ -853,9 +904,8 @@ abstract class AsyncRewriterBase extends ContinuationRewriterBase {
 class AsyncStarFunctionRewriter extends AsyncRewriterBase {
   VariableDeclaration controllerVariable;
 
-  AsyncStarFunctionRewriter(
-      HelperNodes helper, FunctionNode enclosingFunction, bool syncAsync)
-      : super(helper, enclosingFunction, syncAsync);
+  AsyncStarFunctionRewriter(HelperNodes helper, FunctionNode enclosingFunction)
+      : super(helper, enclosingFunction);
 
   FunctionNode rewrite() {
     var statements = <Statement>[];
@@ -867,6 +917,11 @@ class AsyncStarFunctionRewriter extends AsyncRewriterBase {
         type: new InterfaceType(
             helper.asyncStarStreamControllerClass, [elementType]));
     statements.add(controllerVariable);
+
+    // dynamic :controller_stream;
+    VariableDeclaration controllerStreamVariable =
+        new VariableDeclaration(ContinuationVariables.controllerStreamVar);
+    statements.add(controllerStreamVariable);
 
     setupAsyncContinuations(statements);
 
@@ -881,12 +936,16 @@ class AsyncStarFunctionRewriter extends AsyncRewriterBase {
         new VariableSet(controllerVariable, buildController));
     statements.add(setController);
 
-    // return :controller.stream;
+    // :controller_stream = :controller.stream;
     var completerGet = new VariableGet(controllerVariable);
-    var returnStatement = new ReturnStatement(new PropertyGet(
-        completerGet,
-        new Name('stream', helper.asyncLibrary),
-        helper.asyncStarStreamControllerStream));
+    statements.add(new ExpressionStatement(new VariableSet(
+        controllerStreamVariable,
+        new PropertyGet(completerGet, new Name('stream', helper.asyncLibrary),
+            helper.asyncStarStreamControllerStream))));
+
+    // return :controller_stream;
+    var returnStatement =
+        new ReturnStatement(new VariableGet(controllerStreamVariable));
     statements.add(returnStatement);
 
     enclosingFunction.body = new Block(statements);
@@ -962,9 +1021,8 @@ class AsyncFunctionRewriter extends AsyncRewriterBase {
   VariableDeclaration completerVariable;
   VariableDeclaration returnVariable;
 
-  AsyncFunctionRewriter(
-      HelperNodes helper, FunctionNode enclosingFunction, bool syncAsync)
-      : super(helper, enclosingFunction, syncAsync);
+  AsyncFunctionRewriter(HelperNodes helper, FunctionNode enclosingFunction)
+      : super(helper, enclosingFunction);
 
   FunctionNode rewrite() {
     var statements = <Statement>[];
@@ -982,28 +1040,16 @@ class AsyncFunctionRewriter extends AsyncRewriterBase {
         new InterfaceType(helper.futureOrClass, <DartType>[valueType]);
     var completerTypeArguments = <DartType>[valueType];
 
-    if (syncAsync) {
-      final completerType = new InterfaceType(
-          helper.asyncAwaitCompleterClass, completerTypeArguments);
-      // final Completer<T> :async_completer = new _AsyncAwaitCompleter<T>();
-      completerVariable = new VariableDeclaration(":async_completer",
-          initializer: new ConstructorInvocation(
-              helper.asyncAwaitCompleterConstructor,
-              new Arguments([], types: completerTypeArguments))
-            ..fileOffset = enclosingFunction.body?.fileOffset ?? -1,
-          isFinal: true,
-          type: completerType);
-    } else {
-      final completerType =
-          new InterfaceType(helper.completerClass, completerTypeArguments);
-      // final Completer<T> :async_completer = new Completer<T>.sync();
-      completerVariable = new VariableDeclaration(":async_completer",
-          initializer: new StaticInvocation(helper.completerConstructor,
-              new Arguments([], types: completerTypeArguments))
-            ..fileOffset = enclosingFunction.body?.fileOffset ?? -1,
-          isFinal: true,
-          type: completerType);
-    }
+    final completerType = new InterfaceType(
+        helper.asyncAwaitCompleterClass, completerTypeArguments);
+    // final Completer<T> :async_completer = new _AsyncAwaitCompleter<T>();
+    completerVariable = new VariableDeclaration(":async_completer",
+        initializer: new ConstructorInvocation(
+            helper.asyncAwaitCompleterConstructor,
+            new Arguments([], types: completerTypeArguments))
+          ..fileOffset = enclosingFunction.body?.fileOffset ?? -1,
+        isFinal: true,
+        type: completerType);
     statements.add(completerVariable);
 
     returnVariable = new VariableDeclaration(":return_value", type: returnType);
@@ -1011,23 +1057,13 @@ class AsyncFunctionRewriter extends AsyncRewriterBase {
 
     setupAsyncContinuations(statements);
 
-    if (syncAsync) {
-      // :async_completer.start(:async_op);
-      var startStatement = new ExpressionStatement(new MethodInvocation(
-          new VariableGet(completerVariable),
-          new Name('start'),
-          new Arguments([new VariableGet(nestedClosureVariable)]))
-        ..fileOffset = enclosingFunction.fileOffset);
-      statements.add(startStatement);
-    } else {
-      // new Future.microtask(:async_op);
-      var newMicrotaskStatement = new ExpressionStatement(new StaticInvocation(
-          helper.futureMicrotaskConstructor,
-          new Arguments([new VariableGet(nestedClosureVariable)],
-              types: [const DynamicType()]))
-        ..fileOffset = enclosingFunction.fileOffset);
-      statements.add(newMicrotaskStatement);
-    }
+    // :async_completer.start(:async_op);
+    var startStatement = new ExpressionStatement(new MethodInvocation(
+        new VariableGet(completerVariable),
+        new Name('start'),
+        new Arguments([new VariableGet(nestedClosureVariable)]))
+      ..fileOffset = enclosingFunction.fileOffset);
+    statements.add(startStatement);
     // return :async_completer.future;
     var completerGet = new VariableGet(completerVariable);
     var returnStatement = new ReturnStatement(new PropertyGet(completerGet,
@@ -1056,11 +1092,12 @@ class AsyncFunctionRewriter extends AsyncRewriterBase {
     // return value variable followed by a break from the labeled body.
     return new Block(<Statement>[
       body,
-      new ExpressionStatement(new MethodInvocation(
-          new VariableGet(completerVariable),
-          new Name("complete"),
-          new Arguments([new VariableGet(returnVariable)]),
-          helper.completerComplete)),
+      new ExpressionStatement(new StaticInvocation(
+          helper.completeOnAsyncReturn,
+          new Arguments([
+            new VariableGet(completerVariable),
+            new VariableGet(returnVariable)
+          ]))),
       new ReturnStatement()..fileOffset = enclosingFunction.fileEndOffset
     ]);
   }
@@ -1087,23 +1124,20 @@ class HelperNodes {
   final Member asyncStarStreamControllerClose;
   final Constructor asyncStarStreamControllerConstructor;
   final Member asyncStarStreamControllerStream;
+  final Member asyncStarListenHelper;
+  final Member asyncStarMoveNextHelper;
   final Procedure asyncThenWrapper;
   final Procedure awaitHelper;
-  final Class completerClass;
   final Class asyncAwaitCompleterClass;
-  final Member completerComplete;
   final Member completerCompleteError;
-  final Member completerConstructor;
   final Member asyncAwaitCompleterConstructor;
+  final Member completeOnAsyncReturn;
   final Member completerFuture;
   final Library coreLibrary;
   final CoreTypes coreTypes;
   final Class futureClass;
-  final Procedure futureMicrotaskConstructor;
   final Class futureOrClass;
   final Class iterableClass;
-  final Class iteratorClass;
-  final Procedure printProcedure;
   final Class streamClass;
   final Member streamIteratorCancel;
   final Class streamIteratorClass;
@@ -1114,6 +1148,9 @@ class HelperNodes {
   final Class syncIteratorClass;
   final Member syncIteratorCurrent;
   final Member syncIteratorYieldEachIterable;
+  final Class boolClass;
+
+  bool productMode;
 
   HelperNodes._(
       this.asyncErrorWrapper,
@@ -1126,23 +1163,20 @@ class HelperNodes {
       this.asyncStarStreamControllerClose,
       this.asyncStarStreamControllerConstructor,
       this.asyncStarStreamControllerStream,
+      this.asyncStarListenHelper,
+      this.asyncStarMoveNextHelper,
       this.asyncThenWrapper,
       this.awaitHelper,
-      this.completerClass,
       this.asyncAwaitCompleterClass,
-      this.completerComplete,
       this.completerCompleteError,
-      this.completerConstructor,
       this.asyncAwaitCompleterConstructor,
+      this.completeOnAsyncReturn,
       this.completerFuture,
       this.coreLibrary,
       this.coreTypes,
       this.futureClass,
-      this.futureMicrotaskConstructor,
       this.futureOrClass,
       this.iterableClass,
-      this.iteratorClass,
-      this.printProcedure,
       this.streamClass,
       this.streamIteratorCancel,
       this.streamIteratorClass,
@@ -1152,9 +1186,11 @@ class HelperNodes {
       this.syncIterableConstructor,
       this.syncIteratorClass,
       this.syncIteratorCurrent,
-      this.syncIteratorYieldEachIterable);
+      this.syncIteratorYieldEachIterable,
+      this.boolClass,
+      this.productMode);
 
-  factory HelperNodes.fromCoreTypes(CoreTypes coreTypes) {
+  factory HelperNodes.fromCoreTypes(CoreTypes coreTypes, bool productMode) {
     return new HelperNodes._(
         coreTypes.asyncErrorWrapperHelperProcedure,
         coreTypes.asyncLibrary,
@@ -1166,23 +1202,20 @@ class HelperNodes {
         coreTypes.asyncStarStreamControllerClose,
         coreTypes.asyncStarStreamControllerDefaultConstructor,
         coreTypes.asyncStarStreamControllerStream,
+        coreTypes.asyncStarListenHelper,
+        coreTypes.asyncStarMoveNextHelper,
         coreTypes.asyncThenWrapperHelperProcedure,
         coreTypes.awaitHelperProcedure,
-        coreTypes.completerClass,
         coreTypes.asyncAwaitCompleterClass,
-        coreTypes.completerComplete,
         coreTypes.completerCompleteError,
-        coreTypes.completerSyncConstructor,
         coreTypes.asyncAwaitCompleterConstructor,
+        coreTypes.completeOnAsyncReturn,
         coreTypes.completerFuture,
         coreTypes.coreLibrary,
         coreTypes,
         coreTypes.futureClass,
-        coreTypes.futureMicrotaskConstructor,
         coreTypes.futureOrClass,
         coreTypes.iterableClass,
-        coreTypes.iteratorClass,
-        coreTypes.printProcedure,
         coreTypes.streamClass,
         coreTypes.streamIteratorCancel,
         coreTypes.streamIteratorClass,
@@ -1192,6 +1225,8 @@ class HelperNodes {
         coreTypes.syncIterableDefaultConstructor,
         coreTypes.syncIteratorClass,
         coreTypes.syncIteratorCurrent,
-        coreTypes.syncIteratorYieldEachIterable);
+        coreTypes.syncIteratorYieldEachIterable,
+        coreTypes.boolClass,
+        productMode);
   }
 }

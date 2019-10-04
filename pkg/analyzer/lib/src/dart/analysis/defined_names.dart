@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -12,7 +12,7 @@ DefinedNames computeDefinedNames(CompilationUnit unit) {
 
   void appendName(Set<String> names, SimpleIdentifier node) {
     String name = node?.name;
-    if (name != null && name.length != 0) {
+    if (name != null && name.isNotEmpty) {
       names.add(name);
     }
   }
@@ -31,6 +31,9 @@ DefinedNames computeDefinedNames(CompilationUnit unit) {
     if (member is NamedCompilationUnitMember) {
       appendName(names.topLevelNames, member.name);
       if (member is ClassDeclaration) {
+        member.members.forEach(appendClassMemberName);
+      }
+      if (member is MixinDeclaration) {
         member.members.forEach(appendClassMemberName);
       }
     } else if (member is TopLevelVariableDeclaration) {

@@ -1,10 +1,18 @@
+include: package:pedantic/analysis_options.1.8.0.yaml
+
 analyzer:
-  strong-mode: true
+  strong-mode:
+    implicit-casts: false
+  errors:
+    todo: ignore
   exclude:
     - doc/api/**
     - gen/**
     - node_modules/**
-    - tool/input_sdk/**
     - test/codegen/**
     - test/samples/**
     - test/transformer/hello_app/**
+
+linter:
+  rules:
+    - annotate_overrides

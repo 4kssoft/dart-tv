@@ -46,6 +46,16 @@ inline void AtomicOperations::DecrementBy(intptr_t* p, intptr_t value) {
   __sync_fetch_and_sub(p, value);
 }
 
+inline uint32_t AtomicOperations::FetchOrRelaxedUint32(uint32_t* ptr,
+                                                       uint32_t value) {
+  return __atomic_fetch_or(ptr, value, __ATOMIC_RELAXED);
+}
+
+inline uint32_t AtomicOperations::FetchAndRelaxedUint32(uint32_t* ptr,
+                                                        uint32_t value) {
+  return __atomic_fetch_and(ptr, value, __ATOMIC_RELAXED);
+}
+
 inline uword AtomicOperations::CompareAndSwapWord(uword* ptr,
                                                   uword old_value,
                                                   uword new_value) {
@@ -56,6 +66,16 @@ inline uint32_t AtomicOperations::CompareAndSwapUint32(uint32_t* ptr,
                                                        uint32_t old_value,
                                                        uint32_t new_value) {
   return __sync_val_compare_and_swap(ptr, old_value, new_value);
+}
+
+template <typename T>
+inline T AtomicOperations::LoadAcquire(T* ptr) {
+  return __atomic_load_n(ptr, __ATOMIC_ACQUIRE);
+}
+
+template <typename T>
+inline void AtomicOperations::StoreRelease(T* ptr, T value) {
+  __atomic_store_n(ptr, value, __ATOMIC_RELEASE);
 }
 
 }  // namespace dart

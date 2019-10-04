@@ -1,7 +1,6 @@
 // Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-// VMOptions=--error_on_bad_type --error_on_bad_override
 
 import 'package:observatory/service_io.dart';
 import 'package:unittest/unittest.dart';
@@ -15,7 +14,7 @@ var tests = <IsolateTest>[
     VM vm = isolate.owner;
 
     final serviceEvents =
-        (await vm.getEventStream('_Service')).asBroadcastStream();
+        (await vm.getEventStream('Service')).asBroadcastStream();
 
     WebSocket _socket =
         await WebSocket.connect((vm as WebSocketVM).target.networkAddress);
@@ -24,7 +23,7 @@ var tests = <IsolateTest>[
 
     // Avoid to manually encode and decode messages from the stream
     Stream<String> stream = socket.stream.map(jsonEncode);
-    stream.retype<Object>().pipe(_socket);
+    stream.cast<Object>().pipe(_socket);
     dynamic _decoder(dynamic obj) {
       return jsonDecode(obj);
     }
@@ -46,7 +45,7 @@ var tests = <IsolateTest>[
     socket.add({
       'jsonrpc': '2.0',
       'id': 1,
-      'method': '_registerService',
+      'method': 'registerService',
       'params': {'service': successServiceName, 'alias': serviceAlias}
     });
 
@@ -59,7 +58,7 @@ var tests = <IsolateTest>[
     socket.add({
       'jsonrpc': '2.0',
       'id': 1,
-      'method': '_registerService',
+      'method': 'registerService',
       'params': {'service': errorServiceName, 'alias': serviceAlias}
     });
 

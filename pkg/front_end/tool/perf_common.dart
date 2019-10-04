@@ -5,14 +5,23 @@
 /// Shared code used by fasta_perf and incremental_perf.
 library front_end.tool.perf_common;
 
-import 'dart:io';
+import 'dart:io' show exitCode, stderr;
 
-import 'package:front_end/src/api_prototype/front_end.dart';
-import 'package:front_end/src/fasta/command_line_reporting.dart';
-import 'package:front_end/src/fasta/fasta_codes.dart';
-import 'package:kernel/target/flutter.dart' show FlutterTarget;
 import 'package:kernel/target/targets.dart' show Target, TargetFlags;
-import 'package:kernel/target/vm.dart' show VmTarget;
+
+import 'package:vm/target/flutter.dart' show FlutterTarget;
+
+import 'package:vm/target/vm.dart' show VmTarget;
+
+import 'package:front_end/src/api_prototype/diagnostic_message.dart'
+    show DiagnosticMessage, DiagnosticMessageHandler, getMessageCodeObject;
+
+import 'package:front_end/src/api_prototype/terminal_color_support.dart'
+    show printDiagnosticMessage;
+
+import 'package:front_end/src/fasta/fasta_codes.dart' as fastaCodes;
+
+import 'package:front_end/src/fasta/severity.dart' show Severity;
 
 /// Error messages that we temporarily allow when compiling benchmarks in strong
 /// mode.
@@ -24,31 +33,28 @@ import 'package:kernel/target/vm.dart' show VmTarget;
 /// Note: the performance bots compile both dart2js and the flutter-gallery app
 /// as benchmarks, so they both need to be checked before we remove a message
 /// from this set.
-final whitelistMessageCode = new Set<String>.from(<String>[
+final whitelistMessageCode = new Set<fastaCodes.Code>.from(<fastaCodes.Code>[
   // Code names in this list should match the key used in messages.yaml
-  codeInvalidAssignment.name,
-  codeOverrideTypeMismatchParameter.name,
-  codeOverriddenMethodCause.name,
+  fastaCodes.codeInvalidAssignment,
+  fastaCodes.codeOverrideTypeMismatchParameter,
+  fastaCodes.codeOverriddenMethodCause,
 
   // The following errors are not covered by unit tests in the SDK repo because
   // they are only seen today in the flutter-gallery benchmark (external to
   // this repo).
-  codeInvalidCastFunctionExpr.name,
-  codeInvalidCastTopLevelFunction.name,
-  codeUndefinedGetter.name,
-  codeUndefinedMethod.name,
+  fastaCodes.codeInvalidCastFunctionExpr,
+  fastaCodes.codeInvalidCastTopLevelFunction,
+  fastaCodes.codeUndefinedGetter,
+  fastaCodes.codeUndefinedMethod,
 ]);
 
-onErrorHandler(bool isStrong) {
+DiagnosticMessageHandler onDiagnosticMessageHandler() {
   bool messageReported = false;
-  return (CompilationMessage m) {
+  return (DiagnosticMessage m) {
     if (m.severity == Severity.internalProblem ||
         m.severity == Severity.error) {
-      if (!isStrong || !whitelistMessageCode.contains(m.code)) {
-        var uri = m.span.start.sourceUrl;
-        var offset = m.span.start.offset;
-        stderr.writeln('$uri:$offset: '
-            '${severityName(m.severity, capitalized: true)}: ${m.message}');
+      if (!whitelistMessageCode.contains(getMessageCodeObject(m))) {
+        printDiagnosticMessage(m, stderr.writeln);
         exitCode = 1;
       } else if (!messageReported) {
         messageReported = true;
@@ -58,34 +64,18 @@ onErrorHandler(bool isStrong) {
   };
 }
 
-/// Creates a [VmTarget] or [FlutterTarget] with strong-mode enabled or
+/// Creates a [VmTarget] or [FlutterTarget] with legacy mode enabled or
 /// disabled.
 // TODO(sigmund): delete as soon as the disableTypeInference flag and the
-// strongMode flag get merged, and we have a single way of specifying the
-// strong-mode flag to the FE.
-Target createTarget({bool isFlutter: false, bool strongMode: true}) {
-  var flags = new TargetFlags(strongMode: strongMode);
+// legacyMode flag get merged, and we have a single way of specifying the
+// legacy-mode flag to the FE.
+Target createTarget({bool isFlutter: false}) {
+  TargetFlags flags = new TargetFlags();
   if (isFlutter) {
-    return strongMode
-        ? new FlutterTarget(flags)
-        : new LegacyFlutterTarget(flags);
+    return new FlutterTarget(flags);
   } else {
-    return strongMode ? new VmTarget(flags) : new LegacyVmTarget(flags);
+    return new VmTarget(flags);
   }
-}
-
-class LegacyVmTarget extends VmTarget {
-  LegacyVmTarget(TargetFlags flags) : super(flags);
-
-  @override
-  bool get disableTypeInference => true;
-}
-
-class LegacyFlutterTarget extends FlutterTarget {
-  LegacyFlutterTarget(TargetFlags flags) : super(flags);
-
-  @override
-  bool get disableTypeInference => true;
 }
 
 class TimingsCollector {
@@ -130,10 +120,16 @@ class TimingsCollector {
   void printTimings() {
     timings.forEach((String key, List<double> durations) {
       double total = 0.0;
-      for (double duration in durations.skip(3)) {
-        total += duration;
+      int length = durations.length;
+      if (length == 1) {
+        total += durations.single;
+      } else {
+        length -= 3;
+        for (double duration in durations.skip(3)) {
+          total += duration;
+        }
       }
-      print("$key took: ${total/(durations.length - 3)}ms");
+      print("$key took: ${total / length}ms");
     });
   }
 }

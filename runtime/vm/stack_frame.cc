@@ -5,9 +5,10 @@
 #include "vm/stack_frame.h"
 
 #include "platform/memory_sanitizer.h"
-#include "vm/become.h"
 #include "vm/compiler/assembler/assembler.h"
+#include "vm/compiler/runtime_api.h"
 #include "vm/deopt_instructions.h"
+#include "vm/heap/become.h"
 #include "vm/isolate.h"
 #include "vm/object.h"
 #include "vm/object_store.h"
@@ -15,49 +16,156 @@
 #include "vm/parser.h"
 #include "vm/raw_object.h"
 #include "vm/reusable_handles.h"
+#include "vm/reverse_pc_lookup_cache.h"
 #include "vm/scopes.h"
 #include "vm/stub_code.h"
 #include "vm/visitor.h"
 
 namespace dart {
 
-intptr_t FrameSlotForVariable(const LocalVariable* variable) {
+DECLARE_FLAG(bool, enable_interpreter);
+
+const FrameLayout invalid_frame_layout = {
+    /*.first_object_from_fp = */ -1,
+    /*.last_fixed_object_from_fp = */ -1,
+    /*.param_end_from_fp = */ -1,
+    /*.last_param_from_entry_sp = */ -1,
+    /*.first_local_from_fp = */ -1,
+    /*.dart_fixed_frame_size = */ -1,
+    /*.saved_caller_pp_from_fp = */ -1,
+    /*.code_from_fp = */ -1,
+    /*.exit_link_slot_from_entry_fp = */ -1,
+};
+
+const FrameLayout default_frame_layout = {
+    /*.first_object_from_fp = */ kFirstObjectSlotFromFp,
+    /*.last_fixed_object_from_fp = */ kLastFixedObjectSlotFromFp,
+    /*.param_end_from_fp = */ kParamEndSlotFromFp,
+    /*.last_param_from_entry_sp = */ kLastParamSlotFromEntrySp,
+    /*.first_local_from_fp = */ kFirstLocalSlotFromFp,
+    /*.dart_fixed_frame_size = */ kDartFrameFixedSize,
+    /*.saved_caller_pp_from_fp = */ kSavedCallerPpSlotFromFp,
+    /*.code_from_fp = */ kPcMarkerSlotFromFp,
+    /*.exit_link_slot_from_entry_fp = */ kExitLinkSlotFromEntryFp,
+};
+const FrameLayout bare_instructions_frame_layout = {
+    /*.first_object_from_pc =*/kFirstObjectSlotFromFp,  // No saved PP slot.
+    /*.last_fixed_object_from_fp = */ kLastFixedObjectSlotFromFp +
+        2,  // No saved CODE, PP slots
+    /*.param_end_from_fp = */ kParamEndSlotFromFp,
+    /*.last_param_from_entry_sp = */ kLastParamSlotFromEntrySp,
+    /*.first_local_from_fp =*/kFirstLocalSlotFromFp +
+        2,  // No saved CODE, PP slots.
+    /*.dart_fixed_frame_size =*/kDartFrameFixedSize -
+        2,                              // No saved CODE, PP slots.
+    /*.saved_caller_pp_from_fp = */ 0,  // No saved PP slot.
+    /*.code_from_fp = */ 0,             // No saved CODE
+    /*.exit_link_slot_from_entry_fp = */ kExitLinkSlotFromEntryFp,
+};
+
+namespace compiler {
+
+namespace target {
+FrameLayout frame_layout = invalid_frame_layout;
+}
+
+}  // namespace compiler
+
+FrameLayout runtime_frame_layout = invalid_frame_layout;
+
+int FrameLayout::FrameSlotForVariable(const LocalVariable* variable) const {
   ASSERT(!variable->is_captured());
-  return FrameSlotForVariableIndex(variable->index().value());
+  return this->FrameSlotForVariableIndex(variable->index().value());
 }
 
-intptr_t FrameOffsetInBytesForVariable(const LocalVariable* variable) {
-  return FrameSlotForVariable(variable) * kWordSize;
-}
-
-intptr_t FrameSlotForVariableIndex(intptr_t variable_index) {
+int FrameLayout::FrameSlotForVariableIndex(int variable_index) const {
   // Variable indices are:
   //    [1, 2, ..., M] for the M parameters.
   //    [0, -1, -2, ... -(N-1)] for the N [LocalVariable]s
   // See (runtime/vm/scopes.h)
-  return variable_index <= 0 ? (variable_index + kFirstLocalSlotFromFp)
-                             : (variable_index + kParamEndSlotFromFp);
+  return variable_index <= 0 ? (variable_index + first_local_from_fp)
+                             : (variable_index + param_end_from_fp);
 }
 
-intptr_t VariableIndexForFrameSlot(intptr_t frame_slot) {
-  if (frame_slot <= kFirstLocalSlotFromFp) {
-    return frame_slot - kFirstLocalSlotFromFp;
-  } else {
-    ASSERT(frame_slot > kParamEndSlotFromFp);
-    return frame_slot - kParamEndSlotFromFp;
+void FrameLayout::Init() {
+  // By default we use frames with CODE_REG/PP in the frame.
+  compiler::target::frame_layout = default_frame_layout;
+  runtime_frame_layout = default_frame_layout;
+
+  if (FLAG_precompiled_mode && FLAG_use_bare_instructions) {
+    compiler::target::frame_layout = bare_instructions_frame_layout;
   }
+#if defined(DART_PRECOMPILED_RUNTIME)
+  if (FLAG_precompiled_mode && FLAG_use_bare_instructions) {
+    compiler::target::frame_layout = invalid_frame_layout;
+    runtime_frame_layout = bare_instructions_frame_layout;
+  }
+#endif
+}
+
+Isolate* StackFrame::IsolateOfBareInstructionsFrame() const {
+  auto isolate = this->isolate();
+
+  if (isolate->object_store()->code_order_table() != Object::null()) {
+    auto rct = isolate->reverse_pc_lookup_cache();
+    if (rct->Contains(pc())) return isolate;
+  }
+
+  isolate = Dart::vm_isolate();
+  if (isolate->object_store()->code_order_table() != Object::null()) {
+    auto rct = isolate->reverse_pc_lookup_cache();
+    if (rct->Contains(pc())) return isolate;
+  }
+
+  return nullptr;
+}
+
+bool StackFrame::IsBareInstructionsDartFrame() const {
+  NoSafepointScope no_safepoint;
+
+  if (auto isolate = IsolateOfBareInstructionsFrame()) {
+    Code code;
+    auto rct = isolate->reverse_pc_lookup_cache();
+    code = rct->Lookup(pc());
+
+    const intptr_t cid = code.owner()->GetClassId();
+    ASSERT(cid == kNullCid || cid == kClassCid || cid == kFunctionCid);
+    return cid == kFunctionCid;
+  }
+  return false;
+}
+
+bool StackFrame::IsBareInstructionsStubFrame() const {
+  NoSafepointScope no_safepoint;
+
+  if (auto isolate = IsolateOfBareInstructionsFrame()) {
+    Code code;
+    auto rct = isolate->reverse_pc_lookup_cache();
+    code = rct->Lookup(pc());
+
+    const intptr_t cid = code.owner()->GetClassId();
+    ASSERT(cid == kNullCid || cid == kClassCid || cid == kFunctionCid);
+    return cid == kNullCid || cid == kClassCid;
+  }
+  return false;
 }
 
 bool StackFrame::IsStubFrame() const {
   if (is_interpreted()) {
     return false;
   }
+
+  if (FLAG_precompiled_mode && FLAG_use_bare_instructions) {
+    return IsBareInstructionsStubFrame();
+  }
+
   ASSERT(!(IsEntryFrame() || IsExitFrame()));
 #if !defined(HOST_OS_WINDOWS) && !defined(HOST_OS_FUCHSIA)
   // On Windows and Fuchsia, the profiler calls this from a separate thread
   // where Thread::Current() is NULL, so we cannot create a NoSafepointScope.
   NoSafepointScope no_safepoint;
 #endif
+
   RawCode* code = GetCodeObject();
   ASSERT(code != Object::null());
   const intptr_t cid = code->ptr()->owner_->GetClassId();
@@ -69,6 +177,15 @@ const char* StackFrame::ToCString() const {
   ASSERT(thread_ == Thread::Current());
   Zone* zone = Thread::Current()->zone();
   if (IsDartFrame()) {
+    if (is_interpreted()) {
+      const Bytecode& bytecode = Bytecode::Handle(zone, LookupDartBytecode());
+      ASSERT(!bytecode.IsNull());
+      return zone->PrintToString("[%-8s : sp(%#" Px ") fp(%#" Px ") pc(%#" Px
+                                 " offset:0x%" Px ") %s ]",
+                                 GetName(), sp(), fp(), pc(),
+                                 pc() - bytecode.PayloadStart(),
+                                 bytecode.FullyQualifiedName());
+    }
     const Code& code = Code::Handle(zone, LookupDartCode());
     ASSERT(!code.IsNull());
     const Object& owner = Object::Handle(zone, code.owner());
@@ -92,14 +209,24 @@ const char* StackFrame::ToCString() const {
 }
 
 void ExitFrame::VisitObjectPointers(ObjectPointerVisitor* visitor) {
-  // Visit pc marker and saved pool pointer.
+  ASSERT(visitor != NULL);
+  // Visit pc marker and saved pool pointer, or, for interpreted frame, code
+  // object and function object.
   RawObject** last_fixed =
-      reinterpret_cast<RawObject**>(fp()) + kFirstObjectSlotFromFp;
+      reinterpret_cast<RawObject**>(fp()) +
+      (is_interpreted() ? kKBCLastFixedObjectSlotFromFp
+                        : runtime_frame_layout.first_object_from_fp);
   RawObject** first_fixed =
-      reinterpret_cast<RawObject**>(fp()) + kLastFixedObjectSlotFromFp;
+      reinterpret_cast<RawObject**>(fp()) +
+      (is_interpreted() ? kKBCFirstObjectSlotFromFp
+                        : runtime_frame_layout.last_fixed_object_from_fp);
 #if !defined(TARGET_ARCH_DBC)
-  ASSERT(first_fixed <= last_fixed);
-  visitor->VisitPointers(first_fixed, last_fixed);
+  if (first_fixed <= last_fixed) {
+    visitor->VisitPointers(first_fixed, last_fixed);
+  } else {
+    ASSERT(runtime_frame_layout.first_object_from_fp ==
+           runtime_frame_layout.first_local_from_fp);
+  }
 #else
   ASSERT(last_fixed <= first_fixed);
   visitor->VisitPointers(last_fixed, first_fixed);
@@ -107,17 +234,22 @@ void ExitFrame::VisitObjectPointers(ObjectPointerVisitor* visitor) {
 }
 
 void EntryFrame::VisitObjectPointers(ObjectPointerVisitor* visitor) {
-  // Visit objects between SP and (FP - callee_save_area).
   ASSERT(visitor != NULL);
+  // Visit objects between SP and (FP - callee_save_area).
 #if !defined(TARGET_ARCH_DBC)
-  RawObject** first = reinterpret_cast<RawObject**>(sp());
-  RawObject** last = reinterpret_cast<RawObject**>(
-      fp() + (kExitLinkSlotFromEntryFp - 1) * kWordSize);
+  RawObject** first = is_interpreted() ? reinterpret_cast<RawObject**>(fp()) +
+                                             kKBCSavedArgDescSlotFromEntryFp
+                                       : reinterpret_cast<RawObject**>(sp());
+  RawObject** last = is_interpreted() ? reinterpret_cast<RawObject**>(sp())
+                                      : reinterpret_cast<RawObject**>(fp()) +
+                                            kExitLinkSlotFromEntryFp - 1;
+  // There may not be any pointer to visit; in this case, first > last.
   visitor->VisitPointers(first, last);
 #else
   // On DBC stack is growing upwards which implies fp() <= sp().
   RawObject** first = reinterpret_cast<RawObject**>(fp());
   RawObject** last = reinterpret_cast<RawObject**>(sp());
+  ASSERT(first <= last);
   visitor->VisitPointers(first, last);
 #endif
 }
@@ -132,11 +264,26 @@ void StackFrame::VisitObjectPointers(ObjectPointerVisitor* visitor) {
   // helper functions to the raw object interface.
   NoSafepointScope no_safepoint;
   Code code;
-  RawCode* raw_code = UncheckedGetCodeObject();
-  // May forward raw_code. Note we don't just visit the pc marker slot first
-  // because the visitor's forwarding might not be idempotent.
-  visitor->VisitPointer(reinterpret_cast<RawObject**>(&raw_code));
-  code ^= raw_code;
+
+  if (auto isolate = IsolateOfBareInstructionsFrame()) {
+    code = isolate->reverse_pc_lookup_cache()->Lookup(pc());
+  } else {
+    RawObject* pc_marker = *(reinterpret_cast<RawObject**>(
+        fp() + ((is_interpreted() ? kKBCPcMarkerSlotFromFp
+                                  : runtime_frame_layout.code_from_fp) *
+                kWordSize)));
+    // May forward raw code. Note we don't just visit the pc marker slot first
+    // because the visitor's forwarding might not be idempotent.
+    visitor->VisitPointer(&pc_marker);
+    if (pc_marker->IsHeapObject() && (pc_marker->GetClassId() == kCodeCid)) {
+      code ^= pc_marker;
+    } else {
+      ASSERT(pc_marker == Object::null() ||
+             (is_interpreted() && (!pc_marker->IsHeapObject() ||
+                                   (pc_marker->GetClassId() == kBytecodeCid))));
+    }
+  }
+
   if (!code.IsNull()) {
     // Optimized frames have a stack map. We need to visit the frame based
     // on the stack map.
@@ -152,7 +299,7 @@ void StackFrame::VisitObjectPointers(ObjectPointerVisitor* visitor) {
       }
       RawObject** first = reinterpret_cast<RawObject**>(sp());
       RawObject** last = reinterpret_cast<RawObject**>(
-          fp() + (kFirstLocalSlotFromFp * kWordSize));
+          fp() + (runtime_frame_layout.first_local_from_fp * kWordSize));
 
       // A stack map is present in the code object, use the stack map to
       // visit frame slots which are marked as having objects.
@@ -190,17 +337,19 @@ void StackFrame::VisitObjectPointers(ObjectPointerVisitor* visitor) {
 
       // Now visit other slots which might be part of the calling convention.
       first = reinterpret_cast<RawObject**>(
-          fp() + ((kFirstLocalSlotFromFp + 1) * kWordSize));
+          fp() + ((runtime_frame_layout.first_local_from_fp + 1) * kWordSize));
       last = reinterpret_cast<RawObject**>(
-          fp() + (kFirstObjectSlotFromFp * kWordSize));
+          fp() + (runtime_frame_layout.first_object_from_fp * kWordSize));
       visitor->VisitPointers(first, last);
 #else
       RawObject** first = reinterpret_cast<RawObject**>(fp());
       RawObject** last = reinterpret_cast<RawObject**>(sp());
 
       // Visit fixed prefix of the frame.
-      RawObject** first_fixed = first + kFirstObjectSlotFromFp;
-      RawObject** last_fixed = first + kLastFixedObjectSlotFromFp;
+      RawObject** first_fixed =
+          first + runtime_frame_layout.first_object_from_fp;
+      RawObject** last_fixed =
+          first + (runtime_frame_layout.first_object_from_fp + 1);
       ASSERT(first_fixed <= last_fixed);
       visitor->VisitPointers(first_fixed, last_fixed);
 
@@ -238,14 +387,25 @@ void StackFrame::VisitObjectPointers(ObjectPointerVisitor* visitor) {
 #if !defined(TARGET_ARCH_DBC)
   // For normal unoptimized Dart frames and Stub frames each slot
   // between the first and last included are tagged objects.
-  RawObject** first = reinterpret_cast<RawObject**>(
-      is_interpreted() ? fp() + (kKBCFirstObjectSlotFromFp * kWordSize) : sp());
+  if (is_interpreted()) {
+    // Do not visit caller's pc or caller's fp.
+    RawObject** first =
+        reinterpret_cast<RawObject**>(fp()) + kKBCFirstObjectSlotFromFp;
+    RawObject** last =
+        reinterpret_cast<RawObject**>(fp()) + kKBCLastFixedObjectSlotFromFp;
+
+    visitor->VisitPointers(first, last);
+  }
+  RawObject** first =
+      reinterpret_cast<RawObject**>(is_interpreted() ? fp() : sp());
   RawObject** last = reinterpret_cast<RawObject**>(
-      is_interpreted() ? sp() : fp() + (kFirstObjectSlotFromFp * kWordSize));
+      is_interpreted()
+          ? sp()
+          : fp() + (runtime_frame_layout.first_object_from_fp * kWordSize));
 #else
   // On DBC stack grows upwards: fp() <= sp().
   RawObject** first = reinterpret_cast<RawObject**>(
-      fp() + (kFirstObjectSlotFromFp * kWordSize));
+      fp() + (runtime_frame_layout.first_object_from_fp * kWordSize));
   RawObject** last = reinterpret_cast<RawObject**>(sp());
 #endif  // !defined(TARGET_ARCH_DBC)
 
@@ -253,6 +413,13 @@ void StackFrame::VisitObjectPointers(ObjectPointerVisitor* visitor) {
 }
 
 RawFunction* StackFrame::LookupDartFunction() const {
+  if (is_interpreted()) {
+    RawObject* result = *(reinterpret_cast<RawFunction**>(
+        fp() + kKBCFunctionSlotFromFp * kWordSize));
+    ASSERT((result == Object::null()) ||
+           (result->GetClassId() == kFunctionCid));
+    return reinterpret_cast<RawFunction*>(result);
+  }
   const Code& code = Code::Handle(LookupDartCode());
   if (!code.IsNull()) {
     return code.function();
@@ -269,6 +436,10 @@ RawCode* StackFrame::LookupDartCode() const {
   // where Thread::Current() is NULL, so we cannot create a NoSafepointScope.
   NoSafepointScope no_safepoint;
 #endif
+  if (auto isolate = IsolateOfBareInstructionsFrame()) {
+    return isolate->reverse_pc_lookup_cache()->Lookup(pc());
+  }
+
   RawCode* code = GetCodeObject();
   if ((code != Code::null()) &&
       (code->ptr()->owner_->GetClassId() == kFunctionCid)) {
@@ -278,17 +449,37 @@ RawCode* StackFrame::LookupDartCode() const {
 }
 
 RawCode* StackFrame::GetCodeObject() const {
-  RawCode* pc_marker = UncheckedGetCodeObject();
-  ASSERT((pc_marker == Object::null()) ||
-         (pc_marker->GetClassId() == kCodeCid));
-  return pc_marker;
+  ASSERT(!is_interpreted());
+  if (auto isolate = IsolateOfBareInstructionsFrame()) {
+    return isolate->reverse_pc_lookup_cache()->Lookup(pc());
+  } else {
+    RawObject* pc_marker = *(reinterpret_cast<RawObject**>(
+        fp() + runtime_frame_layout.code_from_fp * kWordSize));
+    ASSERT((pc_marker == Object::null()) ||
+           (pc_marker->GetClassId() == kCodeCid));
+    return reinterpret_cast<RawCode*>(pc_marker);
+  }
 }
 
-RawCode* StackFrame::UncheckedGetCodeObject() const {
-  return *(reinterpret_cast<RawCode**>(
-      fp() +
-      ((is_interpreted() ? kKBCPcMarkerSlotFromFp : kPcMarkerSlotFromFp) *
-       kWordSize)));
+RawBytecode* StackFrame::LookupDartBytecode() const {
+// We add a no gc scope to ensure that the code below does not trigger
+// a GC as we are handling raw object references here. It is possible
+// that the code is called while a GC is in progress, that is ok.
+#if !defined(HOST_OS_WINDOWS) && !defined(HOST_OS_FUCHSIA)
+  // On Windows and Fuchsia, the profiler calls this from a separate thread
+  // where Thread::Current() is NULL, so we cannot create a NoSafepointScope.
+  NoSafepointScope no_safepoint;
+#endif
+  return GetBytecodeObject();
+}
+
+RawBytecode* StackFrame::GetBytecodeObject() const {
+  ASSERT(is_interpreted());
+  RawObject* pc_marker = *(
+      reinterpret_cast<RawObject**>(fp() + kKBCPcMarkerSlotFromFp * kWordSize));
+  ASSERT((pc_marker == Object::null()) ||
+         (pc_marker->GetClassId() == kBytecodeCid));
+  return reinterpret_cast<RawBytecode*>(pc_marker);
 }
 
 bool StackFrame::FindExceptionHandler(Thread* thread,
@@ -298,49 +489,75 @@ bool StackFrame::FindExceptionHandler(Thread* thread,
                                       bool* is_optimized) const {
   REUSABLE_CODE_HANDLESCOPE(thread);
   Code& code = reused_code_handle.Handle();
-  code = LookupDartCode();
-  if (code.IsNull()) {
-    return false;  // Stub frames do not have exception handlers.
+  REUSABLE_BYTECODE_HANDLESCOPE(thread);
+  Bytecode& bytecode = reused_bytecode_handle.Handle();
+  REUSABLE_EXCEPTION_HANDLERS_HANDLESCOPE(thread);
+  ExceptionHandlers& handlers = reused_exception_handlers_handle.Handle();
+  REUSABLE_PC_DESCRIPTORS_HANDLESCOPE(thread);
+  PcDescriptors& descriptors = reused_pc_descriptors_handle.Handle();
+  uword start;
+  if (is_interpreted()) {
+    bytecode = LookupDartBytecode();
+    ASSERT(!bytecode.IsNull());
+    start = bytecode.PayloadStart();
+    handlers = bytecode.exception_handlers();
+  } else {
+    code = LookupDartCode();
+    if (code.IsNull()) {
+      return false;  // Stub frames do not have exception handlers.
+    }
+    start = code.PayloadStart();
+    handlers = code.exception_handlers();
+    descriptors = code.pc_descriptors();
+    *is_optimized = code.is_optimized();
   }
-  *is_optimized = code.is_optimized();
   HandlerInfoCache* cache = thread->isolate()->handler_info_cache();
   ExceptionHandlerInfo* info = cache->Lookup(pc());
   if (info != NULL) {
-    *handler_pc = code.PayloadStart() + info->handler_pc_offset;
-    *needs_stacktrace = info->needs_stacktrace;
-    *has_catch_all = info->has_catch_all;
+    *handler_pc = start + info->handler_pc_offset;
+    *needs_stacktrace = (info->needs_stacktrace != 0);
+    *has_catch_all = (info->has_catch_all != 0);
     return true;
   }
-  uword pc_offset = pc() - code.PayloadStart();
 
-  REUSABLE_EXCEPTION_HANDLERS_HANDLESCOPE(thread);
-  ExceptionHandlers& handlers = reused_exception_handlers_handle.Handle();
-  handlers = code.exception_handlers();
   if (handlers.num_entries() == 0) {
     return false;
   }
 
-  // Find pc descriptor for the current pc.
-  REUSABLE_PC_DESCRIPTORS_HANDLESCOPE(thread);
-  PcDescriptors& descriptors = reused_pc_descriptors_handle.Handle();
-  descriptors = code.pc_descriptors();
-  PcDescriptors::Iterator iter(descriptors, RawPcDescriptors::kAnyKind);
-  while (iter.MoveNext()) {
-    const intptr_t current_try_index = iter.TryIndex();
-    if ((iter.PcOffset() == pc_offset) && (current_try_index != -1)) {
-      ExceptionHandlerInfo handler_info;
-      handlers.GetHandlerInfo(current_try_index, &handler_info);
-      *handler_pc = code.PayloadStart() + handler_info.handler_pc_offset;
-      *needs_stacktrace = handler_info.needs_stacktrace;
-      *has_catch_all = handler_info.has_catch_all;
-      cache->Insert(pc(), handler_info);
-      return true;
+  intptr_t try_index = -1;
+  if (is_interpreted()) {
+    try_index = bytecode.GetTryIndexAtPc(pc());
+  } else {
+    uword pc_offset = pc() - code.PayloadStart();
+    PcDescriptors::Iterator iter(descriptors, RawPcDescriptors::kAnyKind);
+    while (iter.MoveNext()) {
+      const intptr_t current_try_index = iter.TryIndex();
+      if ((iter.PcOffset() == pc_offset) && (current_try_index != -1)) {
+        try_index = current_try_index;
+        break;
+      }
     }
   }
-  return false;
+  if (try_index == -1) {
+    return false;
+  }
+  ExceptionHandlerInfo handler_info;
+  handlers.GetHandlerInfo(try_index, &handler_info);
+  *handler_pc = start + handler_info.handler_pc_offset;
+  *needs_stacktrace = (handler_info.needs_stacktrace != 0);
+  *has_catch_all = (handler_info.has_catch_all != 0);
+  cache->Insert(pc(), handler_info);
+  return true;
 }
 
 TokenPosition StackFrame::GetTokenPos() const {
+  if (is_interpreted()) {
+    const Bytecode& bytecode = Bytecode::Handle(LookupDartBytecode());
+    if (bytecode.IsNull()) {
+      return TokenPosition::kNoSource;  // Stub frames do not have token_pos.
+    }
+    return bytecode.GetTokenIndexOfPC(pc());
+  }
   const Code& code = Code::Handle(LookupDartCode());
   if (code.IsNull()) {
     return TokenPosition::kNoSource;  // Stub frames do not have token_pos.
@@ -362,6 +579,9 @@ bool StackFrame::IsValid() const {
   if (IsEntryFrame() || IsExitFrame() || IsStubFrame()) {
     return true;
   }
+  if (is_interpreted()) {
+    return (LookupDartBytecode() != Bytecode::null());
+  }
   return (LookupDartCode() != Code::null());
 }
 
@@ -369,12 +589,13 @@ void StackFrameIterator::SetupLastExitFrameData() {
   ASSERT(thread_ != NULL);
   uword exit_marker = thread_->top_exit_frame_info();
   frames_.fp_ = exit_marker;
-#if defined(DART_USE_INTERPRETER)
-  frames_.CheckIfInterpreted(exit_marker);
-#endif
+  if (FLAG_enable_interpreter) {
+    frames_.CheckIfInterpreted(exit_marker);
+  }
 }
 
 void StackFrameIterator::SetupNextExitFrameData() {
+  ASSERT(entry_.fp() != 0);
   uword exit_address =
       entry_.fp() + ((entry_.is_interpreted() ? kKBCExitLinkSlotFromEntryFp
                                               : kExitLinkSlotFromEntryFp) *
@@ -383,9 +604,9 @@ void StackFrameIterator::SetupNextExitFrameData() {
   frames_.fp_ = exit_marker;
   frames_.sp_ = 0;
   frames_.pc_ = 0;
-#if defined(DART_USE_INTERPRETER)
-  frames_.CheckIfInterpreted(exit_marker);
-#endif
+  if (FLAG_enable_interpreter) {
+    frames_.CheckIfInterpreted(exit_marker);
+  }
 }
 
 // Tell MemorySanitizer that generated code initializes part of the stack.
@@ -425,9 +646,9 @@ StackFrameIterator::StackFrameIterator(uword last_fp,
   frames_.fp_ = last_fp;
   frames_.sp_ = 0;
   frames_.pc_ = 0;
-#if defined(DART_USE_INTERPRETER)
-  frames_.CheckIfInterpreted(last_fp);
-#endif
+  if (FLAG_enable_interpreter) {
+    frames_.CheckIfInterpreted(last_fp);
+  }
 }
 
 #if !defined(TARGET_ARCH_DBC)
@@ -448,9 +669,9 @@ StackFrameIterator::StackFrameIterator(uword fp,
   frames_.fp_ = fp;
   frames_.sp_ = sp;
   frames_.pc_ = pc;
-#if defined(DART_USE_INTERPRETER)
-  frames_.CheckIfInterpreted(fp);
-#endif
+  if (FLAG_enable_interpreter) {
+    frames_.CheckIfInterpreted(fp);
+  }
 }
 #endif
 
@@ -516,15 +737,16 @@ StackFrame* StackFrameIterator::NextFrame() {
   return current_frame_;
 }
 
-#if defined(DART_USE_INTERPRETER)
 void StackFrameIterator::FrameSetIterator::CheckIfInterpreted(
     uword exit_marker) {
-  // TODO(regis): Once the interpreter shares the native stack, we may rely on
-  // a new thread vm_tag to identify an interpreter frame.
-  Interpreter* interpreter = thread_->isolate()->interpreter();
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  // TODO(regis): We should rely on a new thread vm_tag to identify an
+  // interpreter frame and not need the HasFrame() method.
+  ASSERT(FLAG_enable_interpreter);
+  Interpreter* interpreter = thread_->interpreter();
   is_interpreted_ = (interpreter != NULL) && interpreter->HasFrame(exit_marker);
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 }
-#endif
 
 StackFrame* StackFrameIterator::FrameSetIterator::NextFrame(bool validate) {
   StackFrame* frame;
@@ -533,15 +755,11 @@ StackFrame* StackFrameIterator::FrameSetIterator::NextFrame(bool validate) {
   frame->sp_ = sp_;
   frame->fp_ = fp_;
   frame->pc_ = pc_;
-#if defined(DART_USE_INTERPRETER)
   frame->is_interpreted_ = is_interpreted_;
-#endif
   sp_ = frame->GetCallerSp();
   fp_ = frame->GetCallerFp();
   pc_ = frame->GetCallerPc();
-#if defined(DART_USE_INTERPRETER)
   ASSERT(is_interpreted_ == frame->is_interpreted_);
-#endif
   ASSERT(!validate || frame->IsValid());
   return frame;
 }
@@ -550,15 +768,11 @@ ExitFrame* StackFrameIterator::NextExitFrame() {
   exit_.sp_ = frames_.sp_;
   exit_.fp_ = frames_.fp_;
   exit_.pc_ = frames_.pc_;
-#if defined(DART_USE_INTERPRETER)
   exit_.is_interpreted_ = frames_.is_interpreted_;
-#endif
   frames_.sp_ = exit_.GetCallerSp();
   frames_.fp_ = exit_.GetCallerFp();
   frames_.pc_ = exit_.GetCallerPc();
-#if defined(DART_USE_INTERPRETER)
   ASSERT(frames_.is_interpreted_ == exit_.is_interpreted_);
-#endif
   ASSERT(!validate_ || exit_.IsValid());
   return &exit_;
 }
@@ -568,9 +782,7 @@ EntryFrame* StackFrameIterator::NextEntryFrame() {
   entry_.sp_ = frames_.sp_;
   entry_.fp_ = frames_.fp_;
   entry_.pc_ = frames_.pc_;
-#if defined(DART_USE_INTERPRETER)
   entry_.is_interpreted_ = frames_.is_interpreted_;
-#endif
   SetupNextExitFrameData();  // Setup data for next exit frame in chain.
   ASSERT(!validate_ || entry_.IsValid());
   return &entry_;

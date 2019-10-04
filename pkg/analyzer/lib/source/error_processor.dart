@@ -1,9 +1,8 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analyzer/error/error.dart';
-import 'package:analyzer/src/error/codes.dart';
 import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/generated/utilities_general.dart';
 import 'package:analyzer/src/task/options.dart';
@@ -97,40 +96,9 @@ class ErrorProcessor {
     // Let the user configure how specific errors are processed.
     List<ErrorProcessor> processors = analysisOptions.errorProcessors;
 
-    // Give strong mode a chance to upgrade it.
-    if (analysisOptions.strongMode) {
-      processors = processors.toList();
-      processors.add(_StrongModeTypeErrorProcessor.instance);
-    }
+    // Add the strong mode processor.
+    processors = processors.toList();
     return processors.firstWhere((ErrorProcessor p) => p.appliesTo(error),
         orElse: () => null);
-  }
-}
-
-/// In strong mode, this upgrades static type warnings to errors.
-class _StrongModeTypeErrorProcessor implements ErrorProcessor {
-  static final instance = new _StrongModeTypeErrorProcessor();
-
-  // TODO(rnystrom): As far as I know, this is only used to implement
-  // appliesTo(). Consider making it private in ErrorProcessor if possible.
-  String get code => throw new UnsupportedError(
-      "_StrongModeTypeErrorProcessor is not specific to an error code.");
-
-  @override
-  String get description => 'allStrongWarnings -> ERROR';
-
-  /// In strong mode, type warnings are upgraded to errors.
-  ErrorSeverity get severity => ErrorSeverity.ERROR;
-
-  /// Check if this processor applies to the given [error].
-  bool appliesTo(AnalysisError error) {
-    ErrorCode errorCode = error.errorCode;
-    if (errorCode is StaticTypeWarningCode) {
-      return true;
-    }
-    if (errorCode is StaticWarningCode) {
-      return errorCode.isStrongModeError;
-    }
-    return false;
   }
 }

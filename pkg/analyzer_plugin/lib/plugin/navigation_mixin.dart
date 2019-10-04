@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -19,18 +19,18 @@ import 'package:analyzer_plugin/utilities/navigation/navigation.dart';
  * request based on the assumption that the driver being created is an
  * [AnalysisDriver].
  *
- * Clients may not extend or implement this class, but are allowed to use it as
- * a mix-in when creating a subclass of [ServerPlugin] that also uses
- * [NavigationMixin] as a mix-in.
+ * Clients may not implement this mixin, but are allowed to use it as a mix-in
+ * when creating a subclass of [ServerPlugin] that also uses [NavigationMixin]
+ * as a mix-in.
  */
-abstract class DartNavigationMixin implements NavigationMixin {
+mixin DartNavigationMixin implements NavigationMixin {
   @override
   Future<NavigationRequest> getNavigationRequest(
       AnalysisGetNavigationParams parameters) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     String path = parameters.file;
-    ResolveResult result = await getResolveResult(path);
+    ResolvedUnitResult result = await getResolvedUnitResult(path);
     int offset = parameters.offset;
     int length = parameters.length;
     if (offset < 0 && length < 0) {
@@ -46,10 +46,10 @@ abstract class DartNavigationMixin implements NavigationMixin {
  * A mixin that can be used when creating a subclass of [ServerPlugin] to
  * provide most of the implementation for handling navigation requests.
  *
- * Clients may not extend or implement this class, but are allowed to use it as
- * a mix-in when creating a subclass of [ServerPlugin].
+ * Clients may not implement this mixin, but are allowed to use it as a mix-in
+ * when creating a subclass of [ServerPlugin].
  */
-abstract class NavigationMixin implements ServerPlugin {
+mixin NavigationMixin implements ServerPlugin {
   /**
    * Return a list containing the navigation contributors that should be used to
    * create navigation information for the file with the given [path]
@@ -74,8 +74,8 @@ abstract class NavigationMixin implements ServerPlugin {
     NavigationRequest request = await getNavigationRequest(parameters);
     NavigationGenerator generator =
         new NavigationGenerator(getNavigationContributors(path));
-    GeneratorResult result =
-        await generator.generateNavigationResponse(request);
+    GeneratorResult<AnalysisGetNavigationResult> result =
+        generator.generateNavigationResponse(request);
     result.sendNotifications(channel);
     return result.result;
   }
@@ -85,7 +85,7 @@ abstract class NavigationMixin implements ServerPlugin {
    * server.
    */
   @override
-  Future<Null> sendNavigationNotification(String path) async {
+  Future<void> sendNavigationNotification(String path) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     try {
@@ -94,7 +94,7 @@ abstract class NavigationMixin implements ServerPlugin {
       NavigationGenerator generator =
           new NavigationGenerator(getNavigationContributors(path));
       GeneratorResult generatorResult =
-          await generator.generateNavigationNotification(request);
+          generator.generateNavigationNotification(request);
       generatorResult.sendNotifications(channel);
     } on RequestFailure {
       // If we couldn't analyze the file, then don't send a notification.

@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -24,7 +24,8 @@ const int _MAX_VALUE = 1 << 10;
  * by Dan Gusfield and Chas Emerick's implementation of the Levenshtein distance
  * algorithm.
  */
-int levenshtein(String s, String t, int threshold, {bool caseSensitive: true}) {
+int levenshtein(String s, String t, int threshold,
+    {bool caseSensitive = true}) {
   if (s == null || t == null) {
     throw new ArgumentError('Strings must not be null');
   }

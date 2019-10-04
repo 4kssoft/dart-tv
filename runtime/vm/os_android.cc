@@ -8,7 +8,6 @@
 #include "vm/os.h"
 
 #include <android/log.h>   // NOLINT
-#include <endian.h>        // NOLINT
 #include <errno.h>         // NOLINT
 #include <limits.h>        // NOLINT
 #include <malloc.h>        // NOLINT
@@ -25,6 +24,12 @@
 #include "vm/zone.h"
 
 namespace dart {
+
+DEFINE_FLAG(bool,
+            android_log_to_stderr,
+            false,
+            "Send Dart VM logs to stdout and stderr instead of the Android "
+            "system logs.");
 
 // Android CodeObservers.
 
@@ -64,7 +69,8 @@ class PerfCodeObserver : public CodeObserver {
                       uword base,
                       uword prologue_offset,
                       uword size,
-                      bool optimized) {
+                      bool optimized,
+                      const CodeComments* comments) {
     Dart_FileWriteCallback file_write = Dart::file_write_callback();
     if ((file_write == NULL) || (out_file_ == NULL)) {
       return;
@@ -175,9 +181,13 @@ int64_t OS::GetCurrentThreadCPUMicros() {
 // into a architecture specific file e.g: os_ia32_linux.cc
 intptr_t OS::ActivationFrameAlignment() {
 #if defined(TARGET_ARCH_IA32) || defined(TARGET_ARCH_X64) ||                   \
-    defined(TARGET_ARCH_ARM64)
+    defined(TARGET_ARCH_ARM64) ||                                              \
+    defined(TARGET_ARCH_DBC) &&                                                \
+        (defined(HOST_ARCH_IA32) || defined(HOST_ARCH_X64) ||                  \
+         defined(HOST_ARCH_ARM64))
   const int kMinimumAlignment = 16;
-#elif defined(TARGET_ARCH_ARM) || defined(TARGET_ARCH_DBC)
+#elif defined(TARGET_ARCH_ARM) ||                                              \
+    defined(TARGET_ARCH_DBC) && defined(HOST_ARCH_ARM)
   const int kMinimumAlignment = 8;
 #else
 #error Unsupported architecture.
@@ -248,35 +258,15 @@ DART_NOINLINE uintptr_t OS::GetProgramCounter() {
       __builtin_extract_return_addr(__builtin_return_address(0)));
 }
 
-uint16_t HostToBigEndian16(uint16_t value) {
-  return htobe16(value);
-}
-
-uint32_t HostToBigEndian32(uint32_t value) {
-  return htobe32(value);
-}
-
-uint64_t HostToBigEndian64(uint64_t value) {
-  return htobe64(value);
-}
-
-uint16_t HostToLittleEndian16(uint16_t value) {
-  return htole16(value);
-}
-
-uint32_t HostToLittleEndian32(uint32_t value) {
-  return htole32(value);
-}
-
-uint64_t HostToLittleEndian64(uint64_t value) {
-  return htole64(value);
-}
-
 void OS::Print(const char* format, ...) {
   va_list args;
   va_start(args, format);
-  // Forward to the Android log for remote access.
-  __android_log_vprint(ANDROID_LOG_INFO, "DartVM", format, args);
+  if (FLAG_android_log_to_stderr) {
+    vfprintf(stderr, format, args);
+  } else {
+    // Forward to the Android log for remote access.
+    __android_log_vprint(ANDROID_LOG_INFO, "DartVM", format, args);
+  }
   va_end(args);
 }
 
@@ -323,6 +313,8 @@ bool OS::StringToInt64(const char* str, int64_t* value) {
   int i = 0;
   if (str[0] == '-') {
     i = 1;
+  } else if (str[0] == '+') {
+    i = 1;
   }
   if ((str[i] == '0') && (str[i + 1] == 'x' || str[i + 1] == 'X') &&
       (str[i + 2] != '\0')) {
@@ -350,23 +342,23 @@ void OS::RegisterCodeObservers() {
 void OS::PrintErr(const char* format, ...) {
   va_list args;
   va_start(args, format);
-  // Forward to the Android log for remote access.
-  __android_log_vprint(ANDROID_LOG_ERROR, "DartVM", format, args);
+  if (FLAG_android_log_to_stderr) {
+    vfprintf(stderr, format, args);
+  } else {
+    // Forward to the Android log for remote access.
+    __android_log_vprint(ANDROID_LOG_ERROR, "DartVM", format, args);
+  }
   va_end(args);
 }
 
-void OS::InitOnce() {
-  // TODO(5411554): For now we check that initonce is called only once,
-  // Once there is more formal mechanism to call InitOnce we can move
-  // this check there.
-  static bool init_once_called = false;
-  ASSERT(init_once_called == false);
-  init_once_called = true;
-}
+void OS::Init() {}
 
-void OS::Shutdown() {}
+void OS::Cleanup() {}
+
+void OS::PrepareToAbort() {}
 
 void OS::Abort() {
+  PrepareToAbort();
   abort();
 }
 

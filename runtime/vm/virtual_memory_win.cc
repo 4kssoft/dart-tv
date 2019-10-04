@@ -14,35 +14,41 @@
 
 namespace dart {
 
+DECLARE_FLAG(bool, write_protect_code);
+
 uword VirtualMemory::page_size_ = 0;
 
-void VirtualMemory::InitOnce() {
+intptr_t VirtualMemory::CalculatePageSize() {
   SYSTEM_INFO info;
   GetSystemInfo(&info);
-  page_size_ = info.dwPageSize;
+  const intptr_t page_size = info.dwPageSize;
+  ASSERT(page_size != 0);
+  ASSERT(Utils::IsPowerOfTwo(page_size));
+  return page_size;
 }
 
-VirtualMemory* VirtualMemory::Allocate(intptr_t size,
-                                       bool is_executable,
-                                       const char* name) {
-  ASSERT(Utils::IsAligned(size, page_size_));
-  int prot = is_executable ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
-  void* address = VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, prot);
-  if (address == NULL) {
-    return NULL;
-  }
-  MemoryRegion region(address, size);
-  return new VirtualMemory(region, region);
+void VirtualMemory::Init() {
+  page_size_ = CalculatePageSize();
+}
+
+bool VirtualMemory::DualMappingEnabled() {
+  return false;
 }
 
 VirtualMemory* VirtualMemory::AllocateAligned(intptr_t size,
                                               intptr_t alignment,
                                               bool is_executable,
                                               const char* name) {
-  ASSERT(Utils::IsAligned(size, page_size_));
-  ASSERT(Utils::IsAligned(alignment, page_size_));
-  intptr_t reserved_size = size + alignment;
-  int prot = is_executable ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
+  // When FLAG_write_protect_code is active, code memory (indicated by
+  // is_executable = true) is allocated as non-executable and later
+  // changed to executable via VirtualMemory::Protect.
+  ASSERT(Utils::IsAligned(size, PageSize()));
+  ASSERT(Utils::IsPowerOfTwo(alignment));
+  ASSERT(Utils::IsAligned(alignment, PageSize()));
+  intptr_t reserved_size = size + alignment - PageSize();
+  int prot = (is_executable && !FLAG_write_protect_code)
+                 ? PAGE_EXECUTE_READWRITE
+                 : PAGE_READWRITE;
   void* address = VirtualAlloc(NULL, reserved_size, MEM_RESERVE, prot);
   if (address == NULL) {
     return NULL;
@@ -74,17 +80,19 @@ VirtualMemory::~VirtualMemory() {
   }
 }
 
-bool VirtualMemory::FreeSubSegment(void* address,
+void VirtualMemory::FreeSubSegment(void* address,
                                    intptr_t size) {
   if (VirtualFree(address, size, MEM_DECOMMIT) == 0) {
     FATAL1("VirtualFree failed: Error code %d\n", GetLastError());
   }
-  return true;
 }
 
 void VirtualMemory::Protect(void* address, intptr_t size, Protection mode) {
-  ASSERT(Thread::Current()->IsMutatorThread() ||
-         Isolate::Current()->mutator_thread()->IsAtSafepoint());
+#if defined(DEBUG)
+  Thread* thread = Thread::Current();
+  ASSERT((thread == nullptr) || thread->IsMutatorThread() ||
+         thread->isolate()->mutator_thread()->IsAtSafepoint());
+#endif
   uword start_address = reinterpret_cast<uword>(address);
   uword end_address = start_address + size;
   uword page_address = Utils::RoundDown(start_address, PageSize());

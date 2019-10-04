@@ -4,7 +4,7 @@
 
 library dart2js.constants.evaluation;
 
-import 'package:front_end/src/fasta/util/link.dart' show Link;
+import 'package:front_end/src/api_unstable/dart2js.dart' show Link;
 
 import '../common.dart';
 import '../common_elements.dart' show CommonElements;
@@ -55,14 +55,23 @@ abstract class EvaluationEnvironment {
   ConstantValue evaluateConstructor(ConstructorEntity constructor,
       InterfaceType type, ConstantValue evaluate());
 
+  ConstantValue evaluateMapBody(ConstantValue evaluate());
+
   ConstantValue evaluateField(FieldEntity field, ConstantValue evaluate());
 
   /// `true` if assertions are enabled.
   bool get enableAssertions;
+
+  /// If `true`, implicit casts should be checked.
+  ///
+  /// This is used to avoid circular dependencies between js-interop classes
+  /// and their metadata. For non-metadata constants we always check the casts.
+  bool get checkCasts;
 }
 
 abstract class EvaluationEnvironmentBase implements EvaluationEnvironment {
   Link<Spannable> _spannableStack = const Link<Spannable>();
+  @override
   InterfaceType enclosingConstructedType;
   final Set<FieldEntity> _currentlyEvaluatedFields = new Set<FieldEntity>();
   final bool constantRequired;
@@ -70,6 +79,9 @@ abstract class EvaluationEnvironmentBase implements EvaluationEnvironment {
   EvaluationEnvironmentBase(Spannable spannable, {this.constantRequired}) {
     _spannableStack = _spannableStack.prepend(spannable);
   }
+
+  @override
+  bool get checkCasts => true;
 
   DiagnosticReporter get reporter;
 
@@ -110,9 +122,17 @@ abstract class EvaluationEnvironmentBase implements EvaluationEnvironment {
     var old = enclosingConstructedType;
     enclosingConstructedType = type;
     ConstantValue result = evaluate();
+    // All const set literals have as an immediate child a const map. The map
+    // evaluate method calls evaluateMapBody and reset this flag immediately.
+    // Because there are no other children, the flag is kept false.
     enclosingConstructedType = old;
     _spannableStack = _spannableStack.tail;
     return result;
+  }
+
+  @override
+  ConstantValue evaluateMapBody(ConstantValue evaluate()) {
+    return evaluate();
   }
 
   @override
@@ -221,6 +241,7 @@ class NormalizedArguments {
     return value;
   }
 
+  @override
   String toString() {
     StringBuffer sb = new StringBuffer();
     sb.write('NormalizedArguments[');

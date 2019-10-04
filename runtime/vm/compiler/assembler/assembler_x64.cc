@@ -5,31 +5,40 @@
 #include "vm/globals.h"  // NOLINT
 #if defined(TARGET_ARCH_X64)
 
+#define SHOULD_NOT_INCLUDE_RUNTIME
+
+#include "vm/class_id.h"
 #include "vm/compiler/assembler/assembler.h"
 #include "vm/compiler/backend/locations.h"
-#include "vm/cpu.h"
-#include "vm/heap.h"
 #include "vm/instructions.h"
-#include "vm/memory_region.h"
-#include "vm/runtime_entry.h"
-#include "vm/stack_frame.h"
-#include "vm/stub_code.h"
 
 namespace dart {
 
 #if !defined(DART_PRECOMPILED_RUNTIME)
-
 DECLARE_FLAG(bool, check_code_pointer);
 DECLARE_FLAG(bool, inline_alloc);
+DECLARE_FLAG(bool, precompiled_mode);
+DECLARE_FLAG(bool, use_slow_path);
+#endif
 
-Assembler::Assembler(bool use_far_branches)
-    : buffer_(),
-      prologue_offset_(-1),
-      has_single_entry_point_(true),
-      comments_(),
-      constant_pool_allowed_(false) {
+namespace compiler {
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+
+Assembler::Assembler(ObjectPoolBuilder* object_pool_builder,
+                     bool use_far_branches)
+    : AssemblerBase(object_pool_builder), constant_pool_allowed_(false) {
   // Far branching mode is only needed and implemented for ARM.
   ASSERT(!use_far_branches);
+
+  generate_invoke_write_barrier_wrapper_ = [&](Register reg) {
+    call(Address(THR,
+                 target::Thread::write_barrier_wrappers_thread_offset(reg)));
+  };
+  generate_invoke_array_write_barrier_ = [&]() {
+    call(
+        Address(THR, target::Thread::array_write_barrier_entry_point_offset()));
+  };
 }
 
 void Assembler::InitializeMemoryWithBreakpoints(uword data, intptr_t length) {
@@ -43,11 +52,12 @@ void Assembler::call(Label* label) {
   EmitLabel(label, kSize);
 }
 
-void Assembler::LoadNativeEntry(Register dst,
-                                const ExternalLabel* label,
-                                Patchability patchable) {
-  const int32_t offset = ObjectPool::element_offset(
-      object_pool_wrapper_.FindNativeFunction(label, patchable));
+void Assembler::LoadNativeEntry(
+    Register dst,
+    const ExternalLabel* label,
+    ObjectPoolBuilderEntry::Patchability patchable) {
+  const int32_t offset = target::ObjectPool::element_offset(
+      object_pool_builder().FindNativeFunction(label, patchable));
   LoadWordFromPoolOffset(dst, offset - kHeapObjectTag);
 }
 
@@ -61,43 +71,46 @@ void Assembler::call(const ExternalLabel* label) {
   call(TMP);
 }
 
-void Assembler::CallPatchable(const StubEntry& stub_entry) {
+void Assembler::CallPatchable(const Code& target, CodeEntryKind entry_kind) {
   ASSERT(constant_pool_allowed());
-  const Code& target = Code::ZoneHandle(stub_entry.code());
-  intptr_t call_start = buffer_.GetPosition();
-  const intptr_t idx = object_pool_wrapper_.AddObject(target, kPatchable);
-  const int32_t offset = ObjectPool::element_offset(idx);
+  const intptr_t idx = object_pool_builder().AddObject(
+      ToObject(target), ObjectPoolBuilderEntry::kPatchable);
+  const int32_t offset = target::ObjectPool::element_offset(idx);
   LoadWordFromPoolOffset(CODE_REG, offset - kHeapObjectTag);
-  movq(TMP, FieldAddress(CODE_REG, Code::entry_point_offset()));
-  call(TMP);
-  ASSERT((buffer_.GetPosition() - call_start) == kCallExternalLabelSize);
+  call(FieldAddress(CODE_REG, target::Code::entry_point_offset(entry_kind)));
 }
 
-void Assembler::CallWithEquivalence(const StubEntry& stub_entry,
-                                    const Object& equivalence) {
+void Assembler::CallWithEquivalence(const Code& target,
+                                    const Object& equivalence,
+                                    CodeEntryKind entry_kind) {
   ASSERT(constant_pool_allowed());
-  const Code& target = Code::ZoneHandle(stub_entry.code());
-  const intptr_t idx = object_pool_wrapper_.FindObject(target, equivalence);
-  const int32_t offset = ObjectPool::element_offset(idx);
+  const intptr_t idx =
+      object_pool_builder().FindObject(ToObject(target), equivalence);
+  const int32_t offset = target::ObjectPool::element_offset(idx);
   LoadWordFromPoolOffset(CODE_REG, offset - kHeapObjectTag);
-  movq(TMP, FieldAddress(CODE_REG, Code::entry_point_offset()));
-  call(TMP);
+  call(FieldAddress(CODE_REG, target::Code::entry_point_offset(entry_kind)));
 }
 
-void Assembler::Call(const StubEntry& stub_entry) {
+void Assembler::Call(const Code& target) {
   ASSERT(constant_pool_allowed());
-  const Code& target = Code::ZoneHandle(stub_entry.code());
-  const intptr_t idx = object_pool_wrapper_.FindObject(target, kNotPatchable);
-  const int32_t offset = ObjectPool::element_offset(idx);
+  const intptr_t idx = object_pool_builder().FindObject(
+      ToObject(target), ObjectPoolBuilderEntry::kNotPatchable);
+  const int32_t offset = target::ObjectPool::element_offset(idx);
   LoadWordFromPoolOffset(CODE_REG, offset - kHeapObjectTag);
-  movq(TMP, FieldAddress(CODE_REG, Code::entry_point_offset()));
-  call(TMP);
+  call(FieldAddress(CODE_REG, target::Code::entry_point_offset()));
 }
 
 void Assembler::CallToRuntime() {
-  movq(TMP, Address(THR, Thread::call_to_runtime_entry_point_offset()));
-  movq(CODE_REG, Address(THR, Thread::call_to_runtime_stub_offset()));
-  call(TMP);
+  call(Address(THR, target::Thread::call_to_runtime_entry_point_offset()));
+}
+
+void Assembler::CallNullErrorShared(bool save_fpu_registers) {
+  uword entry_point_offset =
+      save_fpu_registers
+          ? target::Thread::null_error_shared_with_fpu_regs_entry_point_offset()
+          : target::Thread::
+                null_error_shared_without_fpu_regs_entry_point_offset();
+  call(Address(THR, entry_point_offset));
 }
 
 void Assembler::pushq(Register reg) {
@@ -145,6 +158,116 @@ void Assembler::setcc(Condition condition, ByteRegister dst) {
   EmitUint8(0x0F);
   EmitUint8(0x90 + condition);
   EmitUint8(0xC0 + (dst & 0x07));
+}
+
+void Assembler::EnterSafepoint() {
+  // We generate the same number of instructions whether or not the slow-path is
+  // forced, to simplify GenerateJitCallbackTrampolines.
+  Label done, slow_path;
+  if (FLAG_use_slow_path) {
+    jmp(&slow_path);
+  }
+
+  // Compare and swap the value at Thread::safepoint_state from unacquired to
+  // acquired. If the CAS fails, go to a slow-path stub.
+  pushq(RAX);
+  movq(RAX, Immediate(target::Thread::safepoint_state_unacquired()));
+  movq(TMP, Immediate(target::Thread::safepoint_state_acquired()));
+  LockCmpxchgq(Address(THR, target::Thread::safepoint_state_offset()), TMP);
+  movq(TMP, RAX);
+  popq(RAX);
+  cmpq(TMP, Immediate(target::Thread::safepoint_state_unacquired()));
+
+  if (!FLAG_use_slow_path) {
+    j(EQUAL, &done);
+  }
+
+  Bind(&slow_path);
+  movq(TMP, Address(THR, target::Thread::enter_safepoint_stub_offset()));
+  movq(TMP, FieldAddress(TMP, target::Code::entry_point_offset()));
+
+  // Use call instead of CallCFunction to avoid having to clean up shadow space
+  // afterwards. This is possible because the safepoint stub does not use the
+  // shadow space as scratch and has no arguments.
+  call(TMP);
+
+  Bind(&done);
+}
+
+void Assembler::TransitionGeneratedToNative(Register destination_address,
+                                            Register new_exit_frame,
+                                            bool enter_safepoint) {
+  // Save exit frame information to enable stack walking.
+  movq(Address(THR, target::Thread::top_exit_frame_info_offset()),
+       new_exit_frame);
+
+  movq(Assembler::VMTagAddress(), destination_address);
+  movq(Address(THR, target::Thread::execution_state_offset()),
+       Immediate(target::Thread::native_execution_state()));
+
+  if (enter_safepoint) {
+    EnterSafepoint();
+  }
+}
+
+void Assembler::LeaveSafepoint() {
+  // We generate the same number of instructions whether or not the slow-path is
+  // forced, for consistency with EnterSafepoint.
+  Label done, slow_path;
+  if (FLAG_use_slow_path) {
+    jmp(&slow_path);
+  }
+
+  // Compare and swap the value at Thread::safepoint_state from acquired to
+  // unacquired. On success, jump to 'success'; otherwise, fallthrough.
+
+  pushq(RAX);
+  movq(RAX, Immediate(target::Thread::safepoint_state_acquired()));
+  movq(TMP, Immediate(target::Thread::safepoint_state_unacquired()));
+  LockCmpxchgq(Address(THR, target::Thread::safepoint_state_offset()), TMP);
+  movq(TMP, RAX);
+  popq(RAX);
+  cmpq(TMP, Immediate(target::Thread::safepoint_state_acquired()));
+
+  if (!FLAG_use_slow_path) {
+    j(EQUAL, &done);
+  }
+
+  Bind(&slow_path);
+  movq(TMP, Address(THR, target::Thread::exit_safepoint_stub_offset()));
+  movq(TMP, FieldAddress(TMP, target::Code::entry_point_offset()));
+
+  // Use call instead of CallCFunction to avoid having to clean up shadow space
+  // afterwards. This is possible because the safepoint stub does not use the
+  // shadow space as scratch and has no arguments.
+  call(TMP);
+
+  Bind(&done);
+}
+
+void Assembler::TransitionNativeToGenerated(bool leave_safepoint) {
+  if (leave_safepoint) {
+    LeaveSafepoint();
+  } else {
+#if defined(DEBUG)
+    // Ensure we've already left the safepoint.
+    movq(TMP, Address(THR, target::Thread::safepoint_state_offset()));
+    andq(TMP, Immediate((1 << target::Thread::safepoint_state_inside_bit())));
+    Label ok;
+    j(ZERO, &ok);
+    Breakpoint();
+    Bind(&ok);
+#endif
+  }
+
+  movq(Assembler::VMTagAddress(),
+       Immediate(target::Thread::vm_tag_compiled_id()));
+  movq(Address(THR, target::Thread::execution_state_offset()),
+       Immediate(target::Thread::generated_execution_state()));
+
+  // Reset exit frame information in Isolate structure.
+  movq(Address(THR, target::Thread::top_exit_frame_info_offset()),
+       Immediate(0));
 }
 
 void Assembler::EmitQ(int reg,
@@ -335,7 +458,7 @@ void Assembler::EmitW(Register dst,
 
 #define UNARY_XMM_WITH_CONSTANT(name, constant, op)                            \
   void Assembler::name(XmmRegister dst, XmmRegister src) {                     \
-    movq(TMP, Address(THR, Thread::constant##_address_offset()));              \
+    movq(TMP, Address(THR, target::Thread::constant##_address_offset()));      \
     if (dst == src) {                                                          \
       op(dst, Address(TMP, 0));                                                \
     } else {                                                                   \
@@ -452,6 +575,13 @@ void Assembler::testb(const Address& address, const Immediate& imm) {
   EmitOperand(0, address);
   ASSERT(imm.is_int8());
   EmitUint8(imm.value() & 0xFF);
+}
+
+void Assembler::testb(const Address& address, Register reg) {
+  AssemblerBuffer::EnsureCapacity ensured(&buffer_);
+  EmitOperandREX(reg, address, REX_NONE);
+  EmitUint8(0x84);
+  EmitOperand(reg & 7, address);
 }
 
 void Assembler::testq(Register reg, const Immediate& imm) {
@@ -869,13 +999,11 @@ void Assembler::j(Condition condition, Label* label, bool near) {
   }
 }
 
-void Assembler::J(Condition condition,
-                  const StubEntry& stub_entry,
-                  Register pp) {
+void Assembler::J(Condition condition, const Code& target, Register pp) {
   Label no_jump;
   // Negate condition.
   j(static_cast<Condition>(condition ^ 1), &no_jump, kNearJump);
-  Jmp(stub_entry, pp);
+  Jmp(target, pp);
   Bind(&no_jump);
 }
 
@@ -912,24 +1040,23 @@ void Assembler::jmp(const ExternalLabel* label) {
   jmp(TMP);
 }
 
-void Assembler::JmpPatchable(const StubEntry& stub_entry, Register pp) {
+void Assembler::JmpPatchable(const Code& target, Register pp) {
   ASSERT((pp != PP) || constant_pool_allowed());
-  const Code& target = Code::ZoneHandle(stub_entry.code());
-  const intptr_t idx = object_pool_wrapper_.AddObject(target, kPatchable);
-  const int32_t offset = ObjectPool::element_offset(idx);
-  movq(CODE_REG, Address::AddressBaseImm32(pp, offset - kHeapObjectTag));
-  movq(TMP, FieldAddress(CODE_REG, Code::entry_point_offset()));
+  const intptr_t idx = object_pool_builder().AddObject(
+      ToObject(target), ObjectPoolBuilderEntry::kPatchable);
+  const int32_t offset = target::ObjectPool::element_offset(idx);
+  movq(CODE_REG, Address(pp, offset - kHeapObjectTag));
+  movq(TMP, FieldAddress(CODE_REG, target::Code::entry_point_offset()));
   jmp(TMP);
 }
 
-void Assembler::Jmp(const StubEntry& stub_entry, Register pp) {
+void Assembler::Jmp(const Code& target, Register pp) {
   ASSERT((pp != PP) || constant_pool_allowed());
-  const Code& target = Code::ZoneHandle(stub_entry.code());
-  const intptr_t idx = object_pool_wrapper_.FindObject(target, kNotPatchable);
-  const int32_t offset = ObjectPool::element_offset(idx);
+  const intptr_t idx = object_pool_builder().FindObject(
+      ToObject(target), ObjectPoolBuilderEntry::kNotPatchable);
+  const int32_t offset = target::ObjectPool::element_offset(idx);
   movq(CODE_REG, FieldAddress(pp, offset));
-  movq(TMP, FieldAddress(CODE_REG, Code::entry_point_offset()));
-  jmp(TMP);
+  jmp(FieldAddress(CODE_REG, target::Code::entry_point_offset()));
 }
 
 void Assembler::CompareRegisters(Register a, Register b) {
@@ -1067,67 +1194,54 @@ void Assembler::Drop(intptr_t stack_elements, Register tmp) {
     }
     return;
   }
-  addq(RSP, Immediate(stack_elements * kWordSize));
+  addq(RSP, Immediate(stack_elements * target::kWordSize));
 }
 
 bool Assembler::CanLoadFromObjectPool(const Object& object) const {
-  ASSERT(!object.IsICData() || ICData::Cast(object).IsOriginal());
-  ASSERT(!object.IsField() || Field::Cast(object).IsOriginal());
-  ASSERT(!Thread::CanLoadFromThread(object));
+  ASSERT(IsOriginalObject(object));
+  ASSERT(!target::CanLoadFromThread(object));
   if (!constant_pool_allowed()) {
     return false;
   }
 
-  // TODO(zra, kmillikin): Also load other large immediates from the object
-  // pool
-  if (object.IsSmi()) {
+  if (target::IsSmi(object)) {
     // If the raw smi does not fit into a 32-bit signed int, then we'll keep
     // the raw value in the object pool.
-    return !Utils::IsInt(32, reinterpret_cast<int64_t>(object.raw()));
+    return !Utils::IsInt(32, target::ToRawSmi(object));
   }
-  ASSERT(object.IsNotTemporaryScopedHandle());
-  ASSERT(object.IsOld());
+  ASSERT(IsNotTemporaryScopedHandle(object));
+  ASSERT(IsInOldSpace(object));
   return true;
 }
 
 void Assembler::LoadWordFromPoolOffset(Register dst, int32_t offset) {
   ASSERT(constant_pool_allowed());
   ASSERT(dst != PP);
-  // This sequence must be of fixed size. AddressBaseImm32
-  // forces the address operand to use a fixed-size imm32 encoding.
-  movq(dst, Address::AddressBaseImm32(PP, offset));
+  // This sequence must be decodable by code_patcher_x64.cc.
+  movq(dst, Address(PP, offset));
 }
 
 void Assembler::LoadIsolate(Register dst) {
-  movq(dst, Address(THR, Thread::isolate_offset()));
+  movq(dst, Address(THR, target::Thread::isolate_offset()));
 }
 
 void Assembler::LoadObjectHelper(Register dst,
                                  const Object& object,
                                  bool is_unique) {
-  ASSERT(!object.IsICData() || ICData::Cast(object).IsOriginal());
-  ASSERT(!object.IsField() || Field::Cast(object).IsOriginal());
-  if (Thread::CanLoadFromThread(object)) {
-    movq(dst, Address(THR, Thread::OffsetFromThread(object)));
+  ASSERT(IsOriginalObject(object));
+
+  intptr_t offset_from_thread;
+  if (target::CanLoadFromThread(object, &offset_from_thread)) {
+    movq(dst, Address(THR, offset_from_thread));
   } else if (CanLoadFromObjectPool(object)) {
-    const intptr_t idx = is_unique ? object_pool_wrapper_.AddObject(object)
-                                   : object_pool_wrapper_.FindObject(object);
-    const int32_t offset = ObjectPool::element_offset(idx);
+    const intptr_t idx = is_unique ? object_pool_builder().AddObject(object)
+                                   : object_pool_builder().FindObject(object);
+    const int32_t offset = target::ObjectPool::element_offset(idx);
     LoadWordFromPoolOffset(dst, offset - kHeapObjectTag);
   } else {
-    ASSERT(object.IsSmi());
-    LoadImmediate(dst, Immediate(reinterpret_cast<int64_t>(object.raw())));
+    ASSERT(target::IsSmi(object));
+    LoadImmediate(dst, Immediate(target::ToRawSmi(object)));
   }
-}
-
-void Assembler::LoadFunctionFromCalleePool(Register dst,
-                                           const Function& function,
-                                           Register new_pp) {
-  ASSERT(!constant_pool_allowed());
-  ASSERT(new_pp != PP);
-  const intptr_t idx = object_pool_wrapper_.FindObject(function, kNotPatchable);
-  const int32_t offset = ObjectPool::element_offset(idx);
-  movq(dst, Address::AddressBaseImm32(new_pp, offset - kHeapObjectTag));
 }
 
 void Assembler::LoadObject(Register dst, const Object& object) {
@@ -1139,51 +1253,55 @@ void Assembler::LoadUniqueObject(Register dst, const Object& object) {
 }
 
 void Assembler::StoreObject(const Address& dst, const Object& object) {
-  ASSERT(!object.IsICData() || ICData::Cast(object).IsOriginal());
-  ASSERT(!object.IsField() || Field::Cast(object).IsOriginal());
-  if (Thread::CanLoadFromThread(object)) {
-    movq(TMP, Address(THR, Thread::OffsetFromThread(object)));
+  ASSERT(IsOriginalObject(object));
+
+  intptr_t offset_from_thread;
+  if (target::CanLoadFromThread(object, &offset_from_thread)) {
+    movq(TMP, Address(THR, offset_from_thread));
     movq(dst, TMP);
   } else if (CanLoadFromObjectPool(object)) {
     LoadObject(TMP, object);
     movq(dst, TMP);
   } else {
-    ASSERT(object.IsSmi());
-    MoveImmediate(dst, Immediate(reinterpret_cast<int64_t>(object.raw())));
+    ASSERT(target::IsSmi(object));
+    MoveImmediate(dst, Immediate(target::ToRawSmi(object)));
   }
 }
 
 void Assembler::PushObject(const Object& object) {
-  ASSERT(!object.IsICData() || ICData::Cast(object).IsOriginal());
-  ASSERT(!object.IsField() || Field::Cast(object).IsOriginal());
-  if (Thread::CanLoadFromThread(object)) {
-    pushq(Address(THR, Thread::OffsetFromThread(object)));
+  ASSERT(IsOriginalObject(object));
+
+  intptr_t offset_from_thread;
+  if (target::CanLoadFromThread(object, &offset_from_thread)) {
+    pushq(Address(THR, offset_from_thread));
   } else if (CanLoadFromObjectPool(object)) {
     LoadObject(TMP, object);
     pushq(TMP);
   } else {
-    ASSERT(object.IsSmi());
-    PushImmediate(Immediate(reinterpret_cast<int64_t>(object.raw())));
+    ASSERT(target::IsSmi(object));
+    PushImmediate(Immediate(target::ToRawSmi(object)));
   }
 }
 
 void Assembler::CompareObject(Register reg, const Object& object) {
-  ASSERT(!object.IsICData() || ICData::Cast(object).IsOriginal());
-  ASSERT(!object.IsField() || Field::Cast(object).IsOriginal());
-  if (Thread::CanLoadFromThread(object)) {
-    cmpq(reg, Address(THR, Thread::OffsetFromThread(object)));
+  ASSERT(IsOriginalObject(object));
+
+  intptr_t offset_from_thread;
+  if (target::CanLoadFromThread(object, &offset_from_thread)) {
+    cmpq(reg, Address(THR, offset_from_thread));
   } else if (CanLoadFromObjectPool(object)) {
-    const intptr_t idx = object_pool_wrapper_.FindObject(object, kNotPatchable);
-    const int32_t offset = ObjectPool::element_offset(idx);
+    const intptr_t idx = object_pool_builder().FindObject(
+        object, ObjectPoolBuilderEntry::kNotPatchable);
+    const int32_t offset = target::ObjectPool::element_offset(idx);
     cmpq(reg, Address(PP, offset - kHeapObjectTag));
   } else {
-    ASSERT(object.IsSmi());
-    CompareImmediate(reg, Immediate(reinterpret_cast<int64_t>(object.raw())));
+    ASSERT(target::IsSmi(object));
+    CompareImmediate(reg, Immediate(target::ToRawSmi(object)));
   }
 }
 
 intptr_t Assembler::FindImmediate(int64_t imm) {
-  return object_pool_wrapper_.FindImmediate(imm);
+  return object_pool_builder().FindImmediate(imm);
 }
 
 void Assembler::LoadImmediate(Register reg, const Immediate& imm) {
@@ -1192,7 +1310,8 @@ void Assembler::LoadImmediate(Register reg, const Immediate& imm) {
   } else if (imm.is_int32() || !constant_pool_allowed()) {
     movq(reg, imm);
   } else {
-    int32_t offset = ObjectPool::element_offset(FindImmediate(imm.value()));
+    int32_t offset =
+        target::ObjectPool::element_offset(FindImmediate(imm.value()));
     LoadWordFromPoolOffset(reg, offset - kHeapObjectTag);
   }
 }
@@ -1212,10 +1331,17 @@ void Assembler::StoreIntoObjectFilter(Register object,
                                       Label* label,
                                       CanBeSmi can_be_smi,
                                       BarrierFilterMode how_to_jump) {
-  COMPILE_ASSERT((kNewObjectAlignmentOffset == kWordSize) &&
-                 (kOldObjectAlignmentOffset == 0));
+  COMPILE_ASSERT((target::ObjectAlignment::kNewObjectAlignmentOffset ==
+                  target::kWordSize) &&
+                 (target::ObjectAlignment::kOldObjectAlignmentOffset == 0));
 
   if (can_be_smi == kValueIsNotSmi) {
+#if defined(DEBUG)
+    Label okay;
+    BranchIfNotSmi(value, &okay);
+    Stop("Unexpected Smi!");
+    Bind(&okay);
+#endif
     // Write-barrier triggers if the value is in the new space (has bit set) and
     // the object is in the old space (has bit cleared).
     // To check that we could compute value & ~object and skip the write barrier
@@ -1224,7 +1350,7 @@ void Assembler::StoreIntoObjectFilter(Register object,
     // ~value | object instead and skip the write barrier if the bit is set.
     notl(value);
     orl(value, object);
-    testl(value, Immediate(kNewObjectAlignmentOffset));
+    testl(value, Immediate(target::ObjectAlignment::kNewObjectAlignmentOffset));
   } else {
     ASSERT(kHeapObjectTag == 1);
     // Detect value being ...1001 and object being ...0001.
@@ -1241,22 +1367,93 @@ void Assembler::StoreIntoObject(Register object,
                                 const Address& dest,
                                 Register value,
                                 CanBeSmi can_be_smi) {
+  // x.slot = x. Barrier should have be removed at the IL level.
   ASSERT(object != value);
-  movq(dest, value);
-  Label done;
-  StoreIntoObjectFilter(object, value, &done, can_be_smi, kJumpToNoUpdate);
-  // A store buffer update is required.
-  if (value != RDX) pushq(RDX);
-  if (object != RDX) {
-    movq(RDX, object);
-  }
-  pushq(CODE_REG);
-  movq(TMP, Address(THR, Thread::update_store_buffer_entry_point_offset()));
-  movq(CODE_REG, Address(THR, Thread::update_store_buffer_code_offset()));
-  call(TMP);
+  ASSERT(object != TMP);
+  ASSERT(value != TMP);
 
-  popq(CODE_REG);
-  if (value != RDX) popq(RDX);
+  movq(dest, value);
+
+  // In parallel, test whether
+  //  - object is old and not remembered and value is new, or
+  //  - object is old and value is old and not marked and concurrent marking is
+  //    in progress
+  // If so, call the WriteBarrier stub, which will either add object to the
+  // store buffer (case 1) or add value to the marking stack (case 2).
+  // Compare RawObject::StorePointer.
+  Label done;
+  if (can_be_smi == kValueCanBeSmi) {
+    testq(value, Immediate(kSmiTagMask));
+    j(ZERO, &done, kNearJump);
+  }
+  movb(TMP, FieldAddress(object, target::Object::tags_offset()));
+  shrl(TMP, Immediate(target::RawObject::kBarrierOverlapShift));
+  andl(TMP, Address(THR, target::Thread::write_barrier_mask_offset()));
+  testb(FieldAddress(value, target::Object::tags_offset()), TMP);
+  j(ZERO, &done, kNearJump);
+
+  Register object_for_call = object;
+  if (value != kWriteBarrierValueReg) {
+    // Unlikely. Only non-graph intrinsics.
+    // TODO(rmacnak): Shuffle registers in intrinsics.
+    pushq(kWriteBarrierValueReg);
+    if (object == kWriteBarrierValueReg) {
+      COMPILE_ASSERT(RBX != kWriteBarrierValueReg);
+      COMPILE_ASSERT(RCX != kWriteBarrierValueReg);
+      object_for_call = (value == RBX) ? RCX : RBX;
+      pushq(object_for_call);
+      movq(object_for_call, object);
+    }
+    movq(kWriteBarrierValueReg, value);
+  }
+  generate_invoke_write_barrier_wrapper_(object_for_call);
+  if (value != kWriteBarrierValueReg) {
+    if (object == kWriteBarrierValueReg) {
+      popq(object_for_call);
+    }
+    popq(kWriteBarrierValueReg);
+  }
+  Bind(&done);
+}
+
+void Assembler::StoreIntoArray(Register object,
+                               Register slot,
+                               Register value,
+                               CanBeSmi can_be_smi) {
+  ASSERT(object != TMP);
+  ASSERT(value != TMP);
+  ASSERT(slot != TMP);
+
+  movq(Address(slot, 0), value);
+
+  // In parallel, test whether
+  //  - object is old and not remembered and value is new, or
+  //  - object is old and value is old and not marked and concurrent marking is
+  //    in progress
+  // If so, call the WriteBarrier stub, which will either add object to the
+  // store buffer (case 1) or add value to the marking stack (case 2).
+  // Compare RawObject::StorePointer.
+  Label done;
+  if (can_be_smi == kValueCanBeSmi) {
+    testq(value, Immediate(kSmiTagMask));
+    j(ZERO, &done, kNearJump);
+  }
+  movb(TMP, FieldAddress(object, target::Object::tags_offset()));
+  shrl(TMP, Immediate(target::RawObject::kBarrierOverlapShift));
+  andl(TMP, Address(THR, target::Thread::write_barrier_mask_offset()));
+  testb(FieldAddress(value, target::Object::tags_offset()), TMP);
+  j(ZERO, &done, kNearJump);
+
+  if ((object != kWriteBarrierObjectReg) || (value != kWriteBarrierValueReg) ||
+      (slot != kWriteBarrierSlotReg)) {
+    // Spill and shuffle unimplemented. Currently StoreIntoArray is only used
+    // from StoreIndexInstr, which gets these exact registers from the register
+    // allocator.
+    UNIMPLEMENTED();
+  }
+
+  generate_invoke_array_write_barrier_();
+
   Bind(&done);
 }
 
@@ -1268,6 +1465,11 @@ void Assembler::StoreIntoObjectNoBarrier(Register object,
   Label done;
   pushq(value);
   StoreIntoObjectFilter(object, value, &done, kValueCanBeSmi, kJumpToNoUpdate);
+
+  testb(FieldAddress(object, target::Object::tags_offset()),
+        Immediate(1 << target::RawObject::kOldAndNotRememberedBit));
+  j(ZERO, &done, Assembler::kNearJump);
+
   Stop("Store buffer update is required");
   Bind(&done);
   popq(value);
@@ -1278,9 +1480,13 @@ void Assembler::StoreIntoObjectNoBarrier(Register object,
 void Assembler::StoreIntoObjectNoBarrier(Register object,
                                          const Address& dest,
                                          const Object& value) {
-  ASSERT(!value.IsICData() || ICData::Cast(value).IsOriginal());
-  ASSERT(!value.IsField() || Field::Cast(value).IsOriginal());
   StoreObject(dest, value);
+}
+
+void Assembler::StoreInternalPointer(Register object,
+                                     const Address& dest,
+                                     Register value) {
+  movq(dest, value);
 }
 
 void Assembler::StoreIntoSmiField(const Address& dest, Register value) {
@@ -1295,36 +1501,15 @@ void Assembler::StoreIntoSmiField(const Address& dest, Register value) {
 }
 
 void Assembler::ZeroInitSmiField(const Address& dest) {
-  Immediate zero(Smi::RawValue(0));
+  Immediate zero(target::ToRawSmi(0));
   movq(dest, zero);
 }
 
 void Assembler::IncrementSmiField(const Address& dest, int64_t increment) {
   // Note: FlowGraphCompiler::EdgeCounterIncrementSizeInBytes depends on
   // the length of this instruction sequence.
-  Immediate inc_imm(Smi::RawValue(increment));
+  Immediate inc_imm(target::ToRawSmi(increment));
   addq(dest, inc_imm);
-}
-
-void Assembler::Stop(const char* message, bool fixed_length_encoding) {
-  if (FLAG_print_stop_message) {
-    int64_t message_address = reinterpret_cast<int64_t>(message);
-    pushq(TMP);  // Preserve TMP register.
-    pushq(RDI);  // Preserve RDI register.
-    if (fixed_length_encoding) {
-      AssemblerBuffer::EnsureCapacity ensured(&buffer_);
-      EmitRegisterREX(RDI, REX_W);
-      EmitUint8(0xB8 | (RDI & 7));
-      EmitInt64(message_address);
-    } else {
-      LoadImmediate(RDI, Immediate(message_address));
-    }
-    call(&StubCode::PrintStopMessage_entry()->label());
-    popq(RDI);  // Restore RDI register.
-    popq(TMP);  // Restore TMP register.
-  }
-  // Emit the int3 instruction.
-  int3();  // Execution can be resumed with the 'cont' command in gdb.
 }
 
 void Assembler::Bind(Label* label) {
@@ -1379,6 +1564,18 @@ void Assembler::ReserveAlignedFrameSpace(intptr_t frame_space) {
   if (OS::ActivationFrameAlignment() > 1) {
     andq(RSP, Immediate(~(OS::ActivationFrameAlignment() - 1)));
   }
+}
+
+void Assembler::EmitEntryFrameVerification() {
+#if defined(DEBUG)
+  Label ok;
+  leaq(RAX, Address(RBP, target::frame_layout.exit_link_slot_from_entry_fp *
+                             target::kWordSize));
+  cmpq(RAX, RSP);
+  j(EQUAL, &ok);
+  Stop("target::frame_layout.exit_link_slot_from_entry_fp mismatch");
+  Bind(&ok);
+#endif
 }
 
 void Assembler::PushRegisters(intptr_t cpu_register_set,
@@ -1436,7 +1633,11 @@ void Assembler::PopRegisters(intptr_t cpu_register_set,
 
 void Assembler::EnterCallRuntimeFrame(intptr_t frame_space) {
   Comment("EnterCallRuntimeFrame");
-  EnterStubFrame();
+  EnterFrame(0);
+  if (!(FLAG_precompiled_mode && FLAG_use_bare_instructions)) {
+    pushq(CODE_REG);
+    pushq(PP);
+  }
 
   // TODO(vegorov): avoid saving FpuTMP, it is used only as scratch.
   PushRegisters(CallingConventions::kVolatileCpuRegisters,
@@ -1454,9 +1655,11 @@ void Assembler::LeaveCallRuntimeFrame() {
   const intptr_t kPushedXmmRegistersCount =
       RegisterSet::RegisterCount(CallingConventions::kVolatileXmmRegisters);
   const intptr_t kPushedRegistersSize =
-      kPushedCpuRegistersCount * kWordSize +
+      kPushedCpuRegistersCount * target::kWordSize +
       kPushedXmmRegistersCount * kFpuRegisterSize +
-      2 * kWordSize;  // PP, pc marker from EnterStubFrame
+      (target::frame_layout.dart_fixed_frame_size - 2) *
+          target::kWordSize;  // From EnterStubFrame (excluding PC / FP)
+
   leaq(RSP, Address(RBP, -kPushedRegistersSize));
 
   // TODO(vegorov): avoid saving FpuTMP, it is used only as scratch.
@@ -1480,25 +1683,28 @@ void Assembler::CallRuntime(const RuntimeEntry& entry,
 }
 
 void Assembler::RestoreCodePointer() {
-  movq(CODE_REG, Address(RBP, kPcMarkerSlotFromFp * kWordSize));
+  movq(CODE_REG,
+       Address(RBP, target::frame_layout.code_from_fp * target::kWordSize));
 }
 
 void Assembler::LoadPoolPointer(Register pp) {
   // Load new pool pointer.
   CheckCodePointer();
-  movq(pp, FieldAddress(CODE_REG, Code::object_pool_offset()));
+  movq(pp, FieldAddress(CODE_REG, target::Code::object_pool_offset()));
   set_constant_pool_allowed(pp == PP);
 }
 
 void Assembler::EnterDartFrame(intptr_t frame_size, Register new_pp) {
   ASSERT(!constant_pool_allowed());
   EnterFrame(0);
-  pushq(CODE_REG);
-  pushq(PP);
-  if (new_pp == kNoRegister) {
-    LoadPoolPointer(PP);
-  } else {
-    movq(PP, new_pp);
+  if (!(FLAG_precompiled_mode && FLAG_use_bare_instructions)) {
+    pushq(CODE_REG);
+    pushq(PP);
+    if (new_pp == kNoRegister) {
+      LoadPoolPointer(PP);
+    } else {
+      movq(PP, new_pp);
+    }
   }
   set_constant_pool_allowed(true);
   if (frame_size != 0) {
@@ -1508,10 +1714,13 @@ void Assembler::EnterDartFrame(intptr_t frame_size, Register new_pp) {
 
 void Assembler::LeaveDartFrame(RestorePP restore_pp) {
   // Restore caller's PP register that was pushed in EnterDartFrame.
-  if (restore_pp == kRestoreCallerPP) {
-    movq(PP, Address(RBP, (kSavedCallerPpSlotFromFp * kWordSize)));
-    set_constant_pool_allowed(false);
+  if (!(FLAG_precompiled_mode && FLAG_use_bare_instructions)) {
+    if (restore_pp == kRestoreCallerPP) {
+      movq(PP, Address(RBP, (target::frame_layout.saved_caller_pp_from_fp *
+                             target::kWordSize)));
+    }
   }
+  set_constant_pool_allowed(false);
   LeaveFrame();
 }
 
@@ -1531,13 +1740,13 @@ void Assembler::CheckCodePointer() {
   {
     const intptr_t kRIPRelativeLeaqSize = 7;
     const intptr_t header_to_entry_offset =
-        (Instructions::HeaderSize() - kHeapObjectTag);
+        (target::Instructions::HeaderSize() - kHeapObjectTag);
     const intptr_t header_to_rip_offset =
         CodeSize() + kRIPRelativeLeaqSize + header_to_entry_offset;
     leaq(RAX, Address::AddressRIPRelative(-header_to_rip_offset));
     ASSERT(CodeSize() == (header_to_rip_offset - header_to_entry_offset));
   }
-  cmpq(RAX, FieldAddress(CODE_REG, Code::saved_instructions_offset()));
+  cmpq(RAX, FieldAddress(CODE_REG, target::Code::saved_instructions_offset()));
   j(EQUAL, &instructions_ok);
   int3();
   Bind(&instructions_ok);
@@ -1572,34 +1781,86 @@ void Assembler::LeaveStubFrame() {
   LeaveDartFrame();
 }
 
-// RDI receiver, RBX guarded cid as Smi.
+// RDX receiver, RBX ICData entries array
 // Preserve R10 (ARGS_DESC_REG), not required today, but maybe later.
-void Assembler::MonomorphicCheckedEntry() {
-  ASSERT(has_single_entry_point_);
+void Assembler::MonomorphicCheckedEntryJIT() {
   has_single_entry_point_ = false;
-  Label immediate, have_cid, miss;
+  intptr_t start = CodeSize();
+  Label have_cid, miss;
   Bind(&miss);
-  jmp(Address(THR, Thread::monomorphic_miss_entry_offset()));
+  jmp(Address(THR, target::Thread::monomorphic_miss_entry_offset()));
 
-  Bind(&immediate);
-  movq(TMP, Immediate(kSmiCid));
-  jmp(&have_cid, kNearJump);
+  // Ensure the monomorphic entry is 2-byte aligned (so GC can see them if we
+  // store them in ICData / MegamorphicCache arrays)
+  nop(1);
 
   Comment("MonomorphicCheckedEntry");
-  ASSERT(CodeSize() == Instructions::kCheckedEntryOffset);
-  SmiUntag(RBX);
-  testq(RDI, Immediate(kSmiTagMask));
-  j(ZERO, &immediate, kNearJump);
+  ASSERT(CodeSize() - start ==
+         target::Instructions::kMonomorphicEntryOffsetJIT);
+  ASSERT((CodeSize() & kSmiTagMask) == kSmiTag);
 
-  LoadClassId(TMP, RDI);
+  const intptr_t cid_offset = target::Array::element_offset(0);
+  const intptr_t count_offset = target::Array::element_offset(1);
 
-  Bind(&have_cid);
-  cmpq(TMP, RBX);
+  LoadTaggedClassIdMayBeSmi(RAX, RDX);
+
+  cmpq(RAX, FieldAddress(RBX, cid_offset));
   j(NOT_EQUAL, &miss, Assembler::kNearJump);
+  addl(FieldAddress(RBX, count_offset), Immediate(target::ToRawSmi(1)));
+  xorq(R10, R10);  // GC-safe for OptimizeInvokedFunction.
+  nop(1);
 
   // Fall through to unchecked entry.
-  ASSERT(CodeSize() == Instructions::kUncheckedEntryOffset);
+  ASSERT(CodeSize() - start ==
+         target::Instructions::kPolymorphicEntryOffsetJIT);
+  ASSERT(((CodeSize() - start) & kSmiTagMask) == kSmiTag);
+}
+
+void Assembler::MonomorphicCheckedEntryAOT() {
+  has_single_entry_point_ = false;
+  intptr_t start = CodeSize();
+  Label have_cid, miss;
+  Bind(&miss);
+  jmp(Address(THR, target::Thread::monomorphic_miss_entry_offset()));
+
+  // Ensure the monomorphic entry is 2-byte aligned (so GC can see them if we
+  // store them in ICData / MegamorphicCache arrays)
+  nop(1);
+
+  Comment("MonomorphicCheckedEntry");
+  ASSERT(CodeSize() - start ==
+         target::Instructions::kMonomorphicEntryOffsetAOT);
   ASSERT((CodeSize() & kSmiTagMask) == kSmiTag);
+
+  movq(RAX, Immediate(kSmiCid));
+  SmiUntag(RBX);
+  testq(RDX, Immediate(kSmiTagMask));
+  j(ZERO, &have_cid, kNearJump);
+  LoadClassId(RAX, RDX);
+  Bind(&have_cid);
+
+  cmpq(RAX, RBX);
+  j(NOT_EQUAL, &miss, Assembler::kNearJump);
+
+  // Ensure the unchecked entry is 2-byte aligned (so GC can see them if we
+  // store them in ICData / MegamorphicCache arrays).
+  nop(1);
+
+  // Fall through to unchecked entry.
+  ASSERT(CodeSize() - start ==
+         target::Instructions::kPolymorphicEntryOffsetAOT);
+  ASSERT(((CodeSize() - start) & kSmiTagMask) == kSmiTag);
+}
+
+void Assembler::BranchOnMonomorphicCheckedEntryJIT(Label* label) {
+  has_single_entry_point_ = false;
+  while (CodeSize() < target::Instructions::kMonomorphicEntryOffsetJIT) {
+    int3();
+  }
+  jmp(label);
+  while (CodeSize() < target::Instructions::kPolymorphicEntryOffsetJIT) {
+    int3();
+  }
 }
 
 #ifndef PRODUCT
@@ -1607,50 +1868,57 @@ void Assembler::MaybeTraceAllocation(intptr_t cid,
                                      Label* trace,
                                      bool near_jump) {
   ASSERT(cid > 0);
-  intptr_t state_offset = ClassTable::StateOffsetFor(cid);
+  const intptr_t shared_table_offset =
+      target::Isolate::class_table_offset() +
+      target::ClassTable::shared_class_table_offset();
+  const intptr_t table_offset =
+      target::SharedClassTable::class_heap_stats_table_offset();
+  const intptr_t state_offset = target::ClassTable::StateOffsetFor(cid);
+
   Register temp_reg = TMP;
   LoadIsolate(temp_reg);
-  intptr_t table_offset =
-      Isolate::class_table_offset() + ClassTable::TableOffsetFor(cid);
+  movq(temp_reg, Address(temp_reg, shared_table_offset));
   movq(temp_reg, Address(temp_reg, table_offset));
   testb(Address(temp_reg, state_offset),
-        Immediate(ClassHeapStats::TraceAllocationMask()));
+        Immediate(target::ClassHeapStats::TraceAllocationMask()));
   // We are tracing for this class, jump to the trace label which will use
   // the allocation stub.
   j(NOT_ZERO, trace, near_jump);
 }
 
-void Assembler::UpdateAllocationStats(intptr_t cid, Heap::Space space) {
+void Assembler::UpdateAllocationStats(intptr_t cid) {
   ASSERT(cid > 0);
-  intptr_t counter_offset =
-      ClassTable::CounterOffsetFor(cid, space == Heap::kNew);
+  const intptr_t shared_table_offset =
+      target::Isolate::class_table_offset() +
+      target::ClassTable::shared_class_table_offset();
+  const intptr_t table_offset =
+      target::SharedClassTable::class_heap_stats_table_offset();
+  const intptr_t counter_offset =
+      target::ClassTable::NewSpaceCounterOffsetFor(cid);
+
   Register temp_reg = TMP;
   LoadIsolate(temp_reg);
-  intptr_t table_offset =
-      Isolate::class_table_offset() + ClassTable::TableOffsetFor(cid);
+  movq(temp_reg, Address(temp_reg, shared_table_offset));
   movq(temp_reg, Address(temp_reg, table_offset));
   incq(Address(temp_reg, counter_offset));
 }
 
-void Assembler::UpdateAllocationStatsWithSize(intptr_t cid,
-                                              Register size_reg,
-                                              Heap::Space space) {
+void Assembler::UpdateAllocationStatsWithSize(intptr_t cid, Register size_reg) {
   ASSERT(cid > 0);
   ASSERT(cid < kNumPredefinedCids);
-  UpdateAllocationStats(cid, space);
+  UpdateAllocationStats(cid);
   Register temp_reg = TMP;
-  intptr_t size_offset = ClassTable::SizeOffsetFor(cid, space == Heap::kNew);
+  intptr_t size_offset = target::ClassTable::NewSpaceSizeOffsetFor(cid);
   addq(Address(temp_reg, size_offset), size_reg);
 }
 
 void Assembler::UpdateAllocationStatsWithSize(intptr_t cid,
-                                              intptr_t size_in_bytes,
-                                              Heap::Space space) {
+                                              intptr_t size_in_bytes) {
   ASSERT(cid > 0);
   ASSERT(cid < kNumPredefinedCids);
-  UpdateAllocationStats(cid, space);
+  UpdateAllocationStats(cid);
   Register temp_reg = TMP;
-  intptr_t size_offset = ClassTable::SizeOffsetFor(cid, space == Heap::kNew);
+  intptr_t size_offset = target::ClassTable::NewSpaceSizeOffsetFor(cid);
   addq(Address(temp_reg, size_offset), Immediate(size_in_bytes));
 }
 #endif  // !PRODUCT
@@ -1661,31 +1929,30 @@ void Assembler::TryAllocate(const Class& cls,
                             Register instance_reg,
                             Register temp) {
   ASSERT(failure != NULL);
-  const intptr_t instance_size = cls.instance_size();
-  if (FLAG_inline_alloc && Heap::IsAllocatableInNewSpace(instance_size)) {
+  const intptr_t instance_size = target::Class::GetInstanceSize(cls);
+  if (FLAG_inline_alloc &&
+      target::Heap::IsAllocatableInNewSpace(instance_size)) {
+    const classid_t cid = target::Class::GetId(cls);
     // If this allocation is traced, program will jump to failure path
     // (i.e. the allocation stub) which will allocate the object and trace the
     // allocation call site.
-    NOT_IN_PRODUCT(MaybeTraceAllocation(cls.id(), failure, near_jump));
-    NOT_IN_PRODUCT(Heap::Space space = Heap::kNew);
-    movq(instance_reg, Address(THR, Thread::top_offset()));
+    NOT_IN_PRODUCT(MaybeTraceAllocation(cid, failure, near_jump));
+    movq(instance_reg, Address(THR, target::Thread::top_offset()));
     addq(instance_reg, Immediate(instance_size));
     // instance_reg: potential next object start.
-    cmpq(instance_reg, Address(THR, Thread::end_offset()));
+    cmpq(instance_reg, Address(THR, target::Thread::end_offset()));
     j(ABOVE_EQUAL, failure, near_jump);
     // Successfully allocated the object, now update top to point to
     // next object start and store the class in the class field of object.
-    movq(Address(THR, Thread::top_offset()), instance_reg);
-    NOT_IN_PRODUCT(UpdateAllocationStats(cls.id(), space));
+    movq(Address(THR, target::Thread::top_offset()), instance_reg);
+    NOT_IN_PRODUCT(UpdateAllocationStats(cid));
     ASSERT(instance_size >= kHeapObjectTag);
     AddImmediate(instance_reg, Immediate(kHeapObjectTag - instance_size));
-    uint32_t tags = 0;
-    tags = RawObject::SizeTag::update(instance_size, tags);
-    ASSERT(cls.id() != kIllegalCid);
-    tags = RawObject::ClassIdTag::update(cls.id(), tags);
+    const uint32_t tags =
+        target::MakeTagWordForNewSpaceObject(cid, instance_size);
     // Extends the 32 bit tags with zeros, which is the uninitialized
     // hash code.
-    MoveImmediate(FieldAddress(instance_reg, Object::tags_offset()),
+    MoveImmediate(FieldAddress(instance_reg, target::Object::tags_offset()),
                   Immediate(tags));
   } else {
     jmp(failure);
@@ -1700,13 +1967,13 @@ void Assembler::TryAllocateArray(intptr_t cid,
                                  Register end_address,
                                  Register temp) {
   ASSERT(failure != NULL);
-  if (FLAG_inline_alloc && Heap::IsAllocatableInNewSpace(instance_size)) {
+  if (FLAG_inline_alloc &&
+      target::Heap::IsAllocatableInNewSpace(instance_size)) {
     // If this allocation is traced, program will jump to failure path
     // (i.e. the allocation stub) which will allocate the object and trace the
     // allocation call site.
     NOT_IN_PRODUCT(MaybeTraceAllocation(cid, failure, near_jump));
-    NOT_IN_PRODUCT(Heap::Space space = Heap::kNew);
-    movq(instance, Address(THR, Thread::top_offset()));
+    movq(instance, Address(THR, target::Thread::top_offset()));
     movq(end_address, instance);
 
     addq(end_address, Immediate(instance_size));
@@ -1715,26 +1982,36 @@ void Assembler::TryAllocateArray(intptr_t cid,
     // Check if the allocation fits into the remaining space.
     // instance: potential new object start.
     // end_address: potential next object start.
-    cmpq(end_address, Address(THR, Thread::end_offset()));
+    cmpq(end_address, Address(THR, target::Thread::end_offset()));
     j(ABOVE_EQUAL, failure);
 
     // Successfully allocated the object(s), now update top to point to
     // next object start and initialize the object.
-    movq(Address(THR, Thread::top_offset()), end_address);
+    movq(Address(THR, target::Thread::top_offset()), end_address);
     addq(instance, Immediate(kHeapObjectTag));
-    NOT_IN_PRODUCT(UpdateAllocationStatsWithSize(cid, instance_size, space));
+    NOT_IN_PRODUCT(UpdateAllocationStatsWithSize(cid, instance_size));
 
     // Initialize the tags.
     // instance: new object start as a tagged pointer.
-    uint32_t tags = 0;
-    tags = RawObject::ClassIdTag::update(cid, tags);
-    tags = RawObject::SizeTag::update(instance_size, tags);
+    const uint32_t tags =
+        target::MakeTagWordForNewSpaceObject(cid, instance_size);
     // Extends the 32 bit tags with zeros, which is the uninitialized
     // hash code.
-    movq(FieldAddress(instance, Array::tags_offset()), Immediate(tags));
+    movq(FieldAddress(instance, target::Object::tags_offset()),
+         Immediate(tags));
   } else {
     jmp(failure);
   }
+}
+
+void Assembler::GenerateUnRelocatedPcRelativeCall(intptr_t offset_into_target) {
+  AssemblerBuffer::EnsureCapacity ensured(&buffer_);
+  buffer_.Emit<uint8_t>(0xe8);
+  buffer_.Emit<int32_t>(0);
+
+  PcRelativeCallPattern pattern(buffer_.contents() + buffer_.Size() -
+                                PcRelativeCallPattern::kLengthInBytes);
+  pattern.set_distance(offset_into_target);
 }
 
 void Assembler::Align(int alignment, intptr_t offset) {
@@ -1749,7 +2026,7 @@ void Assembler::Align(int alignment, intptr_t offset) {
     nop(MAX_NOP_SIZE);
     bytes_needed -= MAX_NOP_SIZE;
   }
-  if (bytes_needed) {
+  if (bytes_needed != 0) {
     nop(bytes_needed);
   }
   ASSERT(((offset + buffer_.GetPosition()) & (alignment - 1)) == 0);
@@ -1865,30 +2142,23 @@ void Assembler::EmitGenericShift(bool wide,
 }
 
 void Assembler::LoadClassId(Register result, Register object) {
-  ASSERT(RawObject::kClassIdTagPos == 16);
-  ASSERT(RawObject::kClassIdTagSize == 16);
+  ASSERT(target::RawObject::kClassIdTagPos == 16);
+  ASSERT(target::RawObject::kClassIdTagSize == 16);
   ASSERT(sizeof(classid_t) == sizeof(uint16_t));
   const intptr_t class_id_offset =
-      Object::tags_offset() + RawObject::kClassIdTagPos / kBitsPerByte;
+      target::Object::tags_offset() +
+      target::RawObject::kClassIdTagPos / kBitsPerByte;
   movzxw(result, FieldAddress(object, class_id_offset));
 }
 
 void Assembler::LoadClassById(Register result, Register class_id) {
   ASSERT(result != class_id);
-  LoadIsolate(result);
-  const intptr_t offset =
-      Isolate::class_table_offset() + ClassTable::table_offset();
-  movq(result, Address(result, offset));
-  ASSERT(kSizeOfClassPairLog2 == 4);
-  // TIMES_16 is not a real scale factor on x64, so we double the class id
-  // and use TIMES_8.
-  addq(class_id, class_id);
-  movq(result, Address(result, class_id, TIMES_8, 0));
-}
+  const intptr_t table_offset = target::Isolate::class_table_offset() +
+                                target::ClassTable::table_offset();
 
-void Assembler::LoadClass(Register result, Register object) {
-  LoadClassId(TMP, object);
-  LoadClassById(result, TMP);
+  LoadIsolate(result);
+  movq(result, Address(result, table_offset));
+  movq(result, Address(result, class_id, TIMES_8, 0));
 }
 
 void Assembler::CompareClassId(Register object,
@@ -1903,11 +2173,12 @@ void Assembler::SmiUntagOrCheckClass(Register object,
                                      intptr_t class_id,
                                      Label* is_smi) {
   ASSERT(kSmiTagShift == 1);
-  ASSERT(RawObject::kClassIdTagPos == 16);
-  ASSERT(RawObject::kClassIdTagSize == 16);
+  ASSERT(target::RawObject::kClassIdTagPos == 16);
+  ASSERT(target::RawObject::kClassIdTagSize == 16);
   ASSERT(sizeof(classid_t) == sizeof(uint16_t));
   const intptr_t class_id_offset =
-      Object::tags_offset() + RawObject::kClassIdTagPos / kBitsPerByte;
+      target::Object::tags_offset() +
+      target::RawObject::kClassIdTagPos / kBitsPerByte;
 
   // Untag optimistically. Tag bit is shifted into the CARRY.
   SmiUntag(object);
@@ -1956,7 +2227,7 @@ void Assembler::LoadTaggedClassIdMayBeSmi(Register result, Register object) {
     jmp(&join, Assembler::kNearJump);
 
     Bind(&smi);
-    movq(result, Immediate(Smi::RawValue(kSmiCid)));
+    movq(result, Immediate(target::ToRawSmi(kSmiCid)));
 
     Bind(&join);
   } else {
@@ -1970,6 +2241,10 @@ void Assembler::LoadTaggedClassIdMayBeSmi(Register result, Register object) {
   }
 }
 
+Address Assembler::VMTagAddress() {
+  return Address(THR, target::Thread::vm_tag_offset());
+}
+
 Address Assembler::ElementAddressForIntIndex(bool is_external,
                                              intptr_t cid,
                                              intptr_t index_scale,
@@ -1979,7 +2254,7 @@ Address Assembler::ElementAddressForIntIndex(bool is_external,
     return Address(array, index * index_scale);
   } else {
     const int64_t disp = static_cast<int64_t>(index) * index_scale +
-                         Instance::DataOffsetFor(cid);
+                         target::Instance::DataOffsetFor(cid);
     ASSERT(Utils::IsInt(32, disp));
     return FieldAddress(array, static_cast<int32_t>(disp));
   }
@@ -2016,32 +2291,13 @@ Address Assembler::ElementAddressForRegIndex(bool is_external,
     return Address(array, index, ToScaleFactor(index_scale), 0);
   } else {
     return FieldAddress(array, index, ToScaleFactor(index_scale),
-                        Instance::DataOffsetFor(cid));
+                        target::Instance::DataOffsetFor(cid));
   }
 }
 
 #endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
-static const char* xmm_reg_names[kNumberOfXmmRegisters] = {
-    "xmm0", "xmm1", "xmm2",  "xmm3",  "xmm4",  "xmm5",  "xmm6",  "xmm7",
-    "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15"};
-
-const char* Assembler::FpuRegisterName(FpuRegister reg) {
-  ASSERT((0 <= reg) && (reg < kNumberOfXmmRegisters));
-  return xmm_reg_names[reg];
-}
-
-static const char* cpu_reg_names[kNumberOfCpuRegisters] = {
-    "rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
-    "r8",  "r9",  "r10", "r11", "r12", "r13", "thr", "pp"};
-
-// Used by disassembler, so it is declared outside of
-// !defined(DART_PRECOMPILED_RUNTIME) section.
-const char* Assembler::RegisterName(Register reg) {
-  ASSERT((0 <= reg) && (reg < kNumberOfCpuRegisters));
-  return cpu_reg_names[reg];
-}
-
+}  // namespace compiler
 }  // namespace dart
 
 #endif  // defined(TARGET_ARCH_X64)

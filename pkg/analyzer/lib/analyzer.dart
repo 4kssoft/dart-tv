@@ -1,9 +1,13 @@
-// Copyright (c) 2013, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2013, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+@deprecated
+library analyzer;
+
 import 'dart:io';
 
+import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/error/error.dart';
 import 'package:analyzer/error/listener.dart';
@@ -35,11 +39,23 @@ export 'package:analyzer/src/generated/utilities_dart.dart';
 /// [suppressErrors] is `true`, in which case any errors are discarded.
 ///
 /// If [parseFunctionBodies] is [false] then only function signatures will be
-/// parsed.
+/// parsed.  (Currently broken; function bodies are always parsed).
+///
+/// Deprecated - please use the `parseString` function
+/// (from package:analyzer/dart/analysis/utilities.dart) instead.
+///
+/// Note that `parseString` does not support the `parseFunctionBodies` option;
+/// callers that don't require function bodies should simply ignore them.
+@Deprecated('Please use parseString instead')
 CompilationUnit parseCompilationUnit(String contents,
-    {String name, bool suppressErrors: false, bool parseFunctionBodies: true}) {
+    {String name,
+    bool suppressErrors: false,
+    bool parseFunctionBodies: true,
+    FeatureSet featureSet}) {
+  // TODO(paulberry): make featureSet a required parameter
+  featureSet ??= FeatureSet.fromEnableFlags([]);
   Source source = new StringSource(contents, name);
-  return _parseSource(contents, source,
+  return _parseSource(contents, source, featureSet,
       suppressErrors: suppressErrors, parseFunctionBodies: parseFunctionBodies);
 }
 
@@ -49,9 +65,20 @@ CompilationUnit parseCompilationUnit(String contents,
 /// [suppressErrors] is `true`, in which case any errors are discarded.
 ///
 /// If [parseFunctionBodies] is [false] then only function signatures will be
-/// parsed.
+/// parsed.  (Currently broken; function bodies are always parsed).
+///
+/// Deprecated - please use the `parseFile2` function
+/// (from package:analyzer/dart/analysis/utilities.dart) instead.
+///
+/// Note that `parseFile2` does not support the `parseFunctionBodies` option;
+/// callers that don't require function bodies should simply ignore them.
+@Deprecated('Please use parseFile2 instead')
 CompilationUnit parseDartFile(String path,
-    {bool suppressErrors: false, bool parseFunctionBodies: true}) {
+    {bool suppressErrors: false,
+    bool parseFunctionBodies: true,
+    FeatureSet featureSet}) {
+  // TODO(paulberry): Make featureSet a required parameter
+  featureSet ??= FeatureSet.fromEnableFlags([]);
   String contents = new File(path).readAsStringSync();
   var sourceFactory = new SourceFactory(
       [new ResourceUriResolver(PhysicalResourceProvider.INSTANCE)]);
@@ -65,11 +92,12 @@ CompilationUnit parseDartFile(String path,
     throw new ArgumentError("Source $source doesn't exist");
   }
 
-  return _parseSource(contents, source,
+  return _parseSource(contents, source, featureSet,
       suppressErrors: suppressErrors, parseFunctionBodies: parseFunctionBodies);
 }
 
 /// Parses the script tag and directives in a string of Dart code into an AST.
+/// (Currently broken; the entire file is parsed).
 ///
 /// Stops parsing when the first non-directive is encountered. The rest of the
 /// string will not be parsed.
@@ -79,14 +107,24 @@ CompilationUnit parseDartFile(String path,
 ///
 /// Throws an [AnalyzerErrorGroup] if any errors occurred, unless
 /// [suppressErrors] is `true`, in which case any errors are discarded.
+///
+/// Deprecated - please use the `parseString` function
+/// (from package:analyzer/dart/analysis/utilities.dart) instead.
+///
+/// Note that `parseString` parses the whole file; callers that only require
+/// directives should simply ignore the rest of the parse result.
+@Deprecated('Please use parseString instead')
 CompilationUnit parseDirectives(String contents,
-    {String name, bool suppressErrors: false}) {
+    {String name, bool suppressErrors: false, FeatureSet featureSet}) {
+  // TODO(paulberry): make featureSet a required parameter.
+  featureSet ??= FeatureSet.fromEnableFlags([]);
   var source = new StringSource(contents, name);
   var errorCollector = new _ErrorCollector();
   var reader = new CharSequenceReader(contents);
-  var scanner = new Scanner(source, reader, errorCollector);
+  var scanner = new Scanner(source, reader, errorCollector)
+    ..configureFeatures(featureSet);
   var token = scanner.tokenize();
-  var parser = new Parser(source, errorCollector);
+  var parser = new Parser(source, errorCollector, featureSet: featureSet);
   var unit = parser.parseDirectives(token);
   unit.lineInfo = new LineInfo(scanner.lineStarts);
 
@@ -96,17 +134,20 @@ CompilationUnit parseDirectives(String contents,
 }
 
 /// Converts an AST node representing a string literal into a [String].
+@Deprecated('Please use StringLiteral.stringValue instead')
 String stringLiteralToString(StringLiteral literal) {
   return literal.stringValue;
 }
 
-CompilationUnit _parseSource(String contents, Source source,
+CompilationUnit _parseSource(
+    String contents, Source source, FeatureSet featureSet,
     {bool suppressErrors: false, bool parseFunctionBodies: true}) {
   var reader = new CharSequenceReader(contents);
   var errorCollector = new _ErrorCollector();
-  var scanner = new Scanner(source, reader, errorCollector);
+  var scanner = new Scanner(source, reader, errorCollector)
+    ..configureFeatures(featureSet);
   var token = scanner.tokenize();
-  var parser = new Parser(source, errorCollector)
+  var parser = new Parser(source, errorCollector, featureSet: featureSet)
     ..parseFunctionBodies = parseFunctionBodies;
   var unit = parser.parseCompilationUnit(token)
     ..lineInfo = new LineInfo(scanner.lineStarts);
@@ -127,7 +168,7 @@ class _ErrorCollector extends AnalysisErrorListener {
       new AnalyzerErrorGroup.fromAnalysisErrors(_errors);
 
   /// Whether any errors where collected.
-  bool get hasErrors => !_errors.isEmpty;
+  bool get hasErrors => _errors.isNotEmpty;
 
   @override
   void onError(AnalysisError error) => _errors.add(error);

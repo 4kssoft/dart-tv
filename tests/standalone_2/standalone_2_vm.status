@@ -6,22 +6,6 @@
 link_natives_lazily_test: SkipByDesign # Not supported.
 no_allow_absolute_addresses_test: SkipByDesign # Not supported.
 
-[ $compiler == app_jit ]
-full_coverage_test: Skip # Platform.executable
-io/code_collection_test: Skip # Platform.executable
-io/namespace_test: RuntimeError # Issue 33168
-io/platform_resolved_executable_test/00: RuntimeError # Issue 33168
-io/platform_resolved_executable_test/01: RuntimeError # Issue 33168
-io/platform_resolved_executable_test/02: RuntimeError # Issue 33168
-io/platform_resolved_executable_test/03: RuntimeError # Issue 33168
-io/platform_resolved_executable_test/04: RuntimeError # Issue 33168
-io/platform_resolved_executable_test/05: RuntimeError # Issue 33168
-io/platform_test: Skip # Platform.executable
-io/test_extension_fail_test: Skip # Platform.executable
-io/test_extension_test: Skip # Platform.executable
-io/test_runner_test: RuntimeError # Issue 33168
-regress_26031_test: Skip # Platform.resolvedExecutable
-
 [ $system == android ]
 io/file_stat_test: Skip # Issue 26376
 io/file_system_watcher_test: Skip # Issue 26376
@@ -56,7 +40,6 @@ io/socket_upgrade_to_secure_test: Skip # Issue 27638
 
 [ $system == windows ]
 io/process_sync_test: Pass, Timeout # Issue 24596
-io/skipping_dart2js_compilations_test: Skip # Issue 19551.
 io/sleep_test: Pass, Fail # Issue 25757
 io/socket_info_ipv6_test: Skip
 verbose_gc_to_bmu_test: Skip
@@ -64,29 +47,39 @@ verbose_gc_to_bmu_test: Skip
 [ $arch == arm && $mode == release && $runtime == dart_precompiled && $system == android ]
 io/stdout_stderr_non_blocking_test: Pass, Timeout # Issue 28426
 
-[ $arch == ia32 && $builder_tag == asan && $mode == release && $runtime == vm && $system == linux ]
-io/socket_close_test: Pass, Timeout # Issue 28502: timeout.
-
 [ $arch == simdbc64 && $mode == debug && $checked ]
 io/web_socket_test: Pass, RuntimeError # Issue 26814.
+
+[ $arch == x64 && $compiler == dartkb && $runtime == vm && $system == linux ]
+io/stdout_stderr_non_blocking_test: Pass, Timeout # Issue 35192
 
 [ $compiler != dart2analyzer && $system == windows ]
 io/platform_resolved_executable_test/06: RuntimeError # Issue 23641
 
+[ $mode == release && $runtime == vm && $system == linux && ($arch == simdbc64 || $arch == x64) ]
+io/http_bind_test: Pass, Timeout # Issue 35192
+
 [ $mode == release && $runtime == vm && $system == macos ]
+io/http_server_close_response_after_error_test: Pass, Timeout # Issue 28370: timeout.
 io/named_pipe_script_test: Pass, RuntimeError # Issue 28737
 
 [ $mode == release && $runtime == vm && $system == windows ]
 io/http_server_close_response_after_error_test: Pass, Timeout # Issue 28370: timeout.
-io/regress_7191_test: Pass, Timeout # Issue 28374: timeout.
 
-[ $runtime == vm && !$checked && !$strong ]
-io/file_constructor_test: RuntimeError
+[ $runtime == dart_precompiled && $system == linux && ($arch == simarm || $arch == simarm64 || $arch == x64) ]
+io/stdout_stderr_non_blocking_test: Pass, Timeout # Issue 35192
 
 [ $runtime == vm && ($arch == arm || $arch == arm64) ]
+io/dart_std_io_pipe_test: Timeout, Pass
 io/file_input_stream_test: Skip # Issue 26109
 io/file_stream_test: Skip # Issue 26109
 io/file_typed_data_test: Skip # Issue 26109
+io/process_sync_test: Timeout, Pass
+
+[ $runtime == vm && ($arch == simarm || $arch == simarm64) ]
+io/dart_std_io_pipe_test: Timeout, Pass
+io/http_client_stays_alive_test: Skip # Spawns process in Dart2 mode.
+io/process_sync_test: Timeout, Pass
 
 [ $arch == simdbc || $arch == simdbc64 ]
 full_coverage_test: Skip # TODO(vegorov) SIMDBC interpreter doesn't support coverage yet.

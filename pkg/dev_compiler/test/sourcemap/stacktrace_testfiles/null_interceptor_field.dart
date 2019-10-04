@@ -6,10 +6,10 @@ class MyType {
   get length => 3; // ensures we build an interceptor for `.length`
 }
 
-main() {
+void main() {
   confuse('').trim(); // includes some code above the interceptors
   confuse([]).length;
-  confuse(new MyType()).length;
+  confuse(MyType()).length;
   confuse(null). /*1:main*/ length; // called through the interceptor
 }
 

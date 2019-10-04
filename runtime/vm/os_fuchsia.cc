@@ -8,15 +8,14 @@
 #include "vm/os.h"
 
 #include <errno.h>
-#include <lib/fdio/util.h>
+#if !defined(FUCHSIA_SDK)
+#include <fuchsia/timezone/cpp/fidl.h>
+#endif  //  !defined(FUCHSIA_SDK)
+#include <lib/sys/cpp/service_directory.h>
 #include <zircon/process.h>
 #include <zircon/syscalls.h>
 #include <zircon/syscalls/object.h>
 #include <zircon/types.h>
-
-#include <fuchsia/timezone/cpp/fidl.h>
-
-#include "lib/app/cpp/environment_services.h"
 
 #include "platform/assert.h"
 #include "vm/zone.h"
@@ -40,29 +39,45 @@ intptr_t OS::ProcessId() {
   return static_cast<intptr_t>(getpid());
 }
 
+#if !defined(FUCHSIA_SDK)
+// TODO(FL-98): Change this to talk to fuchsia.dart to get timezone service to
+// directly get timezone.
+//
+// Putting this hack right now due to CP-120 as I need to remove
+// component:ConnectToEnvironmentServices and this is the only thing that is
+// blocking it and FL-98 will take time.
+static fuchsia::timezone::TimezoneSyncPtr tz;
+#endif  //  !defined(FUCHSIA_SDK)
+
 static zx_status_t GetLocalAndDstOffsetInSeconds(int64_t seconds_since_epoch,
                                                  int32_t* local_offset,
                                                  int32_t* dst_offset) {
-  fuchsia::timezone::TimezoneSyncPtr time_svc;
-  fuchsia::sys::ConnectToEnvironmentService(time_svc.NewRequest());
-  if (!time_svc->GetTimezoneOffsetMinutes(seconds_since_epoch * 1000,
-                                          local_offset, dst_offset))
-    return ZX_ERR_UNAVAILABLE;
+#if !defined(FUCHSIA_SDK)
+  zx_status_t status = tz->GetTimezoneOffsetMinutes(seconds_since_epoch * 1000,
+                                                    local_offset, dst_offset);
+  if (status != ZX_OK) {
+    return status;
+  }
   *local_offset *= 60;
   *dst_offset *= 60;
   return ZX_OK;
+#else
+  return ZX_ERR_NOT_SUPPORTED;
+#endif  //  !defined(FUCHSIA_SDK)
 }
 
 const char* OS::GetTimeZoneName(int64_t seconds_since_epoch) {
+#if !defined(FUCHSIA_SDK)
   // TODO(abarth): Handle time zone changes.
   static const auto* tz_name = new std::string([] {
-    fuchsia::timezone::TimezoneSyncPtr time_svc;
-    fuchsia::sys::ConnectToEnvironmentService(time_svc.NewRequest());
-    fidl::StringPtr result;
-    time_svc->GetTimezoneId(&result);
-    return *result;
+    std::string result;
+    tz->GetTimezoneId(&result);
+    return result;
   }());
   return tz_name->c_str();
+#else
+  return "";
+#endif  //  !defined(FUCHSIA_SDK)}
 }
 
 int OS::GetTimeZoneOffsetInSeconds(int64_t seconds_since_epoch) {
@@ -74,8 +89,10 @@ int OS::GetTimeZoneOffsetInSeconds(int64_t seconds_since_epoch) {
 
 int OS::GetLocalTimeZoneAdjustmentInSeconds() {
   int32_t local_offset, dst_offset;
+  zx_time_t now = 0;
+  zx_clock_get(ZX_CLOCK_UTC, &now);
   zx_status_t status = GetLocalAndDstOffsetInSeconds(
-      zx_clock_get(ZX_CLOCK_UTC) / ZX_SEC(1), &local_offset, &dst_offset);
+      now / ZX_SEC(1), &local_offset, &dst_offset);
   return status == ZX_OK ? local_offset : 0;
 }
 
@@ -84,11 +101,13 @@ int64_t OS::GetCurrentTimeMillis() {
 }
 
 int64_t OS::GetCurrentTimeMicros() {
-  return zx_clock_get(ZX_CLOCK_UTC) / kNanosecondsPerMicrosecond;
+  zx_time_t now = 0;
+  zx_clock_get(ZX_CLOCK_UTC, &now);
+  return now / kNanosecondsPerMicrosecond;
 }
 
 int64_t OS::GetCurrentMonotonicTicks() {
-  return zx_clock_get(ZX_CLOCK_MONOTONIC);
+  return zx_clock_get_monotonic();
 }
 
 int64_t OS::GetCurrentMonotonicFrequency() {
@@ -102,16 +121,22 @@ int64_t OS::GetCurrentMonotonicMicros() {
 }
 
 int64_t OS::GetCurrentThreadCPUMicros() {
-  return zx_clock_get(ZX_CLOCK_THREAD) / kNanosecondsPerMicrosecond;
+  zx_time_t now = 0;
+  zx_clock_get(ZX_CLOCK_THREAD, &now);
+  return now / kNanosecondsPerMicrosecond;
 }
 
 // TODO(5411554):  May need to hoist these architecture dependent code
 // into a architecture specific file e.g: os_ia32_fuchsia.cc
 intptr_t OS::ActivationFrameAlignment() {
 #if defined(TARGET_ARCH_IA32) || defined(TARGET_ARCH_X64) ||                   \
-    defined(TARGET_ARCH_ARM64)
+    defined(TARGET_ARCH_ARM64) ||                                              \
+    defined(TARGET_ARCH_DBC) &&                                                \
+        (defined(HOST_ARCH_IA32) || defined(HOST_ARCH_X64) ||                  \
+         defined(HOST_ARCH_ARM64))
   const int kMinimumAlignment = 16;
-#elif defined(TARGET_ARCH_ARM) || defined(TARGET_ARCH_DBC)
+#elif defined(TARGET_ARCH_ARM) ||                                              \
+    defined(TARGET_ARCH_DBC) && defined(HOST_ARCH_ARM)
   const int kMinimumAlignment = 8;
 #else
 #error Unsupported architecture.
@@ -215,6 +240,8 @@ bool OS::StringToInt64(const char* str, int64_t* value) {
   int i = 0;
   if (str[0] == '-') {
     i = 1;
+  } else if (str[0] == '+') {
+    i = 1;
   }
   if ((str[i] == '0') && (str[i + 1] == 'x' || str[i + 1] == 'X') &&
       (str[i + 2] != '\0')) {
@@ -246,23 +273,24 @@ void OS::PrintErr(const char* format, ...) {
   va_end(args);
 }
 
-void OS::InitOnce() {
-  // TODO(5411554): For now we check that initonce is called only once,
-  // Once there is more formal mechanism to call InitOnce we can move
-  // this check there.
-  static bool init_once_called = false;
-  ASSERT(init_once_called == false);
-  init_once_called = true;
+void OS::Init() {
+#if !defined(FUCHSIA_SDK)
+  auto services = sys::ServiceDirectory::CreateFromNamespace();
+  services->Connect(tz.NewRequest());
+#endif  //  !defined(FUCHSIA_SDK)
 }
 
-void OS::Shutdown() {}
+void OS::Cleanup() {}
+
+void OS::PrepareToAbort() {}
 
 void OS::Abort() {
+  PrepareToAbort();
   abort();
 }
 
 void OS::Exit(int code) {
-  UNIMPLEMENTED();
+  exit(code);
 }
 
 }  // namespace dart

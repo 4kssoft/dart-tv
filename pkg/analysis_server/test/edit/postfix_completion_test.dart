@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -10,6 +10,7 @@ import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import '../analysis_abstract.dart';
+import '../mocks.dart';
 
 main() {
   defineReflectiveSuite(() {
@@ -45,9 +46,30 @@ main() {
 ''');
   }
 
+  test_invalidFilePathFormat_notAbsolute() async {
+    var request = new EditGetPostfixCompletionParams('test.dart', '.for', 0)
+        .toRequest('0');
+    var response = await waitResponse(request);
+    expect(
+      response,
+      isResponseFailure('0', RequestErrorCode.INVALID_FILE_PATH_FORMAT),
+    );
+  }
+
+  test_invalidFilePathFormat_notNormalized() async {
+    var request = new EditGetPostfixCompletionParams(
+            convertPath('/foo/../bar/test.dart'), '.for', 0)
+        .toRequest('0');
+    var response = await waitResponse(request);
+    expect(
+      response,
+      isResponseFailure('0', RequestErrorCode.INVALID_FILE_PATH_FORMAT),
+    );
+  }
+
   void _assertHasChange(String message, String expectedCode, [Function cmp]) {
     if (change.message == message) {
-      if (!change.edits.isEmpty) {
+      if (change.edits.isNotEmpty) {
         String resultCode =
             SourceEdit.applySequence(testCode, change.edits[0].edits);
         expect(resultCode, expectedCode.replaceAll('/*caret*/', ''));
@@ -67,7 +89,7 @@ main() {
   }
 
   _prepareCompletion(String key,
-      {bool atStart: false, bool atEnd: false, int delta: 0}) async {
+      {bool atStart = false, bool atEnd = false, int delta = 0}) async {
     int offset = findOffset(key);
     String src = testCode.replaceFirst(key, '', offset);
     modifyTestFile(src);
@@ -78,7 +100,7 @@ main() {
     var params = new EditGetPostfixCompletionParams(testFile, key, offset);
     var request =
         new Request('0', "edit.isPostfixCompletionApplicable", params.toJson());
-    Response response = await waitResponse(request);
+    Response response = await waitResponse(request, throwOnError: false);
     var isApplicable =
         new EditIsPostfixCompletionApplicableResult.fromResponse(response);
     if (!isApplicable.value) {
@@ -86,7 +108,7 @@ main() {
     }
     request = new EditGetPostfixCompletionParams(testFile, key, offset)
         .toRequest('1');
-    response = await waitResponse(request);
+    response = await waitResponse(request, throwOnError: false);
     var result = new EditGetPostfixCompletionResult.fromResponse(response);
     change = result.change;
   }

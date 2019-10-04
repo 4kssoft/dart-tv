@@ -11,12 +11,15 @@ import 'package:compiler/src/compiler.dart';
 import 'package:compiler/src/diagnostics/diagnostic_listener.dart';
 import 'package:compiler/src/elements/entities.dart';
 import 'package:compiler/src/elements/types.dart';
-import 'package:compiler/src/js_backend/runtime_types.dart';
+import 'package:compiler/src/js_backend/runtime_types_resolution.dart';
+import 'package:compiler/src/js_model/js_world.dart';
+import 'package:compiler/src/js_model/element_map.dart';
 import 'package:compiler/src/kernel/element_map.dart';
-import 'package:compiler/src/kernel/kernel_backend_strategy.dart';
 import 'package:compiler/src/kernel/kernel_strategy.dart';
+import 'package:compiler/src/universe/feature.dart';
+import 'package:compiler/src/universe/resolution_world_builder.dart';
 import 'package:compiler/src/universe/selector.dart';
-import 'package:compiler/src/universe/world_builder.dart';
+import 'package:front_end/src/testing/features.dart';
 import 'package:kernel/ast.dart' as ir;
 import '../equivalence/check_helpers.dart';
 import '../equivalence/id_equivalence.dart';
@@ -27,20 +30,11 @@ main(List<String> args) {
 }
 
 runTests(List<String> args, [int shardIndex]) {
-  cacheRtiDataForTesting = true;
   asyncTest(() async {
     Directory dataDir = new Directory.fromUri(Platform.script.resolve('data'));
-    await checkTests(dataDir, computeKernelRtiMemberNeed,
-        computeClassDataFromKernel: computeKernelRtiClassNeed,
+    await checkTests(dataDir, const RtiNeedDataComputer(),
         options: [],
-        skipForStrong: [
-          'map_literal_checked.dart',
-          // TODO(johnniwinther): Optimize local function type signature need.
-          'subtype_named_args.dart',
-          'subtype_named_args1.dart',
-        ],
         args: args,
-        testOmit: true,
         shardIndex: shardIndex ?? 0,
         shards: shardIndex != null ? 2 : 1);
   });
@@ -56,15 +50,17 @@ class Tags {
   static const String indirectTypeArgumentTest = 'indirect';
   static const String typeLiteral = 'exp';
   static const String selectors = 'selectors';
+  static const String instantiationsNeedTypeArguments = 'needsInst';
 }
 
-abstract class ComputeValueMixin<T> {
+abstract class ComputeValueMixin {
   Compiler get compiler;
 
+  KernelFrontendStrategy get frontendStrategy => compiler.frontendStrategy;
   ResolutionWorldBuilder get resolutionWorldBuilder =>
       compiler.resolutionWorldBuilder;
   RuntimeTypesNeedBuilderImpl get rtiNeedBuilder =>
-      compiler.frontendStrategy.runtimeTypesNeedBuilderForTesting;
+      frontendStrategy.runtimeTypesNeedBuilderForTesting;
   RuntimeTypesNeedImpl get rtiNeed =>
       compiler.backendClosedWorldForTesting.rtiNeed;
   ClassEntity getFrontendClass(ClassEntity cls);
@@ -162,6 +158,13 @@ abstract class ComputeValueMixin<T> {
             features.addElement(Tags.selectors, selector);
           }
         });
+        rtiNeedBuilder.instantiationsNeedingTypeArgumentsForTesting?.forEach(
+            (GenericInstantiation instantiation, Set<Entity> targets) {
+          if (targets.contains(entity)) {
+            features.addElement(
+                Tags.instantiationsNeedTypeArguments, instantiation.shortText);
+          }
+        });
       }
 
       if (frontendClosure != null) {
@@ -227,38 +230,43 @@ class FindTypeVisitor extends BaseDartTypeVisitor<bool, Null> {
   }
 }
 
-/// Compute RTI need data for [member] from the new frontend.
-///
-/// Fills [actualMap] with the data.
-void computeKernelRtiMemberNeed(
-    Compiler compiler, MemberEntity member, Map<Id, ActualData> actualMap,
-    {bool verbose: false}) {
-  KernelBackendStrategy backendStrategy = compiler.backendStrategy;
-  KernelToElementMapForBuilding elementMap = backendStrategy.elementMap;
-  MemberDefinition definition = elementMap.getMemberDefinition(member);
-  new RtiMemberNeedIrComputer(
-          compiler.reporter,
-          actualMap,
-          elementMap,
-          member,
-          compiler,
-          backendStrategy.closureDataLookup as ClosureDataLookup<ir.Node>)
-      .run(definition.node);
+class RtiNeedDataComputer extends DataComputer<String> {
+  const RtiNeedDataComputer();
+
+  /// Compute RTI need data for [member] from the new frontend.
+  ///
+  /// Fills [actualMap] with the data.
+  @override
+  void computeMemberData(Compiler compiler, MemberEntity member,
+      Map<Id, ActualData<String>> actualMap,
+      {bool verbose: false}) {
+    JsClosedWorld closedWorld = compiler.backendClosedWorldForTesting;
+    JsToElementMap elementMap = closedWorld.elementMap;
+    MemberDefinition definition = elementMap.getMemberDefinition(member);
+    new RtiNeedIrComputer(compiler.reporter, actualMap, elementMap, compiler,
+            closedWorld.closureDataLookup)
+        .run(definition.node);
+  }
+
+  /// Compute RTI need data for [cls] from the new frontend.
+  ///
+  /// Fills [actualMap] with the data.
+  @override
+  void computeClassData(
+      Compiler compiler, ClassEntity cls, Map<Id, ActualData<String>> actualMap,
+      {bool verbose: false}) {
+    JsClosedWorld closedWorld = compiler.backendClosedWorldForTesting;
+    JsToElementMap elementMap = closedWorld.elementMap;
+    new RtiNeedIrComputer(compiler.reporter, actualMap, elementMap, compiler,
+            closedWorld.closureDataLookup)
+        .computeForClass(elementMap.getClassDefinition(cls).node);
+  }
+
+  @override
+  DataInterpreter<String> get dataValidator => const StringDataInterpreter();
 }
 
-/// Compute RTI need data for [cls] from the new frontend.
-///
-/// Fills [actualMap] with the data.
-void computeKernelRtiClassNeed(
-    Compiler compiler, ClassEntity cls, Map<Id, ActualData> actualMap,
-    {bool verbose: false}) {
-  KernelBackendStrategy backendStrategy = compiler.backendStrategy;
-  KernelToElementMapForBuilding elementMap = backendStrategy.elementMap;
-  new RtiClassNeedIrComputer(compiler, elementMap, actualMap)
-      .computeClassValue(cls);
-}
-
-abstract class IrMixin implements ComputeValueMixin<ir.Node> {
+abstract class IrMixin implements ComputeValueMixin {
   @override
   MemberEntity getFrontendMember(MemberEntity backendMember) {
     ElementEnvironment elementEnvironment = compiler
@@ -295,51 +303,59 @@ abstract class IrMixin implements ComputeValueMixin<ir.Node> {
 
   @override
   Local getFrontendClosure(MemberEntity member) {
-    KernelBackendStrategy backendStrategy = compiler.backendStrategy;
-    ir.Node node = backendStrategy.elementMap.getMemberDefinition(member).node;
+    JsClosedWorld closedWorld = compiler.backendClosedWorldForTesting;
+    ir.Node node = closedWorld.elementMap.getMemberDefinition(member).node;
     if (node is ir.FunctionDeclaration || node is ir.FunctionExpression) {
-      KernelFrontEndStrategy frontendStrategy = compiler.frontendStrategy;
-      KernelToElementMapForImpact frontendElementMap =
-          frontendStrategy.elementMap;
+      KernelFrontendStrategy frontendStrategy = compiler.frontendStrategy;
+      KernelToElementMap frontendElementMap = frontendStrategy.elementMap;
       return frontendElementMap.getLocalFunction(node);
     }
     return null;
   }
 }
 
-class RtiClassNeedIrComputer extends DataRegistry
-    with ComputeValueMixin<ir.Node>, IrMixin {
+class RtiClassNeedIrComputer extends DataRegistry<String>
+    with ComputeValueMixin, IrMixin, IrDataRegistryMixin<String> {
+  @override
   final Compiler compiler;
-  final KernelToElementMapForBuilding _elementMap;
-  final Map<Id, ActualData> actualMap;
+  final JsToElementMap _elementMap;
+  @override
+  final Map<Id, ActualData<String>> actualMap;
 
   RtiClassNeedIrComputer(this.compiler, this._elementMap, this.actualMap);
 
+  @override
   DiagnosticReporter get reporter => compiler.reporter;
 
   void computeClassValue(ClassEntity cls) {
     Id id = new ClassId(cls.name);
     ir.TreeNode node = _elementMap.getClassDefinition(cls).node;
-    registerValue(
-        computeSourceSpanFromTreeNode(node), id, getClassValue(cls), cls);
+    ir.TreeNode nodeWithOffset = computeTreeNodeWithOffset(node);
+    registerValue(nodeWithOffset?.location?.file, nodeWithOffset?.fileOffset,
+        id, getClassValue(cls), cls);
   }
 }
 
 /// AST visitor for computing inference data for a member.
-class RtiMemberNeedIrComputer extends IrDataExtractor
-    with ComputeValueMixin<ir.Node>, IrMixin {
-  final KernelToElementMapForBuilding _elementMap;
-  final ClosureDataLookup<ir.Node> _closureDataLookup;
+class RtiNeedIrComputer extends IrDataExtractor<String>
+    with ComputeValueMixin, IrMixin {
+  final JsToElementMap _elementMap;
+  final ClosureData _closureDataLookup;
+  @override
   final Compiler compiler;
 
-  RtiMemberNeedIrComputer(
+  RtiNeedIrComputer(
       DiagnosticReporter reporter,
-      Map<Id, ActualData> actualMap,
+      Map<Id, ActualData<String>> actualMap,
       this._elementMap,
-      MemberEntity member,
       this.compiler,
       this._closureDataLookup)
       : super(reporter, actualMap);
+
+  @override
+  String computeClassValue(Id id, ir.Class node) {
+    return getClassValue(_elementMap.getClass(node));
+  }
 
   @override
   String computeMemberValue(Id id, ir.Member node) {

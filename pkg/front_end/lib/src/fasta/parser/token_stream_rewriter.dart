@@ -2,21 +2,24 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import '../scanner/error_token.dart' show UnmatchedToken;
+
 import '../../scanner/token.dart'
     show
         BeginToken,
+        Keyword,
         SimpleToken,
+        SyntheticBeginToken,
+        SyntheticKeywordToken,
         SyntheticStringToken,
         SyntheticToken,
         Token,
         TokenType;
 
-import 'util.dart' show optional;
-
 /// Provides the capability of inserting tokens into a token stream. This
 /// implementation does this by rewriting the previous token to point to the
 /// inserted token.
-class TokenStreamRewriter {
+class TokenStreamRewriter with _TokenStreamMixin {
   // TODO(brianwilkerson):
   //
   // When we get to the point of removing `token.previous`, the plan is to
@@ -36,43 +39,59 @@ class TokenStreamRewriter {
   // }
   //
 
-  /// Initialize a newly created re-writer.
-  TokenStreamRewriter();
+  /// Insert a synthetic open and close parenthesis and return the new synthetic
+  /// open parenthesis. If [insertIdentifier] is true, then a synthetic
+  /// identifier is included between the open and close parenthesis.
+  Token insertParens(Token token, bool includeIdentifier) {
+    Token next = token.next;
+    int offset = next.charOffset;
+    BeginToken leftParen =
+        next = new SyntheticBeginToken(TokenType.OPEN_PAREN, offset);
+    if (includeIdentifier) {
+      next = next.setNext(
+          new SyntheticStringToken(TokenType.IDENTIFIER, '', offset, 0));
+    }
+    next = next.setNext(new SyntheticToken(TokenType.CLOSE_PAREN, offset));
+    leftParen.endGroup = next;
+    next.setNext(token.next);
 
-  /// Insert a synthetic identifier after [token] and return the new identifier.
-  Token insertSyntheticIdentifier(Token token) {
-    Token identifier = new SyntheticStringToken(
-        TokenType.IDENTIFIER, '', token.next.charOffset, 0)
-      ..setNext(token.next);
+    // A no-op rewriter could skip this step.
+    token.setNext(leftParen);
 
-    // A no-op rewriter could simply return the synthetic identifier here.
-
-    token.setNext(identifier);
-    return identifier;
+    return leftParen;
   }
 
-  /// Insert the chain of tokens starting at the [insertedToken] immediately
-  /// after the [previousToken]. Return the [previousToken].
-  Token insertTokenAfter(Token previousToken, Token insertedToken) {
-    Token afterToken = previousToken.next;
-    previousToken.setNext(insertedToken);
+  /// Insert [newToken] after [token] and return [newToken].
+  Token insertToken(Token token, Token newToken) {
+    newToken.setNext(token.next);
 
-    Token lastReplacement = _lastTokenInChain(insertedToken);
-    lastReplacement.setNext(afterToken);
+    // A no-op rewriter could skip this step.
+    token.setNext(newToken);
 
-    return previousToken;
+    return newToken;
   }
 
-  /// Move [endGroup] (a synthetic `)`, `]`, `}`, or `>` token) after [token]
-  /// in the token stream and return [endGroup].
+  /// Move [endGroup] (a synthetic `)`, `]`, or `}` token) and associated
+  /// error token after [token] in the token stream and return [endGroup].
   Token moveSynthetic(Token token, Token endGroup) {
     assert(endGroup.beforeSynthetic != null);
+    Token errorToken;
+    if (endGroup.next is UnmatchedToken) {
+      errorToken = endGroup.next;
+    }
 
+    // Remove endGroup from its current location
+    endGroup.beforeSynthetic.setNext((errorToken ?? endGroup).next);
+
+    // Insert endGroup into its new location
     Token next = token.next;
-    endGroup.beforeSynthetic.setNext(endGroup.next);
     token.setNext(endGroup);
-    endGroup.setNext(next);
+    (errorToken ?? endGroup).setNext(next);
     endGroup.offset = next.offset;
+    if (errorToken != null) {
+      errorToken.offset = next.offset;
+    }
+
     return endGroup;
   }
 
@@ -89,50 +108,6 @@ class TokenStreamRewriter {
     _lastTokenInChain(replacementToken).setNext(replacedToken.next);
 
     return replacementToken;
-  }
-
-  /// Split a `>>` token into two separate `>` tokens, updates the token stream,
-  /// and returns the first `>`. If [start].endGroup is `>>` then sets
-  /// [start].endGroup to the second `>` but does not set the inner group's
-  /// endGroup, otherwise sets [start].endGroup to the first `>`.
-  Token splitEndGroup(BeginToken start, [Token end]) {
-    end ??= start.endGroup;
-    assert(end != null);
-
-    Token gt;
-    if (optional('>>', end)) {
-      gt = new SimpleToken(TokenType.GT, end.charOffset, end.precedingComments)
-        ..setNext(new SimpleToken(TokenType.GT, end.charOffset + 1)
-          ..setNext(end.next));
-    } else if (optional('>=', end)) {
-      gt = new SimpleToken(TokenType.GT, end.charOffset, end.precedingComments)
-        ..setNext(new SimpleToken(TokenType.EQ, end.charOffset + 1)
-          ..setNext(end.next));
-    } else if (optional('>>=', end)) {
-      gt = new SimpleToken(TokenType.GT, end.charOffset, end.precedingComments)
-        ..setNext(new SimpleToken(TokenType.GT, end.charOffset + 1)
-          ..setNext(new SimpleToken(TokenType.EQ, end.charOffset + 2)
-            ..setNext(end.next)));
-    } else {
-      gt = new SyntheticToken(TokenType.GT, end.charOffset)..setNext(end);
-    }
-
-    Token token = start;
-    Token next = token.next;
-    while (!identical(next, end)) {
-      token = next;
-      next = token.next;
-    }
-    token.setNext(gt);
-
-    if (start.endGroup != null) {
-      assert(optional('>>', start.endGroup));
-      start.endGroup = gt.next;
-    } else {
-      // Recovery
-      start.endGroup = gt;
-    }
-    return gt;
   }
 
   /// Given the [firstToken] in a chain of tokens to be inserted, return the
@@ -155,4 +130,90 @@ class TokenStreamRewriter {
     }
     return current;
   }
+}
+
+/// Provides the capability of adding tokens that lead into a token stream
+/// without modifying the original token stream and not setting the any token's
+/// `previous` field.
+class TokenStreamGhostWriter
+    with _TokenStreamMixin
+    implements TokenStreamRewriter {
+  @override
+  Token insertParens(Token token, bool includeIdentifier) {
+    Token next = token.next;
+    int offset = next.charOffset;
+    BeginToken leftParen =
+        next = new SyntheticBeginToken(TokenType.OPEN_PAREN, offset);
+    if (includeIdentifier) {
+      Token identifier =
+          new SyntheticStringToken(TokenType.IDENTIFIER, '', offset, 0);
+      next.next = identifier;
+      next = identifier;
+    }
+    Token rightParen = new SyntheticToken(TokenType.CLOSE_PAREN, offset);
+    next.next = rightParen;
+    rightParen.next = token.next;
+
+    return leftParen;
+  }
+
+  @override
+  Token insertToken(Token token, Token newToken) {
+    newToken.next = token.next;
+    return newToken;
+  }
+
+  @override
+  Token moveSynthetic(Token token, Token endGroup) {
+    Token newEndGroup =
+        new SyntheticToken(endGroup.type, token.next.charOffset);
+    newEndGroup.next = token.next;
+    return newEndGroup;
+  }
+
+  @override
+  Token replaceTokenFollowing(Token previousToken, Token replacementToken) {
+    Token replacedToken = previousToken.next;
+
+    (replacementToken as SimpleToken).precedingComments =
+        replacedToken.precedingComments;
+
+    _lastTokenInChain(replacementToken).next = replacedToken.next;
+    return replacementToken;
+  }
+
+  /// Given the [firstToken] in a chain of tokens to be inserted, return the
+  /// last token in the chain.
+  Token _lastTokenInChain(Token firstToken) {
+    Token current = firstToken;
+    while (current.next != null && current.next.type != TokenType.EOF) {
+      current = current.next;
+    }
+    return current;
+  }
+}
+
+mixin _TokenStreamMixin {
+  /// Insert a synthetic identifier after [token] and return the new identifier.
+  Token insertSyntheticIdentifier(Token token, [String value]) {
+    return insertToken(
+        token,
+        new SyntheticStringToken(
+            TokenType.IDENTIFIER, value ?? '', token.next.charOffset, 0));
+  }
+
+  /// Insert a new synthetic [keyword] after [token] and return the new token.
+  Token insertSyntheticKeyword(Token token, Keyword keyword) => insertToken(
+      token, new SyntheticKeywordToken(keyword, token.next.charOffset));
+
+  /// Insert a new simple synthetic token of [newTokenType] after [token]
+  /// and return the new token.
+  Token insertSyntheticToken(Token token, TokenType newTokenType) {
+    assert(newTokenType is! Keyword, 'use insertSyntheticKeyword instead');
+    return insertToken(
+        token, new SyntheticToken(newTokenType, token.next.charOffset));
+  }
+
+  /// Insert [newToken] after [token] and return [newToken].
+  Token insertToken(Token token, Token newToken);
 }

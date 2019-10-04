@@ -1,7 +1,8 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/error/error.dart';
@@ -19,13 +20,14 @@ abstract class AbstractRecoveryTest extends FastaParserTestCase {
   void testRecovery(
       String invalidCode, List<ErrorCode> errorCodes, String validCode,
       {CompilationUnit adjustValidUnitBeforeComparison(CompilationUnit unit),
-      List<ErrorCode> expectedErrorsInValidCode}) {
+      List<ErrorCode> expectedErrorsInValidCode,
+      FeatureSet featureSet}) {
     CompilationUnit validUnit;
 
     // Assert that the valid code is indeed valid.
     try {
-      validUnit =
-          parseCompilationUnit(validCode, codes: expectedErrorsInValidCode);
+      validUnit = parseCompilationUnit(validCode,
+          codes: expectedErrorsInValidCode, featureSet: featureSet);
       validateTokenStream(validUnit.beginToken);
     } catch (e) {
 //      print('');
@@ -39,7 +41,8 @@ abstract class AbstractRecoveryTest extends FastaParserTestCase {
     // Compare the structures before asserting valid errors.
     GatheringErrorListener listener =
         new GatheringErrorListener(checkRanges: true);
-    CompilationUnit invalidUnit = parseCompilationUnit2(invalidCode, listener);
+    CompilationUnit invalidUnit =
+        parseCompilationUnit2(invalidCode, listener, featureSet: featureSet);
     validateTokenStream(invalidUnit.beginToken);
     if (adjustValidUnitBeforeComparison != null) {
       validUnit = adjustValidUnitBeforeComparison(validUnit);

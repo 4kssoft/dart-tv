@@ -43,18 +43,16 @@ class TestDart extends Suite {
 
   void writeRunCommandOn(StringSink sink) {
     Uri dartVm;
-    if (Platform.isMacOS) {
-      dartVm = Uri.base.resolve("tools/sdks/mac/dart-sdk/bin/dart");
+    if (Platform.isMacOS || Platform.isLinux) {
+      dartVm = Uri.base.resolve("tools/sdks/dart-sdk/bin/dart");
     } else if (Platform.isWindows) {
-      dartVm = Uri.base.resolve("tools/sdks/win/dart-sdk/bin/dart.exe");
-    } else if (Platform.isLinux) {
-      dartVm = Uri.base.resolve("tools/sdks/linux/dart-sdk/bin/dart");
+      dartVm = Uri.base.resolve("tools/sdks/dart-sdk/bin/dart.exe");
     } else {
       throw "Operating system not supported: ${Platform.operatingSystem}";
     }
     List<String> processedArguments = <String>[];
     processedArguments.add(Uri.base
-        .resolve("tools/testing/dart/package_testing_support.dart")
+        .resolve("pkg/test_runner/bin/package_testing_support.dart")
         .toFilePath());
     for (String commandLine in commandLines) {
       String arguments = common;

@@ -2,245 +2,131 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:collection' show HashSet, Queue;
 import 'dart:convert' show json;
 import 'dart:io' show File;
 
-import 'package:analyzer/analyzer.dart'
-    show AnalysisError, CompilationUnit, ErrorSeverity, ErrorType;
-import 'package:analyzer/dart/analysis/declared_variables.dart';
+import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/element/element.dart'
     show LibraryElement, UriReferencedElement;
-import 'package:analyzer/file_system/file_system.dart' show ResourceProvider;
-import 'package:analyzer/file_system/physical_file_system.dart'
-    show PhysicalResourceProvider;
-import 'package:analyzer/src/context/builder.dart' show ContextBuilder;
-import 'package:analyzer/src/context/context.dart' show AnalysisContextImpl;
-import 'package:analyzer/src/error/codes.dart'
-    show StaticTypeWarningCode, StrongModeCode;
-import 'package:analyzer/src/generated/engine.dart'
-    show AnalysisContext, AnalysisEngine;
-import 'package:analyzer/src/generated/sdk.dart' show DartSdkManager;
-import 'package:analyzer/src/generated/source.dart'
-    show ContentCache, DartUriResolver;
-import 'package:analyzer/src/generated/source_io.dart'
-    show Source, SourceKind, UriResolver;
-import 'package:analyzer/src/summary/package_bundle_reader.dart'
-    show InSummarySource, InputPackagesResultProvider, SummaryDataStore;
+import 'package:analyzer/error/error.dart';
+
+import 'package:analyzer/src/generated/engine.dart' show AnalysisContext;
 import 'package:args/args.dart' show ArgParser, ArgResults;
-import 'package:args/src/usage_exception.dart' show UsageException;
-import 'package:func/func.dart' show Func1;
-import 'package:path/path.dart' as path;
+import 'package:path/path.dart' as p;
 import 'package:source_maps/source_maps.dart';
 
-import '../compiler/js_names.dart' as JS;
+import '../compiler/js_names.dart' as js_ast;
 import '../compiler/module_builder.dart'
     show transformModuleFormat, ModuleFormat;
 import '../compiler/shared_command.dart';
-import '../js_ast/js_ast.dart' as JS;
+import '../compiler/shared_compiler.dart';
+import '../js_ast/js_ast.dart' as js_ast;
 import '../js_ast/js_ast.dart' show js;
 import '../js_ast/source_map_printer.dart' show SourceMapPrintingContext;
 import 'code_generator.dart' show CodeGenerator;
-import 'context.dart' show AnalyzerOptions, createSourceFactory;
-import 'error_helpers.dart' show errorSeverity, formatError, sortErrors;
-import 'extension_types.dart' show ExtensionTypeSet;
+import 'context.dart';
+
+import 'driver.dart';
+import 'error_helpers.dart';
 
 /// Compiles a set of Dart files into a single JavaScript module.
 ///
-/// For a single [BuildUnit] definition, this will produce a [JSModuleFile].
-/// Those objects are record types that record the data consumed and produced
-/// for a single compile.
+/// For a single build unit, this will produce a [JSModuleFile].
+///
+/// A build unit is a collection of Dart sources that is sufficient to be
+/// compiled together. This can be as small as a single Dart library file, but
+/// if the library has parts, or if the library has cyclic dependencies on other
+/// libraries, those must be included as well. A common build unit is the lib
+/// directory of a Dart package.
 ///
 /// This class exists to cache global state associated with a single in-memory
-/// AnalysisContext, such as information about extension types in the Dart SDK.
-/// It can be used once to produce a single module, or reused to save warm-up
-/// time. (Currently there is no warm up, but there may be in the future.)
+/// [AnalysisContext], such as information about extension types in the Dart
+/// SDK. It can be used once to produce a single module, or reused to save
+/// warm-up time. (Currently there is no warm up, but there may be in the
+/// future.)
 ///
 /// The SDK source code is assumed to be immutable for the life of this class.
 ///
-/// For all other files, it is up to the [AnalysisContext] to decide whether or
+/// For all other files, it is up to the analysis context to decide whether or
 /// not any caching is performed. By default an analysis context will assume
 /// sources are immutable for the life of the context, and cache information
 /// about them.
-class ModuleCompiler {
-  final AnalysisContext context;
-  final SummaryDataStore summaryData;
-  final ExtensionTypeSet _extensionTypes;
+JSModuleFile compileWithAnalyzer(
+    CompilerAnalysisDriver compilerDriver,
+    List<String> sourcePaths,
+    AnalyzerOptions analyzerOptions,
+    CompilerOptions options) {
+  var trees = <CompilationUnit>[];
 
-  ModuleCompiler._(AnalysisContext context, this.summaryData)
-      : context = context,
-        _extensionTypes = new ExtensionTypeSet(context);
+  var explicitSources = <Uri>[];
+  var compilingSdk = false;
+  for (var sourcePath in sourcePaths) {
+    var sourceUri = sourcePathToUri(sourcePath);
+    if (sourceUri.scheme == "dart") {
+      compilingSdk = true;
+    }
+    explicitSources.add(sourceUri);
+  }
+  var driver = compilerDriver.linkLibraries(explicitSources, analyzerOptions);
 
-  factory ModuleCompiler(AnalyzerOptions options,
-      {ResourceProvider resourceProvider,
-      String analysisRoot,
-      List<UriResolver> fileResolvers,
-      SummaryDataStore summaryData}) {
-    // TODO(danrubel): refactor with analyzer CLI into analyzer common code
-    AnalysisEngine.instance.processRequiredPlugins();
+  var errors = ErrorCollector(driver.analysisOptions, options.replCompile);
+  for (var libraryUri in driver.libraryUris) {
+    var analysisResults = driver.analyzeLibrary(libraryUri);
 
-    resourceProvider ??= PhysicalResourceProvider.INSTANCE;
-    analysisRoot ??= path.current;
-
-    var contextBuilder = new ContextBuilder(resourceProvider,
-        new DartSdkManager(options.dartSdkPath, true), new ContentCache(),
-        options: options.contextBuilderOptions);
-
-    var analysisOptions = contextBuilder.getAnalysisOptions(analysisRoot);
-    var sdk = contextBuilder.findSdk(null, analysisOptions);
-
-    var sdkResolver = new DartUriResolver(sdk);
-
-    // Read the summaries.
-    summaryData ??= new SummaryDataStore(options.summaryPaths,
-        resourceProvider: resourceProvider,
-        // TODO(vsm): Reset this to true once we cleanup internal build rules.
-        disallowOverlappingSummaries: false);
-
-    var sdkSummaryBundle = sdk.getLinkedBundle();
-    if (sdkSummaryBundle != null) {
-      summaryData.addBundle(null, sdkSummaryBundle);
+    CompilationUnit definingUnit;
+    for (var result in analysisResults.values) {
+      if (result.file.uriStr == libraryUri) definingUnit = result.unit;
+      errors.addAll(result.unit.lineInfo, result.errors);
+      trees.add(result.unit);
     }
 
-    var srcFactory = createSourceFactory(options,
-        sdkResolver: sdkResolver,
-        fileResolvers: fileResolvers,
-        summaryData: summaryData,
-        resourceProvider: resourceProvider);
+    var library = driver.getLibrary(libraryUri);
 
-    var context =
-        AnalysisEngine.instance.createAnalysisContext() as AnalysisContextImpl;
-    context.analysisOptions = analysisOptions;
-    context.sourceFactory = srcFactory;
-    if (sdkSummaryBundle != null) {
-      context.resultProvider =
-          new InputPackagesResultProvider(context, summaryData);
+    // TODO(jmesserly): remove "dart:mirrors" from DDC's SDK, and then remove
+    // this special case error message.
+    if (!compilingSdk && !options.emitMetadata) {
+      var node = _getDartMirrorsImport(library);
+      if (node != null) {
+        errors.add(
+            definingUnit.lineInfo,
+            AnalysisError(library.source, node.uriOffset, node.uriEnd,
+                invalidImportDartMirrors));
+      }
     }
-    var variables = new Map<String, String>.from(options.declaredVariables)
-      ..addAll(sdkLibraryVariables);
-
-    context.declaredVariables = new DeclaredVariables.fromMap(variables);
-    if (!context.analysisOptions.strongMode) {
-      throw new ArgumentError('AnalysisContext must be strong mode');
-    }
-    if (!context.sourceFactory.dartSdk.context.analysisOptions.strongMode) {
-      throw new ArgumentError('AnalysisContext must have strong mode SDK');
-    }
-
-    return new ModuleCompiler._(context, summaryData);
   }
 
-  bool _isFatalError(AnalysisError e, CompilerOptions options) {
-    if (errorSeverity(context, e) != ErrorSeverity.ERROR) return false;
-
-    // These errors are not fatal in the REPL compile mode as we
-    // allow access to private members across library boundaries
-    // and those accesses will show up as undefined members unless
-    // additional analyzer changes are made to support them.
-    // TODO(jacobr): consider checking that the identifier name
-    // referenced by the error is private.
-    return !options.replCompile ||
-        (e.errorCode != StaticTypeWarningCode.UNDEFINED_GETTER &&
-            e.errorCode != StaticTypeWarningCode.UNDEFINED_SETTER &&
-            e.errorCode != StaticTypeWarningCode.UNDEFINED_METHOD);
-  }
-
-  /// Compiles a single Dart build unit into a JavaScript module.
-  ///
-  /// *Warning* - this may require resolving the entire world.
-  /// If that is not desired, the analysis context must be pre-configured using
-  /// summaries before calling this method.
-  JSModuleFile compile(BuildUnit unit, CompilerOptions options) {
-    var trees = <CompilationUnit>[];
-    var errors = <AnalysisError>[];
-
-    var librariesToCompile = new Queue<LibraryElement>();
-
-    var compilingSdk = false;
-    for (var sourcePath in unit.sources) {
-      var sourceUri = _sourceToUri(sourcePath);
-      if (sourceUri.scheme == "dart") {
-        compilingSdk = true;
-      }
-      var source = context.sourceFactory.forUri2(sourceUri);
-
-      var fileUsage = 'You need to pass at least one existing .dart file as an'
-          ' argument.';
-      if (source == null) {
-        throw new UsageException(
-            'Could not create a source for "$sourcePath". The file name is in'
-            ' the wrong format or was not found.',
-            fileUsage);
-      } else if (!source.exists()) {
-        throw new UsageException(
-            'Given file "$sourcePath" does not exist.', fileUsage);
-      }
-
-      // Ignore parts. They need to be handled in the context of their library.
-      if (context.computeKindOf(source) == SourceKind.PART) {
-        continue;
-      }
-
-      librariesToCompile.add(context.computeLibraryElement(source));
-    }
-
-    var libraries = new HashSet<LibraryElement>();
-    while (librariesToCompile.isNotEmpty) {
-      var library = librariesToCompile.removeFirst();
-      if (library.source is InSummarySource) continue;
-      if (!compilingSdk && library.source.isInSystemLibrary) continue;
-      if (!libraries.add(library)) continue;
-
-      librariesToCompile.addAll(library.importedLibraries);
-      librariesToCompile.addAll(library.exportedLibraries);
-
-      // TODO(jmesserly): remove "dart:mirrors" from DDC's SDK, and then remove
-      // this special case error message.
-      if (!compilingSdk && !options.emitMetadata) {
-        var node = _getDartMirrorsImport(library);
-        if (node != null) {
-          errors.add(new AnalysisError(library.source, node.uriOffset,
-              node.uriEnd, invalidImportDartMirrors));
-        }
-      }
-
-      var tree = context.resolveCompilationUnit(library.source, library);
-      trees.add(tree);
-      errors.addAll(context.computeErrors(library.source));
-
-      for (var part in library.parts) {
-        trees.add(context.resolveCompilationUnit(part.source, library));
-        errors.addAll(context.computeErrors(part.source));
-      }
-    }
-
-    sortErrors(context, errors);
-
-    var messages = <String>[];
-    for (var e in errors) {
-      var m = formatError(context, e);
-      if (m != null) messages.add(m);
-    }
-
-    if (!options.unsafeForceCompile &&
-        errors.any((e) => _isFatalError(e, options))) {
-      return new JSModuleFile.invalid(unit.name, messages, options);
-    }
-
+  js_ast.Program jsProgram;
+  if (options.unsafeForceCompile || !errors.hasFatalErrors) {
+    var codeGenerator = CodeGenerator(
+        driver,
+        driver.typeProvider,
+        compilerDriver.summaryData,
+        options,
+        compilerDriver.extensionTypes,
+        errors);
     try {
-      var codeGenerator =
-          new CodeGenerator(context, summaryData, options, _extensionTypes);
-      return codeGenerator.compile(unit, trees, messages);
+      jsProgram = codeGenerator.compile(trees);
     } catch (e) {
-      if (errors.any((e) => _isFatalError(e, options))) {
-        // Force compilation failed.  Suppress the exception and report
-        // the static errors instead.
-        assert(options.unsafeForceCompile);
-        return new JSModuleFile.invalid(unit.name, messages, options);
-      }
-      rethrow;
+      // If force compilation failed, suppress the exception and report the
+      // static errors instead. Otherwise, rethrow an internal compiler error.
+      if (!errors.hasFatalErrors) rethrow;
+    }
+
+    if (!options.unsafeForceCompile && errors.hasFatalErrors) {
+      jsProgram = null;
     }
   }
+
+  if (analyzerOptions.dependencyTracker != null) {
+    var file = File(analyzerOptions.dependencyTracker.outputPath);
+    file.writeAsStringSync(
+        (analyzerOptions.dependencyTracker.dependencies.toList()..sort())
+            .join('\n'));
+  }
+
+  var jsModule = JSModuleFile(
+      errors.formattedErrors.toList(), options, jsProgram, driver.summaryBytes);
+  return jsModule;
 }
 
 UriReferencedElement _getDartMirrorsImport(LibraryElement library) {
@@ -252,159 +138,93 @@ bool _isDartMirrorsImort(UriReferencedElement import) {
   return import.uri == 'dart:mirrors';
 }
 
-class CompilerOptions {
-  /// Whether to emit the source mapping file.
-  ///
-  /// This supports debugging the original source code instead of the generated
-  /// code.
-  final bool sourceMap;
-
+class CompilerOptions extends SharedCompilerOptions {
   /// If [sourceMap] is emitted, this will emit a `sourceMappingUrl` comment
   /// into the output JavaScript module.
   final bool sourceMapComment;
 
-  /// Whether to emit the source mapping file inline as a data url.
-  final bool inlineSourceMap;
-
-  /// Whether to emit a summary file containing API signatures.
-  ///
-  /// This is required for a modular build process.
-  final bool summarizeApi;
-
   /// The file extension for summaries.
   final String summaryExtension;
 
-  /// Whether to preserve metdata only accessible via mirrors.
-  final bool emitMetadata;
-
-  // Whether to enable assertions.
-  final bool enableAsserts;
-
   /// Whether to force compilation of code with static errors.
   final bool unsafeForceCompile;
-
-  /// Whether to compile code in a more permissive REPL mode allowing access
-  /// to private members across library boundaries.
-  final bool replCompile;
-
-  /// Whether to emit Closure Compiler-friendly code.
-  final bool closure;
-
-  /// Mapping from absolute file paths to bazel short path to substitute in
-  /// source maps.
-  final Map<String, String> bazelMapping;
 
   /// If specified, the path to write the summary file.
   /// Used when building the SDK.
   final String summaryOutPath;
 
-  const CompilerOptions(
-      {this.sourceMap: true,
-      this.sourceMapComment: true,
-      this.inlineSourceMap: false,
-      this.summarizeApi: true,
-      this.summaryExtension: 'sum',
-      this.unsafeForceCompile: false,
-      this.replCompile: false,
-      this.emitMetadata: false,
-      this.enableAsserts: true,
-      this.closure: false,
-      this.bazelMapping: const {},
-      this.summaryOutPath});
+  /// *deprecated* If specified, this is used to initialize the import paths for
+  /// [summaryModules].
+  final String moduleRoot;
+
+  /// *deprecated* If specified, `dartdevc` will synthesize library names that
+  /// are relative to this path for all libraries in the JS module.
+  String libraryRoot;
+
+  CompilerOptions(
+      {bool sourceMap = true,
+      this.sourceMapComment = true,
+      bool summarizeApi = true,
+      this.summaryExtension = 'sum',
+      this.unsafeForceCompile = false,
+      bool replCompile = false,
+      bool emitMetadata = false,
+      bool enableAsserts = true,
+      Map<String, String> bazelMapping = const {},
+      this.summaryOutPath,
+      Map<String, String> summaryModules = const {},
+      this.moduleRoot,
+      this.libraryRoot})
+      : super(
+            sourceMap: sourceMap,
+            summarizeApi: summarizeApi,
+            emitMetadata: emitMetadata,
+            enableAsserts: enableAsserts,
+            replCompile: replCompile,
+            bazelMapping: bazelMapping,
+            summaryModules: summaryModules);
 
   CompilerOptions.fromArguments(ArgResults args)
-      : sourceMap = args['source-map'] as bool,
-        sourceMapComment = args['source-map-comment'] as bool,
-        inlineSourceMap = args['inline-source-map'] as bool,
-        summarizeApi = args['summarize'] as bool,
+      : sourceMapComment = args['source-map-comment'] as bool,
         summaryExtension = args['summary-extension'] as String,
         unsafeForceCompile = args['unsafe-force-compile'] as bool,
-        replCompile = args['repl-compile'] as bool,
-        emitMetadata = args['emit-metadata'] as bool,
-        enableAsserts = args['enable-asserts'] as bool,
-        closure = args['closure-experimental'] as bool,
-        bazelMapping =
-            _parseBazelMappings(args['bazel-mapping'] as List<String>),
-        summaryOutPath = args['summary-out'] as String;
+        summaryOutPath = args['summary-out'] as String,
+        moduleRoot = args['module-root'] as String,
+        libraryRoot = _getLibraryRoot(args),
+        super.fromArguments(args, args['module-root'] as String,
+            args['summary-extension'] as String);
 
-  static void addArguments(ArgParser parser, {bool hide: true}) {
+  static void addArguments(ArgParser parser, {bool hide = true}) {
+    SharedCompilerOptions.addArguments(parser, hide: hide);
     parser
-      ..addFlag('summarize',
-          help: 'emit an API summary file', defaultsTo: true, hide: hide)
       ..addOption('summary-extension',
           help: 'file extension for Dart summary files',
           defaultsTo: 'sum',
           hide: hide)
-      ..addFlag('source-map',
-          help: 'emit source mapping', defaultsTo: true, hide: hide)
       ..addFlag('source-map-comment',
           help: 'adds a sourceMappingURL comment to the end of the JS,\n'
               'disable if using X-SourceMap header',
           defaultsTo: true,
           hide: hide)
-      ..addFlag('inline-source-map',
-          help: 'emit source mapping inline', defaultsTo: false, hide: hide)
-      ..addFlag('emit-metadata',
-          help: 'emit metadata annotations queriable via mirrors', hide: hide)
-      ..addFlag('enable-asserts',
-          help: 'enable assertions', defaultsTo: true, hide: hide)
-      ..addFlag('closure-experimental',
-          help: 'emit Closure Compiler-friendly code (experimental)',
-          hide: hide)
       ..addFlag('unsafe-force-compile',
           help: 'Compile code even if it has errors. ಠ_ಠ\n'
               'This has undefined behavior!',
           hide: hide)
-      ..addFlag('repl-compile',
-          help: 'Compile code more permissively when in REPL mode\n'
-              'allowing access to private members across library boundaries.',
-          hide: hide)
-      ..addMultiOption('bazel-mapping',
-          help:
-              '--bazel-mapping=genfiles/to/library.dart,to/library.dart uses \n'
-              'to/library.dart as the path for library.dart in source maps.',
-          splitCommas: false,
-          hide: hide)
       ..addOption('summary-out',
-          help: 'location to write the summary file', hide: hide);
+          help: 'location to write the summary file', hide: hide)
+      ..addOption('summary-deps-output',
+          help: 'Path to a file to dump summary dependency info to.',
+          hide: hide)
+      ..addOption('module-root',
+          help: '(deprecated) used to determine the default module name and\n'
+              'summary import name if those are not provided.',
+          hide: hide);
   }
 
-  static Map<String, String> _parseBazelMappings(List<String> argument) {
-    var mappings = <String, String>{};
-    for (var mapping in argument) {
-      var splitMapping = mapping.split(',');
-      if (splitMapping.length >= 2) {
-        mappings[path.absolute(splitMapping[0])] = splitMapping[1];
-      }
-    }
-    return mappings;
+  static String _getLibraryRoot(ArgResults args) {
+    var root = args['library-root'] as String;
+    return root != null ? p.absolute(root) : p.current;
   }
-}
-
-/// A unit of Dart code that can be built into a single JavaScript module.
-class BuildUnit {
-  /// The name of this module.
-  final String name;
-
-  /// All library names are relative to this path/prefix.
-  final String libraryRoot;
-
-  /// The list of sources in this module.
-  ///
-  /// The set of Dart files can be arbitrarily large, but it must contain
-  /// complete libraries including all of their parts, as well as all libraries
-  /// that are part of a library cycle.
-  final List<String> sources;
-
-  /// Given an imported library URI, this will determine to what Dart/JS module
-  /// it belongs to.
-  // TODO(jmesserly): we should replace this with another way of tracking
-  // build units.
-  final Func1<Source, String> libraryToModule;
-
-  BuildUnit(
-      String modulePath, this.libraryRoot, this.sources, this.libraryToModule)
-      : name = '${path.toUri(modulePath)}';
 }
 
 /// The output of Dart->JS compilation.
@@ -412,15 +232,12 @@ class BuildUnit {
 /// This contains the file contents of the JS module, as well as a list of
 /// Dart libraries that are contained in this module.
 class JSModuleFile {
-  /// The name of this module.
-  final String name;
-
   /// The list of messages (errors and warnings)
   final List<String> errors;
 
   /// The AST that will be used to generate the [code] and [sourceMap] for this
   /// module.
-  final JS.Program moduleTree;
+  final js_ast.Program moduleTree;
 
   /// The compiler options used to generate this module.
   final CompilerOptions options;
@@ -429,19 +246,14 @@ class JSModuleFile {
   /// the libraries in this module.
   final List<int> summaryBytes;
 
-  /// Unique identifier indicating hole to inline the source map.
-  ///
-  /// We cannot generate the source map before the script it is for is
-  /// generated so we have generate the script including this id and then
-  /// replace the ID once the source map is generated.
-  static String sourceMapHoleID = 'SourceMap3G5a8h6JVhHfdGuDxZr1EF9GQC8y0e6u';
+  JSModuleFile(this.errors, this.options, this.moduleTree, this.summaryBytes);
 
-  JSModuleFile(
-      this.name, this.errors, this.options, this.moduleTree, this.summaryBytes);
-
-  JSModuleFile.invalid(this.name, this.errors, this.options)
+  JSModuleFile.invalid(this.errors, this.options)
       : moduleTree = null,
         summaryBytes = null;
+
+  /// The name of this module.
+  String get name => options.moduleName;
 
   /// True if this library was successfully compiled.
   bool get isValid => moduleTree != null;
@@ -453,36 +265,32 @@ class JSModuleFile {
   //
   // TODO(jmesserly): this should match our old logic, but I'm not sure we are
   // correctly handling the pointer from the .js file to the .map file.
-  JSModuleCode getCode(ModuleFormat format, String jsUrl, String mapUrl,
-      {bool singleOutFile: false}) {
-    var opts = new JS.JavaScriptPrintingOptions(
-        emitTypes: options.closure,
-        allowKeywordsInProperties: true,
-        allowSingleLineIfStatements: true);
-    JS.SimpleJavaScriptPrintingContext printer;
+  JSModuleCode getCode(ModuleFormat format, String jsUrl, String mapUrl) {
+    var opts = js_ast.JavaScriptPrintingOptions(
+        allowKeywordsInProperties: true, allowSingleLineIfStatements: true);
+    js_ast.SimpleJavaScriptPrintingContext printer;
     SourceMapBuilder sourceMap;
     if (options.sourceMap) {
-      var sourceMapContext = new SourceMapPrintingContext();
+      var sourceMapContext = SourceMapPrintingContext();
       sourceMap = sourceMapContext.sourceMap;
       printer = sourceMapContext;
     } else {
-      printer = new JS.SimpleJavaScriptPrintingContext();
+      printer = js_ast.SimpleJavaScriptPrintingContext();
     }
 
-    var tree =
-        transformModuleFormat(format, moduleTree, singleOutFile: singleOutFile);
+    var tree = transformModuleFormat(format, moduleTree);
     tree.accept(
-        new JS.Printer(opts, printer, localNamer: new JS.TemporaryNamer(tree)));
+        js_ast.Printer(opts, printer, localNamer: js_ast.TemporaryNamer(tree)));
 
     Map builtMap;
     if (options.sourceMap && sourceMap != null) {
-      builtMap =
-          placeSourceMap(sourceMap.build(jsUrl), mapUrl, options.bazelMapping);
+      builtMap = placeSourceMap(
+          sourceMap.build(jsUrl), mapUrl, options.bazelMapping, null);
       if (options.sourceMapComment) {
-        var jsDir = path.dirname(path.fromUri(jsUrl));
-        var relative = path.relative(path.fromUri(mapUrl), from: jsDir);
-        var relativeMapUrl = path.toUri(relative).toString();
-        assert(path.dirname(jsUrl) == path.dirname(mapUrl));
+        var jsDir = p.dirname(p.fromUri(jsUrl));
+        var relative = p.relative(p.fromUri(mapUrl), from: jsDir);
+        var relativeMapUrl = p.toUri(relative).toString();
+        assert(p.dirname(jsUrl) == p.dirname(mapUrl));
         printer.emit('\n//# sourceMappingURL=');
         printer.emit(relativeMapUrl);
         printer.emit('\n');
@@ -493,24 +301,23 @@ class JSModuleFile {
     var rawSourceMap = options.inlineSourceMap
         ? js.escapedString(json.encode(builtMap), "'").value
         : 'null';
-    text = text.replaceFirst(sourceMapHoleID, rawSourceMap);
+    text = text.replaceFirst(SharedCompiler.sourceMapLocationID, rawSourceMap);
 
-    return new JSModuleCode(text, builtMap);
+    return JSModuleCode(text, builtMap);
   }
 
   /// Similar to [getCode] but immediately writes the resulting files.
   ///
   /// If [mapPath] is not supplied but [options.sourceMap] is set, mapPath
   /// will default to [jsPath].map.
-  void writeCodeSync(ModuleFormat format, String jsPath,
-      {bool singleOutFile: false}) {
+  void writeCodeSync(ModuleFormat format, String jsPath) {
     String mapPath = jsPath + '.map';
     var code = getCode(
-        format, path.toUri(jsPath).toString(), path.toUri(mapPath).toString(),
-        singleOutFile: singleOutFile);
+        format, p.toUri(jsPath).toString(), p.toUri(mapPath).toString());
     var c = code.code;
-    if (singleOutFile) {
-      // In singleOutFile mode we wrap each module in an eval statement to
+    if (format == ModuleFormat.amdConcat ||
+        format == ModuleFormat.legacyConcat) {
+      // In single-out-file mode we wrap each module in an eval statement to
       // leverage sourceURL to improve the debugging experience when source maps
       // are not enabled.
       //
@@ -521,7 +328,7 @@ class JSModuleFile {
       c = 'eval(${json.encode(c)});\n';
     }
 
-    var file = new File(jsPath);
+    var file = File(jsPath);
     if (!file.parent.existsSync()) file.parent.createSync(recursive: true);
     file.writeAsStringSync(c);
 
@@ -530,7 +337,7 @@ class JSModuleFile {
     // should also write a copy of the source file without a sourcemap even when
     // inlineSourceMap is true.
     if (code.sourceMap != null) {
-      file = new File(mapPath);
+      file = File(mapPath);
       if (!file.parent.existsSync()) file.parent.createSync(recursive: true);
       file.writeAsStringSync(json.encode(code.sourceMap));
     }
@@ -553,64 +360,3 @@ class JSModuleCode {
 
   JSModuleCode(this.code, this.sourceMap);
 }
-
-/// Adjusts the source paths in [sourceMap] to be relative to [sourceMapPath],
-/// and returns the new map.  Relative paths are in terms of URIs ('/'), not
-/// local OS paths (e.g., windows '\').
-// TODO(jmesserly): find a new home for this.
-Map placeSourceMap(
-    Map sourceMap, String sourceMapPath, Map<String, String> bazelMappings) {
-  var map = new Map.from(sourceMap);
-  // Convert to a local file path if it's not.
-  sourceMapPath = path.fromUri(_sourceToUri(sourceMapPath));
-  var sourceMapDir = path.dirname(path.absolute(sourceMapPath));
-  var list = (map['sources'] as List).toList();
-  map['sources'] = list;
-
-  String makeRelative(String sourcePath) {
-    var uri = _sourceToUri(sourcePath);
-    if (uri.scheme == 'dart' || uri.scheme == 'package') return sourcePath;
-
-    // Convert to a local file path if it's not.
-    sourcePath = path.absolute(path.fromUri(uri));
-
-    // Allow bazel mappings to override.
-    var match = bazelMappings[sourcePath];
-    if (match != null) return match;
-
-    // Fall back to a relative path against the source map itself.
-    sourcePath = path.relative(sourcePath, from: sourceMapDir);
-
-    // Convert from relative local path to relative URI.
-    return path.toUri(sourcePath).path;
-  }
-
-  for (int i = 0; i < list.length; i++) {
-    list[i] = makeRelative(list[i] as String);
-  }
-  map['file'] = makeRelative(map['file'] as String);
-  return map;
-}
-
-// Convert a source string to a Uri.  The [source] may be a Dart URI, a file
-// URI, or a local win/mac/linux path.
-Uri _sourceToUri(String source) {
-  var uri = Uri.parse(source);
-  var scheme = uri.scheme;
-  switch (scheme) {
-    case "dart":
-    case "package":
-    case "file":
-      // A valid URI.
-      return uri;
-    default:
-      // Assume a file path.
-      // TODO(jmesserly): shouldn't this be `path.toUri(path.absolute)`?
-      return new Uri.file(path.absolute(source));
-  }
-}
-
-const invalidImportDartMirrors = const StrongModeCode(
-    ErrorType.COMPILE_TIME_ERROR,
-    'IMPORT_DART_MIRRORS',
-    'Cannot import "dart:mirrors" in web applications (https://goo.gl/R1anEs).');

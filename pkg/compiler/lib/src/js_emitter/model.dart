@@ -7,8 +7,10 @@ library dart2js.new_js_emitter.model;
 import '../constants/values.dart' show ConstantValue;
 import '../deferred_load.dart' show OutputUnit;
 import '../elements/entities.dart';
+import '../elements/types.dart';
 import '../js/js.dart' as js show Expression, Name, Statement, TokenFinalizer;
 import '../js/js_debug.dart' as js show nodeToString;
+import '../js_backend/runtime_types_codegen.dart';
 import 'js_emitter.dart' show MetadataCollector;
 
 class Program {
@@ -72,10 +74,8 @@ class Program {
   Fragment get mainFragment => fragments.first;
 }
 
-/**
- * This class represents a JavaScript object that contains static state, like
- * classes or functions.
- */
+/// This class represents a JavaScript object that contains static state, like
+/// classes or functions.
 class Holder {
   final String name;
   final int index;
@@ -85,17 +85,16 @@ class Holder {
   Holder(this.name, this.index,
       {this.isStaticStateHolder: false, this.isConstantsHolder: false});
 
+  @override
   String toString() {
     return 'Holder(name=${name})';
   }
 }
 
-/**
- * This class represents one output file.
- *
- * If no library is deferred, there is only one [Fragment] of type
- * [MainFragment].
- */
+/// This class represents one output file.
+///
+/// If no library is deferred, there is only one [Fragment] of type
+/// [MainFragment].
 abstract class Fragment {
   /// The outputUnit should only be used during the transition to the new model.
   /// Uses indicate missing information in the model.
@@ -122,12 +121,10 @@ abstract class Fragment {
   bool get isMainFragment;
 }
 
-/**
- * The main output file.
- *
- * This code emitted from this [Fragment] must be loaded first. It can then load
- * other [DeferredFragment]s.
- */
+/// The main output file.
+///
+/// This code emitted from this [Fragment] must be loaded first. It can then load
+/// other [DeferredFragment]s.
 class MainFragment extends Fragment {
   final js.Statement invokeMain;
 
@@ -142,16 +139,16 @@ class MainFragment extends Fragment {
       : super(outputUnit, outputFileName, libraries, staticNonFinalFields,
             staticLazilyInitializedFields, constants);
 
+  @override
   bool get isMainFragment => true;
 
+  @override
   String toString() {
     return 'MainFragment()';
   }
 }
 
-/**
- * An output (file) for deferred code.
- */
+/// An output (file) for deferred code.
 class DeferredFragment extends Fragment {
   final String name;
 
@@ -166,8 +163,10 @@ class DeferredFragment extends Fragment {
       : super(outputUnit, outputFileName, libraries, staticNonFinalFields,
             staticLazilyInitializedFields, constants);
 
+  @override
   bool get isMainFragment => false;
 
+  @override
   String toString() {
     return 'DeferredFragment(name=${name})';
   }
@@ -180,6 +179,7 @@ class Constant {
 
   Constant(this.name, this.holder, this.value);
 
+  @override
   String toString() {
     return 'Constant(name=${name.key},value=${value.toStructuredText()})';
   }
@@ -198,11 +198,13 @@ class Library implements FieldContainer {
   final List<StaticMethod> statics;
   final List<Class> classes;
 
+  @override
   final List<Field> staticFieldsForReflection;
 
   Library(this.element, this.uri, this.statics, this.classes,
       this.staticFieldsForReflection);
 
+  @override
   String toString() {
     return 'Library(uri=${uri},element=${element})';
   }
@@ -213,22 +215,26 @@ class StaticField {
   /// Uses indicate missing information in the model.
   final FieldEntity element;
 
-  js.Name name;
+  final js.Name name;
+  final js.Name getterName;
   // TODO(floitsch): the holder for static fields is the isolate object. We
   // could remove this field and use the isolate object directly.
   final Holder holder;
   final js.Expression code;
   final bool isFinal;
   final bool isLazy;
+  final bool isInitializedByConstant;
 
-  StaticField(this.element, this.name, this.holder, this.code, this.isFinal,
-      this.isLazy);
+  StaticField(this.element, this.name, this.getterName, this.holder, this.code,
+      {this.isFinal, this.isLazy, this.isInitializedByConstant: false});
 
+  @override
   String toString() {
     return 'StaticField(name=${name.key},element=${element})';
   }
 }
 
+// TODO(fishythefish, sra): Split type information into separate model object.
 class Class implements FieldContainer {
   /// The element should only be used during the transition to the new model.
   /// Uses indicate missing information in the model.
@@ -237,9 +243,12 @@ class Class implements FieldContainer {
   final js.Name name;
   final Holder holder;
   Class _superclass;
+  Class _mixinClass;
   final List<Method> methods;
   final List<Field> fields;
   final List<StubMethod> isChecks;
+  final ClassChecks classChecksNewRti;
+  final Set<TypeVariableType> namedTypeVariablesNewRti = {};
   final List<StubMethod> checkedSetters;
 
   /// Stub methods for this class that are call stubs for getters.
@@ -247,6 +256,7 @@ class Class implements FieldContainer {
 
   /// noSuchMethod stubs in the special case that the class is Object.
   final List<StubMethod> noSuchMethodStubs;
+  @override
   final List<Field> staticFieldsForReflection;
   final bool hasRtiField; // Per-instance runtime type information pseudo-field.
   final bool onlyForRti;
@@ -258,6 +268,8 @@ class Class implements FieldContainer {
   ///
   /// A soft-deferred class is only fully initialized at first instantiation.
   final bool isSoftDeferred;
+
+  final bool isSuperMixinApplication;
 
   // If the class implements a function type, and the type is encoded in the
   // metatada table, then this field contains the index into that field.
@@ -286,24 +298,33 @@ class Class implements FieldContainer {
       this.noSuchMethodStubs,
       this.checkedSetters,
       this.isChecks,
+      this.classChecksNewRti,
       this.functionTypeIndex,
       {this.hasRtiField,
       this.onlyForRti,
       this.isDirectlyInstantiated,
       this.isNative,
       this.isClosureBaseClass,
-      this.isSoftDeferred = false}) {
+      this.isSoftDeferred = false,
+      this.isSuperMixinApplication}) {
     assert(onlyForRti != null);
     assert(isDirectlyInstantiated != null);
     assert(isNative != null);
     assert(isClosureBaseClass != null);
   }
 
-  bool get isMixinApplication => false;
+  bool get isSimpleMixinApplication => false;
+
   Class get superclass => _superclass;
 
   void setSuperclass(Class superclass) {
     _superclass = superclass;
+  }
+
+  Class get mixinClass => _mixinClass;
+
+  void setMixinClass(Class mixinClass) {
+    _mixinClass = mixinClass;
   }
 
   js.Name get superclassName => superclass == null ? null : superclass.name;
@@ -311,12 +332,11 @@ class Class implements FieldContainer {
   int get superclassHolderIndex =>
       (superclass == null) ? 0 : superclass.holder.index;
 
+  @override
   String toString() => 'Class(name=${name.key},element=$element)';
 }
 
 class MixinApplication extends Class {
-  Class _mixinClass;
-
   MixinApplication(
       ClassEntity element,
       js.Name name,
@@ -326,6 +346,7 @@ class MixinApplication extends Class {
       List<StubMethod> callStubs,
       List<StubMethod> checkedSetters,
       List<StubMethod> isChecks,
+      ClassChecks classChecksNewRti,
       js.Expression functionTypeIndex,
       {bool hasRtiField,
       bool onlyForRti,
@@ -341,20 +362,19 @@ class MixinApplication extends Class {
             const <StubMethod>[],
             checkedSetters,
             isChecks,
+            classChecksNewRti,
             functionTypeIndex,
             hasRtiField: hasRtiField,
             onlyForRti: onlyForRti,
             isDirectlyInstantiated: isDirectlyInstantiated,
             isNative: false,
-            isClosureBaseClass: false);
+            isClosureBaseClass: false,
+            isSuperMixinApplication: false);
 
-  bool get isMixinApplication => true;
-  Class get mixinClass => _mixinClass;
+  @override
+  bool get isSimpleMixinApplication => true;
 
-  void setMixinClass(Class mixinClass) {
-    _mixinClass = mixinClass;
-  }
-
+  @override
   String toString() => 'Mixin(name=${name.key},element=$element)';
 }
 
@@ -384,7 +404,11 @@ class Field {
 
   final bool needsCheckedSetter;
 
-  final bool nullInitializerInAllocator; // TODO(sra): Generalize.
+  final ConstantValue initializerInAllocator;
+
+  final ConstantValue constantValue;
+
+  final bool isElided;
 
   // TODO(floitsch): support renamed fields.
   Field(
@@ -394,7 +418,9 @@ class Field {
       this.getterFlags,
       this.setterFlags,
       this.needsCheckedSetter,
-      this.nullInitializerInAllocator);
+      this.initializerInAllocator,
+      this.constantValue,
+      this.isElided);
 
   bool get needsGetter => getterFlags != 0;
   bool get needsUncheckedSetter => setterFlags != 0;
@@ -408,6 +434,7 @@ class Field {
   bool get needsInterceptedGetterOnThis => getterFlags == 3;
   bool get needsInterceptedSetterOnThis => setterFlags == 3;
 
+  @override
   String toString() {
     return 'Field(name=${name.key},element=${element})';
   }
@@ -433,6 +460,7 @@ abstract class DartMethod extends Method {
   final js.Name tearOffName;
   final List<ParameterStubMethod> parameterStubs;
   final bool canBeApplied;
+  final int applyIndex;
 
   // Is non-null if [needsTearOff].
   //
@@ -441,8 +469,9 @@ abstract class DartMethod extends Method {
   // this field holds a function computing the function signature.
   final js.Expression functionType;
 
-  // Signature information for this method. This is only required and stored
-  // here if the method [canBeApplied].
+  // Signature information for this method. [optionalParameterDefaultValues] is
+  // only required and stored here if the method [canBeApplied]. The count is
+  // always stored to help select specialized tear-off paths.
   final int requiredParameterCount;
   final /* Map | List */ optionalParameterDefaultValues;
 
@@ -458,7 +487,8 @@ abstract class DartMethod extends Method {
       this.canBeApplied,
       this.requiredParameterCount,
       this.optionalParameterDefaultValues,
-      this.functionType})
+      this.functionType,
+      this.applyIndex})
       : super(element, name, code) {
     assert(needsTearOff != null);
     assert(!needsTearOff || tearOffName != null);
@@ -486,6 +516,9 @@ class InstanceMethod extends DartMethod {
   /// True if the interceptor calling convention is used for this method.
   final bool isIntercepted;
 
+  /// Name called via the general 'catch all' path of Function.apply.
+  ///final js.Name applyName;
+
   InstanceMethod(FunctionEntity element, js.Name name, js.Expression code,
       List<ParameterStubMethod> parameterStubs, js.Name callName,
       {bool needsTearOff,
@@ -496,19 +529,23 @@ class InstanceMethod extends DartMethod {
       /* List | Map */ optionalParameterDefaultValues,
       this.isClosureCallMethod,
       this.isIntercepted,
-      js.Expression functionType})
+      js.Expression functionType,
+      int applyIndex})
       : super(element, name, code, parameterStubs, callName,
             needsTearOff: needsTearOff,
             tearOffName: tearOffName,
             canBeApplied: canBeApplied,
             requiredParameterCount: requiredParameterCount,
             optionalParameterDefaultValues: optionalParameterDefaultValues,
-            functionType: functionType) {
+            functionType: functionType,
+            applyIndex: applyIndex) {
     assert(isClosureCallMethod != null);
   }
 
+  @override
   bool get isStatic => false;
 
+  @override
   String toString() {
     return 'InstanceMethod(name=${name.key},element=${element}'
         ',code=${js.nodeToString(code)})';
@@ -522,6 +559,7 @@ class StubMethod extends Method {
   StubMethod(js.Name name, js.Expression code, {MemberEntity element})
       : super(element, name, code);
 
+  @override
   String toString() {
     return 'StubMethod(name=${name.key},element=${element}'
         ',code=${js.nodeToString(code)})';
@@ -545,12 +583,15 @@ class ParameterStubMethod extends StubMethod {
   /// If a stub's member can not be torn off, the [callName] is `null`.
   js.Name callName;
 
-  ParameterStubMethod(js.Name name, this.callName, js.Expression code)
-      : super(name, code);
+  ParameterStubMethod(js.Name name, this.callName, js.Expression code,
+      {MemberEntity element})
+      : super(name, code, element: element);
 
+  @override
   String toString() {
-    return 'ParameterStubMethod(name=${name.key},element=${element}'
-        ',code=${js.nodeToString(code)})';
+    return 'ParameterStubMethod(name=${name.key}, callName=${callName?.key}'
+        ', element=${element}'
+        ', code=${js.nodeToString(code)})';
   }
 }
 
@@ -559,6 +600,7 @@ abstract class StaticMethod implements Method {
 }
 
 class StaticDartMethod extends DartMethod implements StaticMethod {
+  @override
   final Holder holder;
 
   StaticDartMethod(
@@ -573,17 +615,21 @@ class StaticDartMethod extends DartMethod implements StaticMethod {
       bool canBeApplied,
       int requiredParameterCount,
       /* List | Map */ optionalParameterDefaultValues,
-      js.Expression functionType})
+      js.Expression functionType,
+      int applyIndex})
       : super(element, name, code, parameterStubs, callName,
             needsTearOff: needsTearOff,
             tearOffName: tearOffName,
             canBeApplied: canBeApplied,
             requiredParameterCount: requiredParameterCount,
             optionalParameterDefaultValues: optionalParameterDefaultValues,
-            functionType: functionType);
+            functionType: functionType,
+            applyIndex: applyIndex);
 
+  @override
   bool get isStatic => true;
 
+  @override
   String toString() {
     return 'StaticDartMethod(name=${name.key},element=${element}'
         ',code=${js.nodeToString(code)})';
@@ -591,10 +637,12 @@ class StaticDartMethod extends DartMethod implements StaticMethod {
 }
 
 class StaticStubMethod extends StubMethod implements StaticMethod {
+  @override
   Holder holder;
   StaticStubMethod(js.Name name, this.holder, js.Expression code)
       : super(name, code);
 
+  @override
   String toString() {
     return 'StaticStubMethod(name=${name.key},element=${element}}'
         ',code=${js.nodeToString(code)})';

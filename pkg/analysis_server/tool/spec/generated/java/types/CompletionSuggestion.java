@@ -1,9 +1,9 @@
 /*
- * Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+ * Copyright (c) 2019, the Dart project authors. Please see the AUTHORS file
  * for details. All rights reserved. Use of this source code is governed by a
  * BSD-style license that can be found in the LICENSE file.
  *
- * This file has been automatically generated.  Please do not edit it manually.
+ * This file has been automatically generated. Please do not edit it manually.
  * To regenerate the file, use the script "pkg/analysis_server/tool/spec/generate_files".
  */
 package org.dartlang.analysis.server.protocol;
@@ -161,15 +161,9 @@ public class CompletionSuggestion {
   private final String parameterType;
 
   /**
-   * The import to be added if the suggestion is out of scope and needs an import to be added to be
-   * in scope.
-   */
-  private final String importUri;
-
-  /**
    * Constructor for {@link CompletionSuggestion}.
    */
-  public CompletionSuggestion(String kind, int relevance, String completion, String displayText, int selectionOffset, int selectionLength, boolean isDeprecated, boolean isPotential, String docSummary, String docComplete, String declaringType, String defaultArgumentListString, int[] defaultArgumentListTextRanges, Element element, String returnType, List<String> parameterNames, List<String> parameterTypes, Integer requiredParameterCount, Boolean hasNamedParameters, String parameterName, String parameterType, String importUri) {
+  public CompletionSuggestion(String kind, int relevance, String completion, String displayText, int selectionOffset, int selectionLength, boolean isDeprecated, boolean isPotential, String docSummary, String docComplete, String declaringType, String defaultArgumentListString, int[] defaultArgumentListTextRanges, Element element, String returnType, List<String> parameterNames, List<String> parameterTypes, Integer requiredParameterCount, Boolean hasNamedParameters, String parameterName, String parameterType) {
     this.kind = kind;
     this.relevance = relevance;
     this.completion = completion;
@@ -191,7 +185,6 @@ public class CompletionSuggestion {
     this.hasNamedParameters = hasNamedParameters;
     this.parameterName = parameterName;
     this.parameterType = parameterType;
-    this.importUri = importUri;
   }
 
   @Override
@@ -219,8 +212,7 @@ public class CompletionSuggestion {
         ObjectUtilities.equals(other.requiredParameterCount, requiredParameterCount) &&
         ObjectUtilities.equals(other.hasNamedParameters, hasNamedParameters) &&
         ObjectUtilities.equals(other.parameterName, parameterName) &&
-        ObjectUtilities.equals(other.parameterType, parameterType) &&
-        ObjectUtilities.equals(other.importUri, importUri);
+        ObjectUtilities.equals(other.parameterType, parameterType);
     }
     return false;
   }
@@ -247,8 +239,7 @@ public class CompletionSuggestion {
     Boolean hasNamedParameters = jsonObject.get("hasNamedParameters") == null ? null : jsonObject.get("hasNamedParameters").getAsBoolean();
     String parameterName = jsonObject.get("parameterName") == null ? null : jsonObject.get("parameterName").getAsString();
     String parameterType = jsonObject.get("parameterType") == null ? null : jsonObject.get("parameterType").getAsString();
-    String importUri = jsonObject.get("importUri") == null ? null : jsonObject.get("importUri").getAsString();
-    return new CompletionSuggestion(kind, relevance, completion, displayText, selectionOffset, selectionLength, isDeprecated, isPotential, docSummary, docComplete, declaringType, defaultArgumentListString, defaultArgumentListTextRanges, element, returnType, parameterNames, parameterTypes, requiredParameterCount, hasNamedParameters, parameterName, parameterType, importUri);
+    return new CompletionSuggestion(kind, relevance, completion, displayText, selectionOffset, selectionLength, isDeprecated, isPotential, docSummary, docComplete, declaringType, defaultArgumentListString, defaultArgumentListTextRanges, element, returnType, parameterNames, parameterTypes, requiredParameterCount, hasNamedParameters, parameterName, parameterType);
   }
 
   public static List<CompletionSuggestion> fromJsonArray(JsonArray jsonArray) {
@@ -335,14 +326,6 @@ public class CompletionSuggestion {
    */
   public Boolean getHasNamedParameters() {
     return hasNamedParameters;
-  }
-
-  /**
-   * The import to be added if the suggestion is out of scope and needs an import to be added to be
-   * in scope.
-   */
-  public String getImportUri() {
-    return importUri;
   }
 
   /**
@@ -461,7 +444,6 @@ public class CompletionSuggestion {
     builder.append(hasNamedParameters);
     builder.append(parameterName);
     builder.append(parameterType);
-    builder.append(importUri);
     return builder.toHashCode();
   }
 
@@ -528,9 +510,6 @@ public class CompletionSuggestion {
     if (parameterType != null) {
       jsonObject.addProperty("parameterType", parameterType);
     }
-    if (importUri != null) {
-      jsonObject.addProperty("importUri", importUri);
-    }
     return jsonObject;
   }
 
@@ -579,9 +558,7 @@ public class CompletionSuggestion {
     builder.append("parameterName=");
     builder.append(parameterName + ", ");
     builder.append("parameterType=");
-    builder.append(parameterType + ", ");
-    builder.append("importUri=");
-    builder.append(importUri);
+    builder.append(parameterType);
     builder.append("]");
     return builder.toString();
   }

@@ -8,9 +8,9 @@
  */
 import 'dart:collection';
 
-import 'package:front_end/src/base/syntactic_entity.dart';
-import 'package:front_end/src/fasta/scanner/token_constants.dart';
-import 'package:front_end/src/scanner/string_utilities.dart';
+import '../base/syntactic_entity.dart';
+import '../fasta/scanner/token_constants.dart';
+import 'string_utilities.dart';
 
 const int NO_PRECEDENCE = 0;
 const int ASSIGNMENT_PRECEDENCE = 1;
@@ -51,6 +51,7 @@ class BeginToken extends SimpleToken {
         type == TokenType.OPEN_CURLY_BRACKET ||
         type == TokenType.OPEN_PAREN ||
         type == TokenType.OPEN_SQUARE_BRACKET ||
+        type == TokenType.QUESTION_PERIOD_OPEN_SQUARE_BRACKET ||
         type == TokenType.STRING_INTERPOLATION_EXPRESSION);
   }
 
@@ -108,13 +109,6 @@ class CommentToken extends StringToken {
  */
 class DocumentationCommentToken extends CommentToken {
   /**
-   * The references embedded within the documentation comment.
-   * This list will be empty unless this is a documentation comment that has
-   * references embedded within it.
-   */
-  final List<Token> references = <Token>[];
-
-  /**
    * Initialize a newly created token to represent a token of the given [type]
    * with the given [value] at the given [offset].
    */
@@ -122,12 +116,7 @@ class DocumentationCommentToken extends CommentToken {
       : super(type, value, offset);
 
   @override
-  CommentToken copy() {
-    DocumentationCommentToken copy =
-        new DocumentationCommentToken(type, _value, offset);
-    references.forEach((ref) => copy.references.add(ref.copy()));
-    return copy;
-  }
+  CommentToken copy() => new DocumentationCommentToken(type, _value, offset);
 }
 
 /**
@@ -185,6 +174,9 @@ class Keyword extends TokenType {
 
   static const Keyword EXTENDS = const Keyword("extends", "EXTENDS");
 
+  static const Keyword EXTENSION = const Keyword("extension", "EXTENSION",
+      isBuiltIn: true, isTopLevelKeyword: true);
+
   static const Keyword EXTERNAL =
       const Keyword("external", "EXTERNAL", isBuiltIn: true, isModifier: true);
 
@@ -217,16 +209,21 @@ class Keyword extends TokenType {
 
   static const Keyword IN = const Keyword("in", "IN");
 
+  static const Keyword INOUT = const Keyword("inout", "INOUT", isPseudo: true);
+
   static const Keyword INTERFACE =
       const Keyword("interface", "INTERFACE", isBuiltIn: true);
 
   static const Keyword IS =
       const Keyword("is", "IS", precedence: RELATIONAL_PRECEDENCE);
 
+  static const Keyword LATE = const Keyword("late", "LATE", isModifier: true);
+
   static const Keyword LIBRARY = const Keyword("library", "LIBRARY",
       isBuiltIn: true, isTopLevelKeyword: true);
 
-  static const Keyword MIXIN = const Keyword("mixin", "MIXIN", isBuiltIn: true);
+  static const Keyword MIXIN =
+      const Keyword("mixin", "MIXIN", isBuiltIn: true, isTopLevelKeyword: true);
 
   static const Keyword NATIVE =
       const Keyword("native", "NATIVE", isPseudo: true);
@@ -242,10 +239,15 @@ class Keyword extends TokenType {
   static const Keyword OPERATOR =
       const Keyword("operator", "OPERATOR", isBuiltIn: true);
 
+  static const Keyword OUT = const Keyword("out", "OUT", isPseudo: true);
+
   static const Keyword PART =
       const Keyword("part", "PART", isBuiltIn: true, isTopLevelKeyword: true);
 
   static const Keyword PATCH = const Keyword("patch", "PATCH", isPseudo: true);
+
+  static const Keyword REQUIRED =
+      const Keyword("required", "REQUIRED", isBuiltIn: true, isModifier: true);
 
   static const Keyword RETHROW = const Keyword("rethrow", "RETHROW");
 
@@ -309,6 +311,7 @@ class Keyword extends TokenType {
     ENUM,
     EXPORT,
     EXTENDS,
+    EXTENSION,
     EXTERNAL,
     FACTORY,
     FALSE,
@@ -322,8 +325,10 @@ class Keyword extends TokenType {
     IMPLEMENTS,
     IMPORT,
     IN,
+    INOUT,
     INTERFACE,
     IS,
+    LATE,
     LIBRARY,
     MIXIN,
     NATIVE,
@@ -332,8 +337,10 @@ class Keyword extends TokenType {
     OF,
     ON,
     OPERATOR,
+    OUT,
     PART,
     PATCH,
+    REQUIRED,
     RETHROW,
     RETURN,
     SET,
@@ -1023,97 +1030,97 @@ class TokenClass {
    * A value used to indicate that the token type is an additive operator.
    */
   static const TokenClass ADDITIVE_OPERATOR =
-      const TokenClass('ADDITIVE_OPERATOR', 13);
+      const TokenClass('ADDITIVE_OPERATOR', ADDITIVE_PRECEDENCE);
 
   /**
    * A value used to indicate that the token type is an assignment operator.
    */
   static const TokenClass ASSIGNMENT_OPERATOR =
-      const TokenClass('ASSIGNMENT_OPERATOR', 1);
+      const TokenClass('ASSIGNMENT_OPERATOR', ASSIGNMENT_PRECEDENCE);
 
   /**
    * A value used to indicate that the token type is a bitwise-and operator.
    */
   static const TokenClass BITWISE_AND_OPERATOR =
-      const TokenClass('BITWISE_AND_OPERATOR', 11);
+      const TokenClass('BITWISE_AND_OPERATOR', BITWISE_AND_PRECEDENCE);
 
   /**
    * A value used to indicate that the token type is a bitwise-or operator.
    */
   static const TokenClass BITWISE_OR_OPERATOR =
-      const TokenClass('BITWISE_OR_OPERATOR', 9);
+      const TokenClass('BITWISE_OR_OPERATOR', BITWISE_OR_PRECEDENCE);
 
   /**
    * A value used to indicate that the token type is a bitwise-xor operator.
    */
   static const TokenClass BITWISE_XOR_OPERATOR =
-      const TokenClass('BITWISE_XOR_OPERATOR', 10);
+      const TokenClass('BITWISE_XOR_OPERATOR', BITWISE_XOR_PRECEDENCE);
 
   /**
    * A value used to indicate that the token type is a cascade operator.
    */
   static const TokenClass CASCADE_OPERATOR =
-      const TokenClass('CASCADE_OPERATOR', 2);
+      const TokenClass('CASCADE_OPERATOR', CASCADE_PRECEDENCE);
 
   /**
    * A value used to indicate that the token type is a conditional operator.
    */
   static const TokenClass CONDITIONAL_OPERATOR =
-      const TokenClass('CONDITIONAL_OPERATOR', 3);
+      const TokenClass('CONDITIONAL_OPERATOR', CONDITIONAL_PRECEDENCE);
 
   /**
    * A value used to indicate that the token type is an equality operator.
    */
   static const TokenClass EQUALITY_OPERATOR =
-      const TokenClass('EQUALITY_OPERATOR', 7);
+      const TokenClass('EQUALITY_OPERATOR', EQUALITY_PRECEDENCE);
 
   /**
    * A value used to indicate that the token type is an if-null operator.
    */
   static const TokenClass IF_NULL_OPERATOR =
-      const TokenClass('IF_NULL_OPERATOR', 4);
+      const TokenClass('IF_NULL_OPERATOR', IF_NULL_PRECEDENCE);
 
   /**
    * A value used to indicate that the token type is a logical-and operator.
    */
   static const TokenClass LOGICAL_AND_OPERATOR =
-      const TokenClass('LOGICAL_AND_OPERATOR', 6);
+      const TokenClass('LOGICAL_AND_OPERATOR', LOGICAL_AND_PRECEDENCE);
 
   /**
    * A value used to indicate that the token type is a logical-or operator.
    */
   static const TokenClass LOGICAL_OR_OPERATOR =
-      const TokenClass('LOGICAL_OR_OPERATOR', 5);
+      const TokenClass('LOGICAL_OR_OPERATOR', LOGICAL_OR_PRECEDENCE);
 
   /**
    * A value used to indicate that the token type is a multiplicative operator.
    */
   static const TokenClass MULTIPLICATIVE_OPERATOR =
-      const TokenClass('MULTIPLICATIVE_OPERATOR', 14);
+      const TokenClass('MULTIPLICATIVE_OPERATOR', MULTIPLICATIVE_PRECEDENCE);
 
   /**
    * A value used to indicate that the token type is a relational operator.
    */
   static const TokenClass RELATIONAL_OPERATOR =
-      const TokenClass('RELATIONAL_OPERATOR', 8);
+      const TokenClass('RELATIONAL_OPERATOR', RELATIONAL_PRECEDENCE);
 
   /**
    * A value used to indicate that the token type is a shift operator.
    */
   static const TokenClass SHIFT_OPERATOR =
-      const TokenClass('SHIFT_OPERATOR', 12);
+      const TokenClass('SHIFT_OPERATOR', SHIFT_PRECEDENCE);
 
   /**
    * A value used to indicate that the token type is a unary operator.
    */
   static const TokenClass UNARY_POSTFIX_OPERATOR =
-      const TokenClass('UNARY_POSTFIX_OPERATOR', 16);
+      const TokenClass('UNARY_POSTFIX_OPERATOR', POSTFIX_PRECEDENCE);
 
   /**
    * A value used to indicate that the token type is a unary operator.
    */
   static const TokenClass UNARY_PREFIX_OPERATOR =
-      const TokenClass('UNARY_PREFIX_OPERATOR', 15);
+      const TokenClass('UNARY_PREFIX_OPERATOR', PREFIX_PRECEDENCE);
 
   /**
    * The name of the token class.
@@ -1130,7 +1137,7 @@ class TokenClass {
    * Initialize a newly created class of tokens to have the given [name] and
    * [precedence].
    */
-  const TokenClass(this.name, [this.precedence = 0]);
+  const TokenClass(this.name, [this.precedence = NO_PRECEDENCE]);
 
   @override
   String toString() => name;
@@ -1157,7 +1164,7 @@ class TokenType {
       stringValue: null);
 
   static const TokenType IDENTIFIER = const TokenType(
-      'identifier', 'STRING_INT', NO_PRECEDENCE, IDENTIFIER_TOKEN,
+      'identifier', 'IDENTIFIER', NO_PRECEDENCE, IDENTIFIER_TOKEN,
       stringValue: null);
 
   static const TokenType INT = const TokenType(
@@ -1284,6 +1291,14 @@ class TokenType {
 
   static const TokenType GT_GT_EQ = const TokenType(
       '>>=', 'GT_GT_EQ', ASSIGNMENT_PRECEDENCE, GT_GT_EQ_TOKEN,
+      isOperator: true);
+
+  static const TokenType GT_GT_GT = const TokenType(
+      '>>>', 'GT_GT_GT', SHIFT_PRECEDENCE, GT_GT_GT_TOKEN,
+      isOperator: true, isUserDefinableOperator: true);
+
+  static const TokenType GT_GT_GT_EQ = const TokenType(
+      '>>>=', 'GT_GT_GT_EQ', ASSIGNMENT_PRECEDENCE, GT_GT_GT_EQ_TOKEN,
       isOperator: true);
 
   static const TokenType HASH =
@@ -1429,19 +1444,23 @@ class TokenType {
   static const TokenType PERIOD_PERIOD_PERIOD = const TokenType(
       '...', 'PERIOD_PERIOD_PERIOD', NO_PRECEDENCE, PERIOD_PERIOD_PERIOD_TOKEN);
 
-  static const TokenType GENERIC_METHOD_TYPE_LIST = const TokenType(
-      'generic_comment_list',
-      'GENERIC_METHOD_TYPE_LIST',
+  static const TokenType PERIOD_PERIOD_PERIOD_QUESTION = const TokenType(
+      '...?',
+      'PERIOD_PERIOD_PERIOD_QUESTION',
       NO_PRECEDENCE,
-      GENERIC_METHOD_TYPE_LIST_TOKEN,
-      stringValue: null);
+      PERIOD_PERIOD_PERIOD_QUESTION_TOKEN);
 
-  static const TokenType GENERIC_METHOD_TYPE_ASSIGN = const TokenType(
-      'generic_comment_assign',
-      'GENERIC_METHOD_TYPE_ASSIGN',
-      NO_PRECEDENCE,
-      GENERIC_METHOD_TYPE_ASSIGN_TOKEN,
-      stringValue: null);
+  static const TokenType QUESTION_PERIOD_OPEN_SQUARE_BRACKET = const TokenType(
+      '?.[',
+      'QUESTION_PERIOD_OPEN_SQUARE_BRACKET',
+      SELECTOR_PRECEDENCE,
+      QUESTION_PERIOD_OPEN_SQUARE_BRACKET_TOKEN);
+
+  static const TokenType QUESTION_PERIOD_PERIOD = const TokenType(
+      '?..',
+      'QUESTION_PERIOD_PERIOD',
+      CASCADE_PRECEDENCE,
+      QUESTION_PERIOD_PERIOD_TOKEN);
 
   static const TokenType AS = Keyword.AS;
 
@@ -1534,8 +1553,7 @@ class TokenType {
     TokenType.BACKPING,
     TokenType.BACKSLASH,
     TokenType.PERIOD_PERIOD_PERIOD,
-    TokenType.GENERIC_METHOD_TYPE_LIST,
-    TokenType.GENERIC_METHOD_TYPE_ASSIGN,
+    TokenType.PERIOD_PERIOD_PERIOD_QUESTION,
 
     // TODO(danrubel): Should these be added to the "all" list?
     //TokenType.IS,

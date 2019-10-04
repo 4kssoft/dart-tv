@@ -1,8 +1,6 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
-library analyzer.src.generated.utilities_dart;
 
 import 'package:analyzer/dart/ast/ast.dart' show AnnotatedNode, Comment;
 import 'package:analyzer/dart/ast/token.dart' show Token;
@@ -52,20 +50,32 @@ bool startsWith(Uri uri1, Uri uri2) {
 }
 
 /**
- * The kinds of a parameter. There are two basic kinds of parameters: required
- * and optional. Optional parameters are further divided into two kinds:
- * positional optional and named optional.
+ * The kind of a parameter. A parameter can be either positional or named, and
+ * can be either required or optional. 
  */
 class ParameterKind implements Comparable<ParameterKind> {
+  /// A positional required parameter.
   static const ParameterKind REQUIRED =
-      const ParameterKind('REQUIRED', 0, false);
+      const ParameterKind('REQUIRED', 0, false, false);
 
+  /// A positional optional parameter.
   static const ParameterKind POSITIONAL =
-      const ParameterKind('POSITIONAL', 1, true);
+      const ParameterKind('POSITIONAL', 1, false, true);
 
-  static const ParameterKind NAMED = const ParameterKind('NAMED', 2, true);
+  /// A named required parameter.
+  static const ParameterKind NAMED_REQUIRED =
+      const ParameterKind('NAMED_REQUIRED', 2, true, false);
 
-  static const List<ParameterKind> values = const [REQUIRED, POSITIONAL, NAMED];
+  /// A named optional parameter.
+  static const ParameterKind NAMED =
+      const ParameterKind('NAMED', 2, true, true);
+
+  static const List<ParameterKind> values = const [
+    REQUIRED,
+    POSITIONAL,
+    NAMED_REQUIRED,
+    NAMED
+  ];
 
   /**
    * The name of this parameter.
@@ -78,14 +88,19 @@ class ParameterKind implements Comparable<ParameterKind> {
   final int ordinal;
 
   /**
-   * A flag indicating whether this is an optional parameter.
+   * A flag indicating whether this is a named or positional parameter.
+   */
+  final bool isNamed;
+
+  /**
+   * A flag indicating whether this is an optional or required parameter.
    */
   final bool isOptional;
 
   /**
    * Initialize a newly created kind with the given state.
    */
-  const ParameterKind(this.name, this.ordinal, this.isOptional);
+  const ParameterKind(this.name, this.ordinal, this.isNamed, this.isOptional);
 
   @override
   int get hashCode => ordinal;

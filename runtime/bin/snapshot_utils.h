@@ -30,16 +30,25 @@ class Snapshot {
  public:
   static void GenerateKernel(const char* snapshot_filename,
                              const char* script_name,
-                             bool strong,
                              const char* package_config);
-  static void GenerateScript(const char* snapshot_filename);
   static void GenerateAppJIT(const char* snapshot_filename);
   static void GenerateAppAOTAsBlobs(const char* snapshot_filename,
                                     const uint8_t* shared_data,
                                     const uint8_t* shared_instructions);
   static void GenerateAppAOTAsAssembly(const char* snapshot_filename);
 
+  static AppSnapshot* TryReadAppendedAppSnapshotBlobs(
+      const char* container_path);
   static AppSnapshot* TryReadAppSnapshot(const char* script_name);
+  static void WriteAppSnapshot(const char* filename,
+                               uint8_t* vm_data_buffer,
+                               intptr_t vm_data_size,
+                               uint8_t* vm_instructions_buffer,
+                               intptr_t vm_instructions_size,
+                               uint8_t* isolate_data_buffer,
+                               intptr_t isolate_data_size,
+                               uint8_t* isolate_instructions_buffer,
+                               intptr_t isolate_instructions_size);
 
  private:
   DISALLOW_ALLOCATION();

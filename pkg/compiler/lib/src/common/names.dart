@@ -43,6 +43,24 @@ class Identifiers {
 
   /// The name of the signature function in closure classes.
   static const String signature = ':signature';
+
+  /// The name of the 'JS' foreign function.
+  static const String JS = 'JS';
+
+  /// The name of the 'JS_BUILTIN' foreign function.
+  static const String JS_BUILTIN = 'JS_BUILTIN';
+
+  /// The name of the 'JS_EMBEDDED_GLOBAL' foreign function.
+  static const String JS_EMBEDDED_GLOBAL = 'JS_EMBEDDED_GLOBAL';
+
+  /// The name of the 'JS_INTERCEPTOR_CONSTANT' foreign function.
+  static const String JS_INTERCEPTOR_CONSTANT = 'JS_INTERCEPTOR_CONSTANT';
+
+  /// The name of the 'JS_STRING_CONCAT' foreign function.
+  static const String JS_STRING_CONCAT = 'JS_STRING_CONCAT';
+
+  /// The name of the 'DART_CLOSURE_TO_JS' foreign function.
+  static const String DART_CLOSURE_TO_JS = 'DART_CLOSURE_TO_JS';
 }
 
 /// [Name]s commonly used.
@@ -214,6 +232,9 @@ class Uris {
   static final Uri dart__js_helper =
       new Uri(scheme: 'dart', path: '_js_helper');
 
+  /// The URI for 'dart:_rti'.
+  static final Uri dart__rti = new Uri(scheme: 'dart', path: '_rti');
+
   /// The URI for 'dart:_interceptors'.
   static final Uri dart__interceptors =
       new Uri(scheme: 'dart', path: '_interceptors');
@@ -229,6 +250,13 @@ class Uris {
   static final Uri dart__js_embedded_names =
       new Uri(scheme: 'dart', path: '_js_embedded_names');
 
+  /// The URI for 'dart:js'.
+  static final Uri dart_js = Uri(scheme: 'dart', path: 'js');
+
   /// The URI for 'package:js'.
   static final Uri package_js = new Uri(scheme: 'package', path: 'js/js.dart');
+
+  /// The URI for 'package:meta/dart2js.dart'.
+  static final Uri package_meta_dart2js =
+      new Uri(scheme: 'package', path: 'meta/dart2js.dart');
 }

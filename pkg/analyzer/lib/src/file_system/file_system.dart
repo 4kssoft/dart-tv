@@ -1,9 +1,10 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer/file_system/file_system.dart';
+import 'package:analyzer/src/util/uri.dart';
 
 /**
  * A [UriResolver] for [Resource]s.
@@ -25,12 +26,9 @@ class ResourceUriResolver extends UriResolver {
     if (!isFileUri(uri)) {
       return null;
     }
-    String path = _provider.pathContext.fromUri(uri);
-    Resource resource = _provider.getResource(path);
-    if (resource is File) {
-      return resource.createSource(actualUri ?? uri);
-    }
-    return null;
+    String path = fileUriToNormalizedPath(_provider.pathContext, uri);
+    File file = _provider.getFile(path);
+    return file.createSource(actualUri ?? uri);
   }
 
   @override

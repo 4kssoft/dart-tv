@@ -4,7 +4,7 @@
 
 import "package:expect/expect.dart";
 import "package:async_helper/async_helper.dart";
-import '../compiler_helper.dart';
+import '../helpers/compiler_helper.dart';
 
 const String TEST = r"""
 class A {
@@ -20,9 +20,8 @@ main() {
 main() {
   runTest() async {
     String generated = await compileAll(TEST);
-
-    Expect.isTrue(generated
-        .contains(new RegExp('A: {[ \n]*"\\^": "Object;",[ \n]*static:')));
+    // No methods (including no constructor body method.
+    Expect.isTrue(generated.contains('.A.prototype = {}'));
   }
 
   asyncTest(() async {

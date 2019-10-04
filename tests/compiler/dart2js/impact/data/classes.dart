@@ -2,7 +2,7 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-/*element: main:
+/*member: main:
  static=[
   testAbstractClassWithField(0),
   testEnum(0),
@@ -40,108 +40,104 @@ main() {
   testGenericNamedMixinInstantiation();
 }
 
-/*element: Super1.:static=[Object.(0)]*/
+/*member: Super1.:static=[Object.(0)]*/
 class Super1 {
-  /*element: Super1.foo:*/
+  /*member: Super1.foo:*/
   foo() {}
 }
 
 class Sub1 extends Super1 {
-  /*element: Sub1.:static=[Super1.(0),Super1.foo(0)]*/
+  /*member: Sub1.:static=[Super1.(0),Super1.foo(0)]*/
   Sub1() {
     super.foo();
   }
 }
 
-/*element: testSuperCall:static=[Sub1.(0)]*/
+/*member: testSuperCall:static=[Sub1.(0)]*/
 testSuperCall() => new Sub1();
 
-/*element: Super2.:static=[Object.(0)]*/
+/*member: Super2.:static=[Object.(0)]*/
 class Super2 {
-  /*element: Super2.foo:type=[inst:JSNull]*/
+  /*member: Super2.foo:type=[inst:JSNull]*/
   var foo;
 }
 
 class Sub2 extends Super2 {
-  /*element: Sub2.:static=[Super2.(0),Super2.foo]*/
+  /*member: Sub2.:static=[Super2.(0),Super2.foo]*/
   Sub2() {
     super.foo;
   }
 }
 
-/*element: testSuperGet:static=[Sub2.(0)]*/
+/*member: testSuperGet:static=[Sub2.(0)]*/
 testSuperGet() => new Sub2();
 
-/*element: Super3.:static=[Object.(0)]*/
+/*member: Super3.:static=[Object.(0)]*/
 class Super3 {
-  /*element: Super3.foo:type=[inst:JSNull]*/
+  /*member: Super3.foo:type=[inst:JSNull]*/
   var foo;
 }
 
 class Sub3 extends Super3 {
-  /*element: Sub3.:static=[Super3.(0),set:Super3.foo],type=[inst:JSBool]*/
+  /*member: Sub3.:static=[Super3.(0),set:Super3.foo],type=[inst:JSBool]*/
   Sub3() {
     super.foo = true;
   }
 }
 
-/*element: testSuperFieldSet:static=[Sub3.(0)]*/
+/*member: testSuperFieldSet:static=[Sub3.(0)]*/
 testSuperFieldSet() => new Sub3();
 
-/*element: Super4.:static=[Object.(0)]*/
+/*member: Super4.:static=[Object.(0)]*/
 class Super4 {
-  /*element: Super4.foo=:*/
+  /*member: Super4.foo=:*/
   set foo(_) {}
 }
 
 class Sub4 extends Super4 {
-  /*element: Sub4.:static=[Super4.(0),set:Super4.foo],type=[inst:JSBool]*/
+  /*member: Sub4.:static=[Super4.(0),set:Super4.foo],type=[inst:JSBool]*/
   Sub4() {
     super.foo = true;
   }
 }
 
-/*element: testSuperSetterSet:static=[Sub4.(0)]*/
+/*member: testSuperSetterSet:static=[Sub4.(0)]*/
 testSuperSetterSet() => new Sub4();
 
-/*element: Super5.:static=[Object.(0)]*/
+/*member: Super5.:static=[Object.(0)]*/
 class Super5 {
-  /*element: Super5.foo:*/
+  /*member: Super5.foo:*/
   foo() {}
 }
 
-/*element: Sub5.:static=[Super5.(0),Super5.foo]*/
+/*member: Sub5.:static=[Super5.(0),Super5.foo]*/
 class Sub5 extends Super5 {
   Sub5() {
     super.foo;
   }
 }
 
-/*element: testSuperClosurization:static=[Sub5.(0)]*/
+/*member: testSuperClosurization:static=[Sub5.(0)]*/
 testSuperClosurization() => new Sub5();
 
 class EmptyMixin {}
 
 class ForwardingConstructorSuperClass {
-  /*element: ForwardingConstructorSuperClass.:static=[Object.(0)]*/
+  /*member: ForwardingConstructorSuperClass.:static=[Object.(0)]*/
   ForwardingConstructorSuperClass(arg);
 }
 
 class ForwardingConstructorClass = ForwardingConstructorSuperClass
     with EmptyMixin;
 
-/*element: testForwardingConstructor:
+/*member: testForwardingConstructor:
  static=[ForwardingConstructorClass.(1)],
  type=[inst:JSNull]
 */
 testForwardingConstructor() => new ForwardingConstructorClass(null);
 
 class ForwardingConstructorTypedSuperClass {
-  /*kernel.element: ForwardingConstructorTypedSuperClass.:
-   static=[Object.(0)],
-   type=[check:int]
-  */
-  /*strong.element: ForwardingConstructorTypedSuperClass.:
+  /*member: ForwardingConstructorTypedSuperClass.:
    static=[Object.(0)],
    type=[inst:JSBool,param:int]
   */
@@ -151,27 +147,23 @@ class ForwardingConstructorTypedSuperClass {
 class ForwardingConstructorTypedClass = ForwardingConstructorTypedSuperClass
     with EmptyMixin;
 
-/*element: testForwardingConstructorTyped:
+/*member: testForwardingConstructorTyped:
  static=[ForwardingConstructorTypedClass.(1)],
  type=[inst:JSNull]
 */
 testForwardingConstructorTyped() => new ForwardingConstructorTypedClass(null);
 
 class ForwardingConstructorGenericSuperClass<T> {
-  /*kernel.element: ForwardingConstructorGenericSuperClass.:
-   static=[Object.(0)],
-   type=[check:ForwardingConstructorGenericSuperClass.T]
-  */
-  /*strong.element: ForwardingConstructorGenericSuperClass.:
+  /*member: ForwardingConstructorGenericSuperClass.:
    static=[
     Object.(0),
-    checkSubtype,
-    checkSubtypeOfRuntimeType,
-    getRuntimeTypeArgument,
-    getRuntimeTypeArgumentIntercepted,
-    getRuntimeTypeInfo,
-    getTypeArgumentByIndex,
-    setRuntimeTypeInfo],
+    checkSubtype(4),
+    checkSubtypeOfRuntimeType(2),
+    getRuntimeTypeArgument(3),
+    getRuntimeTypeArgumentIntercepted(4),
+    getRuntimeTypeInfo(1),
+    getTypeArgumentByIndex(2),
+    setRuntimeTypeInfo(2)],
    type=[
     inst:JSArray<dynamic>,
     inst:JSBool,
@@ -187,62 +179,44 @@ class ForwardingConstructorGenericSuperClass<T> {
 class ForwardingConstructorGenericClass<
     S> = ForwardingConstructorGenericSuperClass<S> with EmptyMixin;
 
-/*element: testForwardingConstructorGeneric:
+/*member: testForwardingConstructorGeneric:
  static=[
   ForwardingConstructorGenericClass.(1),
-  assertIsSubtype,
-  throwTypeError],
+  assertIsSubtype(5),
+  throwTypeError(1)],
  type=[inst:JSNull]
 */
 testForwardingConstructorGeneric() {
   new ForwardingConstructorGenericClass<int>(null);
 }
 
-enum Enum {
-  /*kernel.element: Enum.A:static=[Enum.(2)],
-   type=[
-    check:Enum,
-    inst:JSDouble,
-    inst:JSInt,
-    inst:JSNumber,
-    inst:JSPositiveInt,
-    inst:JSString,
-    inst:JSUInt31,
-    inst:JSUInt32]
-  */
-  /*strong.element: Enum.A:static=[Enum.(2)],
-   type=[
-    inst:JSBool,
-    inst:JSDouble,
-    inst:JSInt,
-    inst:JSNumber,
-    inst:JSPositiveInt,
-    inst:JSString,
-    inst:JSUInt31,
-    inst:JSUInt32,
-    param:Enum]
-  */
-  A
-}
+enum Enum { A }
 
-/*element: testEnum:static=[Enum.A]*/
+/*strong.member: testEnum:
+ static=[
+  Enum._name=StringConstant("Enum.A"),
+  Enum.index=IntConstant(0)],
+ type=[
+  const:Enum,
+  inst:JSDouble,
+  inst:JSInt,
+  inst:JSNumber,
+  inst:JSPositiveInt,
+  inst:JSString,
+  inst:JSUInt31,
+  inst:JSUInt32]
+*/
 testEnum() => Enum.A;
 
-/*kernel.element: staticGenericMethod:
- type=[
-  check:List<staticGenericMethod.T>,
-  check:staticGenericMethod.T,
-  inst:List<dynamic>]
- */
-/*strong.element: staticGenericMethod:
+/*member: staticGenericMethod:
  static=[
-  checkSubtype,
-  checkSubtypeOfRuntimeType,
-  getRuntimeTypeArgument,
-  getRuntimeTypeArgumentIntercepted,
-  getRuntimeTypeInfo,
-  getTypeArgumentByIndex,
-  setRuntimeTypeInfo],
+  checkSubtype(4),
+  checkSubtypeOfRuntimeType(2),
+  getRuntimeTypeArgument(3),
+  getRuntimeTypeArgumentIntercepted(4),
+  getRuntimeTypeInfo(1),
+  getTypeArgumentByIndex(2),
+  setRuntimeTypeInfo(2)],
  type=[
   inst:JSArray<dynamic>,
   inst:JSBool,
@@ -256,11 +230,7 @@ testEnum() => Enum.A;
 */
 List<T> staticGenericMethod<T>(T arg) => [arg];
 
-/*kernel.element: testStaticGenericMethod:
-  static=[staticGenericMethod(1)],
-  type=[inst:JSBool]
-*/
-/*strong.element: testStaticGenericMethod:
+/*member: testStaticGenericMethod:
   static=[staticGenericMethod<bool>(1)],
   type=[inst:JSBool]
 */
@@ -268,20 +238,12 @@ testStaticGenericMethod() {
   staticGenericMethod<bool>(true);
 }
 
-/*kernel.element: testInstanceGenericMethod:
- dynamic=[genericMethod(1)],
+/*member: testInstanceGenericMethod:
+ dynamic=[exact:GenericClass.genericMethod<bool>(1)],
  static=[
   GenericClass.generative(0),
-  assertIsSubtype,
-  throwTypeError],
- type=[inst:JSBool]
-*/
-/*strong.element: testInstanceGenericMethod:
- dynamic=[genericMethod<bool>(1)],
- static=[
-  GenericClass.generative(0),
-  assertIsSubtype,
-  throwTypeError],
+  assertIsSubtype(5),
+  throwTypeError(1)],
  type=[inst:JSBool]
 */
 testInstanceGenericMethod() {
@@ -292,60 +254,52 @@ abstract class AbstractClass {
   // ignore: UNUSED_FIELD
   final _field;
 
-  /*kernel.element: AbstractClass.:type=[check:AbstractClass,inst:JSNull]*/
-  /*strong.element: AbstractClass.:type=[inst:JSNull]*/
+  /*member: AbstractClass.:type=[inst:JSNull]*/
   factory AbstractClass() => null;
 }
 
-/*element: testAbstractClassWithField:static=[AbstractClass.(0)]*/
+/*member: testAbstractClassWithField:static=[AbstractClass.(0)]*/
 testAbstractClassWithField() => new AbstractClass();
 
-/*element: testMixinInstantiation:static=[Sub.(0)]*/
+/*member: testMixinInstantiation:static=[Sub.(0)]*/
 testMixinInstantiation() => new Sub();
 
-/*element: testNamedMixinInstantiation:static=[NamedMixin.(0)]*/
+/*member: testNamedMixinInstantiation:static=[NamedMixin.(0)]*/
 testNamedMixinInstantiation() => new NamedMixin();
 
-/*element: testGenericMixinInstantiation:
+/*member: testGenericMixinInstantiation:
  static=[
   GenericSub.(0),
-  assertIsSubtype,
-  throwTypeError]
+  assertIsSubtype(5),
+  throwTypeError(1)]
 */
 testGenericMixinInstantiation() => new GenericSub<int, String>();
 
-/*element: testGenericNamedMixinInstantiation:
+/*member: testGenericNamedMixinInstantiation:
  static=[
   GenericNamedMixin.(0),
-  assertIsSubtype,
-  throwTypeError]
+  assertIsSubtype(5),
+  throwTypeError(1)]
 */
 testGenericNamedMixinInstantiation() => new GenericNamedMixin<int, String>();
 
 class Class {
-  /*element: GenericClass.generative:static=[Object.(0)]*/
+  /*member: GenericClass.generative:static=[Object.(0)]*/
   const Class.generative();
 }
 
 class GenericClass<X, Y> {
   const GenericClass.generative();
 
-  /*kernel.element: GenericClass.genericMethod:
-   type=[
-    check:Map<GenericClass.X,genericMethod.T>,
-    check:genericMethod.T,
-    inst:JSNull,
-    inst:Map<dynamic,dynamic>]
-  */
-  /*strong.element: GenericClass.genericMethod:
+  /*member: GenericClass.genericMethod:
    static=[
-    checkSubtype,
-    checkSubtypeOfRuntimeType,
-    getRuntimeTypeArgument,
-    getRuntimeTypeArgumentIntercepted,
-    getRuntimeTypeInfo,
-    getTypeArgumentByIndex,
-    setRuntimeTypeInfo],
+    checkSubtype(4),
+    checkSubtypeOfRuntimeType(2),
+    getRuntimeTypeArgument(3),
+    getRuntimeTypeArgumentIntercepted(4),
+    getRuntimeTypeInfo(1),
+    getTypeArgumentByIndex(2),
+    setRuntimeTypeInfo(2)],
    type=[
     inst:JSArray<dynamic>,
     inst:JSBool,
@@ -361,26 +315,26 @@ class GenericClass<X, Y> {
   Map<X, T> genericMethod<T>(T arg) => {null: arg};
 }
 
-/*element: Super.:static=[Object.(0)]*/
+/*member: Super.:static=[Object.(0)]*/
 class Super {}
 
 class Mixin1 {}
 
 class Mixin2 {}
 
-/*element: Sub.:static=[_Sub&Super&Mixin1&Mixin2.(0)]*/
+/*member: Sub.:static=[_Sub&Super&Mixin1&Mixin2.(0)]*/
 class Sub extends Super with Mixin1, Mixin2 {}
 
 class NamedMixin = Super with Mixin1, Mixin2;
 
-/*element: GenericSuper.:static=[Object.(0)]*/
+/*member: GenericSuper.:static=[Object.(0)]*/
 class GenericSuper<X1, Y1> {}
 
 class GenericMixin1<X2, Y2> {}
 
 class GenericMixin2<X3, Y3> {}
 
-/*element: GenericSub.:
+/*member: GenericSub.:
   static=[_GenericSub&GenericSuper&GenericMixin1&GenericMixin2.(0)]
 */
 class GenericSub<X4, Y4> extends GenericSuper<X4, Y4>

@@ -15,11 +15,11 @@ class CombinedCodeStatistics {
  public:
   // clang-format off
   enum EntryCounter {
-#define DO(type) kTag##type,
+#define DO(type, attrs) kTag##type,
     FOR_EACH_INSTRUCTION(DO)
 #undef DO
 
-#define DO(type) kTag##type##SlowPath,
+#define DO(type, attrs) kTag##type##SlowPath,
     FOR_EACH_INSTRUCTION(DO)
 #undef DO
 
@@ -67,7 +67,7 @@ class CombinedCodeStatistics {
 
 class CodeStatistics {
  public:
-  explicit CodeStatistics(Assembler* assembler);
+  explicit CodeStatistics(compiler::Assembler* assembler);
 
   void Begin(Instruction* instruction);
   void End(Instruction* instruction);
@@ -82,7 +82,7 @@ class CodeStatistics {
  private:
   static const int kStackSize = 8;
 
-  Assembler* assembler_;
+  compiler::Assembler* assembler_;
 
   typedef struct {
     intptr_t bytes;

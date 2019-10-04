@@ -2,8 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-main() {
-  /*1:main*/ test(new Class());
+void main() {
+  /*1:main*/ test(Class());
 }
 
 test(c) {

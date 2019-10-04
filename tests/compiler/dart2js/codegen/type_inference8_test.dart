@@ -6,10 +6,17 @@
 
 import "package:async_helper/async_helper.dart";
 import "package:compiler/src/commandline_options.dart";
+import "package:compiler/src/common_elements.dart";
+import "package:compiler/src/compiler.dart";
 import "package:compiler/src/constants/values.dart";
+import "package:compiler/src/elements/entities.dart";
+import "package:compiler/src/inferrer/abstract_value_domain.dart";
+import "package:compiler/src/inferrer/types.dart";
 import 'package:compiler/src/inferrer/typemasks/masks.dart';
+import 'package:compiler/src/js_model/js_strategy.dart';
+import "package:compiler/src/world.dart";
 import "package:expect/expect.dart";
-import '../memory_compiler.dart';
+import '../helpers/memory_compiler.dart';
 
 import 'dart:async';
 
@@ -33,29 +40,32 @@ main() {
 """;
 
 Future runTest1() async {
-  var result = await runCompiler(
+  CompilationResult result = await runCompiler(
       memorySourceFiles: {'main.dart': TEST1},
       options: [Flags.disableInlining]);
-  var compiler = result.compiler;
-  var typesInferrer = compiler.globalInference.typesInferrerInternal;
-  var closedWorld = typesInferrer.closedWorld;
-  var elementEnvironment = closedWorld.elementEnvironment;
-  var commonMasks = closedWorld.abstractValueDomain;
-  var element = elementEnvironment.lookupLibraryMember(
+  Compiler compiler = result.compiler;
+  JsBackendStrategy backendStrategy = compiler.backendStrategy;
+  GlobalTypeInferenceResults results =
+      compiler.globalInference.resultsForTesting;
+  JClosedWorld closedWorld = results.closedWorld;
+  JElementEnvironment elementEnvironment = closedWorld.elementEnvironment;
+  AbstractValueDomain commonMasks = closedWorld.abstractValueDomain;
+  MemberEntity element = elementEnvironment.lookupLibraryMember(
       elementEnvironment.mainLibrary, 'foo');
-  var mask = typesInferrer.getReturnTypeOfMember(element);
-  var falseType =
+  AbstractValue mask = results.resultOfMember(element).returnType;
+  AbstractValue falseType =
       new ValueTypeMask(commonMasks.boolType, new FalseConstantValue());
   // 'foo' should always return false
   Expect.equals(falseType, mask);
   // the argument to 'bar' is always false
-  dynamic bar = elementEnvironment.lookupLibraryMember(
+  MemberEntity bar = elementEnvironment.lookupLibraryMember(
       elementEnvironment.mainLibrary, 'bar');
-  compiler.codegenWorldBuilder.forEachParameterAsLocal(bar, (barArg) {
-    var barArgMask = typesInferrer.getTypeOfParameter(barArg);
+  elementEnvironment.forEachParameterAsLocal(closedWorld.globalLocalsMap, bar,
+      (barArg) {
+    AbstractValue barArgMask = results.resultOfParameter(barArg);
     Expect.equals(falseType, barArgMask);
   });
-  var barCode = compiler.backend.getGeneratedCode(bar);
+  String barCode = backendStrategy.getGeneratedCodeForTesting(bar);
   Expect.isTrue(barCode.contains('"bbb"'));
   Expect.isFalse(barCode.contains('"aaa"'));
 }
@@ -81,35 +91,39 @@ main() {
 """;
 
 Future runTest2() async {
-  var result = await runCompiler(
+  CompilationResult result = await runCompiler(
       memorySourceFiles: {'main.dart': TEST2},
       options: [Flags.disableInlining]);
-  var compiler = result.compiler;
-  var typesInferrer = compiler.globalInference.typesInferrerInternal;
-  var commonMasks = typesInferrer.closedWorld.abstractValueDomain;
-  var closedWorld = typesInferrer.closedWorld;
-  var elementEnvironment = closedWorld.elementEnvironment;
-  var element = elementEnvironment.lookupLibraryMember(
+  Compiler compiler = result.compiler;
+  JsBackendStrategy backendStrategy = compiler.backendStrategy;
+  GlobalTypeInferenceResults results =
+      compiler.globalInference.resultsForTesting;
+  JClosedWorld closedWorld = results.closedWorld;
+  AbstractValueDomain commonMasks = closedWorld.abstractValueDomain;
+  JElementEnvironment elementEnvironment = closedWorld.elementEnvironment;
+  MemberEntity element = elementEnvironment.lookupLibraryMember(
       elementEnvironment.mainLibrary, 'foo');
-  var mask = typesInferrer.getReturnTypeOfMember(element);
+  AbstractValue mask = results.resultOfMember(element).returnType;
   // Can't infer value for foo's return type, it could be either true or false
   Expect.identical(commonMasks.boolType, mask);
-  dynamic bar = elementEnvironment.lookupLibraryMember(
+  MemberEntity bar = elementEnvironment.lookupLibraryMember(
       elementEnvironment.mainLibrary, 'bar');
-  compiler.codegenWorldBuilder.forEachParameterAsLocal(bar, (barArg) {
-    var barArgMask = typesInferrer.getTypeOfParameter(barArg);
+  elementEnvironment.forEachParameterAsLocal(closedWorld.globalLocalsMap, bar,
+      (barArg) {
+    AbstractValue barArgMask = results.resultOfParameter(barArg);
     // The argument to bar should have the same type as the return type of foo
     Expect.identical(commonMasks.boolType, barArgMask);
   });
-  var barCode = compiler.backend.getGeneratedCode(bar);
+  String barCode = backendStrategy.getGeneratedCodeForTesting(bar);
   Expect.isTrue(barCode.contains('"bbb"'));
   // Still must output the print for "aaa"
   Expect.isTrue(barCode.contains('"aaa"'));
 }
 
 main() {
-  asyncStart();
-  runTest1().then((_) {
-    return runTest2();
-  }).whenComplete(asyncEnd);
+  asyncTest(() async {
+    ;
+    await runTest1();
+    await runTest2();
+  });
 }

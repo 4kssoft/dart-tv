@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -6,9 +6,8 @@ import 'dart:async';
 
 import 'package:analysis_server/src/provisional/completion/dart/completion_dart.dart';
 import 'package:analysis_server/src/services/completion/dart/suggestion_builder.dart';
-import 'package:analysis_server/src/utilities/flutter.dart' as flutter;
+import 'package:analysis_server/src/utilities/flutter.dart';
 import 'package:analyzer/dart/ast/ast.dart';
-import 'package:analyzer/dart/ast/standard_resolution_map.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer_plugin/src/utilities/completion/completion_target.dart';
@@ -22,18 +21,16 @@ import '../../../protocol_server.dart'
  * or `null` if the target is in a static method or field
  * or not in a class.
  */
-ClassDeclaration _enclosingClass(CompletionTarget target) {
+ClassOrMixinDeclaration _enclosingClass(CompletionTarget target) {
   AstNode node = target.containingNode;
   while (node != null) {
-    if (node is ClassDeclaration) {
+    if (node is ClassOrMixinDeclaration) {
       return node;
-    }
-    if (node is MethodDeclaration) {
+    } else if (node is MethodDeclaration) {
       if (node.isStatic) {
         return null;
       }
-    }
-    if (node is FieldDeclaration) {
+    } else if (node is FieldDeclaration) {
       if (node.isStatic) {
         return null;
       }
@@ -60,32 +57,24 @@ class InheritedReferenceContributor extends DartCompletionContributor
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     if (!request.includeIdentifiers) {
-      return EMPTY_LIST;
+      return const <CompletionSuggestion>[];
     }
 
-    ClassDeclaration classDecl = _enclosingClass(request.target);
-    if (classDecl == null || classDecl.element == null) {
-      return EMPTY_LIST;
-    }
-    containingLibrary = request.libraryElement;
-    return _computeSuggestionsForClass2(
-        resolutionMap.elementDeclaredByClassDeclaration(classDecl), request);
-  }
-
-  List<CompletionSuggestion> computeSuggestionsForClass(
-      ClassElement classElement, DartCompletionRequest request,
-      {bool skipChildClass: true}) {
-    if (!request.includeIdentifiers) {
-      return EMPTY_LIST;
+    ClassOrMixinDeclaration classDecl = _enclosingClass(request.target);
+    if (classDecl == null || classDecl.declaredElement == null) {
+      return const <CompletionSuggestion>[];
     }
     containingLibrary = request.libraryElement;
-
-    return _computeSuggestionsForClass2(classElement, request,
-        skipChildClass: skipChildClass);
+    if (classDecl is ClassDeclaration) {
+      return _computeSuggestionsForClass2(classDecl.declaredElement, request);
+    } else if (classDecl is MixinDeclaration) {
+      return _computeSuggestionsForClass2(classDecl.declaredElement, request);
+    }
+    return const <CompletionSuggestion>[];
   }
 
   _addSuggestionsForType(InterfaceType type, DartCompletionRequest request,
-      {bool isFunctionalArgument: false}) {
+      {bool isFunctionalArgument = false}) {
     OpType opType = request.opType;
     if (!isFunctionalArgument) {
       for (PropertyAccessorElement elem in type.accessors) {
@@ -117,17 +106,11 @@ class InheritedReferenceContributor extends DartCompletionContributor
   }
 
   List<CompletionSuggestion> _computeSuggestionsForClass2(
-      ClassElement classElement, DartCompletionRequest request,
-      {bool skipChildClass: true}) {
+      ClassElement classElement, DartCompletionRequest request) {
     bool isFunctionalArgument = request.target.isFunctionalArgument();
     kind = isFunctionalArgument
         ? CompletionSuggestionKind.IDENTIFIER
         : CompletionSuggestionKind.INVOCATION;
-    if (!skipChildClass) {
-      _addSuggestionsForType(classElement.type, request,
-          isFunctionalArgument: isFunctionalArgument);
-    }
-
     for (InterfaceType type in classElement.allSupertypes) {
       _addSuggestionsForType(type, request,
           isFunctionalArgument: isFunctionalArgument);
@@ -142,7 +125,7 @@ class InheritedReferenceContributor extends DartCompletionContributor
     }
     if (element is MethodElement &&
         element.name == 'setState' &&
-        flutter.isExactState(element.enclosingElement)) {
+        Flutter.of(request.result).isExactState(element.enclosingElement)) {
       // Find the line indentation.
       String content = request.result.content;
       int lineStartOffset = request.offset;

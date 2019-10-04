@@ -1,8 +1,6 @@
-// Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2016, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
-library analyzer.src.command_line.arguments;
 
 import 'dart:collection';
 
@@ -17,9 +15,9 @@ import 'package:path/path.dart';
 const String analysisOptionsFileOption = 'options';
 const String bazelAnalysisOptionsPath =
     'package:dart.analysis_options/default.yaml';
-const String declarationCastsFlag = 'declaration-casts';
 const String defineVariableOption = 'D';
 const String enableInitializingFormalAccessFlag = 'initializing-formal-access';
+@deprecated
 const String enableSuperMixinFlag = 'supermixin';
 const String flutterAnalysisOptionsPath =
     'package:flutter/analysis_options_user.yaml';
@@ -27,13 +25,11 @@ const String ignoreUnrecognizedFlagsFlag = 'ignore-unrecognized-flags';
 const String implicitCastsFlag = 'implicit-casts';
 const String lintsFlag = 'lints';
 const String noImplicitDynamicFlag = 'no-implicit-dynamic';
-const String packageDefaultAnalysisOptions = 'package-default-analysis-options';
 const String packageRootOption = 'package-root';
 const String packagesOption = 'packages';
 const String sdkPathOption = 'dart-sdk';
 
 const String sdkSummaryPathOption = 'dart-sdk-summary';
-const String strongModeFlag = 'strong';
 
 /**
  * Update [options] with the value of each analysis option command line flag.
@@ -46,27 +42,14 @@ void applyAnalysisOptionFlags(AnalysisOptionsImpl options, ArgResults args,
     }
   }
 
-  if (args.wasParsed(enableSuperMixinFlag)) {
-    options.enableSuperMixins = args[enableSuperMixinFlag];
-    verbose('$enableSuperMixinFlag = ${options.enableSuperMixins}');
-  }
   if (args.wasParsed(implicitCastsFlag)) {
     options.implicitCasts = args[implicitCastsFlag];
     verbose('$implicitCastsFlag = ${options.implicitCasts}');
-  }
-  if (args.wasParsed(declarationCastsFlag)) {
-    options.declarationCasts = args[declarationCastsFlag];
-    verbose('$declarationCastsFlag = ${options.declarationCasts}');
-  } else if (args.wasParsed(implicitCastsFlag)) {
-    options.declarationCasts = args[implicitCastsFlag];
-    verbose('$declarationCastsFlag = ${options.declarationCasts}');
   }
   if (args.wasParsed(noImplicitDynamicFlag)) {
     options.implicitDynamic = !args[noImplicitDynamicFlag];
     verbose('$noImplicitDynamicFlag = ${options.implicitDynamic}');
   }
-  options.strongMode = args[strongModeFlag];
-  verbose('$strongModeFlag = ${options.strongMode}');
   try {
     if (args.wasParsed(lintsFlag)) {
       options.lint = args[lintsFlag];
@@ -82,7 +65,7 @@ void applyAnalysisOptionFlags(AnalysisOptionsImpl options, ArgResults args,
  * create a context builder.
  */
 ContextBuilderOptions createContextBuilderOptions(ArgResults args,
-    {bool strongMode, bool trackCacheDependencies}) {
+    {bool trackCacheDependencies}) {
   ContextBuilderOptions builderOptions = new ContextBuilderOptions();
   builderOptions.argResults = args;
   //
@@ -94,18 +77,10 @@ ContextBuilderOptions createContextBuilderOptions(ArgResults args,
   builderOptions.defaultPackageFilePath = args[packagesOption];
   builderOptions.defaultPackagesDirectoryPath = args[packageRootOption];
   //
-  // Flags.
-  //
-  builderOptions.packageDefaultAnalysisOptions =
-      args[packageDefaultAnalysisOptions];
-  //
   // Analysis options.
   //
   AnalysisOptionsImpl defaultOptions = new AnalysisOptionsImpl();
   applyAnalysisOptionFlags(defaultOptions, args);
-  if (strongMode != null) {
-    defaultOptions.strongMode = strongMode;
-  }
   if (trackCacheDependencies != null) {
     defaultOptions.trackCacheDependencies = trackCacheDependencies;
   }
@@ -153,7 +128,7 @@ DartSdkManager createDartSdkManager(
         return !context.isWithin(sdkPath, sourcePath);
       });
   return new DartSdkManager(
-      sdkPath ?? FolderBasedDartSdk.defaultSdkDirectory(resourceProvider),
+      sdkPath ?? FolderBasedDartSdk.defaultSdkDirectory(resourceProvider)?.path,
       canUseSummaries);
 }
 
@@ -174,14 +149,15 @@ void defineAnalysisArguments(ArgParser parser, {bool hide: true, ddc: false}) {
       help: 'The path to a package root directory (deprecated). '
           'This option cannot be used with --packages.',
       hide: ddc && hide);
-  parser.addFlag(strongModeFlag,
-      help: 'Enable strong static checks (https://goo.gl/DqcBsw).',
+  parser.addFlag('strong',
+      help: 'Enable strong mode (deprecated); this option is now ignored.',
       defaultsTo: true,
-      hide: ddc,
+      hide: true,
       negatable: true);
-  parser.addFlag(declarationCastsFlag,
+  parser.addFlag('declaration-casts',
       negatable: true,
-      help: 'Disable declaration casts in strong mode (https://goo.gl/cTLz40).',
+      help: 'Disable declaration casts in strong mode (https://goo.gl/cTLz40)\n'
+          'This option is now ignored and will be removed in a future release.',
       hide: ddc && hide);
   parser.addFlag(implicitCastsFlag,
       negatable: true,
@@ -200,17 +176,6 @@ void defineAnalysisArguments(ArgParser parser, {bool hide: true, ddc: false}) {
       help: 'Define environment variables. For example, "-Dfoo=bar" defines an '
           'environment variable named "foo" whose value is "bar".',
       hide: hide);
-  parser.addFlag(packageDefaultAnalysisOptions,
-      help: 'If an analysis options file is not explicitly specified '
-          'via the "--$analysisOptionsFileOption" option\n'
-          'and an analysis options file cannot be found '
-          'in the project directory or any parent directory,\n'
-          'then look for analysis options in the following locations:\n'
-          '- $flutterAnalysisOptionsPath\n'
-          '- $bazelAnalysisOptionsPath',
-      defaultsTo: true,
-      negatable: true,
-      hide: hide);
   parser.addOption(packagesOption,
       help: 'The path to the package resolution configuration file, which '
           'supplies a mapping of package names\nto paths. This option cannot be '
@@ -225,11 +190,6 @@ void defineAnalysisArguments(ArgParser parser, {bool hide: true, ddc: false}) {
       defaultsTo: false,
       negatable: false,
       hide: hide || ddc);
-  parser.addFlag(enableSuperMixinFlag,
-      help: 'Relax restrictions on mixins (DEP 34).',
-      defaultsTo: false,
-      negatable: false,
-      hide: hide);
   if (!ddc) {
     parser.addFlag(lintsFlag,
         help: 'Show lint results.', defaultsTo: false, negatable: true);

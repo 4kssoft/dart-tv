@@ -4,18 +4,21 @@
 
 part of masks;
 
-/**
- * A [MapTypeMask] is a [TypeMask] for a specific allocation
- * site of a map (currently only internal Map class) that will get specialized
- * once the [TypeGraphInferrer] phase finds a key and/or value type for it.
- */
-class MapTypeMask<T> extends AllocationTypeMask<T> {
+/// A [MapTypeMask] is a [TypeMask] for a specific allocation
+/// site of a map (currently only internal Map class) that will get specialized
+/// once the [TypeGraphInferrer] phase finds a key and/or value type for it.
+class MapTypeMask extends AllocationTypeMask {
+  /// Tag used for identifying serialized [MapTypeMask] objects in a
+  /// debugging data stream.
+  static const String tag = 'map-type-mask';
+
+  @override
   final TypeMask forwardTo;
 
-  // The [Node] where this type mask was created.
-  final T allocationNode;
+  @override
+  final ir.Node allocationNode;
 
-  // The [MemberEntity] where this type mask was created.
+  @override
   final MemberEntity allocationElement;
 
   // The value type of this map.
@@ -27,6 +30,34 @@ class MapTypeMask<T> extends AllocationTypeMask<T> {
   MapTypeMask(this.forwardTo, this.allocationNode, this.allocationElement,
       this.keyType, this.valueType);
 
+  /// Deserializes a [MapTypeMask] object from [source].
+  factory MapTypeMask.readFromDataSource(
+      DataSource source, JClosedWorld closedWorld) {
+    source.begin(tag);
+    TypeMask forwardTo = new TypeMask.readFromDataSource(source, closedWorld);
+    ir.TreeNode allocationNode = source.readTreeNodeOrNull();
+    MemberEntity allocationElement = source.readMemberOrNull();
+    TypeMask keyType = new TypeMask.readFromDataSource(source, closedWorld);
+    TypeMask valueType = new TypeMask.readFromDataSource(source, closedWorld);
+    source.end(tag);
+    return new MapTypeMask(
+        forwardTo, allocationNode, allocationElement, keyType, valueType);
+  }
+
+  /// Serializes this [MapTypeMask] to [sink].
+  @override
+  void writeToDataSink(DataSink sink) {
+    sink.writeEnum(TypeMaskKind.map);
+    sink.begin(tag);
+    forwardTo.writeToDataSink(sink);
+    sink.writeTreeNodeOrNull(allocationNode);
+    sink.writeMemberOrNull(allocationElement);
+    keyType.writeToDataSink(sink);
+    valueType.writeToDataSink(sink);
+    sink.end(tag);
+  }
+
+  @override
   TypeMask nullable() {
     return isNullable
         ? this
@@ -34,6 +65,7 @@ class MapTypeMask<T> extends AllocationTypeMask<T> {
             allocationElement, keyType, valueType);
   }
 
+  @override
   TypeMask nonNullable() {
     return isNullable
         ? new MapTypeMask(forwardTo.nonNullable(), allocationNode,
@@ -41,10 +73,14 @@ class MapTypeMask<T> extends AllocationTypeMask<T> {
         : this;
   }
 
+  @override
   bool get isContainer => false;
+  @override
   bool get isMap => true;
+  @override
   bool get isExact => true;
 
+  @override
   bool equalsDisregardNull(other) {
     if (other is! MapTypeMask) return false;
     return super.equalsDisregardNull(other) &&
@@ -53,12 +89,14 @@ class MapTypeMask<T> extends AllocationTypeMask<T> {
         valueType == other.valueType;
   }
 
+  @override
   TypeMask intersection(TypeMask other, JClosedWorld closedWorld) {
     TypeMask forwardIntersection = forwardTo.intersection(other, closedWorld);
     if (forwardIntersection.isEmptyOrNull) return forwardIntersection;
     return forwardIntersection.isNullable ? nullable() : nonNullable();
   }
 
+  @override
   TypeMask union(dynamic other, JClosedWorld closedWorld) {
     if (this == other) {
       return this;
@@ -100,13 +138,16 @@ class MapTypeMask<T> extends AllocationTypeMask<T> {
     }
   }
 
+  @override
   bool operator ==(other) => super == other;
 
+  @override
   int get hashCode {
     return computeHashCode(
         allocationNode, isNullable, keyType, valueType, forwardTo);
   }
 
+  @override
   String toString() {
     return 'Map($forwardTo, key: $keyType, value: $valueType)';
   }

@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -121,6 +121,7 @@ Stream<Operation> openInput(PerfArgs args) {
   }
   logger.log(Level.INFO, 'tmpSrcDir: ${args.tmpSrcDirPath}');
   return inputRaw
+      .cast<List<int>>()
       .transform(systemEncoding.decoder)
       .transform(new LineSplitter())
       .transform(new InputConverter(args.tmpSrcDirPath, args.srcPathMap));

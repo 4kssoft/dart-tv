@@ -1,7 +1,8 @@
 // Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-// VMOptions=--error_on_bad_type --error_on_bad_override
+
+// VMOptions=--profiler_native_memory
 
 import 'package:observatory/sample_profile.dart';
 import 'package:observatory/models.dart' as M;
@@ -14,12 +15,12 @@ void verifyHelper(var root, bool exclusive) {
     return;
   }
 
-/*  if (!(root is FunctionCallTreeNode)) {
+  if (!(root is FunctionCallTreeNode)) {
     print('${root.profileCode.code.name}');
   } else {
     print('${root.profileFunction.function.name}');
   }
-*/
+
   int inclusiveAllocations = 0;
   int exclusiveAllocations = 0;
 
@@ -56,7 +57,7 @@ var tests = <VMTest>[
   // Verify inclusive tries.
   (VM vm) async {
     var response =
-        await vm.invokeRpc('_getNativeAllocationSamples', {'tags': 'None'});
+        await vm.invokeRpc('_getNativeAllocationSamples', {'_code': true});
     SampleProfile cpuProfile = new SampleProfile();
     await cpuProfile.load(vm, response);
     var codeTree = cpuProfile.loadCodeTree(M.ProfileTreeDirection.inclusive);
@@ -68,7 +69,7 @@ var tests = <VMTest>[
   // Verify exclusive tries.
   (VM vm) async {
     var response =
-        await vm.invokeRpc('_getNativeAllocationSamples', {'tags': 'None'});
+        await vm.invokeRpc('_getNativeAllocationSamples', {'_code': true});
     SampleProfile cpuProfile = new SampleProfile();
     await cpuProfile.load(vm, response);
     var codeTreeExclusive =

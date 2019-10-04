@@ -5,6 +5,8 @@
 #ifndef RUNTIME_VM_STACK_FRAME_KBC_H_
 #define RUNTIME_VM_STACK_FRAME_KBC_H_
 
+#include "platform/globals.h"
+
 namespace dart {
 
 /* Kernel Bytecode Frame Layout
@@ -22,8 +24,8 @@ Callee frame   | ...                |
 Current frame  | ...               T| <- SP of current frame
                | ...               T|
                | first local       T| <- FP of current frame
-               | caller's FP       *|
-               | caller's PC       *|
+               | caller's FP        |
+               | caller's PC        |
                | code object       T|    (current frame's code object)
                | function object   T|    (current frame's function object)
                +--------------------+
@@ -31,8 +33,6 @@ Caller frame   | last parameter     | <- SP of caller frame
                |  ...               |
 
                T against a slot indicates it needs to be traversed during GC.
-               * against a slot indicates that it can be traversed during GC
-                 because it will look like a smi to the visitor.
 */
 
 static const int kKBCDartFrameFixedSize = 4;  // Function, Code, PC, FP
@@ -46,16 +46,13 @@ static const int kKBCSavedCallerPcSlotFromFp = -2;
 static const int kKBCCallerSpSlotFromFp = -kKBCDartFrameFixedSize - 1;
 static const int kKBCPcMarkerSlotFromFp = -3;
 static const int kKBCFunctionSlotFromFp = -4;
+static const int kKBCParamEndSlotFromFp = 4;
 
-// Note: These constants don't match actual KBC behavior. This is done because
-// setting kKBCFirstLocalSlotFromFp to 0 breaks assumptions spread across the
-// code.
-// Instead for the purposes of local variable allocation we pretend that KBC
-// behaves as other architectures (stack growing downwards) and later fix
-// these indices during code generation in the backend.
-static const int kKBCParamEndSlotFromFp = 4;  // One slot past last parameter.
-static const int kKBCFirstLocalSlotFromFp = -1;
+// Entry and exit frame layout.
+static const int kKBCEntrySavedSlots = 3;
 static const int kKBCExitLinkSlotFromEntryFp = 0;
+static const int kKBCSavedArgDescSlotFromEntryFp = 1;
+static const int kKBCSavedPpSlotFromEntryFp = 2;
 
 // Value for stack limit that is used to cause an interrupt.
 // Note that on KBC stack is growing upwards so interrupt limit is 0 unlike

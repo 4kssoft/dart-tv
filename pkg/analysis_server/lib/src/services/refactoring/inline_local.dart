@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -10,11 +10,13 @@ import 'package:analysis_server/src/services/correction/util.dart';
 import 'package:analysis_server/src/services/refactoring/refactoring.dart';
 import 'package:analysis_server/src/services/refactoring/refactoring_internal.dart';
 import 'package:analysis_server/src/services/search/search_engine.dart';
+import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/ast/ast.dart';
+import 'package:analyzer/dart/ast/precedence.dart';
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/element/element.dart';
+import 'package:analyzer/src/dart/analysis/session_helper.dart';
 import 'package:analyzer/src/dart/ast/utilities.dart';
-import 'package:analyzer/src/dart/element/ast_provider.dart';
 import 'package:analyzer/src/generated/java_core.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer_plugin/utilities/range_factory.dart';
@@ -25,10 +27,8 @@ import 'package:analyzer_plugin/utilities/range_factory.dart';
 class InlineLocalRefactoringImpl extends RefactoringImpl
     implements InlineLocalRefactoring {
   final SearchEngine searchEngine;
-  final AstProvider astProvider;
-  final CompilationUnit unit;
+  final ResolvedUnitResult resolveResult;
   final int offset;
-  CompilationUnitElement unitElement;
   CorrectionUtils utils;
 
   Element _variableElement;
@@ -36,9 +36,8 @@ class InlineLocalRefactoringImpl extends RefactoringImpl
   List<SearchMatch> _references;
 
   InlineLocalRefactoringImpl(
-      this.searchEngine, this.astProvider, this.unit, this.offset) {
-    unitElement = unit.element;
-    utils = new CorrectionUtils(unit);
+      this.searchEngine, this.resolveResult, this.offset) {
+    utils = new CorrectionUtils(resolveResult);
   }
 
   @override
@@ -73,13 +72,16 @@ class InlineLocalRefactoringImpl extends RefactoringImpl
     RefactoringStatus result = new RefactoringStatus();
     // prepare variable
     {
-      AstNode offsetNode = new NodeLocator(offset).searchWithin(unit);
+      AstNode offsetNode =
+          new NodeLocator(offset).searchWithin(resolveResult.unit);
       if (offsetNode is SimpleIdentifier) {
         Element element = offsetNode.staticElement;
         if (element is LocalVariableElement) {
           _variableElement = element;
-          AstNode name = await astProvider.getResolvedNameForElement(element);
-          _variableNode = name.parent as VariableDeclaration;
+          var declarationResult =
+              await AnalysisSessionHelper(resolveResult.session)
+                  .getElementDeclaration(element);
+          _variableNode = declarationResult.node;
         }
       }
     }
@@ -120,11 +122,11 @@ class InlineLocalRefactoringImpl extends RefactoringImpl
     SourceChange change = new SourceChange(refactoringName);
     // remove declaration
     {
-      Statement declarationStatement = _variableNode
-          .getAncestor((node) => node is VariableDeclarationStatement);
+      Statement declarationStatement =
+          _variableNode.thisOrAncestorOfType<VariableDeclarationStatement>();
       SourceRange range = utils.getLinesRangeStatements([declarationStatement]);
-      doSourceChange_addElementEdit(
-          change, unitElement, newSourceEdit_range(range, ''));
+      doSourceChange_addElementEdit(change, resolveResult.unit.declaredElement,
+          newSourceEdit_range(range, ''));
     }
     // prepare initializer
     Expression initializer = _variableNode.initializer;
@@ -160,15 +162,12 @@ class InlineLocalRefactoringImpl extends RefactoringImpl
         codeForReference = initializerCode;
       }
       // do replace
-      doSourceChange_addElementEdit(change, unitElement,
+      doSourceChange_addElementEdit(change, resolveResult.unit.declaredElement,
           newSourceEdit_range(editRange, codeForReference));
     }
     // done
     return new Future.value(change);
   }
-
-  @override
-  bool requiresPreview() => false;
 
   bool _isVariableDeclaredInStatement() {
     if (_variableNode == null) {
@@ -194,7 +193,7 @@ class InlineLocalRefactoringImpl extends RefactoringImpl
 
   static bool _shouldUseParenthesis(Expression init, AstNode node) {
     // check precedence
-    int initPrecedence = getExpressionPrecedence(init);
+    Precedence initPrecedence = getExpressionPrecedence(init);
     if (initPrecedence < getExpressionParentPrecedence(node)) {
       return true;
     }

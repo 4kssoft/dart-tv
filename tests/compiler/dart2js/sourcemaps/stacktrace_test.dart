@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:async_helper/async_helper.dart';
 import 'package:compiler/compiler_new.dart';
+import 'package:compiler/src/commandline_options.dart';
 import 'package:compiler/src/dart2js.dart' as entry;
 
 import 'package:sourcemap_testing/src/stacktrace_helper.dart';
@@ -25,6 +26,7 @@ void main(List<String> args) {
     bool continuing = false;
     await for (FileSystemEntity entity in dataDir.list()) {
       String name = entity.uri.pathSegments.last;
+      if (!name.endsWith('.dart')) continue;
       if (argResults.rest.isNotEmpty &&
           !argResults.rest.contains(name) &&
           !continuing) {
@@ -37,7 +39,8 @@ void main(List<String> args) {
       await testAnnotatedCode(annotatedCode,
           verbose: argResults['verbose'],
           printJs: argResults['print-js'],
-          writeJs: argResults['write-js']);
+          writeJs: argResults['write-js'],
+          inlineData: name.endsWith('_inlining.dart'));
       if (argResults['continued']) {
         continuing = true;
       }
@@ -48,18 +51,25 @@ void main(List<String> args) {
 const String kernelMarker = 'kernel.';
 
 Future testAnnotatedCode(String code,
-    {bool printJs: false, bool writeJs: false, bool verbose: false}) async {
+    {bool printJs: false,
+    bool writeJs: false,
+    bool verbose: false,
+    bool inlineData: false}) async {
   Test test = processTestCode(code, [kernelMarker]);
   print(test.code);
   print('---from kernel------------------------------------------------------');
   await runTest(test, kernelMarker,
-      printJs: printJs, writeJs: writeJs, verbose: verbose);
+      printJs: printJs,
+      writeJs: writeJs,
+      verbose: verbose,
+      inlineData: inlineData);
 }
 
 Future runTest(Test test, String config,
     {bool printJs: false,
     bool writeJs: false,
     bool verbose: false,
+    bool inlineData: false,
     List<String> options: const <String>[]}) async {
   List<LineException> testAfterExceptions = <LineException>[];
   if (config == kernelMarker) {
@@ -72,8 +82,10 @@ Future runTest(Test test, String config,
   return testStackTrace(test, config, (String input, String output) async {
     List<String> arguments = [
       '-o$output',
-      '--library-root=sdk',
+      '--libraries-spec=sdk/lib/libraries.json',
       '--packages=${Platform.packageConfig}',
+      Flags.testMode,
+      '--enable-experiment=extension-methods',
       input,
     ]..addAll(options);
     print("Compiling dart2js ${arguments.join(' ')}");
@@ -87,13 +99,15 @@ Future runTest(Test test, String config,
       verbose: verbose,
       printJs: printJs,
       writeJs: writeJs,
-      stackTraceLimit: 100);
+      stackTraceLimit: 100,
+      expandDart2jsInliningData: inlineData);
 }
 
 /// Lines allowed before the intended stack trace. Typically from helper
 /// methods.
 const List<LineException> beforeExceptions = const [
   const LineException('wrapException', 'js_helper.dart'),
+  const LineException('throwExpression', 'js_helper.dart'),
 ];
 
 /// Lines allowed after the intended stack trace. Typically from the event

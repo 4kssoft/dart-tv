@@ -1,12 +1,15 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:collection';
 
-import 'package:analyzer/analyzer.dart';
+import 'package:analyzer/error/error.dart';
+import 'package:analyzer/error/listener.dart';
 import 'package:analyzer/source/error_processor.dart';
 import 'package:analyzer/src/analysis_options/analysis_options_provider.dart';
+import 'package:analyzer/src/analysis_options/error/option_codes.dart';
+import 'package:analyzer/src/dart/analysis/experiments.dart';
 import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/generated/java_engine.dart';
 import 'package:analyzer/src/generated/source.dart';
@@ -16,21 +19,92 @@ import 'package:analyzer/src/lint/linter.dart';
 import 'package:analyzer/src/lint/options_rule_validator.dart';
 import 'package:analyzer/src/lint/registry.dart';
 import 'package:analyzer/src/plugin/options.dart';
-import 'package:analyzer/src/task/api/general.dart';
-import 'package:analyzer/src/task/api/model.dart';
-import 'package:analyzer/src/task/general.dart';
 import 'package:analyzer/src/util/yaml.dart';
 import 'package:source_span/source_span.dart';
 import 'package:yaml/yaml.dart';
 
-/// The errors produced while parsing an analysis options file.
-///
-/// The list will be empty if there were no errors, but will not be `null`.
-final ListResultDescriptor<AnalysisError> ANALYSIS_OPTIONS_ERRORS =
-    new ListResultDescriptor<AnalysisError>(
-        'ANALYSIS_OPTIONS_ERRORS', AnalysisError.NO_ERRORS);
-
 final _OptionsProcessor _processor = new _OptionsProcessor();
+
+List<AnalysisError> analyzeAnalysisOptions(
+    Source source, String content, SourceFactory sourceFactory) {
+  List<AnalysisError> errors = <AnalysisError>[];
+  Source initialSource = source;
+  SourceSpan initialIncludeSpan;
+  AnalysisOptionsProvider optionsProvider =
+      new AnalysisOptionsProvider(sourceFactory);
+
+  // Validate the specified options and any included option files
+  void validate(Source source, YamlMap options) {
+    List<AnalysisError> validationErrors =
+        new OptionsFileValidator(source).validate(options);
+    if (initialIncludeSpan != null && validationErrors.isNotEmpty) {
+      for (AnalysisError error in validationErrors) {
+        var args = [
+          source.fullName,
+          error.offset.toString(),
+          (error.offset + error.length - 1).toString(),
+          error.message,
+        ];
+        errors.add(new AnalysisError(
+            initialSource,
+            initialIncludeSpan.start.column + 1,
+            initialIncludeSpan.length,
+            AnalysisOptionsWarningCode.INCLUDED_FILE_WARNING,
+            args));
+      }
+    } else {
+      errors.addAll(validationErrors);
+    }
+
+    YamlNode node = getValue(options, AnalyzerOptions.include);
+    if (node == null) {
+      return;
+    }
+    SourceSpan span = node.span;
+    initialIncludeSpan ??= span;
+    String includeUri = span.text;
+    Source includedSource = sourceFactory.resolveUri(source, includeUri);
+    if (includedSource == null || !includedSource.exists()) {
+      errors.add(new AnalysisError(
+          initialSource,
+          initialIncludeSpan.start.column + 1,
+          initialIncludeSpan.length,
+          AnalysisOptionsWarningCode.INCLUDE_FILE_NOT_FOUND,
+          [includeUri, source.fullName]));
+      return;
+    }
+    try {
+      YamlMap options =
+          optionsProvider.getOptionsFromString(includedSource.contents.data);
+      validate(includedSource, options);
+    } on OptionsFormatException catch (e) {
+      var args = [
+        includedSource.fullName,
+        e.span.start.offset.toString(),
+        e.span.end.offset.toString(),
+        e.message,
+      ];
+      // Report errors for included option files
+      // on the include directive located in the initial options file.
+      errors.add(new AnalysisError(
+          initialSource,
+          initialIncludeSpan.start.column + 1,
+          initialIncludeSpan.length,
+          AnalysisOptionsErrorCode.INCLUDED_FILE_PARSE_ERROR,
+          args));
+    }
+  }
+
+  try {
+    YamlMap options = optionsProvider.getOptionsFromString(content);
+    validate(source, options);
+  } on OptionsFormatException catch (e) {
+    SourceSpan span = e.span;
+    errors.add(new AnalysisError(source, span.start.column + 1, span.length,
+        AnalysisOptionsErrorCode.PARSE_ERROR, [e.message]));
+  }
+  return errors;
+}
 
 void applyToAnalysisOptions(AnalysisOptionsImpl options, YamlMap optionMap) {
   _processor.applyToAnalysisOptions(options, optionMap);
@@ -39,24 +113,29 @@ void applyToAnalysisOptions(AnalysisOptionsImpl options, YamlMap optionMap) {
 /// `analyzer` analysis options constants.
 class AnalyzerOptions {
   static const String analyzer = 'analyzer';
-  static const String enableAsync = 'enableAsync';
-  static const String enableGenericMethods = 'enableGenericMethods';
-  static const String enableInitializingFormalAccess =
-      'enableInitializingFormalAccess';
   static const String enableSuperMixins = 'enableSuperMixins';
   static const String enablePreviewDart2 = 'enablePreviewDart2';
 
+  static const String enableExperiment = 'enable-experiment';
   static const String errors = 'errors';
   static const String exclude = 'exclude';
   static const String include = 'include';
   static const String language = 'language';
+  static const String optionalChecks = 'optional-checks';
   static const String plugins = 'plugins';
   static const String strong_mode = 'strong-mode';
 
-  // Strong mode options, see AnalysisOptionsImpl for documentation.
+  // Optional checks options.
+  static const String chromeOsManifestChecks = 'chrome-os-manifest-checks';
+
+  // Strong mode options (see AnalysisOptionsImpl for documentation).
   static const String declarationCasts = 'declaration-casts';
   static const String implicitCasts = 'implicit-casts';
   static const String implicitDynamic = 'implicit-dynamic';
+
+  // Language options (see AnalysisOptionsImpl for documentation).
+  static const String strictInference = 'strict-inference';
+  static const String strictRawTypes = 'strict-raw-types';
 
   /// Ways to say `ignore`.
   static const List<String> ignoreSynonyms = const ['ignore', 'false'];
@@ -73,19 +152,31 @@ class AnalyzerOptions {
 
   /// Supported top-level `analyzer` options.
   static const List<String> topLevel = const [
+    enableExperiment,
     errors,
     exclude,
     language,
+    optionalChecks,
     plugins,
-    strong_mode
+    strong_mode,
   ];
 
-  /// Supported `analyzer` language configuration options.
+  /// Supported `analyzer` strong-mode options.
+  static const List<String> strongModeOptions = const [
+    declarationCasts, // deprecated
+    implicitCasts,
+    implicitDynamic,
+  ];
+
+  /// Supported `analyzer` language options.
   static const List<String> languageOptions = const [
-    enableAsync,
-    enableGenericMethods,
-    enableSuperMixins,
-    enablePreviewDart2
+    strictInference,
+    strictRawTypes
+  ];
+
+  // Supported 'analyzer' optional checks options.
+  static const List<String> optionalChecksOptions = const [
+    chromeOsManifestChecks,
   ];
 }
 
@@ -96,7 +187,9 @@ class AnalyzerOptionsValidator extends CompositeValidator {
           new TopLevelAnalyzerOptionsValidator(),
           new StrongModeOptionValueValidator(),
           new ErrorFilterOptionValidator(),
-          new LanguageOptionValidator()
+          new EnabledExperimentsValidator(),
+          new LanguageOptionValidator(),
+          new OptionalChecksValueValidator()
         ]);
 }
 
@@ -111,6 +204,45 @@ class CompositeValidator extends OptionsValidator {
       validators.forEach((v) => v.validate(reporter, options));
 }
 
+/// Validates `analyzer` language configuration options.
+class EnabledExperimentsValidator extends OptionsValidator {
+  ErrorBuilder builder = new ErrorBuilder(AnalyzerOptions.languageOptions);
+  ErrorBuilder trueOrFalseBuilder = new TrueOrFalseValueErrorBuilder();
+
+  @override
+  void validate(ErrorReporter reporter, YamlMap options) {
+    var analyzer = getValue(options, AnalyzerOptions.analyzer);
+    if (analyzer is YamlMap) {
+      var experimentNames =
+          getValue(analyzer, AnalyzerOptions.enableExperiment);
+      if (experimentNames is YamlList) {
+        var flags =
+            experimentNames.nodes.map((node) => node.toString()).toList();
+        for (var validationResult in validateFlags(flags)) {
+          var flagIndex = validationResult.stringIndex;
+          var span = experimentNames.nodes[flagIndex].span;
+          if (validationResult is UnrecognizedFlag) {
+            reporter.reportErrorForSpan(
+                AnalysisOptionsWarningCode.UNSUPPORTED_OPTION_WITHOUT_VALUES,
+                span,
+                [AnalyzerOptions.enableExperiment, flags[flagIndex]]);
+          } else {
+            reporter.reportErrorForSpan(
+                AnalysisOptionsWarningCode.INVALID_OPTION,
+                span,
+                [AnalyzerOptions.enableExperiment, validationResult.message]);
+          }
+        }
+      } else if (experimentNames != null) {
+        reporter.reportErrorForSpan(
+            AnalysisOptionsWarningCode.INVALID_SECTION_FORMAT,
+            experimentNames.span,
+            [AnalyzerOptions.enableExperiment]);
+      }
+    }
+  }
+}
+
 /// Builds error reports with value proposals.
 class ErrorBuilder {
   String proposal;
@@ -118,15 +250,20 @@ class ErrorBuilder {
 
   /// Create a builder for the given [supportedOptions].
   ErrorBuilder(List<String> supportedOptions) {
-    assert(supportedOptions != null && !supportedOptions.isEmpty);
-    if (supportedOptions.length > 1) {
-      proposal = StringUtilities.printListOfQuotedNames(supportedOptions);
-      code = pluralProposalCode;
-    } else {
+    assert(supportedOptions != null);
+    if (supportedOptions.isEmpty) {
+      code = noProposalCode;
+    } else if (supportedOptions.length == 1) {
       proposal = "'${supportedOptions.join()}'";
       code = singularProposalCode;
+    } else {
+      proposal = StringUtilities.printListOfQuotedNames(supportedOptions);
+      code = pluralProposalCode;
     }
   }
+
+  AnalysisOptionsWarningCode get noProposalCode =>
+      AnalysisOptionsWarningCode.UNSUPPORTED_OPTION_WITHOUT_VALUES;
 
   AnalysisOptionsWarningCode get pluralProposalCode =>
       AnalysisOptionsWarningCode.UNSUPPORTED_OPTION_WITH_LEGAL_VALUES;
@@ -136,8 +273,12 @@ class ErrorBuilder {
 
   /// Report an unsupported [node] value, defined in the given [scopeName].
   void reportError(ErrorReporter reporter, String scopeName, YamlNode node) {
-    reporter
-        .reportErrorForSpan(code, node.span, [scopeName, node.value, proposal]);
+    if (proposal != null) {
+      reporter.reportErrorForSpan(
+          code, node.span, [scopeName, node.value, proposal]);
+    } else {
+      reporter.reportErrorForSpan(code, node.span, [scopeName, node.value]);
+    }
   }
 }
 
@@ -214,153 +355,6 @@ class ErrorFilterOptionValidator extends OptionsValidator {
   }
 }
 
-/// A task that generates errors for an analysis options file.
-class GenerateOptionsErrorsTask extends SourceBasedAnalysisTask {
-  /// The name of the input whose value is the content of the file.
-  static const String CONTENT_INPUT_NAME = 'CONTENT_INPUT_NAME';
-
-  /// The task descriptor describing this kind of task.
-  static final TaskDescriptor DESCRIPTOR = new TaskDescriptor(
-      'GenerateOptionsErrorsTask',
-      createTask,
-      buildInputs,
-      <ResultDescriptor>[ANALYSIS_OPTIONS_ERRORS, LINE_INFO],
-      suitabilityFor: suitabilityFor);
-
-  AnalysisOptionsProvider optionsProvider;
-
-  GenerateOptionsErrorsTask(AnalysisContext context, AnalysisTarget target)
-      : super(context, target) {
-    optionsProvider = new AnalysisOptionsProvider(context?.sourceFactory);
-  }
-
-  @override
-  TaskDescriptor get descriptor => DESCRIPTOR;
-
-  Source get source => target.source;
-
-  @override
-  void internalPerform() {
-    String content = getRequiredInput(CONTENT_INPUT_NAME);
-    //
-    // Record outputs.
-    //
-    outputs[ANALYSIS_OPTIONS_ERRORS] =
-        analyzeAnalysisOptions(source, content, context?.sourceFactory);
-    outputs[LINE_INFO] = computeLineInfo(content);
-  }
-
-  static List<AnalysisError> analyzeAnalysisOptions(
-      Source source, String content, SourceFactory sourceFactory) {
-    List<AnalysisError> errors = <AnalysisError>[];
-    Source initialSource = source;
-    SourceSpan initialIncludeSpan;
-    AnalysisOptionsProvider optionsProvider =
-        new AnalysisOptionsProvider(sourceFactory);
-
-    // Validate the specified options and any included option files
-    void validate(Source source, YamlMap options) {
-      List<AnalysisError> validationErrors =
-          new OptionsFileValidator(source).validate(options);
-      if (initialIncludeSpan != null && validationErrors.isNotEmpty) {
-        for (AnalysisError error in validationErrors) {
-          var args = [
-            source.fullName,
-            error.offset.toString(),
-            (error.offset + error.length - 1).toString(),
-            error.message,
-          ];
-          errors.add(new AnalysisError(
-              initialSource,
-              initialIncludeSpan.start.column + 1,
-              initialIncludeSpan.length,
-              AnalysisOptionsWarningCode.INCLUDED_FILE_WARNING,
-              args));
-        }
-      } else {
-        errors.addAll(validationErrors);
-      }
-
-      YamlNode node = getValue(options, AnalyzerOptions.include);
-      if (node == null) {
-        return;
-      }
-      SourceSpan span = node.span;
-      initialIncludeSpan ??= span;
-      String includeUri = span.text;
-      Source includedSource = sourceFactory.resolveUri(source, includeUri);
-      if (includedSource == null || !includedSource.exists()) {
-        errors.add(new AnalysisError(
-            initialSource,
-            initialIncludeSpan.start.column + 1,
-            initialIncludeSpan.length,
-            AnalysisOptionsWarningCode.INCLUDE_FILE_NOT_FOUND,
-            [includeUri, source.fullName]));
-        return;
-      }
-      try {
-        YamlMap options =
-            optionsProvider.getOptionsFromString(includedSource.contents.data);
-        validate(includedSource, options);
-      } on OptionsFormatException catch (e) {
-        var args = [
-          includedSource.fullName,
-          e.span.start.offset.toString(),
-          e.span.end.offset.toString(),
-          e.message,
-        ];
-        // Report errors for included option files
-        // on the include directive located in the initial options file.
-        errors.add(new AnalysisError(
-            initialSource,
-            initialIncludeSpan.start.column + 1,
-            initialIncludeSpan.length,
-            AnalysisOptionsErrorCode.INCLUDED_FILE_PARSE_ERROR,
-            args));
-      }
-    }
-
-    try {
-      YamlMap options = optionsProvider.getOptionsFromString(content);
-      validate(source, options);
-    } on OptionsFormatException catch (e) {
-      SourceSpan span = e.span;
-      errors.add(new AnalysisError(source, span.start.column + 1, span.length,
-          AnalysisOptionsErrorCode.PARSE_ERROR, [e.message]));
-    }
-    return errors;
-  }
-
-  /// Return a map from the names of the inputs of this kind of task to the
-  /// task input descriptors describing those inputs for a task with the
-  /// given [target].
-  static Map<String, TaskInput> buildInputs(AnalysisTarget source) =>
-      <String, TaskInput>{CONTENT_INPUT_NAME: CONTENT.of(source)};
-
-  /// Compute [LineInfo] for the given [content].
-  static LineInfo computeLineInfo(String content) {
-    List<int> lineStarts = StringUtilities.computeLineStarts(content);
-    return new LineInfo(lineStarts);
-  }
-
-  /// Create a task based on the given [target] in the given [context].
-  static GenerateOptionsErrorsTask createTask(
-          AnalysisContext context, AnalysisTarget target) =>
-      new GenerateOptionsErrorsTask(context, target);
-
-  /**
-   * Return an indication of how suitable this task is for the given [target].
-   */
-  static TaskSuitability suitabilityFor(AnalysisTarget target) {
-    if (target is Source &&
-        (target.shortName == AnalysisEngine.ANALYSIS_OPTIONS_FILE ||
-            target.shortName == AnalysisEngine.ANALYSIS_OPTIONS_YAML_FILE)) {
-      return TaskSuitability.HIGHEST;
-    }
-    return TaskSuitability.NONE;
-  }
-}
-
 /// Validates `analyzer` language configuration options.
 class LanguageOptionValidator extends OptionsValidator {
   ErrorBuilder builder = new ErrorBuilder(AnalyzerOptions.languageOptions);
@@ -377,7 +371,15 @@ class LanguageOptionValidator extends OptionsValidator {
           bool validKey = false;
           if (k is YamlScalar) {
             key = k.value?.toString();
-            if (!AnalyzerOptions.languageOptions.contains(key)) {
+            if (AnalyzerOptions.enablePreviewDart2 == key) {
+              reporter.reportErrorForSpan(
+                  AnalysisOptionsHintCode.PREVIEW_DART_2_SETTING_DEPRECATED,
+                  k.span);
+            } else if (AnalyzerOptions.enableSuperMixins == key) {
+              reporter.reportErrorForSpan(
+                  AnalysisOptionsHintCode.SUPER_MIXINS_SETTING_DEPRECATED,
+                  k.span);
+            } else if (!AnalyzerOptions.languageOptions.contains(key)) {
               builder.reportError(reporter, AnalyzerOptions.language, k);
             } else {
               // If we have a valid key, go on and check the value.
@@ -391,6 +393,16 @@ class LanguageOptionValidator extends OptionsValidator {
             }
           }
         });
+      } else if (language is YamlScalar && language.value != null) {
+        reporter.reportErrorForSpan(
+            AnalysisOptionsWarningCode.INVALID_SECTION_FORMAT,
+            language.span,
+            [AnalyzerOptions.language]);
+      } else if (language is YamlList) {
+        reporter.reportErrorForSpan(
+            AnalysisOptionsWarningCode.INVALID_SECTION_FORMAT,
+            language.span,
+            [AnalyzerOptions.language]);
       }
     }
   }
@@ -433,6 +445,7 @@ class OptionsFileValidator {
 
 /// Validates `analyzer` strong-mode value configuration options.
 class StrongModeOptionValueValidator extends OptionsValidator {
+  ErrorBuilder builder = new ErrorBuilder(AnalyzerOptions.strongModeOptions);
   ErrorBuilder trueOrFalseBuilder = new TrueOrFalseValueErrorBuilder();
 
   @override
@@ -447,8 +460,74 @@ class StrongModeOptionValueValidator extends OptionsValidator {
               reporter, AnalyzerOptions.strong_mode, v);
         } else if (value == 'false') {
           reporter.reportErrorForSpan(
-              AnalysisOptionsHintCode.SPEC_MODE_DEPRECATED, v.span);
+              AnalysisOptionsWarningCode.SPEC_MODE_REMOVED, v.span);
+        } else if (value == 'true') {
+          reporter.reportErrorForSpan(
+              AnalysisOptionsHintCode.STRONG_MODE_SETTING_DEPRECATED, v.span);
         }
+      } else if (v is YamlMap) {
+        v.nodes.forEach((k, v) {
+          String key, value;
+          bool validKey = false;
+          if (k is YamlScalar) {
+            key = k.value?.toString();
+            if (!AnalyzerOptions.strongModeOptions.contains(key)) {
+              builder.reportError(reporter, AnalyzerOptions.strong_mode, k);
+            } else if (key == AnalyzerOptions.declarationCasts) {
+              reporter.reportErrorForSpan(
+                  AnalysisOptionsWarningCode.ANALYSIS_OPTION_DEPRECATED,
+                  k.span,
+                  [key]);
+            } else {
+              // If we have a valid key, go on and check the value.
+              validKey = true;
+            }
+          }
+          if (validKey && v is YamlScalar) {
+            value = toLowerCase(v.value);
+            if (!AnalyzerOptions.trueOrFalse.contains(value)) {
+              trueOrFalseBuilder.reportError(reporter, key, v);
+            }
+          }
+        });
+      }
+    }
+  }
+}
+
+/// Validates `analyzer` optional-checks value configuration options.
+class OptionalChecksValueValidator extends OptionsValidator {
+  ErrorBuilder builder =
+      new ErrorBuilder(AnalyzerOptions.optionalChecksOptions);
+  ErrorBuilder trueOrFalseBuilder = new TrueOrFalseValueErrorBuilder();
+
+  @override
+  void validate(ErrorReporter reporter, YamlMap options) {
+    var analyzer = getValue(options, AnalyzerOptions.analyzer);
+    if (analyzer is YamlMap) {
+      var v = getValue(analyzer, AnalyzerOptions.optionalChecks);
+      if (v is YamlScalar) {
+        var value = toLowerCase(v.value);
+        if (value != AnalyzerOptions.chromeOsManifestChecks) {
+          builder.reportError(
+              reporter, AnalyzerOptions.chromeOsManifestChecks, v);
+        }
+      } else if (v is YamlMap) {
+        v.nodes.forEach((k, v) {
+          String key, value;
+          if (k is YamlScalar) {
+            key = k.value?.toString();
+            if (key != AnalyzerOptions.chromeOsManifestChecks) {
+              builder.reportError(
+                  reporter, AnalyzerOptions.chromeOsManifestChecks, k);
+            } else {
+              value = toLowerCase(v.value);
+              if (!AnalyzerOptions.trueOrFalse.contains(value)) {
+                trueOrFalseBuilder.reportError(reporter, key, v);
+              }
+            }
+          }
+        });
       }
     }
   }
@@ -470,7 +549,7 @@ class TopLevelOptionValidator extends OptionsValidator {
   AnalysisOptionsWarningCode _warningCode;
 
   TopLevelOptionValidator(this.pluginName, this.supportedOptions) {
-    assert(supportedOptions != null && !supportedOptions.isEmpty);
+    assert(supportedOptions != null && supportedOptions.isNotEmpty);
     if (supportedOptions.length > 1) {
       _valueProposal = StringUtilities.printListOfQuotedNames(supportedOptions);
       _warningCode =
@@ -524,9 +603,27 @@ class _OptionsProcessor {
       var strongMode = getValue(analyzer, AnalyzerOptions.strong_mode);
       _applyStrongOptions(options, strongMode);
 
-      // Set filters.
+      // Process filters.
       var filters = getValue(analyzer, AnalyzerOptions.errors);
       _applyProcessors(options, filters);
+
+      // Process enabled experiments.
+      var experimentNames =
+          getValue(analyzer, AnalyzerOptions.enableExperiment);
+      if (experimentNames is YamlList) {
+        List<String> enabledExperiments = <String>[];
+        for (var element in experimentNames.nodes) {
+          String experimentName = _toString(element);
+          if (experimentName != null) {
+            enabledExperiments.add(experimentName);
+          }
+        }
+        options.enabledExperiments = enabledExperiments;
+      }
+
+      // Process optional checks options.
+      var optionalChecks = getValue(analyzer, AnalyzerOptions.optionalChecks);
+      _applyOptionalChecks(options, optionalChecks);
 
       // Process language options.
       var language = getValue(analyzer, AnalyzerOptions.language);
@@ -583,10 +680,11 @@ class _OptionsProcessor {
       AnalysisOptionsImpl options, Object feature, Object value) {
     bool boolValue = toBool(value);
     if (boolValue != null) {
-      if (feature == AnalyzerOptions.enableSuperMixins) {
-        options.enableSuperMixins = boolValue;
-      } else if (feature == AnalyzerOptions.enablePreviewDart2) {
-        options.previewDart2 = boolValue;
+      if (feature == AnalyzerOptions.strictInference) {
+        options.strictInference = boolValue;
+      }
+      if (feature == AnalyzerOptions.strictRawTypes) {
+        options.strictRawTypes = boolValue;
       }
     }
   }
@@ -611,9 +709,6 @@ class _OptionsProcessor {
       AnalysisOptionsImpl options, String feature, Object value) {
     bool boolValue = toBool(value);
     if (boolValue != null) {
-      if (feature == AnalyzerOptions.declarationCasts) {
-        options.declarationCasts = boolValue;
-      }
       if (feature == AnalyzerOptions.implicitCasts) {
         options.implicitCasts = boolValue;
       }
@@ -625,16 +720,35 @@ class _OptionsProcessor {
 
   void _applyStrongOptions(AnalysisOptionsImpl options, YamlNode config) {
     if (config is YamlMap) {
-      options.strongMode = true;
       config.nodes.forEach((k, v) {
         if (k is YamlScalar && v is YamlScalar) {
           _applyStrongModeOption(options, k.value?.toString(), v.value);
         }
       });
-    } else {
-      bool value = toBool(config);
-      if (value != null) {
-        options.strongMode = value;
+    }
+  }
+
+  void _applyOptionalChecksOption(
+      AnalysisOptionsImpl options, String feature, Object value) {
+    bool boolValue = toBool(value);
+    if (boolValue != null) {
+      if (feature == AnalyzerOptions.chromeOsManifestChecks) {
+        options.chromeOsManifestChecks = boolValue;
+      }
+    }
+  }
+
+  void _applyOptionalChecks(AnalysisOptionsImpl options, YamlNode config) {
+    if (config is YamlMap) {
+      config.nodes.forEach((k, v) {
+        if (k is YamlScalar && v is YamlScalar) {
+          _applyOptionalChecksOption(options, k.value?.toString(), v.value);
+        }
+      });
+    }
+    if (config is YamlScalar) {
+      if (config.value?.toString() == AnalyzerOptions.chromeOsManifestChecks) {
+        options.chromeOsManifestChecks = true;
       }
     }
   }

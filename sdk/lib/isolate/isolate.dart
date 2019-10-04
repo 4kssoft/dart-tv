@@ -17,6 +17,8 @@
 library dart.isolate;
 
 import "dart:async";
+import "dart:_internal" show Since;
+import "dart:typed_data" show ByteBuffer, TypedData, Uint8List;
 
 part "capability.dart";
 
@@ -26,6 +28,7 @@ part "capability.dart";
 class IsolateSpawnException implements Exception {
   /** Error message reported by the spawn operation. */
   final String message;
+  @pragma("vm:entry-point")
   IsolateSpawnException(this.message);
   String toString() => "IsolateSpawnException: $message";
 }
@@ -39,7 +42,7 @@ class IsolateSpawnException implements Exception {
  *
  * An `Isolate` object is a reference to an isolate, usually different from
  * the current isolate.
- * It represents, and can be used control, the other isolate.
+ * It represents, and can be used to control, the other isolate.
  *
  * When spawning a new isolate, the spawning isolate receives an `Isolate`
  * object representing the new isolate when the spawn operation succeeds.
@@ -70,12 +73,8 @@ class IsolateSpawnException implements Exception {
 class Isolate {
   /** Argument to `ping` and `kill`: Ask for immediate action. */
   static const int immediate = 0;
-  @Deprecated("Use immediate instead")
-  static const int IMMEDIATE = immediate;
   /** Argument to `ping` and `kill`: Ask for action before the next event. */
   static const int beforeNextEvent = 1;
-  @Deprecated("Use beforeNextEvent instead")
-  static const int BEFORE_NEXT_EVENT = beforeNextEvent;
 
   /**
    * Control port used to send control messages to the isolate.
@@ -113,6 +112,21 @@ class Isolate {
    * then calls to those methods will have no effect.
    */
   final Capability terminateCapability;
+
+  /**
+   * The name of the [Isolate] displayed for debug purposes.
+   *
+   * This can be set using the `debugName` parameter in [spawn] and [spawnUri].
+   *
+   * This name does not uniquely identify an isolate. Multiple isolates in the
+   * same process may have the same `debugName`.
+   *
+   * For a given isolate, this value will be the same as the values returned by
+   * `Dart_DebugName` in the C embedding API and the `debugName` property in
+   * [IsolateMirror].
+   */
+  @Since("2.3")
+  external String get debugName;
 
   /**
    * Create a new [Isolate] object with a restricted set of capabilities.
@@ -160,11 +174,10 @@ class Isolate {
   /**
    * The location of the package configuration of the current isolate, if any.
    *
-   * If the isolate is using a [packageConfig] or the isolate has not been
-   * setup for package resolution, this getter returns `null`, otherwise it
-   * returns the package root - a directory that package URIs are resolved
-   * against.
+   * This getter returns `null`, as the `packages/` directory is not supported
+   * in Dart 2.
    */
+  @Deprecated('packages/ directory resolution is not supported in Dart 2.')
   external static Future<Uri> get packageRoot;
 
   /**
@@ -219,6 +232,9 @@ class Isolate {
    * corresponding parameter and was processed before the isolate starts
    * running.
    *
+   * If [debugName] is provided, the spawned [Isolate] will be identifiable by
+   * this name in debuggers and logging.
+   *
    * If [errorsAreFatal] is omitted, the platform may choose a default behavior
    * or inherit the current isolate's behavior.
    *
@@ -235,7 +251,8 @@ class Isolate {
       {bool paused: false,
       bool errorsAreFatal,
       SendPort onExit,
-      SendPort onError});
+      SendPort onError,
+      @Since("2.3") String debugName});
 
   /**
    * Creates and spawns an isolate that runs the code from the library with
@@ -286,16 +303,6 @@ class Isolate {
    *
    * WARNING: The [checked] parameter is not implemented on all platforms yet.
    *
-   * If the [packageRoot] parameter is provided, it is used to find the location
-   * of package sources in the spawned isolate.
-   *
-   * The `packageRoot` URI must be a "file" or "http"/"https" URI that specifies
-   * a directory. If it doesn't end in a slash, one will be added before
-   * using the URI, and any query or fragment parts are ignored.
-   * Package imports (like `"package:foo/bar.dart"`) in the new isolate are
-   * resolved against this location, as by
-   * `packageRoot.resolve("foo/bar.dart")`.
-   *
    * If the [packageConfig] parameter is provided, then it is used to find the
    * location of a package resolution configuration file for the spawned
    * isolate.
@@ -313,20 +320,28 @@ class Isolate {
    * WARNING: The [environment] parameter is not implemented on all
    * platforms yet.
    *
+   * If [debugName] is provided, the spawned [Isolate] will be identifiable by
+   * this name in debuggers and logging.
+   *
    * Returns a future that will complete with an [Isolate] instance if the
    * spawning succeeded. It will complete with an error otherwise.
    */
   external static Future<Isolate> spawnUri(
-      Uri uri, List<String> args, var message,
+      Uri uri,
+      List<String> args,
+      var message,
       {bool paused: false,
       SendPort onExit,
       SendPort onError,
       bool errorsAreFatal,
       bool checked,
       Map<String, String> environment,
-      Uri packageRoot,
+      @Deprecated('The packages/ dir is not supported in Dart 2')
+          Uri packageRoot,
       Uri packageConfig,
-      bool automaticPackageResolution: false});
+      bool automaticPackageResolution: false,
+      @Since("2.3")
+          String debugName});
 
   /**
    * Requests the isolate to pause.
@@ -565,8 +580,9 @@ class Isolate {
     StreamController controller;
     RawReceivePort port;
     void handleError(message) {
-      String errorDescription = message[0];
-      String stackDescription = message[1];
+      List listMessage = message;
+      String errorDescription = listMessage[0];
+      String stackDescription = listMessage[1];
       var error = new RemoteError(errorDescription, stackDescription);
       controller.addError(error, error.stackTrace);
     }
@@ -737,4 +753,37 @@ class RemoteError implements Error {
       : _description = description,
         stackTrace = new StackTrace.fromString(stackDescription);
   String toString() => _description;
+}
+
+/**
+ * An efficiently transferable sequence of byte values.
+ *
+ * A [TransferableTypedData] is created from a number of bytes.
+ * This will take time proportional to the number of bytes.
+ *
+ * The [TransferableTypedData] can be moved between isolates, so
+ * sending it through a send port will only take constant time.
+ *
+ * When sent this way, the local transferable can no longer be materialized,
+ * and the received object is now the only way to materialize the data.
+ */
+@Since("2.3.2")
+abstract class TransferableTypedData {
+  /**
+   * Creates a new [TransferableTypedData] containing the bytes of [list].
+   *
+   * It must be possible to create a single [Uint8List] containing the
+   * bytes, so if there are more bytes than what the platform allows in
+   * a single [Uint8List], then creation fails.
+   */
+  external factory TransferableTypedData.fromList(List<TypedData> list);
+
+  /**
+   * Creates a new [ByteBuffer] containing the bytes stored in this [TransferableTypedData].
+   *
+   * The [TransferableTypedData] is a cross-isolate single-use resource.
+   * This method must not be called more than once on the same underlying
+   * transferable bytes, even if the calls occur in different isolates.
+   */
+  ByteBuffer materialize();
 }

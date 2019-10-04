@@ -2,10 +2,7 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-/// ignore: IMPORT_INTERNAL_LIBRARY
-import 'dart:_js_helper';
-
-/*element: main:[]*/
+/*member: main:[]*/
 main() {
   forceInlineDynamic();
   forceInlineOptional();
@@ -16,17 +13,17 @@ main() {
 ////////////////////////////////////////////////////////////////////////////////
 
 class Class1 {
-  /*element: Class1.:[]*/
-  @NoInline()
+  /*member: Class1.:[]*/
+  @pragma('dart2js:noInline')
   Class1();
 
-  /*element: Class1.method:[forceInlineDynamic]*/
-  @ForceInline()
+  /*member: Class1.method:[forceInlineDynamic]*/
+  @pragma('dart2js:tryInline')
   method() {}
 }
 
-/*element: forceInlineDynamic:[]*/
-@NoInline()
+/*member: forceInlineDynamic:[]*/
+@pragma('dart2js:noInline')
 forceInlineDynamic() {
   new Class1().method();
 }
@@ -36,17 +33,17 @@ forceInlineDynamic() {
 ////////////////////////////////////////////////////////////////////////////////
 
 class Class2 {
-  /*element: Class2.:[]*/
-  @NoInline()
+  /*member: Class2.:[]*/
+  @pragma('dart2js:noInline')
   Class2();
 
-  /*element: Class2.method:[forceInlineOptional]*/
-  @ForceInline()
+  /*member: Class2.method:[forceInlineOptional]*/
+  @pragma('dart2js:tryInline')
   method([x]) {}
 }
 
-/*element: forceInlineOptional:[]*/
-@NoInline()
+/*member: forceInlineOptional:[]*/
+@pragma('dart2js:noInline')
 forceInlineOptional() {
   new Class2().method();
 }

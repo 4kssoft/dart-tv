@@ -1,11 +1,10 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-library analyzer.src.generated.constant;
-
 import 'package:analyzer/dart/analysis/declared_variables.dart';
 import 'package:analyzer/dart/ast/ast.dart';
+import 'package:analyzer/error/error.dart';
 import 'package:analyzer/error/listener.dart';
 import 'package:analyzer/src/dart/constant/evaluation.dart';
 import 'package:analyzer/src/dart/constant/value.dart';
@@ -14,7 +13,7 @@ import 'package:analyzer/src/generated/engine.dart' show RecordingErrorListener;
 import 'package:analyzer/src/generated/resolver.dart' show TypeProvider;
 import 'package:analyzer/src/generated/source.dart' show Source;
 import 'package:analyzer/src/generated/type_system.dart'
-    show TypeSystem, TypeSystemImpl;
+    show Dart2TypeSystem, TypeSystem;
 
 export 'package:analyzer/dart/analysis/declared_variables.dart';
 export 'package:analyzer/dart/constant/value.dart';
@@ -120,7 +119,7 @@ class ConstantEvaluator {
    */
   ConstantEvaluator(this._source, TypeProvider typeProvider,
       {TypeSystem typeSystem})
-      : _typeSystem = typeSystem ?? new TypeSystemImpl(typeProvider),
+      : _typeSystem = typeSystem ?? new Dart2TypeSystem(typeProvider),
         _typeProvider = typeProvider;
 
   EvaluationResult evaluate(Expression expression) {
@@ -130,9 +129,15 @@ class ConstantEvaluator {
         new ConstantEvaluationEngine(_typeProvider, new DeclaredVariables(),
             typeSystem: _typeSystem),
         errorReporter));
+    List<AnalysisError> errors = errorListener.errors;
+    if (errors.isNotEmpty) {
+      return EvaluationResult.forErrors(errors);
+    }
     if (result != null) {
       return EvaluationResult.forValue(result);
     }
-    return EvaluationResult.forErrors(errorListener.errors);
+    // We should not get here. Either there should be a valid value or there
+    // should be an error explaining why a value could not be generated.
+    return EvaluationResult.forErrors(errors);
   }
 }

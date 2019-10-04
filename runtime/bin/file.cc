@@ -8,11 +8,11 @@
 
 #include "bin/builtin.h"
 #include "bin/dartutils.h"
-#include "bin/embedded_dart_io.h"
 #include "bin/io_buffer.h"
 #include "bin/namespace.h"
 #include "bin/typed_data_utils.h"
 #include "bin/utils.h"
+#include "include/bin/dart_io_api.h"
 #include "include/dart_api.h"
 #include "include/dart_tools_api.h"
 #include "platform/globals.h"
@@ -42,6 +42,10 @@ static File* GetFile(Dart_NativeArguments args) {
   Dart_Handle result = Dart_GetNativeInstanceField(
       dart_this, kFileNativeFieldIndex, reinterpret_cast<intptr_t*>(&file));
   ASSERT(!Dart_IsError(result));
+  if (file == NULL) {
+    Dart_PropagateError(Dart_NewUnhandledExceptionError(
+        DartUtils::NewInternalError("No native peer")));
+  }
   return file;
 }
 
@@ -49,10 +53,7 @@ static void SetFile(Dart_Handle dart_this, intptr_t file_pointer) {
   DEBUG_ASSERT(IsFile(dart_this));
   Dart_Handle result = Dart_SetNativeInstanceField(
       dart_this, kFileNativeFieldIndex, file_pointer);
-  if (Dart_IsError(result)) {
-    Log::PrintErr("SetNativeInstanceField in SetFile() failed\n");
-    Dart_PropagateError(result);
-  }
+  ThrowIfError(result);
 }
 
 void FUNCTION_NAME(File_GetPointer)(Dart_NativeArguments args) {
@@ -116,12 +117,15 @@ void FUNCTION_NAME(File_Open)(Dart_NativeArguments args) {
 }
 
 void FUNCTION_NAME(File_Exists)(Dart_NativeArguments args) {
-  Namespace* namespc = Namespace::GetNamespace(args, 0);
-  Dart_Handle path_handle = Dart_GetNativeArgument(args, 1);
-  TypedDataScope data(path_handle);
-  ASSERT(data.type() == Dart_TypedData_kUint8);
-  const char* filename = data.GetCString();
-  bool exists = File::Exists(namespc, filename);
+  bool exists;
+  {
+    Namespace* namespc = Namespace::GetNamespace(args, 0);
+    Dart_Handle path_handle = Dart_GetNativeArgument(args, 1);
+    TypedDataScope data(path_handle);
+    ASSERT(data.type() == Dart_TypedData_kUint8);
+    const char* filename = data.GetCString();
+    exists = File::Exists(namespc, filename);
+  }
   Dart_SetBooleanReturnValue(args, exists);
 }
 
@@ -213,9 +217,7 @@ void FUNCTION_NAME(File_Read)(Dart_NativeArguments args) {
     dart_args[2] = Dart_NewInteger(bytes_read);
     // TODO(sgjesse): Cache the _makeUint8ListView function somewhere.
     Dart_Handle io_lib = Dart_LookupLibrary(DartUtils::NewString("dart:io"));
-    if (Dart_IsError(io_lib)) {
-      Dart_PropagateError(io_lib);
-    }
+    ThrowIfError(io_lib);
     Dart_Handle array_view =
         Dart_Invoke(io_lib, DartUtils::NewString("_makeUint8ListView"),
                     kNumArgs, dart_args);
@@ -239,9 +241,7 @@ void FUNCTION_NAME(File_ReadInto)(Dart_NativeArguments args) {
   intptr_t length = end - start;
   intptr_t array_len = 0;
   Dart_Handle result = Dart_ListLength(buffer_obj, &array_len);
-  if (Dart_IsError(result)) {
-    Dart_PropagateError(result);
-  }
+  ThrowIfError(result);
   ASSERT(end <= array_len);
   uint8_t* buffer = Dart_ScopeAllocate(length);
   int64_t bytes_read = file->Read(reinterpret_cast<void*>(buffer), length);
@@ -278,9 +278,7 @@ void FUNCTION_NAME(File_WriteFrom)(Dart_NativeArguments args) {
   void* buffer = NULL;
   Dart_Handle result =
       Dart_TypedDataAcquireData(buffer_obj, &type, &buffer, &buffer_len);
-  if (Dart_IsError(result)) {
-    Dart_PropagateError(result);
-  }
+  ThrowIfError(result);
 
   ASSERT(type == Dart_TypedData_kUint8 || type == Dart_TypedData_kInt8);
   ASSERT(end <= buffer_len);
@@ -291,11 +289,7 @@ void FUNCTION_NAME(File_WriteFrom)(Dart_NativeArguments args) {
   bool success = file->WriteFully(byte_buffer + start, length);
 
   // Release the direct pointer acquired above.
-  result = Dart_TypedDataReleaseData(buffer_obj);
-  if (Dart_IsError(result)) {
-    Dart_PropagateError(result);
-  }
-
+  ThrowIfError(Dart_TypedDataReleaseData(buffer_obj));
   if (!success) {
     Dart_SetReturnValue(args, DartUtils::NewDartOSError());
   } else {
@@ -567,7 +561,8 @@ void FUNCTION_NAME(File_LinkTarget)(Dart_NativeArguments args) {
   if (target == NULL) {
     Dart_SetReturnValue(args, DartUtils::NewDartOSError(&os_error));
   } else {
-    Dart_SetReturnValue(args, DartUtils::NewString(target));
+    Dart_Handle str = ThrowIfError(DartUtils::NewString(target));
+    Dart_SetReturnValue(args, str);
   }
 }
 
@@ -700,7 +695,8 @@ void FUNCTION_NAME(File_ResolveSymbolicLinks)(Dart_NativeArguments args) {
     }
   }
   if (path != NULL) {
-    Dart_SetReturnValue(args, DartUtils::NewString(path));
+    Dart_Handle str = ThrowIfError(DartUtils::NewString(path));
+    Dart_SetReturnValue(args, str);
   } else {
     Dart_SetReturnValue(args, DartUtils::NewDartOSError(&os_error));
   }
@@ -721,13 +717,16 @@ void FUNCTION_NAME(File_GetStdioHandleType)(Dart_NativeArguments args) {
 }
 
 void FUNCTION_NAME(File_GetType)(Dart_NativeArguments args) {
-  Namespace* namespc = Namespace::GetNamespace(args, 0);
-  Dart_Handle path_handle = Dart_GetNativeArgument(args, 1);
-  TypedDataScope data(path_handle);
-  ASSERT(data.type() == Dart_TypedData_kUint8);
-  const char* path = data.GetCString();
-  bool follow_links = DartUtils::GetNativeBooleanArgument(args, 2);
-  File::Type type = File::GetType(namespc, path, follow_links);
+  File::Type type;
+  {
+    Namespace* namespc = Namespace::GetNamespace(args, 0);
+    Dart_Handle path_handle = Dart_GetNativeArgument(args, 1);
+    TypedDataScope data(path_handle);
+    ASSERT(data.type() == Dart_TypedData_kUint8);
+    const char* path = data.GetCString();
+    bool follow_links = DartUtils::GetNativeBooleanArgument(args, 2);
+    type = File::GetType(namespc, path, follow_links);
+  }
   Dart_SetIntegerReturnValue(args, static_cast<int>(type));
 }
 
@@ -743,22 +742,16 @@ void FUNCTION_NAME(File_Stat)(Dart_NativeArguments args) {
   }
   Dart_Handle returned_data =
       Dart_NewTypedData(Dart_TypedData_kInt64, File::kStatSize);
-  if (Dart_IsError(returned_data)) {
-    Dart_PropagateError(returned_data);
-  }
+  ThrowIfError(returned_data);
   Dart_TypedData_Type data_type_unused;
   void* data_location;
   intptr_t data_length_unused;
   Dart_Handle status = Dart_TypedDataAcquireData(
       returned_data, &data_type_unused, &data_location, &data_length_unused);
-  if (Dart_IsError(status)) {
-    Dart_PropagateError(status);
-  }
+  ThrowIfError(status);
   memmove(data_location, stat_data, File::kStatSize * sizeof(int64_t));
   status = Dart_TypedDataReleaseData(returned_data);
-  if (Dart_IsError(status)) {
-    Dart_PropagateError(status);
-  }
+  ThrowIfError(status);
   Dart_SetReturnValue(args, returned_data);
 }
 
@@ -1509,6 +1502,68 @@ CObject* File::LockRequest(const CObjectArray& request) {
   return file->Lock(static_cast<File::LockType>(lock), start, end)
              ? CObject::True()
              : CObject::NewOSError();
+}
+
+// Inspired by sdk/lib/core/uri.dart
+UriDecoder::UriDecoder(const char* uri) : uri_(uri) {
+  const char* ch = uri;
+  while ((*ch != '\0') && (*ch != '%')) {
+    ch++;
+  }
+  if (*ch == 0) {
+    // if there are no '%', nothing to decode, refer to original as decoded.
+    decoded_ = const_cast<char*>(uri);
+    return;
+  }
+  const intptr_t len = strlen(uri);
+  // Decoded string should be shorter than original because of
+  // percent-encoding.
+  char* dest = reinterpret_cast<char*>(malloc(len + 1));
+  int i = ch - uri;
+  // Copy all characters up to first '%' at index i.
+  strncpy(dest, uri, i);
+  decoded_ = dest;
+  dest += i;
+  while (*ch != '\0') {
+    if (*ch != '%') {
+      *(dest++) = *(ch++);
+      continue;
+    }
+    if ((i + 3 > len) || !HexCharPairToByte(ch + 1, dest)) {
+      free(decoded_);
+      decoded_ = NULL;
+      return;
+    }
+    ++dest;
+    ch += 3;
+  }
+  *dest = 0;
+}
+
+UriDecoder::~UriDecoder() {
+  if (uri_ != decoded_ && decoded_ != NULL) {
+    free(decoded_);
+  }
+}
+
+bool UriDecoder::HexCharPairToByte(const char* pch, char* const dest) {
+  int byte = 0;
+  for (int i = 0; i < 2; i++) {
+    char char_code = *(pch + i);
+    if (0x30 <= char_code && char_code <= 0x39) {
+      byte = byte * 16 + char_code - 0x30;
+    } else {
+      // Check ranges A-F (0x41-0x46) and a-f (0x61-0x66).
+      char_code |= 0x20;
+      if (0x61 <= char_code && char_code <= 0x66) {
+        byte = byte * 16 + char_code - 0x57;
+      } else {
+        return false;
+      }
+    }
+  }
+  *dest = byte;
+  return true;
 }
 
 }  // namespace bin

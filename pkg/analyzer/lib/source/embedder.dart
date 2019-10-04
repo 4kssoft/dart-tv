@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -51,8 +51,9 @@ class EmbedderSdk extends AbstractDartSdk {
   @override
   String getRelativePathFromFile(JavaFile file) => file.getAbsolutePath();
 
+  @deprecated
   @override
-  PackageBundle getSummarySdkBundle(bool strongMode) => null;
+  PackageBundle getSummarySdkBundle(bool _) => null;
 
   @override
   FileBasedSource internalMapDartUri(String dartUri) {
@@ -168,6 +169,9 @@ class EmbedderUriResolver implements DartUriResolver {
 
   /// Number of embedded libraries.
   int get length => _embedderSdk?.urlMappings?.length ?? 0;
+
+  @override
+  void clearCache() {}
 
   @override
   Source resolveAbsolute(Uri uri, [Uri actualUri]) =>

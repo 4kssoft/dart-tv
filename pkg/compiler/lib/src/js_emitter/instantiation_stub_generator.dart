@@ -4,17 +4,17 @@
 
 library dart2js.js_emitter.instantiation_stub_generator;
 
-import '../common/names.dart';
-import '../common_elements.dart' show CommonElements;
+import '../common_elements.dart' show JCommonElements, JElementEnvironment;
 import '../elements/entities.dart';
 import '../io/source_information.dart';
 import '../js/js.dart' as jsAst;
 import '../js/js.dart' show js;
 import '../js_backend/namer.dart' show Namer;
+import '../options.dart';
 import '../universe/call_structure.dart' show CallStructure;
+import '../universe/codegen_world_builder.dart';
 import '../universe/selector.dart' show Selector;
-import '../universe/world_builder.dart'
-    show CodegenWorldBuilder, SelectorConstraints;
+import '../universe/world_builder.dart' show SelectorConstraints;
 import '../world.dart' show JClosedWorld;
 
 import 'model.dart';
@@ -24,22 +24,22 @@ import 'code_emitter_task.dart' show CodeEmitterTask, Emitter;
 // Generator of stubs required for Instantiation classes.
 class InstantiationStubGenerator {
   final CodeEmitterTask _emitterTask;
-  final CommonElements _commonElements;
   final Namer _namer;
-  final CodegenWorldBuilder _codegenWorldBuilder;
+  final CodegenWorld _codegenWorld;
   final JClosedWorld _closedWorld;
   // ignore: UNUSED_FIELD
   final SourceInformationStrategy _sourceInformationStrategy;
 
-  InstantiationStubGenerator(
-      this._emitterTask,
-      this._commonElements,
-      this._namer,
-      this._codegenWorldBuilder,
-      this._closedWorld,
-      this._sourceInformationStrategy);
+  InstantiationStubGenerator(this._emitterTask, this._namer, this._closedWorld,
+      this._codegenWorld, this._sourceInformationStrategy);
 
   Emitter get _emitter => _emitterTask.emitter;
+
+  JCommonElements get _commonElements => _closedWorld.commonElements;
+  JElementEnvironment get _elementEnvironment =>
+      _closedWorld.elementEnvironment;
+
+  CompilerOptions get _options => _emitterTask.options;
 
   /// Generates a stub to forward a call selector with no type arguments to a
   /// call selector with stored types.
@@ -81,8 +81,18 @@ class InstantiationStubGenerator {
       parameters.add(new jsAst.Parameter(jsName));
     }
 
-    for (int i = 0; i < targetSelector.typeArgumentCount; i++) {
-      arguments.add(js('this.#[#]', [_namer.rtiFieldJsName, js.number(i)]));
+    if (_options.experimentNewRti) {
+      for (int i = 0; i < targetSelector.typeArgumentCount; i++) {
+        arguments.add(js('this.#.#[#]', [
+          _namer.rtiFieldJsName,
+          _namer.fieldPropertyName(_commonElements.rtiRestField),
+          js.number(i)
+        ]));
+      }
+    } else {
+      for (int i = 0; i < targetSelector.typeArgumentCount; i++) {
+        arguments.add(js('this.#[#]', [_namer.rtiFieldJsName, js.number(i)]));
+      }
     }
 
     jsAst.Fun function = js('function(#) { return this.#.#(#); }', [
@@ -109,21 +119,37 @@ class InstantiationStubGenerator {
   /// }
   /// ```
   ParameterStubMethod _generateSignatureStub(FieldEntity functionField) {
-    jsAst.Name operatorSignature = _namer.asName(_namer.operatorSignature);
+    jsAst.Name operatorSignature =
+        _namer.asName(_namer.fixedNames.operatorSignature);
 
-    jsAst.Fun function = js('function() { return #(#(this.#), this.#); }', [
-      _emitter.staticFunctionAccess(
-          _commonElements.instantiatedGenericFunctionType),
-      _emitter.staticFunctionAccess(
-          _commonElements.extractFunctionTypeObjectFromInternal),
-      _namer.fieldPropertyName(functionField),
-      _namer.rtiFieldJsName,
-    ]);
+    jsAst.Fun function = _options.experimentNewRti
+        ? _generateSignatureNewRti(functionField)
+        : _generateSignatureLegacy(functionField);
+
     // TODO(sra): Generate source information for stub that has no member.
     // TODO(sra): .withSourceInformation(sourceInformation);
 
     return new ParameterStubMethod(operatorSignature, null, function);
   }
+
+  jsAst.Fun _generateSignatureLegacy(FieldEntity functionField) =>
+      js('function() { return #(#(this.#), this.#); }', [
+        _emitter.staticFunctionAccess(
+            _commonElements.instantiatedGenericFunctionType),
+        _emitter.staticFunctionAccess(
+            _commonElements.extractFunctionTypeObjectFromInternal),
+        _namer.fieldPropertyName(functionField),
+        _namer.rtiFieldJsName,
+      ]);
+
+  jsAst.Fun _generateSignatureNewRti(FieldEntity functionField) =>
+      js('function() { return #(#(this.#), this.#); }', [
+        _emitter.staticFunctionAccess(
+            _commonElements.instantiatedGenericFunctionTypeNewRti),
+        _emitter.staticFunctionAccess(_commonElements.closureFunctionType),
+        _namer.fieldPropertyName(functionField),
+        _namer.rtiFieldJsName,
+      ]);
 
   // Returns all stubs for an instantiation class.
   //
@@ -138,8 +164,9 @@ class InstantiationStubGenerator {
 
     // 2. Find the function field access path.
     FieldEntity functionField;
-    _codegenWorldBuilder.forEachInstanceField(instantiationClass,
+    _elementEnvironment.forEachInstanceField(instantiationClass,
         (ClassEntity enclosing, FieldEntity field) {
+      if (_closedWorld.fieldAnalysis.getFieldData(field).isElided) return;
       if (field.name == '_genericClosure') functionField = field;
     });
     assert(functionField != null,
@@ -147,26 +174,21 @@ class InstantiationStubGenerator {
 
     String call = _namer.closureInvocationSelectorName;
     Map<Selector, SelectorConstraints> callSelectors =
-        _codegenWorldBuilder.invocationsByName(call);
+        _codegenWorld.invocationsByName(call);
 
     Set<ParameterStructure> computeLiveParameterStructures() {
       Set<ParameterStructure> parameterStructures =
           new Set<ParameterStructure>();
 
-      void process(Iterable<FunctionEntity> functions) {
-        for (FunctionEntity function in functions) {
-          if (function.parameterStructure.typeParameters == typeArgumentCount) {
-            parameterStructures.add(function.parameterStructure);
-          }
+      void process(FunctionEntity function) {
+        if (function.parameterStructure.typeParameters == typeArgumentCount) {
+          parameterStructures.add(function.parameterStructure);
         }
       }
 
-      process(_codegenWorldBuilder.closurizedStatics);
-      process(_codegenWorldBuilder.closurizedMembers);
-      process(_codegenWorldBuilder.genericInstanceMethods.where(
-          (FunctionEntity function) =>
-              function.name == Identifiers.call &&
-              function.enclosingClass.isClosure));
+      _codegenWorld.closurizedStatics.forEach(process);
+      _codegenWorld.closurizedMembers.forEach(process);
+      _codegenWorld.forEachGenericClosureCallMethod(process);
 
       return parameterStructures;
     }
@@ -176,20 +198,22 @@ class InstantiationStubGenerator {
     // For every call-selector generate a stub to the corresponding selector
     // with filled-in type arguments.
 
-    Set<ParameterStructure> parameterStructures;
-    for (Selector selector in callSelectors.keys) {
-      CallStructure callStructure = selector.callStructure;
-      if (callStructure.typeArgumentCount != 0) continue;
-      CallStructure genericCallStructure =
-          callStructure.withTypeArgumentCount(typeArgumentCount);
-      parameterStructures ??= computeLiveParameterStructures();
-      for (ParameterStructure parameterStructure in parameterStructures) {
-        if (genericCallStructure.signatureApplies(parameterStructure)) {
-          Selector genericSelector =
-              new Selector.call(selector.memberName, genericCallStructure);
-          stubs.add(_generateStub(
-              instantiationClass, functionField, selector, genericSelector));
-          break;
+    if (callSelectors != null) {
+      Set<ParameterStructure> parameterStructures;
+      for (Selector selector in callSelectors.keys) {
+        CallStructure callStructure = selector.callStructure;
+        if (callStructure.typeArgumentCount != 0) continue;
+        CallStructure genericCallStructure =
+            callStructure.withTypeArgumentCount(typeArgumentCount);
+        parameterStructures ??= computeLiveParameterStructures();
+        for (ParameterStructure parameterStructure in parameterStructures) {
+          if (genericCallStructure.signatureApplies(parameterStructure)) {
+            Selector genericSelector =
+                new Selector.call(selector.memberName, genericCallStructure);
+            stubs.add(_generateStub(
+                instantiationClass, functionField, selector, genericSelector));
+            break;
+          }
         }
       }
     }

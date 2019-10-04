@@ -35,7 +35,6 @@ namespace dart {
 namespace bin {
 
 const char* DartUtils::original_working_directory = NULL;
-CommandLineOptions* DartUtils::url_mapping = NULL;
 const char* const DartUtils::kDartScheme = "dart:";
 const char* const DartUtils::kDartExtensionScheme = "dart-ext:";
 const char* const DartUtils::kAsyncLibURL = "dart:async";
@@ -52,9 +51,13 @@ const char* const DartUtils::kUriLibURL = "dart:uri";
 const char* const DartUtils::kHttpScheme = "http:";
 const char* const DartUtils::kVMServiceLibURL = "dart:vmservice";
 
+dart::SimpleHashMap* DartUtils::environment_ = NULL;
+
 MagicNumberData appjit_magic_number = {8, {0xdc, 0xdc, 0xf6, 0xf6, 0, 0, 0, 0}};
-MagicNumberData snapshot_magic_number = {4, {0xf5, 0xf5, 0xdc, 0xdc}};
 MagicNumberData kernel_magic_number = {4, {0x90, 0xab, 0xcd, 0xef}};
+MagicNumberData kernel_list_magic_number = {
+    7,
+    {0x23, 0x40, 0x64, 0x69, 0x6c, 0x6c, 0x0a}};  // #@dill\n
 MagicNumberData gzip_magic_number = {2, {0x1f, 0x8b, 0, 0}};
 
 static bool IsWindowsHost() {
@@ -63,23 +66,6 @@ static bool IsWindowsHost() {
 #else   // defined(HOST_OS_WINDOWS)
   return false;
 #endif  // defined(HOST_OS_WINDOWS)
-}
-
-const char* DartUtils::MapLibraryUrl(const char* url_string) {
-  ASSERT(url_mapping != NULL);
-  // We need to check if the passed in url is found in the url_mapping array,
-  // in that case use the mapped entry.
-  intptr_t len = strlen(url_string);
-  for (intptr_t idx = 0; idx < url_mapping->count(); idx++) {
-    const char* url_name = url_mapping->GetArgument(idx);
-    if (!strncmp(url_string, url_name, len) && (url_name[len] == ',')) {
-      const char* url_mapped_name = url_name + len + 1;
-      if (strlen(url_mapped_name) != 0) {
-        return url_mapped_name;  // Found a mapping for this URL.
-      }
-    }
-  }
-  return NULL;  // Did not find a mapping for this URL.
 }
 
 int64_t DartUtils::GetIntegerValue(Dart_Handle value_obj) {
@@ -385,36 +371,17 @@ Dart_Handle DartUtils::MakeUint8Array(const uint8_t* buffer, intptr_t len) {
 }
 
 Dart_Handle DartUtils::SetWorkingDirectory() {
-  IsolateData* isolate_data =
-      reinterpret_cast<IsolateData*>(Dart_CurrentIsolateData());
-  Dart_Handle builtin_lib = isolate_data->builtin_lib();
   Dart_Handle directory = NewString(original_working_directory);
-  return SingleArgDart_Invoke(builtin_lib, "_setWorkingDirectory", directory);
-}
-
-Dart_Handle DartUtils::ResolveUriInWorkingDirectory(Dart_Handle script_uri) {
-  const int kNumArgs = 1;
-  Dart_Handle dart_args[kNumArgs];
-  dart_args[0] = script_uri;
-  return Dart_Invoke(DartUtils::BuiltinLib(),
-                     NewString("_resolveInWorkingDirectory"), kNumArgs,
-                     dart_args);
-}
-
-Dart_Handle DartUtils::LibraryFilePath(Dart_Handle library_uri) {
-  const int kNumArgs = 1;
-  Dart_Handle dart_args[kNumArgs];
-  dart_args[0] = library_uri;
-  return Dart_Invoke(DartUtils::BuiltinLib(), NewString("_libraryFilePath"),
-                     kNumArgs, dart_args);
+  return SingleArgDart_Invoke(LookupBuiltinLib(), "_setWorkingDirectory",
+                              directory);
 }
 
 Dart_Handle DartUtils::ResolveScript(Dart_Handle url) {
   const int kNumArgs = 1;
   Dart_Handle dart_args[kNumArgs];
   dart_args[0] = url;
-  return Dart_Invoke(DartUtils::BuiltinLib(), NewString("_resolveScriptUri"),
-                     kNumArgs, dart_args);
+  return Dart_Invoke(DartUtils::LookupBuiltinLib(),
+                     NewString("_resolveScriptUri"), kNumArgs, dart_args);
 }
 
 static bool CheckMagicNumber(const uint8_t* buffer,
@@ -434,11 +401,11 @@ DartUtils::MagicNumber DartUtils::SniffForMagicNumber(const char* filename) {
       RefCntReleaseScope<File> rs(file);
       intptr_t max_magic_length = 0;
       max_magic_length =
-          Utils::Maximum(max_magic_length, snapshot_magic_number.length);
-      max_magic_length =
           Utils::Maximum(max_magic_length, appjit_magic_number.length);
       max_magic_length =
           Utils::Maximum(max_magic_length, kernel_magic_number.length);
+      max_magic_length =
+          Utils::Maximum(max_magic_length, kernel_list_magic_number.length);
       max_magic_length =
           Utils::Maximum(max_magic_length, gzip_magic_number.length);
       ASSERT(max_magic_length <= 8);
@@ -453,16 +420,16 @@ DartUtils::MagicNumber DartUtils::SniffForMagicNumber(const char* filename) {
 
 DartUtils::MagicNumber DartUtils::SniffForMagicNumber(const uint8_t* buffer,
                                                       intptr_t buffer_length) {
-  if (CheckMagicNumber(buffer, buffer_length, snapshot_magic_number)) {
-    return kSnapshotMagicNumber;
-  }
-
   if (CheckMagicNumber(buffer, buffer_length, appjit_magic_number)) {
     return kAppJITMagicNumber;
   }
 
   if (CheckMagicNumber(buffer, buffer_length, kernel_magic_number)) {
     return kKernelMagicNumber;
+  }
+
+  if (CheckMagicNumber(buffer, buffer_length, kernel_list_magic_number)) {
+    return kKernelListMagicNumber;
   }
 
   if (CheckMagicNumber(buffer, buffer_length, gzip_magic_number)) {
@@ -569,16 +536,16 @@ Dart_Handle DartUtils::SetupPackageRoot(const char* package_root,
     const int kNumArgs = 1;
     Dart_Handle dart_args[kNumArgs];
     dart_args[0] = result;
-    result = Dart_Invoke(DartUtils::BuiltinLib(), NewString("_setPackageRoot"),
-                         kNumArgs, dart_args);
+    result = Dart_Invoke(DartUtils::LookupBuiltinLib(),
+                         NewString("_setPackageRoot"), kNumArgs, dart_args);
   } else if (packages_config != NULL) {
     result = NewString(packages_config);
     RETURN_IF_ERROR(result);
     const int kNumArgs = 1;
     Dart_Handle dart_args[kNumArgs];
     dart_args[0] = result;
-    result = Dart_Invoke(DartUtils::BuiltinLib(), NewString("_setPackagesMap"),
-                         kNumArgs, dart_args);
+    result = Dart_Invoke(DartUtils::LookupBuiltinLib(),
+                         NewString("_setPackagesMap"), kNumArgs, dart_args);
   }
   return result;
 }
@@ -612,13 +579,6 @@ Dart_Handle DartUtils::PrepareForScriptLoading(bool is_service_isolate,
   Dart_Handle cli_lib = Builtin::LoadAndCheckLibrary(Builtin::kCLILibrary);
   RETURN_IF_ERROR(cli_lib);
   Builtin::SetNativeResolver(Builtin::kCLILibrary);
-
-  // Setup the builtin library in a persistent handle attached the isolate
-  // specific data as we seem to lookup and use builtin lib a lot.
-  IsolateData* isolate_data =
-      reinterpret_cast<IsolateData*>(Dart_CurrentIsolateData());
-  ASSERT(isolate_data != NULL);
-  isolate_data->set_builtin_lib(builtin_lib);
 
   // We need to ensure that all the scripts loaded so far are finalized
   // as we are about to invoke some Dart code below to setup closures.
@@ -788,31 +748,62 @@ Dart_Handle DartUtils::NewInternalError(const char* message) {
 }
 
 bool DartUtils::SetOriginalWorkingDirectory() {
+  // If we happen to re-initialize the Dart VM multiple times, make sure to free
+  // the old string (allocated by getcwd()) before setting a new one.
+  if (original_working_directory != nullptr) {
+    free(const_cast<char*>(original_working_directory));
+  }
   original_working_directory = Directory::CurrentNoScope();
-  return original_working_directory != NULL;
+  return original_working_directory != nullptr;
 }
 
-Dart_Handle DartUtils::GetCanonicalizableWorkingDirectory() {
-  const char* str = DartUtils::original_working_directory;
-  intptr_t len = strlen(str);
-  if ((str[len] == '/') || (IsWindowsHost() && str[len] == '\\')) {
-    return Dart_NewStringFromCString(str);
+void DartUtils::SetEnvironment(dart::SimpleHashMap* environment) {
+  environment_ = environment;
+}
+
+Dart_Handle DartUtils::EnvironmentCallback(Dart_Handle name) {
+  uint8_t* utf8_array;
+  intptr_t utf8_len;
+  Dart_Handle result = Dart_Null();
+  Dart_Handle handle = Dart_StringToUTF8(name, &utf8_array, &utf8_len);
+  if (Dart_IsError(handle)) {
+    handle = Dart_ThrowException(
+        DartUtils::NewDartArgumentError(Dart_GetError(handle)));
+  } else {
+    char* name_chars = reinterpret_cast<char*>(malloc(utf8_len + 1));
+    memmove(name_chars, utf8_array, utf8_len);
+    name_chars[utf8_len] = '\0';
+    const char* value = NULL;
+    if (environment_ != NULL) {
+      SimpleHashMap::Entry* entry =
+          environment_->Lookup(GetHashmapKeyFromString(name_chars),
+                               SimpleHashMap::StringHash(name_chars), false);
+      if (entry != NULL) {
+        value = reinterpret_cast<char*>(entry->value);
+      }
+    }
+    if (value != NULL) {
+      result = Dart_NewStringFromUTF8(reinterpret_cast<const uint8_t*>(value),
+                                      strlen(value));
+      if (Dart_IsError(result)) {
+        result = Dart_Null();
+      }
+    }
+    free(name_chars);
   }
-  char* new_str = reinterpret_cast<char*>(Dart_ScopeAllocate(len + 2));
-  snprintf(new_str, (len + 2), "%s%s", str, File::PathSeparator());
-  return Dart_NewStringFromCString(new_str);
+  return result;
 }
 
 // Statically allocated Dart_CObject instances for immutable
 // objects. As these will be used by different threads the use of
 // these depends on the fact that the marking internally in the
 // Dart_CObject structure is not marking simple value objects.
-Dart_CObject CObject::api_null_ = {Dart_CObject_kNull, {0}};
+Dart_CObject CObject::api_null_ = {Dart_CObject_kNull, {false}};
 Dart_CObject CObject::api_true_ = {Dart_CObject_kBool, {true}};
 Dart_CObject CObject::api_false_ = {Dart_CObject_kBool, {false}};
-CObject CObject::null_ = CObject(&api_null_);
-CObject CObject::true_ = CObject(&api_true_);
-CObject CObject::false_ = CObject(&api_false_);
+CObject CObject::null_(&api_null_);
+CObject CObject::true_(&api_true_);
+CObject CObject::false_(&api_false_);
 
 CObject* CObject::Null() {
   return &null_;

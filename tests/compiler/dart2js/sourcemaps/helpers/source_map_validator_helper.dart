@@ -49,8 +49,8 @@ checkIndexReferences(
       //
       // Expect.isTrue(entry.column < target[line.line].length);
       Expect.isTrue(entry.column >= 0);
-      Expect
-          .isTrue(urlIndex == null || (urlIndex >= 0 && urlIndex < urlsLength));
+      Expect.isTrue(
+          urlIndex == null || (urlIndex >= 0 && urlIndex < urlsLength));
       Expect.isTrue(entry.sourceLine == null ||
           (entry.sourceLine >= 0 &&
               entry.sourceLine < sources[urlIndex].length));
@@ -304,6 +304,7 @@ class Position {
     return line < other.line || line == other.line && column <= other.column;
   }
 
+  @override
   String toString() => '[${line + 1},${column + 1}]';
 }
 
@@ -317,5 +318,6 @@ class Interval {
     return begin <= other && other <= end;
   }
 
+  @override
   String toString() => '$begin-$end';
 }

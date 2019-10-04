@@ -10,36 +10,34 @@ import 'package:compiler/src/js_emitter/model.dart';
 import 'package:compiler/src/world.dart';
 import 'package:expect/expect.dart';
 import '../helpers/program_lookup.dart';
-import '../memory_compiler.dart';
+import '../helpers/memory_compiler.dart';
 
 const String code = '''
-import 'package:meta/dart2js.dart';
-
 // This needs one-arg instantiation.
-@noInline
+@pragma('dart2js:noInline')
 T f1a<T>(T t) => t;
 
 // This needs no instantiation because it is not closurized.
-@noInline
+@pragma('dart2js:noInline')
 T f1b<T>(T t1, T t2) => t1;
 
 class Class {
   // This needs two-arg instantiation.
-  @noInline
+  @pragma('dart2js:noInline')
   bool f2a<T, S>(T t, S s) => t == s;
 
   // This needs no instantiation because it is not closurized.
-  @noInline
+  @pragma('dart2js:noInline')
   bool f2b<T, S>(T t, S s1, S s2) => t == s1;
 }
 
-@noInline
+@pragma('dart2js:noInline')
 int method1(int i, int Function(int) f) => f(i);
 
-@noInline
+@pragma('dart2js:noInline')
 bool method2(int a, int b, bool Function(int, int) f) => f(a, b);
 
-@noInline
+@pragma('dart2js:noInline')
 int method3(int a, int b, int c, int Function(int, int, int) f) => f(a, b, c);
 
 main() {
@@ -66,11 +64,11 @@ main() {
   asyncTest(() async {
     CompilationResult result = await runCompiler(
         memorySourceFiles: {'main.dart': code},
-        options: [Flags.strongMode, Flags.omitImplicitChecks]);
+        options: [Flags.omitImplicitChecks]);
     Expect.isTrue(result.isSuccess);
     Compiler compiler = result.compiler;
     JClosedWorld closedWorld = compiler.backendClosedWorldForTesting;
-    ProgramLookup programLookup = new ProgramLookup(compiler);
+    ProgramLookup programLookup = new ProgramLookup(compiler.backendStrategy);
 
     void checkStubs(ClassEntity element, List<String> expectedStubs) {
       Class cls = programLookup.getClass(element);
@@ -87,11 +85,11 @@ main() {
           "Expected: $expectedStubs\n Actual: $actualStubs");
     }
 
-    checkStubs(closedWorld.commonElements.instantiation1Class,
+    checkStubs(closedWorld.commonElements.getInstantiationClass(1),
         [r'call$1', r'$signature']);
-    checkStubs(closedWorld.commonElements.instantiation2Class,
+    checkStubs(closedWorld.commonElements.getInstantiationClass(2),
         [r'call$2', r'$signature']);
-    checkStubs(closedWorld.commonElements.instantiation3Class,
+    checkStubs(closedWorld.commonElements.getInstantiationClass(3),
         [r'call$3', r'call$4', r'$signature']);
   });
 }

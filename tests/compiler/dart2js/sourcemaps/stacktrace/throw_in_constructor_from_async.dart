@@ -2,8 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'package:expect/expect.dart';
-
 main() {
   // This call is no longer on the stack when the error is thrown.
   /*:main*/ test();
@@ -16,8 +14,8 @@ test() async {
 }
 
 class Class {
-  @NoInline()
-  /*2:Class*/ Class() {
-    /*3:Class*/ throw '>ExceptionMarker<';
+  @pragma('dart2js:noInline')
+  Class() {
+    /*2:Class*/ throw '>ExceptionMarker<';
   }
 }

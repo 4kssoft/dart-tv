@@ -13,13 +13,14 @@ import 'type_algebra.dart';
 ///
 /// It is safe to clone members, but cloning a class or library is not
 /// supported.
-class CloneVisitor implements TreeVisitor {
+class CloneVisitor implements TreeVisitor<TreeNode> {
   final Map<VariableDeclaration, VariableDeclaration> variables =
       <VariableDeclaration, VariableDeclaration>{};
   final Map<LabeledStatement, LabeledStatement> labels =
       <LabeledStatement, LabeledStatement>{};
   final Map<SwitchCase, SwitchCase> switchCases = <SwitchCase, SwitchCase>{};
   final Map<TypeParameter, DartType> typeSubstitution;
+  final Map<TypeParameter, TypeParameter> typeParams;
   bool cloneAnnotations;
 
   /// Creates an instance of the cloning visitor for Kernel ASTs.
@@ -29,8 +30,10 @@ class CloneVisitor implements TreeVisitor {
   /// annotations in procedure bodies are cloned unconditionally.
   CloneVisitor(
       {Map<TypeParameter, DartType> typeSubstitution,
+      Map<TypeParameter, TypeParameter> typeParams,
       this.cloneAnnotations = true})
-      : this.typeSubstitution = ensureMutable(typeSubstitution);
+      : this.typeSubstitution = ensureMutable(typeSubstitution),
+        this.typeParams = typeParams ?? <TypeParameter, TypeParameter>{};
 
   static Map<TypeParameter, DartType> ensureMutable(
       Map<TypeParameter, DartType> map) {
@@ -47,6 +50,10 @@ class CloneVisitor implements TreeVisitor {
 
   TreeNode visitClass(Class node) {
     throw 'Cloning of classes is not implemented';
+  }
+
+  TreeNode visitExtension(Extension node) {
+    throw 'Cloning of extensions is not implemented';
   }
 
   // The currently active file uri where we are cloning [TreeNode]s from.  If
@@ -173,6 +180,10 @@ class CloneVisitor implements TreeVisitor {
     return new Not(clone(node.operand));
   }
 
+  visitNullCheck(NullCheck node) {
+    return new NullCheck(clone(node.operand));
+  }
+
   visitLogicalExpression(LogicalExpression node) {
     return new LogicalExpression(
         clone(node.left), node.operator, clone(node.right));
@@ -185,6 +196,38 @@ class CloneVisitor implements TreeVisitor {
 
   visitStringConcatenation(StringConcatenation node) {
     return new StringConcatenation(node.expressions.map(clone).toList());
+  }
+
+  visitListConcatenation(ListConcatenation node) {
+    return new ListConcatenation(node.lists.map(clone).toList(),
+        typeArgument: visitType(node.typeArgument));
+  }
+
+  visitSetConcatenation(SetConcatenation node) {
+    return new SetConcatenation(node.sets.map(clone).toList(),
+        typeArgument: visitType(node.typeArgument));
+  }
+
+  visitMapConcatenation(MapConcatenation node) {
+    return new MapConcatenation(node.maps.map(clone).toList(),
+        keyType: visitType(node.keyType), valueType: visitType(node.valueType));
+  }
+
+  visitInstanceCreation(InstanceCreation node) {
+    final Map<Reference, Expression> fieldValues = <Reference, Expression>{};
+    node.fieldValues.forEach((Reference fieldRef, Expression value) {
+      fieldValues[fieldRef] = clone(value);
+    });
+    return new InstanceCreation(
+        node.classReference,
+        node.typeArguments.map(visitType).toList(),
+        fieldValues,
+        node.asserts.map(clone).toList(),
+        node.unusedArguments.map(clone).toList());
+  }
+
+  visitFileUriExpression(FileUriExpression node) {
+    return new FileUriExpression(clone(node.expression), _activeFileUri);
   }
 
   visitIsExpression(IsExpression node) {
@@ -221,6 +264,11 @@ class CloneVisitor implements TreeVisitor {
         typeArgument: visitType(node.typeArgument), isConst: node.isConst);
   }
 
+  visitSetLiteral(SetLiteral node) {
+    return new SetLiteral(node.expressions.map(clone).toList(),
+        typeArgument: visitType(node.typeArgument), isConst: node.isConst);
+  }
+
   visitMapLiteral(MapLiteral node) {
     return new MapLiteral(node.entries.map(clone).toList(),
         keyType: visitType(node.keyType),
@@ -241,7 +289,8 @@ class CloneVisitor implements TreeVisitor {
   }
 
   visitConstantExpression(ConstantExpression node) {
-    return new ConstantExpression(visitConstant(node.constant));
+    return new ConstantExpression(
+        visitConstant(node.constant), visitType(node.type));
   }
 
   visitStringLiteral(StringLiteral node) {
@@ -269,29 +318,8 @@ class CloneVisitor implements TreeVisitor {
     return new Let(newVariable, clone(node.body));
   }
 
-  visitVectorCreation(VectorCreation node) {
-    return new VectorCreation(node.length);
-  }
-
-  visitClosureCreation(ClosureCreation node) {
-    return new ClosureCreation.byReference(
-        node.topLevelFunctionReference,
-        cloneOptional(node.contextVector),
-        visitOptionalType(node.functionType),
-        node.typeArguments.map(visitType).toList());
-  }
-
-  visitVectorSet(VectorSet node) {
-    return new VectorSet(
-        clone(node.vectorExpression), node.index, clone(node.value));
-  }
-
-  visitVectorGet(VectorGet node) {
-    return new VectorGet(clone(node.vectorExpression), node.index);
-  }
-
-  visitVectorCopy(VectorCopy node) {
-    return new VectorCopy(clone(node.vectorExpression));
+  visitBlockExpression(BlockExpression node) {
+    return new BlockExpression(clone(node.body), clone(node.value));
   }
 
   visitExpressionStatement(ExpressionStatement node) {
@@ -345,7 +373,8 @@ class CloneVisitor implements TreeVisitor {
   visitForInStatement(ForInStatement node) {
     var newVariable = clone(node.variable);
     return new ForInStatement(
-        newVariable, clone(node.iterable), clone(node.body));
+        newVariable, clone(node.iterable), clone(node.body),
+        isAsync: node.isAsync);
   }
 
   visitSwitchStatement(SwitchStatement node) {
@@ -406,7 +435,8 @@ class CloneVisitor implements TreeVisitor {
       ..annotations = cloneAnnotations && !node.annotations.isEmpty
           ? node.annotations.map(clone).toList()
           : const <Expression>[]
-      ..flags = node.flags;
+      ..flags = node.flags
+      ..fileEqualsOffset = _cloneFileOffset(node.fileEqualsOffset);
   }
 
   visitFunctionDeclaration(FunctionDeclaration node) {
@@ -440,6 +470,7 @@ class CloneVisitor implements TreeVisitor {
       ..annotations = cloneAnnotations && !node.annotations.isEmpty
           ? node.annotations.map(clone).toList()
           : const <Expression>[]
+      ..startFileOffset = _cloneFileOffset(node.startFileOffset)
       ..fileOffset = _cloneFileOffset(node.fileOffset)
       ..fileEndOffset = _cloneFileOffset(node.fileEndOffset)
       ..flags = node.flags;
@@ -453,6 +484,7 @@ class CloneVisitor implements TreeVisitor {
         isFinal: node.isFinal,
         isConst: node.isConst,
         isStatic: node.isStatic,
+        isLate: node.isLate,
         hasImplicitGetter: node.hasImplicitGetter,
         hasImplicitSetter: node.hasImplicitSetter,
         transformerFlags: node.transformerFlags,
@@ -466,6 +498,7 @@ class CloneVisitor implements TreeVisitor {
   }
 
   visitRedirectingFactoryConstructor(RedirectingFactoryConstructor node) {
+    prepareTypeParameters(node.typeParameters);
     return new RedirectingFactoryConstructor(node.targetReference,
         name: node.name,
         isConst: node.isConst,
@@ -482,9 +515,19 @@ class CloneVisitor implements TreeVisitor {
           : const <Expression>[];
   }
 
+  void prepareTypeParameters(List<TypeParameter> typeParameters) {
+    for (TypeParameter node in typeParameters) {
+      TypeParameter newNode = typeParams[node];
+      if (newNode == null) {
+        newNode = new TypeParameter(node.name);
+        typeParams[node] = newNode;
+        typeSubstitution[node] = new TypeParameterType(newNode);
+      }
+    }
+  }
+
   visitTypeParameter(TypeParameter node) {
-    var newNode = new TypeParameter(node.name);
-    typeSubstitution[node] = new TypeParameterType(newNode);
+    TypeParameter newNode = typeParams[node];
     newNode.bound = visitType(node.bound);
     if (node.defaultType != null) {
       newNode.defaultType = visitType(node.defaultType);
@@ -507,6 +550,7 @@ class CloneVisitor implements TreeVisitor {
   }
 
   visitFunctionNode(FunctionNode node) {
+    prepareTypeParameters(node.typeParameters);
     var typeParameters = node.typeParameters.map(clone).toList();
     var positional = node.positionalParameters.map(clone).toList();
     var named = node.namedParameters.map(clone).toList();

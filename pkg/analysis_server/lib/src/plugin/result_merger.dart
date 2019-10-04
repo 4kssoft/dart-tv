@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -841,7 +841,7 @@ class ResultMerger {
    */
   @visibleForTesting
   bool overlaps(int leftStart, int leftEnd, int rightStart, int rightEnd,
-      {bool allowNesting: false}) {
+      {bool allowNesting = false}) {
     if (leftEnd < rightStart || leftStart > rightEnd) {
       return false;
     }

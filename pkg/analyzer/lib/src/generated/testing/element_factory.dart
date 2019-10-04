@@ -1,8 +1,6 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
-library analyzer.src.generated.testing.element_factory;
 
 import 'dart:collection';
 
@@ -18,6 +16,7 @@ import 'package:analyzer/src/generated/resolver.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer/src/generated/testing/ast_test_factory.dart';
 import 'package:analyzer/src/generated/utilities_dart.dart';
+import 'package:meta/meta.dart';
 import 'package:path/path.dart';
 
 /**
@@ -56,6 +55,26 @@ class ElementFactory {
           [List<String> parameterNames]) =>
       classElement(typeName, objectType, parameterNames);
 
+  static ClassElementImpl classElement3({
+    @required String name,
+    List<TypeParameterElement> typeParameters,
+    List<String> typeParameterNames = const [],
+    InterfaceType supertype,
+    List<InterfaceType> mixins = const [],
+    List<InterfaceType> interfaces = const [],
+  }) {
+    typeParameters ??= ElementFactory.typeParameters(typeParameterNames);
+    supertype ??= objectType;
+
+    var element = ClassElementImpl(name, 0);
+    element.typeParameters = typeParameters;
+    element.supertype = supertype;
+    element.mixins = mixins;
+    element.interfaces = interfaces;
+    element.constructors = const <ConstructorElement>[];
+    return element;
+  }
+
   static classTypeAlias(String typeName, InterfaceType superclassType,
       [List<String> parameterNames]) {
     ClassElementImpl element =
@@ -72,7 +91,7 @@ class ElementFactory {
       [Source librarySource]) {
     Source source =
         new NonExistingSource(fileName, toUri(fileName), UriKind.FILE_URI);
-    CompilationUnitElementImpl unit = new CompilationUnitElementImpl(fileName);
+    CompilationUnitElementImpl unit = new CompilationUnitElementImpl();
     unit.source = source;
     if (librarySource == null) {
       librarySource = source;
@@ -151,7 +170,7 @@ class ElementFactory {
     FieldElementImpl valuesField = new FieldElementImpl("values", -1);
     valuesField.isStatic = true;
     valuesField.isConst = true;
-    valuesField.type = typeProvider.listType.instantiate(<DartType>[enumType]);
+    valuesField.type = typeProvider.listType2(enumType);
     fields.add(valuesField);
     //
     // Build the enum constants.
@@ -185,13 +204,17 @@ class ElementFactory {
   }
 
   static ExportElementImpl exportFor(LibraryElement exportedLibrary,
-      [List<NamespaceCombinator> combinators =
-          NamespaceCombinator.EMPTY_LIST]) {
+      [List<NamespaceCombinator> combinators = const <NamespaceCombinator>[]]) {
     ExportElementImpl spec = new ExportElementImpl(-1);
     spec.exportedLibrary = exportedLibrary;
     spec.combinators = combinators;
     return spec;
   }
+
+  static ExtensionElementImpl extensionElement(
+          [String name, DartType extendedType]) =>
+      ExtensionElementImpl.forNode(AstTestFactory.identifier3(name))
+        ..extendedType = extendedType;
 
   static FieldElementImpl fieldElement(
       String name, bool isStatic, bool isFinal, bool isConst, DartType type,
@@ -381,7 +404,6 @@ class ElementFactory {
     element.function = new GenericFunctionTypeElementImpl.forOffset(-1)
       ..parameters = parameters
       ..returnType = returnType ?? DynamicTypeImpl.instance;
-    element.type = new FunctionTypeImpl.forTypedef(element);
     return element;
   }
 
@@ -407,8 +429,7 @@ class ElementFactory {
 
   static ImportElementImpl importFor(
       LibraryElement importedLibrary, PrefixElement prefix,
-      [List<NamespaceCombinator> combinators =
-          NamespaceCombinator.EMPTY_LIST]) {
+      [List<NamespaceCombinator> combinators = const <NamespaceCombinator>[]]) {
     ImportElementImpl spec = new ImportElementImpl(0);
     spec.importedLibrary = importedLibrary;
     spec.prefix = prefix;
@@ -416,12 +437,12 @@ class ElementFactory {
     return spec;
   }
 
-  static LibraryElementImpl library(
-      AnalysisContext context, String libraryName) {
+  static LibraryElementImpl library(AnalysisContext context, String libraryName,
+      {bool isNonNullableByDefault: true}) {
     String fileName = "/$libraryName.dart";
     CompilationUnitElementImpl unit = compilationUnit(fileName);
-    LibraryElementImpl library =
-        new LibraryElementImpl(context, libraryName, 0, libraryName.length);
+    LibraryElementImpl library = new LibraryElementImpl(context, null,
+        libraryName, 0, libraryName.length, isNonNullableByDefault);
     library.definingCompilationUnit = unit;
     return library;
   }
@@ -436,7 +457,7 @@ class ElementFactory {
       [List<DartType> argumentTypes]) {
     MethodElementImpl method = new MethodElementImpl(methodName, 0);
     if (argumentTypes == null) {
-      method.parameters = ParameterElement.EMPTY_LIST;
+      method.parameters = const <ParameterElement>[];
     } else {
       int count = argumentTypes.length;
       List<ParameterElement> parameters = new List<ParameterElement>(count);
@@ -465,6 +486,27 @@ class ElementFactory {
     method.returnType = returnType;
     method.type = new FunctionTypeImpl(method);
     return method;
+  }
+
+  static MixinElementImpl mixinElement({
+    @required String name,
+    List<TypeParameterElement> typeParameters,
+    List<String> typeParameterNames = const [],
+    List<InterfaceType> constraints = const [],
+    List<InterfaceType> interfaces = const [],
+  }) {
+    typeParameters ??= ElementFactory.typeParameters(typeParameterNames);
+
+    if (constraints.isEmpty) {
+      constraints = [objectType];
+    }
+
+    var element = MixinElementImpl(name, 0);
+    element.typeParameters = typeParameters;
+    element.superclassConstraints = constraints;
+    element.interfaces = interfaces;
+    element.constructors = const <ConstructorElement>[];
+    return element;
   }
 
   static ParameterElementImpl namedParameter(String name) {
@@ -543,6 +585,7 @@ class ElementFactory {
     setter.parameters = <ParameterElement>[parameter];
     setter.returnType = VoidTypeImpl.instance;
     setter.type = new FunctionTypeImpl(setter);
+    setter.isStatic = isStatic;
     field.setter = setter;
     return setter;
   }
@@ -585,15 +628,13 @@ class ElementFactory {
   }
 
   static TypeParameterElementImpl typeParameterElement(String name) {
-    TypeParameterElementImpl element = new TypeParameterElementImpl(name, 0);
-    element.type = new TypeParameterTypeImpl(element);
-    return element;
+    return new TypeParameterElementImpl(name, 0);
   }
 
   static List<TypeParameterElement> typeParameters(List<String> names) {
     int count = names.length;
     if (count == 0) {
-      return TypeParameterElement.EMPTY_LIST;
+      return const <TypeParameterElement>[];
     }
     List<TypeParameterElementImpl> typeParameters =
         new List<TypeParameterElementImpl>(count);
@@ -606,7 +647,6 @@ class ElementFactory {
   static TypeParameterElementImpl typeParameterWithType(String name,
       [DartType bound]) {
     TypeParameterElementImpl typeParameter = typeParameterElement(name);
-    typeParameter.type = new TypeParameterTypeImpl(typeParameter);
     typeParameter.bound = bound;
     return typeParameter;
   }

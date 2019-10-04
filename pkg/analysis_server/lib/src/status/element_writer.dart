@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -54,6 +54,7 @@ class ElementWriter extends GeneralizingElementVisitor with TreeWriter {
       properties['isProxy'] = element.isProxy;
       properties['isValidMixin'] = element.isValidMixin;
       properties['mixins'] = element.mixins;
+      properties['superclassConstraints'] = element.superclassConstraints;
       properties['supertype'] = element.supertype;
     }
     if (element is ClassMemberElement) {
@@ -128,12 +129,16 @@ class ElementWriter extends GeneralizingElementVisitor with TreeWriter {
     if (element is ParameterElement) {
       properties['defaultValueCode'] = element.defaultValueCode;
       properties['isInitializingFormal'] = element.isInitializingFormal;
-      if (element.isNotOptional) {
-        properties['parameterKind'] = 'required';
+      if (element.isRequiredPositional) {
+        properties['parameterKind'] = 'required-positional';
+      } else if (element.isRequiredNamed) {
+        properties['parameterKind'] = 'required-named';
       } else if (element.isOptionalPositional) {
-        properties['parameterKind'] = 'positional';
-      } else if (element.isNamed) {
-        properties['parameterKind'] = 'named';
+        properties['parameterKind'] = 'optional-positional';
+      } else if (element.isOptionalNamed) {
+        properties['parameterKind'] = 'optional-named';
+      } else {
+        properties['parameterKind'] = 'unknown kind';
       }
     }
     if (element is PropertyAccessorElement) {
@@ -142,10 +147,6 @@ class ElementWriter extends GeneralizingElementVisitor with TreeWriter {
     }
     if (element is PropertyInducingElement) {
       properties['isStatic'] = element.isStatic;
-      properties['propagatedType'] = element.propagatedType;
-    }
-    if (element is TypeDefiningElement) {
-      properties['type'] = element.type;
     }
     if (element is TypeParameterElement) {
       properties['bound'] = element.bound;

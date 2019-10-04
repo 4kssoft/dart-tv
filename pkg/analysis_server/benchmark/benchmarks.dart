@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -48,7 +48,7 @@ class ListCommand extends Command {
   String get invocation => '${runner.executableName} $name';
 
   void run() {
-    if (argResults['machine']) {
+    if (argResults['machine'] as bool) {
       final Map map = {
         'benchmarks': benchmarks.map((b) => b.toJson()).toList()
       };
@@ -70,9 +70,6 @@ class RunCommand extends Command {
         help: 'Run a quick version of the benchmark. This is not useful for '
             'gathering accurate times,\nbut can be used to validate that the '
             'benchmark works.');
-    argParser.addFlag('use-cfe',
-        negatable: false,
-        help: 'Benchmark against the Dart 2.0 front end implementation.');
     argParser.addOption('repeat',
         defaultsTo: '10', help: 'The number of times to repeat the benchmark.');
     argParser.addFlag('verbose',
@@ -96,15 +93,16 @@ class RunCommand extends Command {
     }
 
     final String benchmarkId = argResults.rest.first;
-    final int repeatCount = int.parse(argResults['repeat']);
+    final int repeatCount = int.parse(argResults['repeat'] as String);
     final bool quick = argResults['quick'];
-    final bool useCFE = argResults['use-cfe'];
     final bool verbose = argResults['verbose'];
 
     final Benchmark benchmark =
         benchmarks.firstWhere((b) => b.id == benchmarkId, orElse: () {
       print("Benchmark '$benchmarkId' not found.");
       exit(1);
+      // Never reached.
+      return null;
     });
 
     int actualIterations = repeatCount;
@@ -125,7 +123,6 @@ class RunCommand extends Command {
       for (int iteration = 0; iteration < actualIterations; iteration++) {
         BenchMarkResult newResult = await benchmark.run(
           quick: quick,
-          useCFE: useCFE,
           verbose: verbose,
         );
         print('  $newResult');
@@ -154,7 +151,8 @@ abstract class Benchmark {
   /// One of 'memory', 'cpu', or 'group'.
   final String kind;
 
-  Benchmark(this.id, this.description, {this.enabled: true, this.kind: 'cpu'});
+  Benchmark(this.id, this.description,
+      {this.enabled = true, this.kind = 'cpu'});
 
   bool get needsSetup => false;
 
@@ -163,9 +161,8 @@ abstract class Benchmark {
   Future oneTimeCleanup() => new Future.value();
 
   Future<BenchMarkResult> run({
-    bool quick: false,
-    bool useCFE: false,
-    bool verbose: false,
+    bool quick = false,
+    bool verbose = false,
   });
 
   int get maxIterations => 0;
@@ -216,8 +213,10 @@ class CompoundBenchMarkResult extends BenchMarkResult {
     CompoundBenchMarkResult o = other as CompoundBenchMarkResult;
 
     CompoundBenchMarkResult combined = new CompoundBenchMarkResult(name);
-    List<String> keys =
-        (new Set()..addAll(results.keys)..addAll(o.results.keys)).toList();
+    List<String> keys = (new Set<String>()
+          ..addAll(results.keys)
+          ..addAll(o.results.keys))
+        .toList();
 
     for (String key in keys) {
       combined.add(key, _combine(results[key], o.results[key]));
@@ -237,7 +236,7 @@ class CompoundBenchMarkResult extends BenchMarkResult {
   String toString() => '${toJson()}';
 }
 
-List<String> getProjectRoots({bool quick: false}) {
+List<String> getProjectRoots({bool quick = false}) {
   String script = Platform.script.toFilePath(windows: Platform.isWindows);
   String pkgPath = path.normalize(path.join(path.dirname(script), '..', '..'));
   return <String>[path.join(pkgPath, quick ? 'meta' : 'analysis_server')];

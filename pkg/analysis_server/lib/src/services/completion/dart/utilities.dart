@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -79,8 +79,8 @@ protocol.Element createLocalElement(
     Source source, protocol.ElementKind kind, SimpleIdentifier id,
     {String parameters,
     TypeAnnotation returnType,
-    bool isAbstract: false,
-    bool isDeprecated: false}) {
+    bool isAbstract = false,
+    bool isDeprecated = false}) {
   String name;
   Location location;
   if (id != null) {
@@ -102,35 +102,19 @@ protocol.Element createLocalElement(
 }
 
 /**
- * Create a new suggestion for the given [fieldDecl]. Return the new suggestion
- * or `null` if it could not be created.
- */
-CompletionSuggestion createLocalFieldSuggestion(
-    Source source, FieldDeclaration fieldDecl, VariableDeclaration varDecl) {
-  bool deprecated = isDeprecated(fieldDecl) || isDeprecated(varDecl);
-  TypeAnnotation type = fieldDecl.fields.type;
-  return createLocalSuggestion(
-      varDecl.name, deprecated, DART_RELEVANCE_LOCAL_FIELD, type,
-      classDecl: fieldDecl.parent,
-      element: createLocalElement(
-          source, protocol.ElementKind.FIELD, varDecl.name,
-          returnType: type, isDeprecated: deprecated));
-}
-
-/**
  * Create a new suggestion based upon the given information. Return the new
  * suggestion or `null` if it could not be created.
  */
 CompletionSuggestion createLocalSuggestion(SimpleIdentifier id,
     bool isDeprecated, int defaultRelevance, TypeAnnotation returnType,
-    {ClassDeclaration classDecl,
+    {ClassOrMixinDeclaration classDecl,
     CompletionSuggestionKind kind = CompletionSuggestionKind.INVOCATION,
     protocol.Element element}) {
   if (id == null) {
     return null;
   }
   String completion = id.name;
-  if (completion == null || completion.length <= 0 || completion == '_') {
+  if (completion == null || completion.isEmpty || completion == '_') {
     return null;
   }
   CompletionSuggestion suggestion = new CompletionSuggestion(
@@ -147,7 +131,7 @@ CompletionSuggestion createLocalSuggestion(SimpleIdentifier id,
     SimpleIdentifier classId = classDecl.name;
     if (classId != null) {
       String className = classId.name;
-      if (className != null && className.length > 0) {
+      if (className != null && className.isNotEmpty) {
         suggestion.declaringType = className;
       }
     }
@@ -223,13 +207,13 @@ String nameForType(SimpleIdentifier identifier, TypeAnnotation declaredType) {
     }
     type = element.returnType;
   } else if (element is VariableElement) {
-    type = identifier.bestType;
+    type = identifier.staticType;
   } else {
     return null;
   }
 
   // If the type is unresolved, use the declared type.
-  if (type != null && type.isUndefined) {
+  if (type != null && type.isDynamic) {
     if (declaredType is TypeName) {
       Identifier id = declaredType.name;
       if (id != null) {

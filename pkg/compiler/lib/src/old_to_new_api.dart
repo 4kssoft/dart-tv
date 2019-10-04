@@ -23,6 +23,8 @@ class LegacyCompilerInput implements CompilerInput {
 
   @override
   Future<Input> readFromUri(Uri uri, {InputKind inputKind: InputKind.UTF8}) {
+    // The switch handles all enum values, but not null.
+    // ignore: missing_return
     return _inputProvider(uri).then((/*String|List<int>*/ data) {
       switch (inputKind) {
         case InputKind.UTF8:
@@ -71,7 +73,8 @@ class LegacyCompilerOutput implements CompilerOutput {
   OutputSink createOutputSink(String name, String extension, OutputType type) {
     if (_outputProvider != null) {
       switch (type) {
-        case OutputType.info:
+        case OutputType.dumpInfo:
+        case OutputType.deferredMap:
           if (extension == '') {
             // Needed to make Pub generate the same output name.
             extension = 'deferred_map';
@@ -82,6 +85,11 @@ class LegacyCompilerOutput implements CompilerOutput {
       return new LegacyOutputSink(_outputProvider(name, extension));
     }
     return NullSink.outputProvider(name, extension, type);
+  }
+
+  @override
+  BinaryOutputSink createBinarySink(Uri uri) {
+    throw new UnsupportedError("LegacyCompilerOutput.createBinarySink");
   }
 }
 

@@ -8,7 +8,7 @@ import "package:async_helper/async_helper.dart";
 class A {
   int a = -1;
 
-  @NoInline()
+  @pragma('dart2js:noInline')
   foo(ignored, val) {
     Expect.equals(val, this.a);
   }
@@ -21,14 +21,14 @@ testA() async {
   a.foo(await false, 0);
 }
 
-@NoInline()
-@AssumeDynamic()
+@pragma('dart2js:noInline')
+@pragma('dart2js:assumeDynamic')
 confuse(x) => x;
 
 class B {
   var f;
-  @NoInline()
   var b = 10;
+
   B(this.f);
 
   bar(x) => b;

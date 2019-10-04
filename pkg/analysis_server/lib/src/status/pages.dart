@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -30,7 +30,7 @@ abstract class Page {
 
   String get path => '/$id';
 
-  Future<Null> asyncDiv(void gen(), {String classes}) async {
+  Future<void> asyncDiv(void gen(), {String classes}) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     if (classes != null) {
@@ -38,7 +38,9 @@ abstract class Page {
     } else {
       buf.writeln('<div>');
     }
-    await gen();
+    // TODO(brianwilkerson) Determine if await is necessary, if so, change the
+    // return type of [gen] to `Future<void>`.
+    await (gen() as dynamic);
     buf.writeln('</div>');
   }
 
@@ -60,11 +62,13 @@ abstract class Page {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     buf.clear();
-    await generatePage(params);
+    // TODO(brianwilkerson) Determine if await is necessary, if so, change the
+    // return type of [generatePage] to `Future<void>`.
+    await (generatePage(params) as dynamic);
     return buf.toString();
   }
 
-  void generatePage(Map<String, String> params);
+  Future<void> generatePage(Map<String, String> params);
 
   void h1(String text, {String classes}) {
     if (classes != null) {
@@ -78,11 +82,11 @@ abstract class Page {
     buf.writeln('<h2>${escape(text)}</h2>');
   }
 
-  void h3(String text, {bool raw: false}) {
+  void h3(String text, {bool raw = false}) {
     buf.writeln('<h3>${raw ? text : escape(text)}</h3>');
   }
 
-  void h4(String text, {bool raw: false}) {
+  void h4(String text, {bool raw = false}) {
     buf.writeln('<h4>${raw ? text : escape(text)}</h4>');
   }
 
@@ -98,7 +102,7 @@ abstract class Page {
 
   bool isCurrentPage(String pathToTest) => path == pathToTest;
 
-  void p(String text, {String style, bool raw: false, String classes}) {
+  void p(String text, {String style, bool raw = false, String classes}) {
     String c = classes == null ? '' : ' class="$classes"';
 
     if (style != null) {
@@ -118,6 +122,13 @@ abstract class Page {
     buf.writeln('</pre>');
   }
 
+  void prettyJson(Map<String, dynamic> data) {
+    const jsonEncoder = const JsonEncoder.withIndent('  ');
+    pre(() {
+      buf.write(jsonEncoder.convert(data));
+    });
+  }
+
   void ul<T>(Iterable<T> items, void gen(T item), {String classes}) {
     buf.writeln('<ul${classes == null ? '' : ' class=$classes'}>');
     for (T item in items) {
@@ -132,7 +143,7 @@ abstract class Page {
 /// Contains a collection of Pages.
 abstract class Site {
   final String title;
-  List<Page> pages = [];
+  final List<Page> pages = [];
 
   Site(this.title);
 
@@ -142,7 +153,7 @@ abstract class Site {
 
   Page createUnknownPage(String unknownPath);
 
-  Future<Null> handleGetRequest(HttpRequest request) async {
+  Future<void> handleGetRequest(HttpRequest request) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     try {
@@ -156,42 +167,42 @@ abstract class Site {
       for (Page page in pages) {
         if (page.path == path) {
           HttpResponse response = request.response;
-          response.headers.contentType = ContentType.HTML;
+          response.headers.contentType = ContentType.html;
           response.write(await page.generate(request.uri.queryParameters));
           response.close();
           return;
         }
       }
 
-      await respond(request, createUnknownPage(path), HttpStatus.NOT_FOUND);
+      await respond(request, createUnknownPage(path), HttpStatus.notFound);
     } catch (e, st) {
       try {
         await respond(request, createExceptionPage('$e', st),
-            HttpStatus.INTERNAL_SERVER_ERROR);
+            HttpStatus.internalServerError);
       } catch (e, st) {
         HttpResponse response = request.response;
-        response.statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
-        response.headers.contentType = ContentType.TEXT;
+        response.statusCode = HttpStatus.internalServerError;
+        response.headers.contentType = ContentType.text;
         response.write('$e\n\n$st');
         response.close();
       }
     }
   }
 
-  Future<Null> respond(HttpRequest request, Page page,
-      [int code = HttpStatus.OK]) async {
+  Future<void> respond(HttpRequest request, Page page,
+      [int code = HttpStatus.ok]) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     HttpResponse response = request.response;
     response.statusCode = code;
-    response.headers.contentType = ContentType.HTML;
+    response.headers.contentType = ContentType.html;
     response.write(await page.generate(request.uri.queryParameters));
     response.close();
   }
 
   void respondRedirect(HttpRequest request, String pathFragment) {
     HttpResponse response = request.response;
-    response.statusCode = HttpStatus.MOVED_TEMPORARILY;
+    response.statusCode = HttpStatus.movedTemporarily;
     response.redirect(request.uri.resolve(pathFragment));
   }
 }

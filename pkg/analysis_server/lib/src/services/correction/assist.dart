@@ -1,17 +1,44 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'package:analysis_server/plugin/edit/assist/assist_dart.dart';
+import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer_plugin/utilities/assist/assist.dart';
+import 'package:analyzer_plugin/utilities/change_builder/change_workspace.dart';
+
+/**
+ * The implementation of [DartAssistContext].
+ */
+class DartAssistContextImpl implements DartAssistContext {
+  @override
+  final ChangeWorkspace workspace;
+
+  @override
+  final ResolvedUnitResult resolveResult;
+
+  @override
+  final int selectionOffset;
+
+  @override
+  final int selectionLength;
+
+  DartAssistContextImpl(this.workspace, this.resolveResult,
+      this.selectionOffset, this.selectionLength);
+}
 
 /**
  * An enumeration of possible assist kinds.
  */
 class DartAssistKind {
+  static const ADD_NOT_NULL_ASSERT = const AssistKind(
+      'dart.assist.addNotNullAssert', 30, "Add a not-null assertion");
   static const ADD_TYPE_ANNOTATION = const AssistKind(
       'dart.assist.addTypeAnnotation', 30, "Add type annotation");
   static const ASSIGN_TO_LOCAL_VARIABLE = const AssistKind(
       'dart.assist.assignToVariable', 30, "Assign value to new local variable");
+  static const CONVERT_CLASS_TO_MIXIN = const AssistKind(
+      'dart.assist.convert.classToMixin', 30, "Convert class to a mixin");
   static const CONVERT_DOCUMENTATION_INTO_BLOCK = const AssistKind(
       'dart.assist.convert.blockComment',
       30,
@@ -21,15 +48,15 @@ class DartAssistKind {
       30,
       "Convert to line documentation comment");
   static const CONVERT_INTO_ASYNC_BODY = const AssistKind(
-      'dart.assist.convert.bodyToAsync', 30, "Convert to async function body");
+      'dart.assist.convert.bodyToAsync', 29, "Convert to async function body");
   static const CONVERT_INTO_BLOCK_BODY = const AssistKind(
       'dart.assist.convert.bodyToBlock', 30, "Convert to block body");
   static const CONVERT_INTO_EXPRESSION_BODY = const AssistKind(
       'dart.assist.convert.bodyToExpression', 30, "Convert to expression body");
-  static const CONVERT_INTO_FOR_INDEX = const AssistKind(
-      'dart.assist.convert.forEachToForIndex', 30, "Convert to for-index loop");
   static const CONVERT_INTO_FINAL_FIELD = const AssistKind(
       'dart.assist.convert.getterToFinalField', 30, "Convert to final field");
+  static const CONVERT_INTO_FOR_INDEX = const AssistKind(
+      'dart.assist.convert.forEachToForIndex', 30, "Convert to for-index loop");
   static const CONVERT_INTO_GENERIC_FUNCTION_SYNTAX = const AssistKind(
       'dart.assist.convert.toGenericFunctionSyntax',
       30,
@@ -39,7 +66,9 @@ class DartAssistKind {
   static const CONVERT_INTO_IS_NOT =
       const AssistKind('dart.assist.convert.isNot', 30, "Convert to is!");
   static const CONVERT_INTO_IS_NOT_EMPTY = const AssistKind(
-      'dart.assist.convert.isNotEmpty', 30, "Convert to 'isNotEmpty'");
+      'dart.assist.convert.isNotEmpty', 30, "Convert to 'isNotEmpty'",
+      // todo (pq): unify w/ fix
+      associatedErrorCodes: <String>['prefer_is_not_empty']);
   static const CONVERT_PART_OF_TO_URI = const AssistKind(
       'dart.assist.convert.partOfToPartUri', 30, "Convert to use a URI");
   static const CONVERT_TO_DOUBLE_QUOTED_STRING = const AssistKind(
@@ -50,14 +79,44 @@ class DartAssistKind {
       'dart.assist.convert.toConstructorFieldParameter',
       30,
       "Convert to field formal parameter");
+  static const CONVERT_TO_FOR_ELEMENT = const AssistKind(
+      'dart.assist.convertToForElement', 30, "Convert to a 'for' element");
+  static const CONVERT_TO_IF_ELEMENT = const AssistKind(
+      'dart.assist.convertToIfElement', 30, "Convert to an 'if' element");
+  static const CONVERT_TO_INT_LITERAL = const AssistKind(
+      'dart.assist.convert.toIntLiteral', 30, "Convert to an int literal");
+  static const CONVERT_TO_LIST_LITERAL = const AssistKind(
+      'dart.assist.convert.toListLiteral', 30, "Convert to list literal",
+      // todo (brianwilkerson): unify w/ fix
+      associatedErrorCodes: <String>['prefer_collection_literals']);
+  static const CONVERT_TO_MAP_LITERAL = const AssistKind(
+      'dart.assist.convert.toMapLiteral', 30, "Convert to map literal",
+      // todo (brianwilkerson): unify w/ fix
+      associatedErrorCodes: <String>['prefer_collection_literals']);
+  static const CONVERT_TO_MULTILINE_STRING = const AssistKind(
+      'dart.assist.convert.toMultilineString',
+      30,
+      "Convert to multiline string");
   static const CONVERT_TO_NORMAL_PARAMETER = const AssistKind(
       'dart.assist.convert.toConstructorNormalParameter',
       30,
       "Convert to normal parameter");
+  static const CONVERT_TO_NULL_AWARE = const AssistKind(
+      'dart.assist.convert.toNullAware', 30, "Convert to use '?.'");
+  static const CONVERT_TO_PACKAGE_IMPORT = const AssistKind(
+      'dart.assist.convert.relativeToPackageImport',
+      30,
+      "Convert to 'package:' import");
+  static const CONVERT_TO_SET_LITERAL = const AssistKind(
+      'dart.assist.convert.toSetLiteral', 30, "Convert to set literal",
+      // todo (brianwilkerson): unify w/ fix
+      associatedErrorCodes: <String>['prefer_collection_literals']);
   static const CONVERT_TO_SINGLE_QUOTED_STRING = const AssistKind(
       'dart.assist.convert.toSingleQuotedString',
       30,
       "Convert to single quoted string");
+  static const CONVERT_TO_SPREAD = const AssistKind(
+      'dart.assist.convertToSpread', 30, "Convert to a spread");
   static const ENCAPSULATE_FIELD =
       const AssistKind('dart.assist.encapsulateField', 30, "Encapsulate field");
   static const EXCHANGE_OPERANDS =
@@ -74,8 +133,8 @@ class DartAssistKind {
       const AssistKind('dart.assist.flutter.move.down', 30, "Move widget down");
   static const FLUTTER_MOVE_UP =
       const AssistKind('dart.assist.flutter.move.up', 30, "Move widget up");
-  static const FLUTTER_REMOVE_WIDGET =
-      const AssistKind('dart.assist.flutter.removeWidget', 30, "Remove widget");
+  static const FLUTTER_REMOVE_WIDGET = const AssistKind(
+      'dart.assist.flutter.removeWidget', 30, "Remove this widget");
   static const FLUTTER_SWAP_WITH_CHILD = const AssistKind(
       'dart.assist.flutter.swap.withChild', 30, "Swap with child");
   static const FLUTTER_SWAP_WITH_PARENT = const AssistKind(
@@ -84,14 +143,20 @@ class DartAssistKind {
       const AssistKind('dart.assist.flutter.wrap.center', 30, "Center widget");
   static const FLUTTER_WRAP_COLUMN = const AssistKind(
       'dart.assist.flutter.wrap.column', 30, "Wrap with Column");
+  static const FLUTTER_WRAP_CONTAINER = const AssistKind(
+      'dart.assist.flutter.wrap.container', 30, "Wrap with Container");
   static const FLUTTER_WRAP_GENERIC = const AssistKind(
       'dart.assist.flutter.wrap.generic', 30, "Wrap with new widget");
   static const FLUTTER_WRAP_PADDING =
       const AssistKind('dart.assist.flutter.wrap.padding', 30, "Add padding");
   static const FLUTTER_WRAP_ROW =
       const AssistKind('dart.assist.flutter.wrap.row', 30, "Wrap with Row");
+  static const FLUTTER_WRAP_STREAM_BUILDER = const AssistKind(
+      'dart.assist.flutter.wrap.streamBuilder', 30, "Wrap with StreamBuilder");
   static const IMPORT_ADD_SHOW = const AssistKind(
       'dart.assist.addShowCombinator', 30, "Add explicit 'show' combinator");
+  static const INLINE_INVOCATION =
+      const AssistKind('dart.assist.inline', 30, "Inline invocation of '{0}'");
   static const INTRODUCE_LOCAL_CAST_TYPE = const AssistKind(
       'dart.assist.introduceLocalCast',
       30,
@@ -109,7 +174,10 @@ class DartAssistKind {
   static const JOIN_VARIABLE_DECLARATION = const AssistKind(
       'dart.assist.joinVariableDeclaration', 30, "Join variable declaration");
   static const REMOVE_TYPE_ANNOTATION = const AssistKind(
-      'dart.assist.removeTypeAnnotation', 29, "Remove type annotation");
+      // todo (pq): unify w/ fix
+      'dart.assist.removeTypeAnnotation',
+      29,
+      "Remove type annotation");
   static const REPLACE_CONDITIONAL_WITH_IF_ELSE = const AssistKind(
       'dart.assist.convert.conditionalToIfElse',
       30,
@@ -118,6 +186,10 @@ class DartAssistKind {
       'dart.assist.convert.ifElseToConditional',
       30,
       "Replace 'if-else' with conditional ('c ? x : y')");
+  static const SORT_CHILD_PROPERTY_LAST = const AssistKind(
+      'dart.assist.sort.child.properties.last',
+      30,
+      "Move child property to end of arguments");
   static const SPLIT_AND_CONDITION = const AssistKind(
       'dart.assist.splitIfConjunction', 30, "Split && condition");
   static const SPLIT_VARIABLE_DECLARATION = const AssistKind(
@@ -138,4 +210,6 @@ class DartAssistKind {
       'dart.assist.surround.tryFinally', 29, "Surround with 'try-finally'");
   static const SURROUND_WITH_WHILE = const AssistKind(
       'dart.assist.surround.while', 24, "Surround with 'while'");
+  static const USE_CURLY_BRACES =
+      const AssistKind('USE_CURLY_BRACES', 30, "Use curly braces");
 }

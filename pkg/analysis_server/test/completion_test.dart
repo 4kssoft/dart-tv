@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -155,23 +155,21 @@ class String{}class List{}class test <X extends !1String!2> {}''',
 class String{}class List{}class DateTime{}typedef T Y<T extends !1>(List input);''',
         <String>["1+DateTime", "1+String"]);
 
-    buildTests('testCommentSnippets029', '''
+    // https://github.com/dart-lang/sdk/issues/33992
+    buildTests(
+        'testCommentSnippets029',
+        '''
 interface A<X> default B<X extends !1List!2> {}''',
-        <String>["1+DateTime", "2+List"]);
-
-    buildTests(
-        'testCommentSnippets030',
-        '''
-class Bar<T extends Foo> {const Bar(!1T!2 k);T!3 m(T!4 a, T!5 b){}final T!6 f = null;}''',
-        <String>["1+T", "2+T", "3+T", "4+T", "5+T", "6+T"],
-        failingTests: '123456');
-
-    buildTests(
-        'testCommentSnippets031',
-        '''
-class Bar<T extends Foo> {m(x){if (x is !1) return;if (x is!!!2)}}''',
-        <String>["1+Bar", "1+T", "2+T", "2+Bar"],
+        <String>["1+DateTime", "2+List"],
         failingTests: '12');
+
+    buildTests('testCommentSnippets030', '''
+class Bar<T extends Foo> {const Bar(!1T!2 k);T!3 m(T!4 a, T!5 b){}final T!6 f = null;}''',
+        <String>["1+T", "2+T", "3+T", "4+T", "5+T", "6+T"]);
+
+    buildTests('testCommentSnippets031', '''
+class Bar<T extends Foo> {m(x){if (x is !1) return;if (x is!!!2)}}''',
+        <String>["1+Bar", "1+T", "2+T", "2+Bar"]);
 
     buildTests(
         'testCommentSnippets032',
@@ -594,12 +592,17 @@ class Foo {this.!1}''',
         <String>["1-Object"],
         failingTests: '1');
 
-    buildTests('testCommentSnippets082', '''
+    // https://github.com/dart-lang/sdk/issues/33992
+    buildTests(
+        'testCommentSnippets082',
+        '''
         class HttpRequest {}
         class HttpResponse {}
         main() {
           var v = (HttpRequest req, HttpResp!1)
-        }''', <String>["1+HttpResponse"]);
+        }''',
+        <String>["1+HttpResponse"],
+        failingTests: '1');
 
     buildTests('testCommentSnippets083', '''
 main() {(.!1)}''', <String>["1-toString"]);
@@ -751,7 +754,9 @@ class AAA {
 
 class C {
   @A!1
-}''', <String>["1+AAA" /*":" + ProposalKind.CONSTRUCTOR*/]);
+}''', <String>[
+      "1+AAA" /*":" + ProposalKind.CONSTRUCTOR*/
+    ]);
 
     buildTests('testCompletion_argument_typeName', '''
 class Enum {
@@ -1016,9 +1021,13 @@ class int{}class Foo { mth() { for (in!1t i = 0; i!2 < 5; i!3++); }}''',
 class Foo { int boo = 7; mth() { PNGS.sort((String a, Str!1) => a.compareTo(b)); }}''',
         <String>["1+String"]);
 
-    buildTests('testCompletion_function_partial', '''
+    // https://github.com/dart-lang/sdk/issues/33992
+    buildTests(
+        'testCompletion_function_partial',
+        '''
 class Foo { int boo = 7; mth() { PNGS.sort((String a, Str!1)); }}''',
-        <String>["1+String"]);
+        <String>["1+String"],
+        failingTests: '1');
 
     buildTests(
         'testCompletion_functionTypeParameter_namedArgument',
@@ -1194,12 +1203,17 @@ main(p) {
       "4-isVariable"
     ]);
 
-    buildTests('testCompletion_is_asIdentifierStart', '''
+    // https://github.com/dart-lang/sdk/issues/33992
+    buildTests(
+        'testCompletion_is_asIdentifierStart',
+        '''
 main(p) {
   var isVisible;
   var v1 = is!1;
   var v2 = is!2
-}''', <String>["1+isVisible", "2+isVisible"]);
+}''',
+        <String>["1+isVisible", "2+isVisible"],
+        failingTests: '12');
 
     buildTests('testCompletion_is_asPrefixedIdentifierStart', '''
 class A {
@@ -1689,8 +1703,7 @@ throw new Seria!1lizationException();}''',
     buildTests(
         'testLibrary002',
         '''t2() {var q=[0],z=q.!1length;q.!2clear();}''',
-        <String>["1+length", "1+isEmpty", "2+clear"],
-        failingTests: '1');
+        <String>["1+length", "1+isEmpty", "2+clear"]);
 
     // TODO Include corelib analysis
     buildTests('testLibrary003', '''class X{var q; f() {q.!1a!2}}''',
@@ -2230,7 +2243,9 @@ class T {
     buildTests(
         'test027', '''m(){try{}catch(eeee,ssss){s!1}''', <String>["1+ssss"]);
 
-    buildTests('test028', '''m(){var isX=3;if(is!1)''', <String>["1+isX"]);
+    // https://github.com/dart-lang/sdk/issues/33992
+    buildTests('test028', '''m(){var isX=3;if(is!1)''', <String>["1+isX"],
+        failingTests: '1');
 
     buildTests('test029', '''m(){[1].forEach((x)=>!1x);}''', <String>["1+x"]);
 
@@ -2407,11 +2422,11 @@ class A<Z extends X> {
    *
    * Optional argument [failingTests], if given, is a string, each character of
    * which corresponds to an X in the [originalSource] for which the test is
-   * expected to fail.  This sould be used to mark known completion bugs that
+   * expected to fail.  This should be used to mark known completion bugs that
    * have not yet been fixed.
    */
   void buildTests(String baseName, String originalSource, List<String> results,
-      {Map<String, String> extraFiles, String failingTests: ''}) {
+      {Map<String, String> extraFiles, String failingTests = ''}) {
     List<LocationSpec> completionTests =
         LocationSpec.from(originalSource, results);
     completionTests.sort((LocationSpec first, LocationSpec second) {

@@ -3,56 +3,53 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:async_helper/async_helper.dart';
-import 'package:compiler/src/commandline_options.dart';
 import 'package:compiler/src/compiler.dart';
 import 'package:compiler/src/universe/call_structure.dart';
-import 'package:compiler/src/universe/world_builder.dart';
+import 'package:compiler/src/universe/codegen_world_builder.dart';
 import 'package:expect/expect.dart';
 
-import '../memory_compiler.dart';
+import '../helpers/memory_compiler.dart';
 
 const String code = r'''
-import 'package:meta/dart2js.dart';
-
 class Class1 {
-  @noInline
+  @pragma('dart2js:noInline')
   method1<T>() {}
 
-  @noInline
+  @pragma('dart2js:noInline')
   method2<T>() => T;
 
-  @noInline
+  @pragma('dart2js:noInline')
   method3<T>() => T;
 
-  @noInline
+  @pragma('dart2js:noInline')
   method4<T>() => T;
 
-  @noInline
+  @pragma('dart2js:noInline')
   method5<T>() => T;
 
-  @noInline
+  @pragma('dart2js:noInline')
   method6<T>() {}
 }
 
 class Class2 {}
 
 class Class3 implements Class1 {
-  @noInline
+  @pragma('dart2js:noInline')
   method1<T>() {}
 
-  @noInline
+  @pragma('dart2js:noInline')
   method2<T>() {}
 
-  @noInline
+  @pragma('dart2js:noInline')
   method3<T>() {}
 
-  @noInline
+  @pragma('dart2js:noInline')
   method4<T>() {}
 
-  @noInline
+  @pragma('dart2js:noInline')
   method5<T>() {}
 
-  @noInline
+  @pragma('dart2js:noInline')
   method6<T>() {}
 }
 
@@ -85,17 +82,17 @@ main(args) {
 
 main() {
   asyncTest(() async {
-    CompilationResult result = await runCompiler(
-        memorySourceFiles: {'main.dart': code}, options: [Flags.strongMode]);
+    CompilationResult result =
+        await runCompiler(memorySourceFiles: {'main.dart': code});
     Expect.isTrue(result.isSuccess);
     Compiler compiler = result.compiler;
-    CodegenWorldBuilder worldBuilder = compiler.codegenWorldBuilder;
+    CodegenWorld codegenWorld = compiler.codegenWorldForTesting;
 
     CallStructure noTypeArguments = new CallStructure(0, [], 0);
     CallStructure oneTypeArgument = new CallStructure(0, [], 1);
 
     Iterable<CallStructure> getCallStructures(String name) {
-      return worldBuilder
+      return codegenWorld
               .invocationsByName(name)
               ?.keys
               ?.map((s) => s.callStructure) ??

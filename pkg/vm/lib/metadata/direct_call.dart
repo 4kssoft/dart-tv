@@ -26,8 +26,10 @@ class DirectCallMetadata {
 /// Repository for [DirectCallMetadata].
 class DirectCallMetadataRepository
     extends MetadataRepository<DirectCallMetadata> {
+  static const repositoryTag = 'vm.direct-call.metadata';
+
   @override
-  final String tag = 'vm.direct-call.metadata';
+  String get tag => repositoryTag;
 
   @override
   final Map<TreeNode, DirectCallMetadata> mapping =
@@ -35,7 +37,8 @@ class DirectCallMetadataRepository
 
   @override
   void writeToBinary(DirectCallMetadata metadata, Node node, BinarySink sink) {
-    sink.writeCanonicalNameReference(getCanonicalNameOfMember(metadata.target));
+    sink.writeNullAllowedCanonicalNameReference(
+        getCanonicalNameOfMember(metadata.target));
     sink.writeByte(metadata.checkReceiverForNull ? 1 : 0);
   }
 

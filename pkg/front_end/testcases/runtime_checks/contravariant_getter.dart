@@ -9,13 +9,13 @@ typedef void F<T>(T x);
 
 class C<T> {
   F<T> y;
-  void f(T /*@covariance=genericImpl*/ value) {
+  void f(T value) {
     this.y(value);
   }
 }
 
 void g(C<num> c) {
-  c.y /*@checkGetterReturn=(num) -> void*/ (1.5);
+  c.y /*@ checkGetterReturn=(num*) ->* void */ (1.5);
 }
 
 void main() {}

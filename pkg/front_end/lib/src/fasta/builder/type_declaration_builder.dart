@@ -4,38 +4,43 @@
 
 library fasta.type_declaration_builder;
 
+import 'package:kernel/ast.dart' show DartType, Nullability;
+
 import 'builder.dart'
     show
-        Declaration,
+        Builder,
         LibraryBuilder,
         MetadataBuilder,
         ModifierBuilder,
+        NullabilityBuilder,
         TypeBuilder;
 
-abstract class TypeDeclarationBuilder<T extends TypeBuilder, R>
-    extends ModifierBuilder {
+abstract class TypeDeclarationBuilder extends ModifierBuilder {
   final List<MetadataBuilder> metadata;
 
   final int modifiers;
 
   final String name;
 
-  Declaration parent;
+  Builder parent;
 
   TypeDeclarationBuilder(
       this.metadata, this.modifiers, this.name, this.parent, int charOffset,
       [Uri fileUri])
-      : super(parent, charOffset, fileUri);
+      : assert(modifiers != null),
+        super(parent, charOffset, fileUri);
 
   bool get isTypeDeclaration => true;
 
-  bool get isMixinApplication => false;
-
-  R buildType(LibraryBuilder library, List<T> arguments);
-
-  /// [arguments] have already been built.
-  R buildTypesWithBuiltArguments(LibraryBuilder library, List<R> arguments);
-
   @override
   String get fullNameForErrors => name;
+
+  int get typeVariablesCount => 0;
+
+  DartType buildType(LibraryBuilder library,
+      NullabilityBuilder nullabilityBuilder, List<TypeBuilder> arguments);
+
+  /// [arguments] have already been built.
+  DartType buildTypesWithBuiltArguments(LibraryBuilder library,
+      Nullability nullability, List<DartType> arguments);
 }

@@ -1,9 +1,7 @@
 // Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-// VMOptions=--error_on_bad_type --error_on_bad_override
 
-import 'dart:async';
 import 'dart:developer';
 import 'package:observatory/service_io.dart';
 import 'package:unittest/unittest.dart';
@@ -57,22 +55,19 @@ var tests = <IsolateTest>[
     print(result);
     expect(result.valueAsString, equals('105'));
 
-    result = await lib.evaluate('globalVar + staticVar + 5');
-    expect(result.type, equals('Error'));
+    await expectError(() => lib.evaluate('globalVar + staticVar + 5'));
 
     result = await cls.evaluate('globalVar + staticVar + 5');
     print(result);
     expect(result.valueAsString, equals('1105'));
 
-    result = await cls.evaluate('this + 5');
-    expect(result.type, equals('Error'));
+    await expectError(() => cls.evaluate('this + 5'));
 
     result = await instance.evaluate('this + 5');
     print(result);
     expect(result.valueAsString, equals('10005'));
 
-    result = await instance.evaluate('this + frog');
-    expect(result.type, equals('Error'));
+    await expectError(() => instance.evaluate('this + frog'));
   },
   resumeIsolate,
   hasStoppedAtBreakpoint,
@@ -92,5 +87,20 @@ var tests = <IsolateTest>[
     expect(result.valueAsString, equals("2"));
   }
 ];
+
+expectError(func) async {
+  bool gotException = false;
+  dynamic result;
+  try {
+    result = await func();
+    expect(result.type, equals('Error')); // dart1 semantics
+  } on ServerRpcException catch (e) {
+    expect(e.code, equals(ServerRpcException.kExpressionCompilationError));
+    gotException = true;
+  }
+  if (result?.type != 'Error') {
+    expect(gotException, true); // dart2 semantics
+  }
+}
 
 main(args) => runIsolateTests(args, tests, testeeConcurrent: testFunction);

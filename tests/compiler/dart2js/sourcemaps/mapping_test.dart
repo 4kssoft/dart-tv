@@ -9,9 +9,9 @@ import 'package:async_helper/async_helper.dart';
 import 'package:compiler/compiler_new.dart';
 import 'package:expect/expect.dart';
 import 'package:source_maps/source_maps.dart';
-import 'package:sourcemap_testing/src/annotated_code_helper.dart';
+import 'package:front_end/src/testing/annotated_code_helper.dart';
 
-import '../memory_compiler.dart';
+import '../helpers/memory_compiler.dart';
 
 const List<String> TESTS = const <String>[
   '''
@@ -34,7 +34,7 @@ import 'package:expect/expect.dart';
   @{main}test();
 @{main}}
 
-@NoInline()
+@pragma('dart2js:noInline')
 @{test}test() {
 @{test}}
 ''',
@@ -72,7 +72,7 @@ void main(List<String> arguments) {
     } else if (arg == '--write-js') {
       writeJs = true;
     } else {
-      int index = int.parse(arg, onError: (_) => null);
+      int index = int.tryParse(arg);
       if (index != null) {
         indices ??= <int>[];
         if (index < 0 || index >= TESTS.length) {
@@ -171,9 +171,11 @@ class SourceLocation {
 
   SourceLocation(this.methodName, this.lineNo, this.columnNo);
 
+  @override
   int get hashCode =>
       methodName.hashCode * 13 + lineNo.hashCode * 17 + columnNo.hashCode * 19;
 
+  @override
   bool operator ==(other) {
     if (identical(this, other)) return true;
     if (other is! SourceLocation) return false;
@@ -182,5 +184,6 @@ class SourceLocation {
         columnNo == other.columnNo;
   }
 
+  @override
   String toString() => '$methodName:$lineNo:$columnNo';
 }

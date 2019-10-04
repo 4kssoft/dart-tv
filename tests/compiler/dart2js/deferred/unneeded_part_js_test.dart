@@ -6,7 +6,7 @@
 
 import 'package:async_helper/async_helper.dart';
 import 'package:expect/expect.dart';
-import '../memory_compiler.dart';
+import '../helpers/memory_compiler.dart';
 
 main() {
   runTest() async {
@@ -27,7 +27,7 @@ main() {
   });
 }
 
-const Map MEMORY_SOURCE_FILES = const {
+const Map<String, String> MEMORY_SOURCE_FILES = const {
   'main.dart': """
 class Greeting {
   final message;

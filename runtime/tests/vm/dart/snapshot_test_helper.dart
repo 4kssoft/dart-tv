@@ -4,6 +4,7 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:expect/expect.dart';
 import 'package:path/path.dart' as p;
@@ -40,15 +41,58 @@ void expectOutput(String what, Result result) {
   }
 }
 
-Future<Result> runDartBinary(String prefix, List<String> arguments) async {
-  final binary = Platform.executable;
-  final actualArguments = <String>[]
+final String scriptSuffix = Platform.isWindows ? ".bat" : "";
+final String executableSuffix = Platform.isWindows ? ".exe" : "";
+final String buildDir = p.dirname(Platform.executable);
+final String platformDill = p.join(buildDir, "vm_platform_strong.dill");
+final String genSnapshot = p.join(buildDir, "gen_snapshot${executableSuffix}");
+final String dartPrecompiledRuntime =
+    p.join(buildDir, "dart_precompiled_runtime${executableSuffix}");
+final String genKernel = p.join("pkg", "vm", "bin", "gen_kernel.dart");
+final String checkedInDartVM =
+    p.join("tools", "sdks", "dart-sdk", "bin", "dart${executableSuffix}");
+
+Future<Result> runDart(String prefix, List<String> arguments) {
+  final augmentedArguments = <String>[]
     ..addAll(Platform.executableArguments)
     ..addAll(arguments);
-  print("+ $binary " + actualArguments.join(" "));
-  final processResult = await Process.run(binary, actualArguments);
-  final result = new Result(
-      '[$prefix] ${binary} ${actualArguments.join(' ')}', processResult);
+  return runBinary(prefix, Platform.executable, augmentedArguments);
+}
+
+Future<Result> runGenKernel(String prefix, List<String> arguments) {
+  final augmentedArguments = <String>[]
+    ..add(genKernel)
+    ..add("--platform")
+    ..add(platformDill)
+    ..addAll(arguments);
+  return runBinary(prefix, checkedInDartVM, augmentedArguments);
+}
+
+Future<Result> runGenSnapshot(String prefix, List<String> arguments) {
+  return runBinary(prefix, genSnapshot, arguments);
+}
+
+Future<Result> runBinary(
+    String prefix, String binary, List<String> arguments) async {
+  print("+ $binary " + arguments.join(" "));
+  final processResult = await Process.run(binary, arguments);
+  final result =
+      new Result('[$prefix] ${binary} ${arguments.join(' ')}', processResult);
+
+  if (processResult.stdout.isNotEmpty) {
+    print('''
+
+Command stdout:
+${processResult.stdout}''');
+  }
+
+  if (processResult.stderr.isNotEmpty) {
+    print('''
+
+Command stderr:
+${processResult.stderr}''');
+  }
+
   if (result.processResult.exitCode != 0) {
     reportError(result,
         '[$prefix] Process finished with non-zero exit code ${result.processResult.exitCode}');
@@ -56,15 +100,28 @@ Future<Result> runDartBinary(String prefix, List<String> arguments) async {
   return result;
 }
 
-Future<Null> checkDeterministicSnapshot(
-    String snapshotKind, String expectedStdout) async {
-  final Directory temp = Directory.systemTemp.createTempSync();
-  final snapshot1Path = p.join(temp.path, 'snapshot1');
-  final snapshot2Path = p.join(temp.path, 'snapshot2');
-
+withTempDir(Future fun(String dir)) async {
+  final Directory tempDir = Directory.systemTemp.createTempSync();
   try {
-    final generate1Result = await runDartBinary('GENERATE SNAPSHOT 1', [
+    await fun(tempDir.path);
+  } finally {
+    tempDir.deleteSync(recursive: true);
+  }
+}
+
+checkDeterministicSnapshot(String snapshotKind, String expectedStdout) async {
+  await withTempDir((String temp) async {
+    final snapshot1Path = p.join(temp, 'snapshot1');
+    final snapshot2Path = p.join(temp, 'snapshot2');
+
+    print("Version ${Platform.version}");
+
+    final generate1Result = await runDart('GENERATE SNAPSHOT 1', [
       '--deterministic',
+      '--trace_class_finalization',
+      '--trace_type_finalization',
+      '--trace_compiler',
+      '--verbose_gc',
       '--snapshot=$snapshot1Path',
       '--snapshot-kind=$snapshotKind',
       Platform.script.toFilePath(),
@@ -72,8 +129,12 @@ Future<Null> checkDeterministicSnapshot(
     ]);
     expectOutput(expectedStdout, generate1Result);
 
-    final generate2Result = await runDartBinary('GENERATE SNAPSHOT 2', [
+    final generate2Result = await runDart('GENERATE SNAPSHOT 2', [
       '--deterministic',
+      '--trace_class_finalization',
+      '--trace_type_finalization',
+      '--trace_compiler',
+      '--verbose_gc',
       '--snapshot=$snapshot2Path',
       '--snapshot-kind=$snapshotKind',
       Platform.script.toFilePath(),
@@ -84,13 +145,48 @@ Future<Null> checkDeterministicSnapshot(
     var snapshot1Bytes = await new File(snapshot1Path).readAsBytes();
     var snapshot2Bytes = await new File(snapshot2Path).readAsBytes();
 
-    Expect.equals(snapshot1Bytes.length, snapshot2Bytes.length);
-    for (var i = 0; i < snapshot1Bytes.length; i++) {
+    var minLength = min(snapshot1Bytes.length, snapshot2Bytes.length);
+    for (var i = 0; i < minLength; i++) {
       if (snapshot1Bytes[i] != snapshot2Bytes[i]) {
-        Expect.fail("Snapshots are not bitwise equal!");
+        Expect.fail("Snapshots differ at byte $i");
       }
     }
-  } finally {
-    await temp.delete(recursive: true);
-  }
+    Expect.equals(snapshot1Bytes.length, snapshot2Bytes.length);
+  });
+}
+
+runAppJitTest(Uri testScriptUri) async {
+  await withTempDir((String temp) async {
+    final snapshotPath = p.join(temp, 'app.jit');
+    final testPath = testScriptUri.toFilePath();
+
+    final trainingResult = await runDart('TRAINING RUN', [
+      '--snapshot=$snapshotPath',
+      '--snapshot-kind=app-jit',
+      testPath,
+      '--train'
+    ]);
+    expectOutput("OK(Trained)", trainingResult);
+    final runResult = await runDart('RUN FROM SNAPSHOT', [snapshotPath]);
+    expectOutput("OK(Run)", runResult);
+  });
+}
+
+Future<void> runAppJitBytecodeTest(Uri testScriptUri) async {
+  await withTempDir((String temp) async {
+    final snapshotPath = p.join(temp, 'app.jit');
+    final testPath = testScriptUri.toFilePath();
+
+    final trainingResult = await runDart('TRAINING RUN', [
+      '--enable_interpreter',
+      '--snapshot=$snapshotPath',
+      '--snapshot-kind=app-jit',
+      testPath,
+      '--train'
+    ]);
+    expectOutput("OK(Trained)", trainingResult);
+    final runResult = await runDart(
+        'RUN FROM SNAPSHOT', ['--enable_interpreter', snapshotPath]);
+    expectOutput("OK(Run)", runResult);
+  });
 }

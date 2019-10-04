@@ -2,24 +2,6 @@
 # for details. All rights reserved. Use of this source code is governed by a
 # BSD-style license that can be found in the LICENSE file.
 
-[ $compiler == dart2js ]
-bound_closure_super_test: RuntimeError
-fake_thing_test: RuntimeError # Issue 13010
-mirror_intercepted_field_test: SkipByDesign # mirrors not supported
-native_mirror_test: SkipByDesign # mirrors not supported
-native_no_such_method_exception3_frog_test: SkipByDesign # mirrors not supported
-native_no_such_method_exception4_frog_test: SkipByDesign # mirrors not supported
-native_no_such_method_exception5_frog_test: SkipByDesign # mirrors not supported
-
 [ $browser ]
 *: Skip
 
-[ $compiler == dart2js && $fasta ]
-native_library_same_name_used_frog_test: CompileTimeError
-subclassing_constructor_1_test: RuntimeError
-subclassing_super_call_test: RuntimeError
-subclassing_super_field_1_test: RuntimeError
-subclassing_super_field_2_test: RuntimeError
-
-[ $compiler == dart2js && $minified ]
-optimization_hints_test: RuntimeError, OK # Test relies on unminified names.

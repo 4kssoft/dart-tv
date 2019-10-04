@@ -10,13 +10,22 @@ import "dart:io" show File;
 
 import "dart:typed_data" show Uint8List;
 
+import 'package:kernel/ast.dart' show Location, Source;
+
+import "package:kernel/target/targets.dart" show TargetFlags;
+
 import "package:testing/testing.dart"
     show Chain, ChainContext, Result, Step, TestDescription, runMe;
+
+import "package:vm/target/vm.dart" show VmTarget;
 
 import "package:yaml/yaml.dart" show YamlList, YamlMap, YamlNode, loadYamlNode;
 
 import 'package:front_end/src/api_prototype/compiler_options.dart'
     show CompilerOptions;
+
+import 'package:front_end/src/api_prototype/diagnostic_message.dart'
+    show DiagnosticMessage, getMessageCodeObject;
 
 import 'package:front_end/src/api_prototype/memory_file_system.dart'
     show MemoryFileSystem;
@@ -24,7 +33,8 @@ import 'package:front_end/src/api_prototype/memory_file_system.dart'
 import 'package:front_end/src/compute_platform_binaries_location.dart'
     show computePlatformBinariesLocation;
 
-import 'package:front_end/src/fasta/fasta_codes.dart' show FormattedMessage;
+import 'package:front_end/src/fasta/command_line_reporting.dart'
+    as command_line_reporting;
 
 import 'package:front_end/src/fasta/severity.dart'
     show Severity, severityEnumValues;
@@ -33,6 +43,8 @@ import 'package:front_end/src/fasta/hybrid_file_system.dart'
     show HybridFileSystem;
 
 import "../../tool/_fasta/entry_points.dart" show BatchCompiler;
+
+import '../spell_checking_utils.dart' as spell;
 
 class MessageTestDescription extends TestDescription {
   @override
@@ -63,7 +75,9 @@ class MessageTestSuite extends ChainContext {
 
   final BatchCompiler compiler;
 
-  MessageTestSuite()
+  final bool fastOnly;
+
+  MessageTestSuite(this.fastOnly)
       : fileSystem = new MemoryFileSystem(Uri.parse("org-dartlang-fasta:///")),
         compiler = new BatchCompiler(null);
 
@@ -75,7 +89,8 @@ class MessageTestSuite extends ChainContext {
   Stream<MessageTestDescription> list(Chain suite) async* {
     Uri uri = suite.uri.resolve("messages.yaml");
     File file = new File.fromUri(uri);
-    YamlMap messages = loadYamlNode(await file.readAsString(), sourceUrl: uri);
+    String fileContent = file.readAsStringSync();
+    YamlMap messages = loadYamlNode(fileContent, sourceUrl: uri);
     for (String name in messages.keys) {
       YamlNode messageNode = messages.nodes[name];
       var message = messageNode.value;
@@ -85,23 +100,90 @@ class MessageTestSuite extends ChainContext {
       List<Example> examples = <Example>[];
       String externalTest;
       bool frontendInternal = false;
-      String analyzerCode;
-      String dart2jsCode;
+      List<String> analyzerCodes;
       Severity severity;
       YamlNode badSeverity;
+      YamlNode unnecessarySeverity;
+      List<String> badHasPublishedDocsValue = <String>[];
+      List<String> spellingMessages;
+      const String spellingPostMessage = "\nIf the word(s) look okay, update "
+          "'spell_checking_list_messages.txt' or "
+          "'spell_checking_list_common.txt'.";
+
+      Source source;
+      List<String> formatSpellingMistakes(
+          spell.SpellingResult spellResult, int offset, String message) {
+        if (source == null) {
+          List<int> bytes = file.readAsBytesSync();
+          List<int> lineStarts = new List<int>();
+          int indexOf = 0;
+          while (indexOf >= 0) {
+            lineStarts.add(indexOf);
+            indexOf = bytes.indexOf(10, indexOf + 1);
+          }
+          lineStarts.add(bytes.length);
+          source = new Source(lineStarts, bytes, uri, uri);
+        }
+        List<String> result = new List<String>();
+        for (int i = 0; i < spellResult.misspelledWords.length; i++) {
+          Location location = source.getLocation(
+              uri, offset + spellResult.misspelledWordsOffset[i]);
+          result.add(command_line_reporting.formatErrorMessage(
+              source.getTextLine(location.line),
+              location,
+              spellResult.misspelledWords[i].length,
+              relativize(uri),
+              "$message: '${spellResult.misspelledWords[i]}'."));
+        }
+        return result;
+      }
 
       for (String key in message.keys) {
         YamlNode node = message.nodes[key];
         var value = node.value;
+        // When positions matter, use node.span.text.
+        // When using node.span.text, replace r"\n" with "\n\n" to replace two
+        // characters with two characters without actually having the string
+        // "backslash n".
         switch (key) {
           case "template":
+            spell.SpellingResult spellingResult = spell.spellcheckString(
+                node.span.text.replaceAll(r"\n", "\n\n"),
+                dictionaries: const [
+                  spell.Dictionaries.common,
+                  spell.Dictionaries.cfeMessages
+                ]);
+            if (spellingResult.misspelledWords != null) {
+              spellingMessages ??= new List<String>();
+              spellingMessages.addAll(formatSpellingMistakes(
+                  spellingResult,
+                  node.span.start.offset,
+                  "Template likely has the following spelling mistake"));
+            }
+            break;
+
           case "tip":
+            spell.SpellingResult spellingResult = spell.spellcheckString(
+                node.span.text.replaceAll(r"\n", "\n\n"),
+                dictionaries: const [
+                  spell.Dictionaries.common,
+                  spell.Dictionaries.cfeMessages
+                ]);
+            if (spellingResult.misspelledWords != null) {
+              spellingMessages ??= new List<String>();
+              spellingMessages.addAll(formatSpellingMistakes(
+                  spellingResult,
+                  node.span.start.offset,
+                  "Tip likely has the following spelling mistake"));
+            }
             break;
 
           case "severity":
             severity = severityEnumValues[value];
             if (severity == null) {
               badSeverity = node;
+            } else if (severity == Severity.error) {
+              unnecessarySeverity = node;
             }
             break;
 
@@ -110,11 +192,9 @@ class MessageTestSuite extends ChainContext {
             break;
 
           case "analyzerCode":
-            analyzerCode = value;
-            break;
-
-          case "dart2jsCode":
-            dart2jsCode = value;
+            analyzerCodes = value is String
+                ? <String>[value]
+                : new List<String>.from(value);
             break;
 
           case "bytes":
@@ -157,10 +237,11 @@ class MessageTestSuite extends ChainContext {
             if (node is YamlList) {
               int i = 0;
               for (YamlNode script in node.nodes) {
-                examples.add(new ScriptExample("script${++i}", name, script));
+                examples
+                    .add(new ScriptExample("script${++i}", name, script, this));
               }
             } else {
-              examples.add(new ScriptExample("script", name, node));
+              examples.add(new ScriptExample("script", name, node, this));
             }
             break;
 
@@ -180,6 +261,16 @@ class MessageTestSuite extends ChainContext {
             externalTest = node.value;
             break;
 
+          case "index":
+            // index is validated during generation
+            break;
+
+          case "hasPublishedDocs":
+            if (value != true) {
+              badHasPublishedDocsValue.add(name);
+            }
+            break;
+
           default:
             unknownKeys.add(key);
         }
@@ -192,7 +283,7 @@ class MessageTestSuite extends ChainContext {
         if (problem != null) {
           String filename = relativize(uri);
           location ??= message.span.start;
-          int line = location.line;
+          int line = location.line + 1;
           int column = location.column;
           problem = "$filename:$line:$column: error:\n$problem";
         }
@@ -200,8 +291,18 @@ class MessageTestSuite extends ChainContext {
             name, messageNode, example, problem);
       }
 
-      for (Example example in examples) {
-        yield createDescription(example.name, example, null);
+      if (!fastOnly) {
+        for (Example example in examples) {
+          yield createDescription(example.name, example, null);
+        }
+        // "Wrap" example as a part.
+        for (Example example in examples) {
+          yield createDescription(
+              "part_wrapped_${example.name}",
+              new PartWrapExample(
+                  "part_wrapped_${example.name}", name, example),
+              null);
+        }
       }
 
       yield createDescription(
@@ -212,6 +313,14 @@ class MessageTestSuite extends ChainContext {
               : null);
 
       yield createDescription(
+          'hasPublishedDocs',
+          null,
+          badHasPublishedDocsValue.isNotEmpty
+              ? "Bad hasPublishedDocs value (only 'true' supported) in:"
+                  " ${badHasPublishedDocsValue.join(', ')}"
+              : null);
+
+      yield createDescription(
           "severity",
           null,
           badSeverity != null
@@ -219,16 +328,34 @@ class MessageTestSuite extends ChainContext {
               : null,
           location: badSeverity?.span?.start);
 
-      bool exampleAndAnalyzerCodeRequired = (severity != Severity.context &&
-          severity != Severity.internalProblem);
+      yield createDescription(
+          "unnecessarySeverity",
+          null,
+          unnecessarySeverity != null
+              ? "The 'ERROR' severity is the default and not necessary."
+              : null,
+          location: unnecessarySeverity?.span?.start);
 
       yield createDescription(
-          "externalexample",
+          "spelling",
+          null,
+          spellingMessages != null
+              ? spellingMessages.join("\n") + spellingPostMessage
+              : null);
+
+      bool exampleAndAnalyzerCodeRequired = severity != Severity.context &&
+          severity != Severity.internalProblem &&
+          severity != Severity.ignored;
+
+      yield createDescription(
+          "externalExample",
           null,
           exampleAndAnalyzerCodeRequired &&
                   externalTest != null &&
-                  !(new File(externalTest).existsSync())
-              ? "Given external example for $name points to a nonexisting file."
+                  !(new File.fromUri(suite.uri.resolve(externalTest))
+                      .existsSync())
+              ? "Given external example for $name points to a nonexisting file "
+                  "(${suite.uri.resolve(externalTest)})."
               : null);
 
       yield createDescription(
@@ -245,45 +372,34 @@ class MessageTestSuite extends ChainContext {
           null,
           exampleAndAnalyzerCodeRequired &&
                   !frontendInternal &&
-                  analyzerCode == null
+                  analyzerCodes == null
               ? "No analyzer code for $name."
                   "\nTry running"
                   " <BUILDDIR>/dart-sdk/bin/dartanalyzer --format=machine"
                   " on an example to find the code."
                   " The code is printed just before the file name."
               : null);
-
-      yield createDescription(
-          "dart2jsCode",
-          null,
-          exampleAndAnalyzerCodeRequired &&
-                  !frontendInternal &&
-                  analyzerCode != null &&
-                  dart2jsCode == null
-              ? "No dart2js code for $name."
-                  " Try using *ignored* or *fatal*"
-              : null);
     }
   }
 
-  String formatProblems(String message, Example example, List<List> problems) {
+  String formatProblems(
+      String message, Example example, List<DiagnosticMessage> messages) {
     var span = example.node.span;
     StringBuffer buffer = new StringBuffer();
     buffer
       ..write(relativize(span.sourceUrl))
       ..write(":")
-      ..write(span.start.line)
+      ..write(span.start.line + 1)
       ..write(":")
       ..write(span.start.column)
       ..write(": error: ")
       ..write(message);
     buffer.write("\n${span.text}");
-    for (List problem in problems) {
-      FormattedMessage message = problem[0];
-      String formatted = message.formatted;
-      buffer.write("\nCode: ${message.code.name}");
+    for (DiagnosticMessage message in messages) {
+      buffer.write("\nCode: ${getMessageCodeObject(message).name}");
       buffer.write("\n  > ");
-      buffer.write(formatted.replaceAll("\n", "\n  > "));
+      buffer.write(
+          message.plainTextFormatted.join("\n").replaceAll("\n", "\n  > "));
     }
 
     return "$buffer";
@@ -300,6 +416,12 @@ abstract class Example {
   YamlNode get node;
 
   Uint8List get bytes;
+
+  Map<String, Uint8List> get scripts {
+    return {mainFilename: bytes};
+  }
+
+  String get mainFilename => "main.dart";
 }
 
 class BytesExample extends Example {
@@ -310,7 +432,7 @@ class BytesExample extends Example {
   final Uint8List bytes;
 
   BytesExample(String name, String code, this.node)
-      : bytes = new Uint8List.fromList(node.value),
+      : bytes = new Uint8List.fromList(node.cast<int>()),
         super(name, code);
 }
 
@@ -379,16 +501,80 @@ class ScriptExample extends Example {
   @override
   final YamlNode node;
 
-  final String script;
+  final Object script;
 
-  ScriptExample(String name, String code, this.node)
+  ScriptExample(String name, String code, this.node, MessageTestSuite suite)
       : script = node.value,
-        super(name, code);
+        super(name, code) {
+    if (script is! String && script is! Map) {
+      throw suite.formatProblems(
+          "A script must be either a String or a Map in $code:",
+          this, <DiagnosticMessage>[]);
+    }
+  }
 
   @override
-  Uint8List get bytes {
-    return new Uint8List.fromList(utf8.encode(script));
+  Uint8List get bytes => throw "Unsupported: ScriptExample.bytes";
+
+  @override
+  Map<String, Uint8List> get scripts {
+    Object script = this.script;
+    if (script is Map) {
+      var scriptFiles = <String, Uint8List>{};
+      script.forEach((fileName, value) {
+        scriptFiles[fileName] = new Uint8List.fromList(utf8.encode(value));
+      });
+      return scriptFiles;
+    } else {
+      return {mainFilename: new Uint8List.fromList(utf8.encode(script))};
+    }
   }
+}
+
+class PartWrapExample extends Example {
+  final Example example;
+  PartWrapExample(String name, String code, this.example) : super(name, code);
+
+  @override
+  Uint8List get bytes => throw "Unsupported: PartWrapExample.bytes";
+
+  @override
+  String get mainFilename => "main_wrapped.dart";
+
+  @override
+  Map<String, Uint8List> get scripts {
+    Map<String, Uint8List> wrapped = example.scripts;
+
+    var scriptFiles = <String, Uint8List>{};
+    scriptFiles.addAll(wrapped);
+
+    // Create a new main file
+    // TODO: Technically we should find a un-used name.
+    if (scriptFiles.containsKey(mainFilename)) {
+      throw "Framework failure: "
+          "Wanted to create wrapper file, but the file already exists!";
+    }
+    scriptFiles[mainFilename] = new Uint8List.fromList(utf8.encode("""
+      part "${example.mainFilename}";
+    """));
+
+    // Modify the original main file to be part of the wrapper and add lots of
+    // gunk so every actual position in the file is not a valid position in the
+    // wrapper.
+    scriptFiles[example.mainFilename] = new Uint8List.fromList(utf8.encode("""
+      part of "${mainFilename}";
+      // La la la la la la la la la la la la la.
+      // La la la la la la la la la la la la la.
+      // La la la la la la la la la la la la la.
+      // La la la la la la la la la la la la la.
+      // La la la la la la la la la la la la la.
+    """) + scriptFiles[example.mainFilename]);
+
+    return scriptFiles;
+  }
+
+  @override
+  YamlNode get node => example.node;
 }
 
 class Validate extends Step<MessageTestDescription, Example, MessageTestSuite> {
@@ -413,62 +599,73 @@ class Compile extends Step<Example, Null, MessageTestSuite> {
 
   Future<Result<Null>> run(Example example, MessageTestSuite suite) async {
     if (example == null) return pass(null);
-    String name = "${example.expectedCode}/${example.name}";
-    Uri uri = suite.fileSystem.currentDirectory.resolve("${name}.dart");
-    suite.fileSystem.entityForUri(uri).writeAsBytesSync(example.bytes);
-    Uri output = uri.resolve("${uri.path}.dill");
+    String dir = "${example.expectedCode}/${example.name}";
+    example.scripts.forEach((String fileName, Uint8List bytes) {
+      Uri uri = suite.fileSystem.currentDirectory.resolve("$dir/$fileName");
+      suite.fileSystem.entityForUri(uri).writeAsBytesSync(bytes);
+    });
+    Uri main = suite.fileSystem.currentDirectory
+        .resolve("$dir/${example.mainFilename}");
+    Uri output =
+        suite.fileSystem.currentDirectory.resolve("$dir/main.dart.dill");
 
-    print("Compiling $uri");
-    List<List> problems = <List>[];
+    // Setup .packages if it doesn't exist.
+    Uri dotPackagesUri =
+        suite.fileSystem.currentDirectory.resolve("$dir/.packages");
+    if (!await suite.fileSystem.entityForUri(dotPackagesUri).exists()) {
+      suite.fileSystem.entityForUri(dotPackagesUri).writeAsBytesSync([]);
+    }
+
+    print("Compiling $main");
+    List<DiagnosticMessage> messages = <DiagnosticMessage>[];
 
     await suite.compiler.batchCompile(
         new CompilerOptions()
-          ..sdkSummary = computePlatformBinariesLocation()
+          ..sdkSummary = computePlatformBinariesLocation(forceBuildDir: true)
               .resolve("vm_platform_strong.dill")
+          ..target = new VmTarget(new TargetFlags())
           ..fileSystem = new HybridFileSystem(suite.fileSystem)
-          ..onProblem = (FormattedMessage problem, Severity severity,
-              List<FormattedMessage> context) {
-            problems.add([problem, severity]);
-          }
-          ..strongMode = true,
-        uri,
+          ..packagesFileUri = dotPackagesUri
+          ..onDiagnostic = messages.add
+          ..environmentDefines = const {},
+        main,
         output);
 
-    List<List> unexpectedProblems = <List>[];
-    for (List problem in problems) {
-      FormattedMessage message = problem[0];
-      if (message.code.name != example.expectedCode) {
-        unexpectedProblems.add(problem);
+    List<DiagnosticMessage> unexpectedMessages = <DiagnosticMessage>[];
+    for (DiagnosticMessage message in messages) {
+      if (getMessageCodeObject(message).name != example.expectedCode) {
+        unexpectedMessages.add(message);
       }
     }
-    if (unexpectedProblems.isEmpty) {
-      switch (problems.length) {
+    if (unexpectedMessages.isEmpty) {
+      switch (messages.length) {
         case 0:
           return fail(
               null,
-              suite.formatProblems("No problem reported in ${example.name}:",
-                  example, problems));
+              suite.formatProblems("No message reported in ${example.name}:",
+                  example, messages));
         case 1:
           return pass(null);
         default:
           return fail(
               null,
               suite.formatProblems(
-                  "Problem reported multiple times in ${example.name}:",
+                  "Message reported multiple times in ${example.name}:",
                   example,
-                  problems));
+                  messages));
       }
     }
     return fail(
         null,
-        suite.formatProblems("Too many problems reported in ${example.name}:",
-            example, problems));
+        suite.formatProblems("Too many messages reported in ${example.name}:",
+            example, messages));
   }
 }
 
 Future<MessageTestSuite> createContext(
     Chain suite, Map<String, String> environment) async {
-  return new MessageTestSuite();
+  final bool fastOnly = environment["fastOnly"] == "true";
+  return new MessageTestSuite(fastOnly);
 }
 
 String relativize(Uri uri) {
@@ -482,4 +679,4 @@ String relativize(Uri uri) {
 }
 
 main([List<String> arguments = const []]) =>
-    runMe(arguments, createContext, "../../testing.json");
+    runMe(arguments, createContext, configurationPath: "../../testing.json");

@@ -4,7 +4,7 @@
 
 import 'package:expect/expect.dart';
 import 'package:async_helper/async_helper.dart';
-import '../compiler_helper.dart';
+import '../helpers/compiler_helper.dart';
 
 const String TEST_ONE = r"""
 void foo(bar) {
@@ -46,17 +46,21 @@ void foo(a) {
 // Check that [HCheck] instructions do not prevent GVN.
 const String TEST_FIVE = r"""
 class A {
-  var foo = 21;
+  final int foo;
+  A(this.foo);
 }
 
 class B {}
 
 main() {
-  var a = [new B(), new A()][0];
+  helper([new A(32), new A(21), new B(), null][0]);
+}
+
+helper(A a) {
   var b = a.foo;
   var c = a.foo;
   if (a is B) {
-    c = a.foo;
+    c = (a as dynamic).foo;
   }
   return b + c;
 }
@@ -65,11 +69,12 @@ main() {
 // Check that a gvn'able instruction in the loop header gets hoisted.
 const String TEST_SIX = r"""
 class A {
+  @pragma('dart2js:noElision')
   final field = 54;
 }
 
 main() {
-  var a = new A();
+  dynamic a = new A();
   while (a.field == 54) { a.field = 42; }
 }
 """;
@@ -84,8 +89,8 @@ class A {
 }
 
 main() {
-  var a = new A();
-  var b = new A.bar();
+  dynamic a = new A();
+  dynamic b = new A.bar();
   while (a.field == 54) { a.field = 42; b.field = 42; }
 }
 """;
@@ -99,33 +104,32 @@ class A {
 }
 
 main() {
-  var a = new A();
-  var b = new A.bar();
+  dynamic a = new A();
+  dynamic b = new A.bar();
   for (int i = 0; i < a.field; i++) { a.field = 42; b.field = 42; }
 }
 """;
 
 main() {
-  runTests() async {
+  asyncTest(() async {
     await compile(TEST_ONE, entry: 'foo', check: (String generated) {
-      RegExp regexp = new RegExp(r"1 \+ [a-z]+");
+      RegExp regexp = RegExp(r"1 \+ [a-z]+");
       checkNumberOfMatches(regexp.allMatches(generated).iterator, 1);
     });
     await compile(TEST_TWO, entry: 'foo', check: (String generated) {
-      checkNumberOfMatches(
-          new RegExp("length").allMatches(generated).iterator, 1);
+      checkNumberOfMatches(RegExp("length").allMatches(generated).iterator, 1);
     });
     await compile(TEST_THREE, entry: 'foo', check: (String generated) {
-      checkNumberOfMatches(
-          new RegExp("number").allMatches(generated).iterator, 1);
+      checkNumberOfMatches(RegExp("number").allMatches(generated).iterator, 1);
     });
     await compile(TEST_FOUR, entry: 'foo', check: (String generated) {
-      checkNumberOfMatches(new RegExp("shr").allMatches(generated).iterator, 1);
+      checkNumberOfMatches(RegExp("shr").allMatches(generated).iterator, 1);
     });
 
     await compileAll(TEST_FIVE).then((generated) {
+      checkNumberOfMatches(RegExp(r"\.foo;").allMatches(generated).iterator, 1);
       checkNumberOfMatches(
-          new RegExp("get\\\$foo").allMatches(generated).iterator, 1);
+          RegExp(r"get\$foo\(").allMatches(generated).iterator, 0);
     });
     await compileAll(TEST_SIX).then((generated) {
       Expect.isTrue(generated.contains('for (t1 = a.field === 54; t1;)'));
@@ -136,10 +140,5 @@ main() {
     await compileAll(TEST_EIGHT).then((generated) {
       Expect.isTrue(generated.contains('for (; i < t1; ++i)'));
     });
-  }
-
-  asyncTest(() async {
-    print('--test from kernel------------------------------------------------');
-    await runTests();
   });
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -32,7 +32,7 @@ class DartUnitOverridesComputer {
    */
   List<proto.Override> compute() {
     for (CompilationUnitMember unitMember in _unit.declarations) {
-      if (unitMember is ClassDeclaration) {
+      if (unitMember is ClassOrMixinDeclaration) {
         for (ClassMember classMember in unitMember.members) {
           if (classMember is MethodDeclaration) {
             if (classMember.isStatic) {
@@ -131,19 +131,11 @@ class _OverriddenElementsFinder {
 
   List<Element> _superElements = <Element>[];
   List<Element> _interfaceElements = <Element>[];
-  Set<InterfaceType> _visited = new Set<InterfaceType>();
+  Set<ClassElement> _visited = Set<ClassElement>();
 
   _OverriddenElementsFinder(Element seed) {
     _seed = seed;
     _class = seed.enclosingElement;
-    if (_class == null) {
-      // TODO(brianwilkerson) Remove this code when the issue has been fixed
-      // (https://github.com/dart-lang/sdk/issues/25884)
-      Type type = seed.runtimeType;
-      String name = seed.name;
-      throw new ArgumentError(
-          'The $type named $name does not have an enclosing element');
-    }
     _library = _class.library;
     _name = seed.displayName;
     if (seed is MethodElement) {
@@ -160,52 +152,57 @@ class _OverriddenElementsFinder {
    */
   OverriddenElements find() {
     _visited.clear();
-    _addSuperOverrides(_class.type, withThisType: false);
+    _addSuperOverrides(_class, withThisType: false);
     _visited.clear();
-    _addInterfaceOverrides(_class.type, false);
+    _addInterfaceOverrides(_class, false);
     _superElements.forEach(_interfaceElements.remove);
     return new OverriddenElements(_seed, _superElements, _interfaceElements);
   }
 
-  void _addInterfaceOverrides(InterfaceType type, bool checkType) {
-    if (type == null) {
+  void _addInterfaceOverrides(ClassElement class_, bool checkType) {
+    if (class_ == null) {
       return;
     }
-    if (!_visited.add(type)) {
+    if (!_visited.add(class_)) {
       return;
     }
     // this type
     if (checkType) {
-      Element element = _lookupMember(type.element);
+      Element element = _lookupMember(class_);
       if (element != null && !_interfaceElements.contains(element)) {
         _interfaceElements.add(element);
       }
     }
     // interfaces
-    for (InterfaceType interfaceType in type.interfaces) {
-      _addInterfaceOverrides(interfaceType, true);
+    for (InterfaceType interfaceType in class_.interfaces) {
+      _addInterfaceOverrides(interfaceType.element, true);
     }
     // super
-    _addInterfaceOverrides(type.superclass, checkType);
+    _addInterfaceOverrides(class_.supertype?.element, checkType);
   }
 
-  void _addSuperOverrides(InterfaceType type, {bool withThisType: true}) {
-    if (type == null) {
+  void _addSuperOverrides(ClassElement class_, {bool withThisType = true}) {
+    if (class_ == null) {
       return;
     }
-    if (!_visited.add(type)) {
+    if (!_visited.add(class_)) {
       return;
     }
 
     if (withThisType) {
-      Element element = _lookupMember(type.element);
+      Element element = _lookupMember(class_);
       if (element != null && !_superElements.contains(element)) {
         _superElements.add(element);
       }
     }
 
-    _addSuperOverrides(type.superclass);
-    type.mixins.forEach(_addSuperOverrides);
+    _addSuperOverrides(class_.supertype?.element);
+    for (var mixin_ in class_.mixins) {
+      _addSuperOverrides(mixin_.element);
+    }
+    for (var constraint in class_.superclassConstraints) {
+      _addSuperOverrides(constraint.element);
+    }
   }
 
   Element _lookupMember(ClassElement classElement) {

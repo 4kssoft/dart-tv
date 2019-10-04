@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -25,7 +25,7 @@ class ChangeBuilderImplTest {
     String path = '/test.dart';
     FileEditBuilderImpl fileEditBuilder =
         await builder.createFileEditBuilder(path);
-    expect(fileEditBuilder, new isInstanceOf<FileEditBuilder>());
+    expect(fileEditBuilder, const TypeMatcher<FileEditBuilder>());
     SourceFileEdit fileEdit = fileEditBuilder.fileEdit;
     expect(fileEdit.file, path);
   }
@@ -44,7 +44,19 @@ class ChangeBuilderImplTest {
     expect(builder.sourceChange.selection, position);
   }
 
-  void test_sourceChange_noChanges() {
+  void test_sourceChange_emptyEdit() async {
+    ChangeBuilderImpl builder = new ChangeBuilderImpl();
+    String path = '/test.dart';
+    await builder.addFileEdit(path, (FileEditBuilder builder) {});
+    SourceChange sourceChange = builder.sourceChange;
+    expect(sourceChange, isNotNull);
+    expect(sourceChange.edits, isEmpty);
+    expect(sourceChange.linkedEditGroups, isEmpty);
+    expect(sourceChange.message, isEmpty);
+    expect(sourceChange.selection, isNull);
+  }
+
+  void test_sourceChange_noEdits() {
     ChangeBuilderImpl builder = new ChangeBuilderImpl();
     SourceChange sourceChange = builder.sourceChange;
     expect(sourceChange, isNotNull);
@@ -57,7 +69,9 @@ class ChangeBuilderImplTest {
   test_sourceChange_oneChange() async {
     ChangeBuilderImpl builder = new ChangeBuilderImpl();
     String path = '/test.dart';
-    await builder.addFileEdit(path, (FileEditBuilder builder) {});
+    await builder.addFileEdit(path, (FileEditBuilder builder) {
+      builder.addSimpleInsertion(0, '_');
+    });
     builder.getLinkedEditGroup('a');
     SourceChange sourceChange = builder.sourceChange;
     expect(sourceChange, isNotNull);
@@ -126,7 +140,7 @@ class EditBuilderImplTest {
       builder.addInsertion(10, (EditBuilder builder) {
         LinkedEditBuilderImpl linkBuilder =
             (builder as EditBuilderImpl).createLinkedEditBuilder();
-        expect(linkBuilder, new isInstanceOf<LinkedEditBuilder>());
+        expect(linkBuilder, const TypeMatcher<LinkedEditBuilder>());
       });
     });
   }
@@ -318,7 +332,7 @@ class FileEditBuilderImplTest {
       int length = 5;
       EditBuilderImpl editBuilder =
           (builder as FileEditBuilderImpl).createEditBuilder(offset, length);
-      expect(editBuilder, new isInstanceOf<EditBuilder>());
+      expect(editBuilder, const TypeMatcher<EditBuilder>());
       SourceEdit sourceEdit = editBuilder.sourceEdit;
       expect(sourceEdit.length, length);
       expect(sourceEdit.offset, offset);

@@ -7,8 +7,8 @@ import 'dart:collection' show HashMap, HashSet, Queue;
 import 'package:kernel/core_types.dart';
 import 'package:kernel/kernel.dart';
 import 'package:kernel/type_environment.dart';
-import '../compiler/js_names.dart' as JS;
-import '../js_ast/js_ast.dart' as JS;
+
+import '../compiler/js_names.dart' as js_ast;
 import 'kernel_helpers.dart';
 import 'native_types.dart';
 
@@ -21,10 +21,10 @@ import 'native_types.dart';
 /// which members are private and thus, could not be overridden outside of the
 /// current library.
 class VirtualFieldModel {
-  final _modelForLibrary = new HashMap<Library, _LibraryVirtualFieldModel>();
+  final _modelForLibrary = HashMap<Library, _LibraryVirtualFieldModel>();
 
   _LibraryVirtualFieldModel _getModel(Library library) => _modelForLibrary
-      .putIfAbsent(library, () => new _LibraryVirtualFieldModel.build(library));
+      .putIfAbsent(library, () => _LibraryVirtualFieldModel.build(library));
 
   /// Returns true if a field is virtual.
   bool isVirtual(Field field) =>
@@ -39,7 +39,7 @@ class _LibraryVirtualFieldModel {
   ///
   /// This means we must generate them as virtual fields using a property pair
   /// in JavaScript.
-  final _overriddenPrivateFields = new HashSet<Field>();
+  final _overriddenPrivateFields = HashSet<Field>();
 
   /// Private classes that can be extended outside of this library.
   ///
@@ -53,7 +53,7 @@ class _LibraryVirtualFieldModel {
   ///     class C extends _A {}
   ///
   /// The class _A must treat is "x" as virtual, however _B does not.
-  final _extensiblePrivateClasses = new HashSet<Class>();
+  final _extensiblePrivateClasses = HashSet<Class>();
 
   _LibraryVirtualFieldModel.build(Library library) {
     var allClasses = library.classes;
@@ -62,7 +62,7 @@ class _LibraryVirtualFieldModel {
     // From there, visit all immediate private types in this library, and so on
     // from those private types, marking them as extensible.
     var classesToVisit =
-        new Queue<Class>.from(allClasses.where((c) => !c.name.startsWith('_')));
+        Queue<Class>.from(allClasses.where((c) => !c.name.startsWith('_')));
     while (classesToVisit.isNotEmpty) {
       var c = classesToVisit.removeFirst();
 
@@ -84,15 +84,15 @@ class _LibraryVirtualFieldModel {
     // time.
     Map<String, Field> getInstanceFieldMap(Class c) {
       var instanceFields = c.fields.where((f) => !f.isStatic);
-      return new HashMap.fromIterables(
+      return HashMap.fromIterables(
           instanceFields.map((f) => f.name.name), instanceFields);
     }
 
-    var allFields = new HashMap.fromIterables(
-        allClasses, allClasses.map(getInstanceFieldMap));
+    var allFields =
+        HashMap.fromIterables(allClasses, allClasses.map(getInstanceFieldMap));
 
     for (var class_ in allClasses) {
-      Set<Class> superclasses = null;
+      Set<Class> superclasses;
 
       // Visit accessors in the current class, and see if they override an
       // otherwise private field.
@@ -113,7 +113,7 @@ class _LibraryVirtualFieldModel {
         }
 
         if (superclasses == null) {
-          superclasses = new Set();
+          superclasses = Set();
           void collectSupertypes(Class c) {
             if (!superclasses.add(c)) return;
             var s = c.superclass;
@@ -124,8 +124,7 @@ class _LibraryVirtualFieldModel {
 
           collectSupertypes(class_);
           superclasses.remove(class_);
-          superclasses.removeWhere(
-              (s) => s.enclosingLibrary != class_.enclosingLibrary);
+          superclasses.removeWhere((s) => s.enclosingLibrary != library);
         }
 
         // Look in all super classes to see if we're overriding a field in our
@@ -148,11 +147,6 @@ class _LibraryVirtualFieldModel {
       // Enums are not extensible.
       return false;
     }
-    var libraryUri = class_.enclosingLibrary.importUri;
-    if (libraryUri.scheme == 'dart' && libraryUri.path.startsWith('_')) {
-      // There should be no extensible fields in private SDK libraries.
-      return false;
-    }
 
     if (!field.name.isPrivate) {
       // Public fields in public classes (or extensible private classes)
@@ -160,6 +154,13 @@ class _LibraryVirtualFieldModel {
       // They could be overridden by someone using our library.
       if (!class_.name.startsWith('_')) return true;
       if (_extensiblePrivateClasses.contains(class_)) return true;
+    }
+
+    if (class_.constructors.any((c) => c.isConst)) {
+      // Always virtualize fields of a (might be) non-enum (see above) const
+      // class.  The way these are lowered by the CFE, they need to be
+      // writable from different modules even if overridden.
+      return true;
     }
 
     // Otherwise, the field is effectively private and we only need to make it
@@ -184,28 +185,38 @@ class ClassPropertyModel {
   /// pair in JavaScript.
   ///
   /// The value property stores the symbol used for the field's storage slot.
-  final virtualFields = <Field, JS.TemporaryId>{};
+  final virtualFields = <Field, js_ast.TemporaryId>{};
 
   /// The set of inherited getters, used because JS getters/setters are paired,
   /// so if we're generating a setter we may need to emit a getter that calls
   /// super.
-  final inheritedGetters = new HashSet<String>();
+  final inheritedGetters = HashSet<String>();
 
   /// The set of inherited setters, used because JS getters/setters are paired,
   /// so if we're generating a getter we may need to emit a setter that calls
   /// super.
-  final inheritedSetters = new HashSet<String>();
+  final inheritedSetters = HashSet<String>();
 
-  final extensionMethods = new Set<String>();
+  final extensionMethods = Set<String>();
 
-  final extensionAccessors = new Set<String>();
+  final extensionAccessors = Set<String>();
 
   ClassPropertyModel.build(this.types, this.extensionTypes,
       VirtualFieldModel fieldModel, Class class_) {
     // Visit superclasses to collect information about their fields/accessors.
     // This is expensive so we try to collect everything in one pass.
-    for (var base in getSuperclasses(class_)) {
+    var superclasses = [class_, ...getSuperclasses(class_)];
+    for (var base in superclasses) {
       for (var member in base.members) {
+        // Note, we treat noSuchMethodForwarders in the current class as
+        // inherited / potentially virtual.  Skip all other members of the
+        // current class.
+        if (base == class_ &&
+            (member is Field ||
+                (member is Procedure && !member.isNoSuchMethodForwarder))) {
+          continue;
+        }
+
         if (member is Constructor ||
             member is Procedure && (!member.isAccessor || member.isStatic)) {
           continue;
@@ -231,7 +242,7 @@ class ClassPropertyModel {
 
     _collectExtensionMembers(class_);
 
-    var virtualAccessorNames = new HashSet<String>()
+    var virtualAccessorNames = HashSet<String>()
       ..addAll(inheritedGetters)
       ..addAll(inheritedSetters)
       ..addAll(extensionAccessors);
@@ -247,7 +258,7 @@ class ClassPropertyModel {
           fieldModel.isVirtual(field) ||
           field.isCovariant ||
           field.isGenericCovariantImpl) {
-        virtualFields[field] = new JS.TemporaryId(name);
+        virtualFields[field] = js_ast.TemporaryId(name);
       }
     }
   }
@@ -260,23 +271,23 @@ class ClassPropertyModel {
     // Find all generic interfaces that could be used to call into members of
     // this class. This will help us identify which parameters need checks
     // for soundness.
-    var allNatives = new HashSet<String>();
+    var allNatives = HashSet<String>();
     _collectNativeMembers(class_, allNatives);
     if (allNatives.isEmpty) return;
 
     // For members on this class, check them against all generic interfaces.
-    var seenConcreteMembers = new HashSet<String>();
+    var seenConcreteMembers = HashSet<String>();
     _findExtensionMembers(class_, seenConcreteMembers, allNatives);
 
     // For members of the superclass, we may need to add checks because this
     // class adds a new unsafe interface. Collect those checks.
-    var visited = new HashSet<Class>()..add(class_);
-    var existingMembers = new HashSet<String>();
+    var visited = HashSet<Class>()..add(class_);
+    var existingMembers = HashSet<String>();
 
     void visitImmediateSuper(Class c) {
       // For members of mixins/supertypes, check them against new interfaces,
       // and also record any existing checks they already had.
-      var oldCovariant = new HashSet<String>();
+      var oldCovariant = HashSet<String>();
       _collectNativeMembers(c, oldCovariant);
       var newCovariant = allNatives.difference(oldCovariant);
       if (newCovariant.isEmpty) return;

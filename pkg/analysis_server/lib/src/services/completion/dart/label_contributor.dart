@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -76,6 +76,11 @@ class _LabelVisitor extends LocalDeclarationVisitor {
   }
 
   @override
+  void declaredExtension(ExtensionDeclaration declaration) {
+    // ignored
+  }
+
+  @override
   void declaredField(FieldDeclaration fieldDecl, VariableDeclaration varDecl) {
     // ignored
   }
@@ -87,6 +92,11 @@ class _LabelVisitor extends LocalDeclarationVisitor {
 
   @override
   void declaredFunctionTypeAlias(FunctionTypeAlias declaration) {
+    // ignored
+  }
+
+  @override
+  void declaredGenericTypeAlias(GenericTypeAlias declaration) {
     // ignored
   }
 
@@ -140,7 +150,7 @@ class _LabelVisitor extends LocalDeclarationVisitor {
   CompletionSuggestion _addSuggestion(SimpleIdentifier id) {
     if (id != null) {
       String completion = id.name;
-      if (completion != null && completion.length > 0 && completion != '_') {
+      if (completion != null && completion.isNotEmpty && completion != '_') {
         CompletionSuggestion suggestion = new CompletionSuggestion(
             CompletionSuggestionKind.IDENTIFIER,
             DART_RELEVANCE_DEFAULT,

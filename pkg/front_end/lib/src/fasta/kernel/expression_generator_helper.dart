@@ -12,7 +12,7 @@ import '../fasta_codes.dart' show LocatedMessage;
 
 import '../messages.dart' show Message;
 
-import '../scope.dart' show ProblemBuilder, Scope;
+import '../scope.dart' show Scope;
 
 import '../type_inference/inference_helper.dart' show InferenceHelper;
 
@@ -22,34 +22,28 @@ import 'constness.dart' show Constness;
 
 import 'forest.dart' show Forest;
 
-import 'kernel_builder.dart' show PrefixBuilder;
+import 'kernel_builder.dart' show Builder, PrefixBuilder, UnresolvedType;
 
 import 'kernel_ast_api.dart'
     show
+        Arguments,
         Constructor,
         DartType,
+        Expression,
         FunctionNode,
-        FunctionType,
         Initializer,
         Member,
         Name,
         Procedure,
         StaticGet,
         TypeParameter,
-        TypeParameterType;
+        VariableDeclaration;
 
 import 'kernel_builder.dart'
-    show
-        KernelPrefixBuilder,
-        LibraryBuilder,
-        PrefixBuilder,
-        TypeDeclarationBuilder;
+    show PrefixBuilder, LibraryBuilder, TypeDeclarationBuilder;
 
-abstract class ExpressionGeneratorHelper<Expression, Statement, Arguments>
-    implements InferenceHelper<Expression, Statement, Arguments> {
-  LibraryBuilder get library;
-
-  Uri get uri;
+abstract class ExpressionGeneratorHelper implements InferenceHelper {
+  LibraryBuilder get libraryBuilder;
 
   TypePromoter get typePromoter;
 
@@ -57,7 +51,7 @@ abstract class ExpressionGeneratorHelper<Expression, Statement, Arguments>
 
   ConstantContext get constantContext;
 
-  Forest<Expression, Statement, Token, Arguments> get forest;
+  Forest get forest;
 
   Constructor lookupConstructor(Name name, {bool isSuper});
 
@@ -70,17 +64,10 @@ abstract class ExpressionGeneratorHelper<Expression, Statement, Arguments>
 
   finishSend(Object receiver, Arguments arguments, int offset);
 
-  Expression buildCompileTimeError(Message message, int charOffset, int length,
-      {List<LocatedMessage> context});
-
-  Expression wrapInCompileTimeError(Expression expression, Message message);
-
-  Expression deprecated_buildCompileTimeError(String error, [int offset]);
-
   Initializer buildInvalidInitializer(Expression expression, [int offset]);
 
-  Initializer buildFieldInitializer(
-      bool isSynthetic, String name, int offset, Expression expression,
+  Initializer buildFieldInitializer(bool isSynthetic, String name,
+      int fieldNameOffset, int assignmentOffset, Expression expression,
       {DartType formalType});
 
   Initializer buildSuperInitializer(
@@ -92,10 +79,11 @@ abstract class ExpressionGeneratorHelper<Expression, Statement, Arguments>
       [int charOffset = -1]);
 
   Expression buildStaticInvocation(Procedure target, Arguments arguments,
-      {Constness constness, int charOffset, Member initialTarget});
+      {Constness constness, int charOffset});
 
-  Expression buildProblemExpression(
-      ProblemBuilder builder, int offset, int length);
+  Expression buildExtensionMethodInvocation(
+      int fileOffset, Procedure target, Arguments arguments,
+      {bool isTearOff});
 
   Expression throwNoSuchMethodError(
       Expression receiver, String name, Arguments arguments, int offset,
@@ -104,20 +92,15 @@ abstract class ExpressionGeneratorHelper<Expression, Statement, Arguments>
       bool isGetter,
       bool isSetter,
       bool isStatic,
-      LocatedMessage argMessage});
+      LocatedMessage message});
 
   LocatedMessage checkArgumentsForFunction(FunctionNode function,
       Arguments arguments, int offset, List<TypeParameter> typeParameters);
 
-  LocatedMessage checkArgumentsForType(
-      FunctionType function, Arguments arguments, int offset);
-
   StaticGet makeStaticGet(Member readTarget, Token token);
 
   Expression wrapInDeferredCheck(
-      Expression expression, KernelPrefixBuilder prefix, int charOffset);
-
-  dynamic deprecated_addCompileTimeError(int charOffset, String message);
+      Expression expression, PrefixBuilder prefix, int charOffset);
 
   bool isIdentical(Member member);
 
@@ -132,18 +115,20 @@ abstract class ExpressionGeneratorHelper<Expression, Statement, Arguments>
   Expression buildConstructorInvocation(
       TypeDeclarationBuilder type,
       Token nameToken,
+      Token nameLastToken,
       Arguments arguments,
       String name,
-      List<DartType> typeArguments,
+      List<UnresolvedType> typeArguments,
       int charOffset,
       Constness constness);
 
-  DartType validatedTypeVariableUse(
-      TypeParameterType type, int offset, bool nonInstanceAccessIsError);
-
-  void addProblem(Message message, int charOffset, int length);
+  UnresolvedType validateTypeUse(
+      UnresolvedType unresolved, bool nonInstanceAccessIsError);
 
   void addProblemErrorIfConst(Message message, int charOffset, int length);
+
+  Expression buildProblemErrorIfConst(
+      Message message, int charOffset, int length);
 
   Message warnUnresolvedGet(Name name, int charOffset, {bool isSuper});
 
@@ -153,5 +138,21 @@ abstract class ExpressionGeneratorHelper<Expression, Statement, Arguments>
 
   void warnTypeArgumentsMismatch(String name, int expected, int charOffset);
 
-  T storeOffset<T>(T node, int offset);
+  Expression wrapInLocatedProblem(Expression expression, LocatedMessage message,
+      {List<LocatedMessage> context});
+
+  Expression evaluateArgumentsBefore(
+      Arguments arguments, Expression expression);
+
+  DartType buildDartType(UnresolvedType unresolvedType,
+      {bool nonInstanceAccessIsError});
+
+  List<DartType> buildDartTypeArguments(List<UnresolvedType> unresolvedTypes);
+
+  void reportDuplicatedDeclaration(
+      Builder existing, String name, int charOffset);
+
+  /// Creates a [VariableGet] of the [variable] using [charOffset] as the file
+  /// offset of the created node.
+  Expression createVariableGet(VariableDeclaration variable, int charOffset);
 }

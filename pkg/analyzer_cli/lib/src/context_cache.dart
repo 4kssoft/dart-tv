@@ -1,4 +1,4 @@
-// Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -18,7 +18,7 @@ class ContextCache {
 
   /// A mapping from normalized paths (currently, directories) to cache entries
   /// which include builder, analysis_options paths, and [AnalysisOptionImpl]s.
-  Map<String, ContextCacheEntry> _byDirectory = {};
+  final Map<String, ContextCacheEntry> _byDirectory = {};
 
   ContextCache(this.resourceProvider, this.clOptions, this.verbosePrint);
 
@@ -85,21 +85,19 @@ class ContextCacheEntry {
   /// The actual calculation to get the [AnalysisOptionsImpl], with no caching.
   /// This should not be used except behind the getter which caches this result
   /// automatically.
-  AnalysisOptions _getAnalysisOptions() {
+  AnalysisOptionsImpl _getAnalysisOptions() {
     AnalysisOptionsImpl contextOptions = builder.getAnalysisOptions(
-        requestedSourceDirectory,
-        verbosePrint: clOptions.verbose ? verbosePrint : null);
+            requestedSourceDirectory,
+            verbosePrint: clOptions.verbose ? verbosePrint : null)
+        as AnalysisOptionsImpl;
 
     contextOptions.trackCacheDependencies = false;
     contextOptions.disableCacheFlushing = clOptions.disableCacheFlushing;
+    contextOptions.enabledExperiments = clOptions.enabledExperiments;
     contextOptions.hint = !clOptions.disableHints;
     contextOptions.generateImplicitErrors = clOptions.showPackageWarnings;
     contextOptions.generateSdkErrors = clOptions.showSdkWarnings;
-    contextOptions.previewDart2 = clOptions.previewDart2;
-    contextOptions.strongMode = clOptions.strongMode;
-    if (clOptions.useCFE) {
-      contextOptions.useFastaParser = true;
-    }
+    contextOptions.useFastaParser = clOptions.useFastaParser;
     return contextOptions;
   }
 

@@ -4,86 +4,36 @@
 
 library vm.metadata.bytecode;
 
-import 'package:kernel/ast.dart';
-import 'package:vm/bytecode/constant_pool.dart' show ConstantPool;
-import 'package:vm/bytecode/disassembler.dart' show BytecodeDisassembler;
-import 'package:vm/bytecode/exceptions.dart' show ExceptionsTable;
+import 'package:kernel/ast.dart'
+    show BinarySink, BinarySource, MetadataRepository, Node, TreeNode;
+import '../bytecode/bytecode_serialization.dart'
+    show BufferedWriter, BufferedReader, LinkWriter, LinkReader;
+import '../bytecode/declarations.dart' show Component;
 
-/// Metadata containing bytecode.
-///
-/// In kernel binary, bytecode metadata is encoded as following:
-///
-/// type BytecodeMetadata {
-///   ConstantPool constantPool
-///   List<Byte> bytecodes
-///   ExceptionsTable exceptionsTable
-///   List<ClosureBytecode> closures
-/// }
-///
-/// type ClosureBytecode {
-///   ConstantIndex closureFunction
-///   List<Byte> bytecodes
-///   ExceptionsTable exceptionsTable
-/// }
-///
-/// Encoding of ExceptionsTable is described in
-/// pkg/vm/lib/bytecode/exceptions.dart.
-///
-/// Encoding of ConstantPool is described in
-/// pkg/vm/lib/bytecode/constant_pool.dart.
-///
+import 'dart:developer';
+
 class BytecodeMetadata {
-  final ConstantPool constantPool;
-  final List<int> bytecodes;
-  final ExceptionsTable exceptionsTable;
-  final List<ClosureBytecode> closures;
+  final Component component;
 
-  BytecodeMetadata(
-      this.constantPool, this.bytecodes, this.exceptionsTable, this.closures);
+  BytecodeMetadata(this.component);
 
-  // TODO(alexmarkov): Consider printing constant pool before bytecode.
+  void write(BufferedWriter writer) {
+    Timeline.timeSync("BytecodeMetadata.write", () {
+      component.write(writer);
+    });
+  }
+
+  factory BytecodeMetadata.read(BufferedReader reader) {
+    return Timeline.timeSync("BytecodeMetadata.read", () {
+      return new BytecodeMetadata(new Component.read(reader));
+    });
+  }
+
   @override
   String toString() => "\n"
-      "Bytecode {\n"
-      "${new BytecodeDisassembler().disassemble(bytecodes, exceptionsTable)}}\n"
-      "$exceptionsTable"
-      "$constantPool"
-      "${closures.join('\n')}";
-}
-
-/// Bytecode of a nested function (closure).
-/// Closures share the constant pool of a top-level member.
-class ClosureBytecode {
-  final int closureFunctionConstantIndex;
-  final List<int> bytecodes;
-  final ExceptionsTable exceptionsTable;
-
-  ClosureBytecode(
-      this.closureFunctionConstantIndex, this.bytecodes, this.exceptionsTable);
-
-  void writeToBinary(BinarySink sink) {
-    sink.writeUInt30(closureFunctionConstantIndex);
-    sink.writeByteList(bytecodes);
-    exceptionsTable.writeToBinary(sink);
-  }
-
-  factory ClosureBytecode.readFromBinary(BinarySource source) {
-    final closureFunctionConstantIndex = source.readUInt();
-    final List<int> bytecodes = source.readByteList();
-    final exceptionsTable = new ExceptionsTable.readFromBinary(source);
-    return new ClosureBytecode(
-        closureFunctionConstantIndex, bytecodes, exceptionsTable);
-  }
-
-  @override
-  String toString() {
-    StringBuffer sb = new StringBuffer();
-    sb.writeln('Closure CP#$closureFunctionConstantIndex {');
-    sb.writeln(
-        new BytecodeDisassembler().disassemble(bytecodes, exceptionsTable));
-    sb.writeln('}');
-    return sb.toString();
-  }
+      "BytecodeMetadata {\n"
+      "$component\n"
+      "}\n";
 }
 
 /// Repository for [BytecodeMetadata].
@@ -97,22 +47,24 @@ class BytecodeMetadataRepository extends MetadataRepository<BytecodeMetadata> {
 
   @override
   void writeToBinary(BytecodeMetadata metadata, Node node, BinarySink sink) {
-    metadata.constantPool.writeToBinary(node, sink);
-    sink.writeByteList(metadata.bytecodes);
-    metadata.exceptionsTable.writeToBinary(sink);
-    sink.writeUInt30(metadata.closures.length);
-    metadata.closures.forEach((c) => c.writeToBinary(sink));
+    final bytecodeComponent = metadata.component;
+    final linkWriter = new LinkWriter();
+    final writer = new BufferedWriter(
+        bytecodeComponent.version,
+        bytecodeComponent.stringTable,
+        bytecodeComponent.objectTable,
+        linkWriter,
+        baseOffset: sink.getBufferOffset());
+    metadata.write(writer);
+    sink.writeBytes(writer.takeBytes());
   }
 
   @override
   BytecodeMetadata readFromBinary(Node node, BinarySource source) {
-    final ConstantPool constantPool =
-        new ConstantPool.readFromBinary(node, source);
-    final List<int> bytecodes = source.readByteList();
-    final exceptionsTable = new ExceptionsTable.readFromBinary(source);
-    final List<ClosureBytecode> closures = new List<ClosureBytecode>.generate(
-        source.readUInt(), (_) => new ClosureBytecode.readFromBinary(source));
-    return new BytecodeMetadata(
-        constantPool, bytecodes, exceptionsTable, closures);
+    final linkReader = new LinkReader();
+    final reader = new BufferedReader(-1, null, null, linkReader, source.bytes,
+        baseOffset: source.currentOffset);
+    final bytecodeComponent = new Component.read(reader);
+    return new BytecodeMetadata(bytecodeComponent);
   }
 }

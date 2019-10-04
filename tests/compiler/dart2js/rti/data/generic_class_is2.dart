@@ -3,18 +3,17 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:expect/expect.dart';
-import 'package:meta/dart2js.dart';
 
 /*class: A:implicit=[List<A<C2>>,List<A<C>>]*/
 class A<T> {}
 
-/*!strong.class: A1:*/
+/*omit.class: A1:*/
 /*strong.class: A1:implicit=[A1]*/
 class A1 implements A<C1> {}
 
 /*class: B:direct,explicit=[B.T],needsArgs*/
 class B<T> {
-  @noInline
+  @pragma('dart2js:noInline')
   method(var t) => t is T;
 }
 

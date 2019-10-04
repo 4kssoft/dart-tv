@@ -4,7 +4,7 @@
 
 part of vmservice_io;
 
-final bool silentObservatory = const bool.fromEnvironment('SILENT_OBSERVATORY');
+final bool silentObservatory = new bool.fromEnvironment('SILENT_OBSERVATORY');
 
 void serverPrint(String s) {
   if (silentObservatory) {
@@ -81,10 +81,9 @@ class WebSocketClient extends Client {
           socket.addUtf8Text(result.payload);
           break;
       }
-    } catch (e, st) {
-      serverPrint("Ignoring error posting over WebSocket.");
-      serverPrint(e.toString());
-      serverPrint(st.toString());
+    } on StateError catch (_) {
+      // VM has shutdown, do nothing.
+      return;
     }
   }
 
@@ -148,6 +147,8 @@ class Server {
   final String _ip;
   final int _port;
   final bool _originCheckDisabled;
+  final bool _authCodesDisabled;
+  final String _serviceInfoFilename;
   HttpServer _server;
   bool get running => _server != null;
 
@@ -158,11 +159,15 @@ class Server {
     }
     var ip = _server.address.address;
     var port = _server.port;
-    var path = useAuthToken ? "$serviceAuthToken/" : "/";
+    var path = !_authCodesDisabled ? "$serviceAuthToken/" : "/";
     return new Uri(scheme: 'http', host: ip, port: port, path: path);
   }
 
-  Server(this._service, this._ip, this._port, this._originCheckDisabled);
+  // On Fuchsia, authentication codes are disabled by default. To enable, the authentication token
+  // would have to be written into the hub alongside the port number.
+  Server(this._service, this._ip, this._port, this._originCheckDisabled,
+      bool authCodesDisabled, this._serviceInfoFilename)
+      : _authCodesDisabled = (authCodesDisabled || Platform.isFuchsia);
 
   bool _isAllowedOrigin(String origin) {
     Uri uri;
@@ -212,14 +217,15 @@ class Server {
     return false;
   }
 
-  /// Checks the [requestUri] for the service auth token and returns the path.
-  /// If the service auth token check fails, returns null.
-  String _checkAuthTokenAndGetPath(Uri requestUri) {
-    if (!useAuthToken) {
+  /// Checks the [requestUri] for the service auth token and returns the path
+  /// as a String. If the service auth token check fails, returns null.
+  /// Returns a Uri if a redirect is required.
+  dynamic _checkAuthTokenAndGetPath(Uri requestUri) {
+    if (_authCodesDisabled) {
       return requestUri.path == '/' ? ROOT_REDIRECT_PATH : requestUri.path;
     }
     final List<String> requestPathSegments = requestUri.pathSegments;
-    if (requestPathSegments.length < 2) {
+    if (requestPathSegments.isEmpty) {
       // Malformed.
       return null;
     }
@@ -228,6 +234,18 @@ class Server {
     if (authToken != serviceAuthToken) {
       // Malformed.
       return null;
+    }
+    // Missing a trailing '/'. We'll need to redirect to serve
+    // ROOT_REDIRECT_PATH correctly, otherwise the response is misinterpreted.
+    if (requestPathSegments.length == 1) {
+      // requestPathSegments is unmodifiable. Copy it.
+      final List<String> pathSegments = <String>[]..addAll(requestPathSegments);
+
+      // Adding an empty string to the path segments results in the path having
+      // a trailing '/'.
+      pathSegments.add('');
+
+      return requestUri.replace(pathSegments: pathSegments);
     }
     // Construct the actual request path by chopping off the auth token.
     return (requestPathSegments[1] == '')
@@ -238,6 +256,8 @@ class Server {
   Future _requestHandler(HttpRequest request) async {
     if (!_originCheck(request)) {
       // This is a cross origin attempt to connect
+      request.response.statusCode = HttpStatus.forbidden;
+      request.response.write("forbidden origin");
       request.response.close();
       return;
     }
@@ -279,9 +299,14 @@ class Server {
 
       String result;
       try {
-        result = await _service.devfs.handlePutStream(
-            fsName, fsPath, fsUri, request.transform(GZIP.decoder));
-      } catch (e) {/* ignore */}
+        result = await _service.devfs.handlePutStream(fsName, fsPath, fsUri,
+            request.cast<List<int>>().transform(GZIP.decoder));
+      } catch (e) {
+        request.response.statusCode = HttpStatus.internalServerError;
+        request.response.write(e);
+        request.response.close();
+        return;
+      }
 
       if (result != null) {
         request.response.headers.contentType =
@@ -293,17 +318,30 @@ class Server {
     }
     if (request.method != 'GET') {
       // Not a GET request. Do nothing.
+      request.response.statusCode = HttpStatus.methodNotAllowed;
+      request.response.write("method not allowed");
       request.response.close();
       return;
     }
 
-    final String path = _checkAuthTokenAndGetPath(request.uri);
-    if (path == null) {
-      // Malformed.
+    final dynamic result = _checkAuthTokenAndGetPath(request.uri);
+    if (result == null) {
+      // Either no authentication code was provided when one was expected or an
+      // incorrect authentication code was provided.
+      request.response.statusCode = HttpStatus.forbidden;
+      request.response.write("missing or invalid authentication code");
+      request.response.close();
+      return;
+    } else if (result is Uri) {
+      // The URI contains the valid auth token but is missing a trailing '/'.
+      // Redirect to the same URI with the trailing '/' to correctly serve
+      // index.html.
+      request.response.redirect(result as Uri);
       request.response.close();
       return;
     }
 
+    final String path = result;
     if (path == WEBSOCKET_PATH) {
       WebSocketTransformer.upgrade(request).then((WebSocket webSocket) {
         new WebSocketClient(webSocket, _service);
@@ -327,8 +365,17 @@ class Server {
     }
     // HTTP based service request.
     final client = new HttpRequestClient(request, _service);
-    final message = new Message.fromUri(client, request.uri);
+    final message = new Message.fromUri(
+        client, Uri(path: path, queryParameters: request.uri.queryParameters));
     client.onRequest(message); // exception free, no need to try catch
+  }
+
+  Future<void> _dumpServiceInfoToFile() async {
+    final serviceInfo = <String, dynamic>{
+      'uri': serverAddress.toString(),
+    };
+    final file = File.fromUri(Uri.parse(_serviceInfoFilename));
+    file.writeAsString(json.encode(serviceInfo));
   }
 
   Future startup() async {
@@ -373,6 +420,12 @@ class Server {
       }
       await new Future<Null>.delayed(const Duration(seconds: 1));
     }
+    if (_service.isExiting) {
+      serverPrint('Observatory HTTP server exiting before listening as '
+          'vm service has received exit request\n');
+      await shutdown(true);
+      return this;
+    }
     _server.listen(_requestHandler, cancelOnError: true);
     serverPrint('Observatory listening on $serverAddress');
     if (Platform.isFuchsia) {
@@ -381,6 +434,9 @@ class Server {
       String path = "$tmp/dart.services/${_server.port}";
       serverPrint("Creating $path");
       new File(path)..createSync(recursive: true);
+    }
+    if (_serviceInfoFilename != null && _serviceInfoFilename.isNotEmpty) {
+      _dumpServiceInfoToFile();
     }
     // Server is up and running.
     _notifyServerState(serverAddress.toString());

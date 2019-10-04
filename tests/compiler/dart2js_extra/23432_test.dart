@@ -15,12 +15,12 @@ class N {
   }
 }
 
-@NoInline()
-@AssumeDynamic()
+@pragma('dart2js:noInline')
+@pragma('dart2js:assumeDynamic')
 get NEVER => false;
 
 main() {
-  var c = 12345;
+  dynamic c = 12345;
   if (NEVER) c = new N();
   var e;
   try {

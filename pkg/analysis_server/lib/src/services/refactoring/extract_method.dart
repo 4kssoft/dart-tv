@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -15,16 +15,17 @@ import 'package:analysis_server/src/services/refactoring/refactoring.dart';
 import 'package:analysis_server/src/services/refactoring/refactoring_internal.dart';
 import 'package:analysis_server/src/services/refactoring/rename_class_member.dart';
 import 'package:analysis_server/src/services/refactoring/rename_unit_member.dart';
+import 'package:analysis_server/src/services/refactoring/visible_ranges_computer.dart';
 import 'package:analysis_server/src/services/search/search_engine.dart';
-import 'package:analyzer/dart/analysis/session.dart';
+import 'package:analyzer/dart/analysis/features.dart';
+import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/ast/ast.dart';
-import 'package:analyzer/dart/ast/standard_resolution_map.dart';
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/type.dart';
+import 'package:analyzer/src/dart/analysis/session_helper.dart';
 import 'package:analyzer/src/dart/ast/utilities.dart';
-import 'package:analyzer/src/dart/element/ast_provider.dart';
 import 'package:analyzer/src/generated/java_core.dart';
 import 'package:analyzer/src/generated/resolver.dart' show ExitDetector;
 import 'package:analyzer/src/generated/resolver.dart';
@@ -38,7 +39,8 @@ Element _getLocalElement(SimpleIdentifier node) {
   Element element = node.staticElement;
   if (element is LocalVariableElement ||
       element is ParameterElement ||
-      element is FunctionElement && element.visibleRange != null) {
+      element is FunctionElement &&
+          element.enclosingElement is! CompilationUnitElement) {
     return element;
   }
   return null;
@@ -48,8 +50,8 @@ Element _getLocalElement(SimpleIdentifier node) {
  * Returns the "normalized" version of the given source, which is reconstructed
  * from tokens, so ignores all the comments and spaces.
  */
-String _getNormalizedSource(String src) {
-  List<Token> selectionTokens = TokenUtils.getTokens(src);
+String _getNormalizedSource(String src, FeatureSet featureSet) {
+  List<Token> selectionTokens = TokenUtils.getTokens(src, featureSet);
   return selectionTokens.join(_TOKEN_SEPARATOR);
 }
 
@@ -74,16 +76,12 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
       'execution flows exit. Semantics may not be preserved.';
 
   final SearchEngine searchEngine;
-  final AstProvider astProvider;
-  final CompilationUnit unit;
+  final ResolvedUnitResult resolveResult;
   final int selectionOffset;
   final int selectionLength;
-  AnalysisSession session;
-  CompilationUnitElement unitElement;
-  LibraryElement libraryElement;
   SourceRange selectionRange;
   CorrectionUtils utils;
-  Set<Source> librariesToImport = new Set<Source>();
+  final Set<Source> librariesToImport = new Set<Source>();
 
   String returnType = '';
   String variableType;
@@ -96,20 +94,26 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
   final List<int> lengths = <int>[];
 
   /**
+   * The map of local elements to their visibility ranges.
+   */
+  Map<LocalElement, SourceRange> _visibleRangeMap;
+
+  /**
    * The map of local names to their visibility ranges.
    */
-  Map<String, List<SourceRange>> _localNames = <String, List<SourceRange>>{};
+  final Map<String, List<SourceRange>> _localNames =
+      <String, List<SourceRange>>{};
 
   /**
    * The set of names that are referenced without any qualifier.
    */
-  Set<String> _unqualifiedNames = new Set<String>();
+  final Set<String> _unqualifiedNames = new Set<String>();
 
-  Set<String> _excludedNames = new Set<String>();
+  final Set<String> _excludedNames = new Set<String>();
   List<RefactoringMethodParameter> _parameters = <RefactoringMethodParameter>[];
-  Map<String, RefactoringMethodParameter> _parametersMap =
+  final Map<String, RefactoringMethodParameter> _parametersMap =
       <String, RefactoringMethodParameter>{};
-  Map<String, List<SourceRange>> _parameterReferencesMap =
+  final Map<String, List<SourceRange>> _parameterReferencesMap =
       <String, List<SourceRange>>{};
   bool _hasAwait = false;
   DartType _returnType;
@@ -121,13 +125,10 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
   List<_Occurrence> _occurrences = [];
   bool _staticContext = false;
 
-  ExtractMethodRefactoringImpl(this.searchEngine, this.astProvider, this.unit,
+  ExtractMethodRefactoringImpl(this.searchEngine, this.resolveResult,
       this.selectionOffset, this.selectionLength) {
-    unitElement = unit.element;
-    libraryElement = unitElement.library;
-    session = astProvider.driver.currentSession;
     selectionRange = new SourceRange(selectionOffset, selectionLength);
-    utils = new CorrectionUtils(unit);
+    utils = new CorrectionUtils(resolveResult);
   }
 
   @override
@@ -140,9 +141,9 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
 
   @override
   String get refactoringName {
-    AstNode node = new NodeLocator(selectionOffset).searchWithin(unit);
-    if (node != null &&
-        node.getAncestor((node) => node is ClassDeclaration) != null) {
+    AstNode node =
+        new NodeLocator(selectionOffset).searchWithin(resolveResult.unit);
+    if (node != null && node.thisOrAncestorOfType<ClassDeclaration>() != null) {
       return 'Extract Method';
     }
     return 'Extract Function';
@@ -224,7 +225,7 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
     _prepareExcludedNames();
     _prepareNames();
     // closure cannot have parameters
-    if (_selectionFunctionExpression != null && !_parameters.isEmpty) {
+    if (_selectionFunctionExpression != null && _parameters.isNotEmpty) {
       String message = format(
           'Cannot extract closure as method, it references {0} external variable(s).',
           _parameters.length);
@@ -311,7 +312,8 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
       }
       // add replace edit
       SourceEdit edit = newSourceEdit_range(range, invocationSource);
-      doSourceChange_addElementEdit(change, unitElement, edit);
+      doSourceChange_addElementEdit(
+          change, resolveResult.unit.declaredElement, edit);
     }
     // add method declaration
     {
@@ -391,12 +393,13 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
         int offset = _parentMember.end;
         SourceEdit edit =
             new SourceEdit(offset, 0, '$eol$eol$prefix$declarationSource');
-        doSourceChange_addElementEdit(change, unitElement, edit);
+        doSourceChange_addElementEdit(
+            change, resolveResult.unit.declaredElement, edit);
       }
     }
     // done
-    addLibraryImports(session.resourceProvider.pathContext, change,
-        libraryElement, librariesToImport);
+    await addLibraryImports(resolveResult.session, change,
+        resolveResult.libraryElement, librariesToImport);
     return change;
   }
 
@@ -404,9 +407,6 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
   bool isAvailable() {
     return !_checkSelection().hasFatalError;
   }
-
-  @override
-  bool requiresPreview() => false;
 
   /**
    * Adds a new reference to the parameter with the given name.
@@ -451,15 +451,14 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
     AstNode parent = _parentMember.parent;
     // top-level function
     if (parent is CompilationUnit) {
-      LibraryElement libraryElement =
-          resolutionMap.elementDeclaredByCompilationUnit(parent).library;
+      LibraryElement libraryElement = parent.declaredElement.library;
       return validateCreateFunction(searchEngine, libraryElement, name);
     }
     // method of class
     if (parent is ClassDeclaration) {
-      ClassElement classElement = parent.element;
-      return validateCreateMethod(
-          searchEngine, astProvider, classElement, name);
+      ClassElement classElement = parent.declaredElement;
+      return validateCreateMethod(searchEngine,
+          AnalysisSessionHelper(resolveResult.session), classElement, name);
     }
     // OK
     return new Future<RefactoringStatus>.value(result);
@@ -470,6 +469,15 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
    * location of this [DartExpression] in AST allows extracting.
    */
   RefactoringStatus _checkSelection() {
+    if (selectionOffset <= 0) {
+      return new RefactoringStatus.fatal(
+          'The selection offset must be greater than zero.');
+    }
+    if (selectionOffset + selectionLength >= resolveResult.content.length) {
+      return new RefactoringStatus.fatal(
+          'The selection end offset must be less then the length of the file.');
+    }
+
     // Check for implicitly selected closure.
     {
       FunctionExpression function = _findFunctionExpression();
@@ -481,23 +489,20 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
       }
     }
 
-    _ExtractMethodAnalyzer selectionAnalyzer =
-        new _ExtractMethodAnalyzer(unit, selectionRange);
-    unit.accept(selectionAnalyzer);
+    var analyzer = new _ExtractMethodAnalyzer(resolveResult, selectionRange);
+    analyzer.analyze();
     // May be a fatal error.
     {
-      if (selectionAnalyzer.status.hasFatalError) {
-        return selectionAnalyzer.status;
+      if (analyzer.status.hasFatalError) {
+        return analyzer.status;
       }
     }
 
-    List<AstNode> selectedNodes = selectionAnalyzer.selectedNodes;
+    List<AstNode> selectedNodes = analyzer.selectedNodes;
 
     // If no selected nodes, extract the smallest covering expression.
     if (selectedNodes.isEmpty) {
-      for (var node = selectionAnalyzer.coveringNode;
-          node != null;
-          node = node.parent) {
+      for (var node = analyzer.coveringNode; node != null; node = node.parent) {
         if (node is Statement) {
           break;
         }
@@ -510,7 +515,7 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
     }
 
     // Check selected nodes.
-    if (!selectedNodes.isEmpty) {
+    if (selectedNodes.isNotEmpty) {
       AstNode selectedNode = selectedNodes.first;
       _parentMember = getEnclosingClassOrUnitMember(selectedNode);
       // single expression selected
@@ -558,7 +563,7 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
       return false;
     }
     // has parameters
-    if (!parameters.isEmpty) {
+    if (parameters.isNotEmpty) {
       return false;
     }
     // is assignment
@@ -584,12 +589,13 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
       return null;
     }
     int offset = selectionRange.offset;
-    AstNode node = new NodeLocator2(offset, offset).searchWithin(unit);
+    AstNode node =
+        new NodeLocator2(offset, offset).searchWithin(resolveResult.unit);
 
     // Check for the parameter list of a FunctionExpression.
     {
       FunctionExpression function =
-          node?.getAncestor((n) => n is FunctionExpression);
+          node?.thisOrAncestorOfType<FunctionExpression>();
       if (function != null &&
           function.parameters != null &&
           range.node(function.parameters).contains(offset)) {
@@ -622,7 +628,7 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
     if (argument.parent is NamedExpression) {
       argument = argument.parent as NamedExpression;
     }
-    ParameterElement parameter = argument.bestParameterElement;
+    ParameterElement parameter = argument.staticParameterElement;
     if (parameter != null) {
       DartType parameterType = parameter.type;
       if (parameterType is FunctionType) {
@@ -658,7 +664,7 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
     // change indentation
     if (_selectionFunctionExpression != null) {
       AstNode baseNode =
-          _selectionFunctionExpression.getAncestor((node) => node is Statement);
+          _selectionFunctionExpression.thisOrAncestorOfType<Statement>();
       if (baseNode != null) {
         String baseIndent = utils.getNodePrefix(baseNode);
         String targetIndent = utils.getNodePrefix(_parentMember);
@@ -679,10 +685,12 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
     String originalSource = utils.getText(range.offset, range.length);
     _SourcePattern pattern = new _SourcePattern();
     List<SourceEdit> replaceEdits = <SourceEdit>[];
-    unit.accept(new _GetSourcePatternVisitor(range, pattern, replaceEdits));
+    resolveResult.unit
+        .accept(new _GetSourcePatternVisitor(range, pattern, replaceEdits));
     replaceEdits = replaceEdits.reversed.toList();
     String source = SourceEdit.applySequence(originalSource, replaceEdits);
-    pattern.normalizedSource = _getNormalizedSource(source);
+    pattern.normalizedSource =
+        _getNormalizedSource(source, resolveResult.unit.featureSet);
     return pattern;
   }
 
@@ -730,10 +738,16 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
     _parameterReferencesMap.clear();
     RefactoringStatus result = new RefactoringStatus();
     List<VariableElement> assignedUsedVariables = [];
-    unit.accept(new _InitializeParametersVisitor(this, assignedUsedVariables));
+
+    var unit = resolveResult.unit;
+    _visibleRangeMap = VisibleRangesComputer.forNode(unit);
+    unit.accept(
+      _InitializeParametersVisitor(this, assignedUsedVariables),
+    );
+
     // single expression
     if (_selectionExpression != null) {
-      _returnType = _selectionExpression.bestType;
+      _returnType = _selectionExpression.staticType;
     }
     // verify that none or all execution flows end with a "return"
     if (_selectionStatements != null) {
@@ -744,7 +758,7 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
     }
     // maybe ends with "return" statement
     if (_selectionStatements != null) {
-      TypeSystem typeSystem = await session.typeSystem;
+      TypeSystem typeSystem = await resolveResult.session.typeSystem;
       _ReturnTypeComputer returnTypeComputer =
           new _ReturnTypeComputer(typeSystem);
       _selectionStatements.forEach((statement) {
@@ -782,33 +796,32 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
     return result;
   }
 
-  Future<Null> _initializeReturnType() async {
+  Future<void> _initializeReturnType() async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
-    TypeProvider typeProvider = await session.typeProvider;
-    InterfaceType futureType = typeProvider.futureType;
+    TypeProvider typeProvider = await resolveResult.session.typeProvider;
     if (_selectionFunctionExpression != null) {
       variableType = '';
       returnType = '';
     } else if (_returnType == null) {
       variableType = null;
       if (_hasAwait) {
-        returnType = _getTypeCode(futureType);
+        returnType = _getTypeCode(typeProvider.futureDynamicType);
       } else {
         returnType = 'void';
       }
     } else if (_returnType.isDynamic) {
       variableType = '';
       if (_hasAwait) {
-        returnType = _getTypeCode(futureType);
+        returnType = _getTypeCode(typeProvider.futureDynamicType);
       } else {
         returnType = '';
       }
     } else {
       variableType = _getTypeCode(_returnType);
       if (_hasAwait) {
-        if (_returnType.element != futureType.element) {
-          returnType = _getTypeCode(futureType.instantiate([_returnType]));
+        if (_returnType.element != typeProvider.futureElement) {
+          returnType = _getTypeCode(typeProvider.futureType2(_returnType));
         }
       } else {
         returnType = variableType;
@@ -827,8 +840,8 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
    * Checks if it is OK to extract the node with the given [SourceRange].
    */
   bool _isExtractable(SourceRange range) {
-    _ExtractMethodAnalyzer analyzer = new _ExtractMethodAnalyzer(unit, range);
-    utils.unit.accept(analyzer);
+    var analyzer = new _ExtractMethodAnalyzer(resolveResult, range);
+    analyzer.analyze();
     return analyzer.status.isOK;
   }
 
@@ -929,8 +942,9 @@ class ExtractMethodRefactoringImpl extends RefactoringImpl
  * [SelectionAnalyzer] for [ExtractMethodRefactoringImpl].
  */
 class _ExtractMethodAnalyzer extends StatementAnalyzer {
-  _ExtractMethodAnalyzer(CompilationUnit unit, SourceRange selection)
-      : super(unit, selection);
+  _ExtractMethodAnalyzer(
+      ResolvedUnitResult resolveResult, SourceRange selection)
+      : super(resolveResult, selection);
 
   @override
   void handleNextSelectedNode(AstNode node) {
@@ -970,13 +984,23 @@ class _ExtractMethodAnalyzer extends StatementAnalyzer {
   }
 
   @override
+  Object visitForParts(ForParts node) {
+    node.visitChildren(this);
+    return null;
+  }
+
+  @override
   Object visitForStatement(ForStatement node) {
     super.visitForStatement(node);
-    if (identical(node.variables, firstSelectedNode)) {
-      invalidSelection(
-          "Cannot extract initialization part of a 'for' statement.");
-    } else if (node.updaters.contains(lastSelectedNode)) {
-      invalidSelection("Cannot extract increment part of a 'for' statement.");
+    var forLoopParts = node.forLoopParts;
+    if (forLoopParts is ForParts) {
+      if (forLoopParts is ForPartsWithDeclarations &&
+          identical(forLoopParts.variables, firstSelectedNode)) {
+        invalidSelection(
+            "Cannot extract initialization part of a 'for' statement.");
+      } else if (forLoopParts.updaters.contains(lastSelectedNode)) {
+        invalidSelection("Cannot extract increment part of a 'for' statement.");
+      }
     }
     return null;
   }
@@ -999,7 +1023,7 @@ class _ExtractMethodAnalyzer extends StatementAnalyzer {
         invalidSelection('Cannot extract the name part of a declaration.');
       }
       // method name
-      Element element = node.bestElement;
+      Element element = node.staticElement;
       if (element is FunctionElement || element is MethodElement) {
         invalidSelection('Cannot extract a single method name.');
       }
@@ -1100,11 +1124,11 @@ class _HasAwaitVisitor extends GeneralizingAstVisitor {
   }
 
   @override
-  visitForEachStatement(ForEachStatement node) {
+  visitForStatement(ForStatement node) {
     if (node.awaitKeyword != null) {
       result = true;
     }
-    super.visitForEachStatement(node);
+    super.visitForStatement(node);
   }
 }
 
@@ -1120,7 +1144,7 @@ class _HasReturnStatementVisitor extends RecursiveAstVisitor {
   }
 }
 
-class _InitializeOccurrencesVisitor extends GeneralizingAstVisitor<Object> {
+class _InitializeOccurrencesVisitor extends GeneralizingAstVisitor<void> {
   final ExtractMethodRefactoringImpl ref;
   final _SourcePattern selectionPattern;
   final Map<String, String> patternToSelectionName;
@@ -1131,50 +1155,50 @@ class _InitializeOccurrencesVisitor extends GeneralizingAstVisitor<Object> {
       this.ref, this.selectionPattern, this.patternToSelectionName);
 
   @override
-  Object visitBlock(Block node) {
+  void visitBlock(Block node) {
     if (ref._selectionStatements != null) {
       _visitStatements(node.statements);
     }
-    return super.visitBlock(node);
+    super.visitBlock(node);
   }
 
   @override
-  Object visitConstructorInitializer(ConstructorInitializer node) {
+  void visitConstructorInitializer(ConstructorInitializer node) {
     forceStatic = true;
     try {
-      return super.visitConstructorInitializer(node);
+      super.visitConstructorInitializer(node);
     } finally {
       forceStatic = false;
     }
   }
 
   @override
-  Object visitExpression(Expression node) {
+  void visitExpression(Expression node) {
     if (ref._selectionFunctionExpression != null ||
         ref._selectionExpression != null &&
             node.runtimeType == ref._selectionExpression.runtimeType) {
       SourceRange nodeRange = range.node(node);
       _tryToFindOccurrence(nodeRange);
     }
-    return super.visitExpression(node);
+    super.visitExpression(node);
   }
 
   @override
-  Object visitMethodDeclaration(MethodDeclaration node) {
+  void visitMethodDeclaration(MethodDeclaration node) {
     forceStatic = node.isStatic;
     try {
-      return super.visitMethodDeclaration(node);
+      super.visitMethodDeclaration(node);
     } finally {
       forceStatic = false;
     }
   }
 
   @override
-  Object visitSwitchMember(SwitchMember node) {
+  void visitSwitchMember(SwitchMember node) {
     if (ref._selectionStatements != null) {
       _visitStatements(node.statements);
     }
-    return super.visitSwitchMember(node);
+    super.visitSwitchMember(node);
   }
 
   /**
@@ -1251,7 +1275,7 @@ class _InitializeParametersVisitor extends GeneralizingAstVisitor {
         // add parameter
         RefactoringMethodParameter parameter = ref._parametersMap[name];
         if (parameter == null) {
-          DartType parameterType = node.bestType;
+          DartType parameterType = node.staticType;
           StringBuffer parametersBuffer = new StringBuffer();
           String parameterTypeCode = ref.utils.getTypeSource(
               parameterType, ref.librariesToImport,
@@ -1279,7 +1303,7 @@ class _InitializeParametersVisitor extends GeneralizingAstVisitor {
       // declared local elements
       if (node.inDeclarationContext()) {
         ref._localNames.putIfAbsent(name, () => <SourceRange>[]);
-        ref._localNames[name].add(element.visibleRange);
+        ref._localNames[name].add(ref._visibleRangeMap[element]);
       }
     } else {
       // unqualified non-local names
@@ -1317,7 +1341,7 @@ class _Occurrence {
   final SourceRange range;
   final bool isSelection;
 
-  Map<String, String> _parameterOldToOccurrenceName = <String, String>{};
+  final Map<String, String> _parameterOldToOccurrenceName = <String, String>{};
 
   _Occurrence(this.range, this.isSelection);
 }
@@ -1340,7 +1364,7 @@ class _ReturnTypeComputer extends RecursiveAstVisitor {
       return;
     }
     // prepare type
-    DartType type = expression.bestType;
+    DartType type = expression.staticType;
     if (type.isBottom) {
       return;
     }
@@ -1365,7 +1389,7 @@ class _ReturnTypeComputer extends RecursiveAstVisitor {
 class _SourcePattern {
   final List<DartType> parameterTypes = <DartType>[];
   String normalizedSource;
-  Map<String, String> originalToPatternNames = {};
+  final Map<String, String> originalToPatternNames = {};
 
   bool isCompatible(_SourcePattern other) {
     if (other.normalizedSource != normalizedSource) {

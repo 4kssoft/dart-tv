@@ -65,7 +65,7 @@ class ObservatoryApplication {
       // On disconnect:
       newVM.onDisconnect.then((String reason) {
         if (this.vm != newVM) {
-          // This disconnect event occured *after* a new VM was installed.
+          // This disconnect event occurred *after* a new VM was installed.
           return;
         }
         // Let anyone looking at the targets know that we have disconnected
@@ -173,7 +173,6 @@ class ObservatoryApplication {
     _pageRegistry.add(new PortsPage(this));
     _pageRegistry.add(new LoggingPage(this));
     _pageRegistry.add(new TimelinePage(this));
-    _pageRegistry.add(new MemoryDashboardPage(this));
     _pageRegistry.add(new TimelineDashboardPage(this));
     // Note that ErrorPage must be the last entry in the list as it is
     // the catch all.
@@ -200,7 +199,7 @@ class ObservatoryApplication {
         return;
       }
     }
-    throw new FallThroughError();
+    throw new ArgumentError.value(uri, 'uri');
   }
 
   /// Set the Observatory application page.
@@ -275,11 +274,6 @@ class ObservatoryApplication {
     events.onPauseException.listen(_addNotification);
     events.onInspect.listen(_addNotification);
     events.onConnectionClosed.listen(_addNotification);
-  }
-
-  loadCrashDump(Map crashDump) {
-    _switchVM(new FakeVM(crashDump['result']));
-    app.locationManager.go(Uris.vm());
   }
 
   void handleException(e, st) {

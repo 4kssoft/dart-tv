@@ -6,16 +6,20 @@ import 'sourcemaps_ddc_suite.dart' as ddc;
 
 Future<ChainContext> createContext(
     Chain suite, Map<String, String> environment) async {
-  return new StackTraceContext();
+  return StackTraceContext();
 }
 
 class StackTraceContext extends ChainContextWithCleanupHelper {
+  @override
   final List<Step> steps = <Step>[
     const Setup(),
     const SetCwdToSdkRoot(),
     const TestStackTrace(
-        const ddc.DevCompilerRunner(false), "ddc.", const ["ddc.", "ddk."]),
+        ddc.DevCompilerRunner(debugging: false, absoluteRoot: false),
+        "ddc",
+        ["ddc", "ddk"]),
   ];
 }
 
-main(List<String> arguments) => runMe(arguments, createContext, "testing.json");
+void main(List<String> arguments) =>
+    runMe(arguments, createContext, configurationPath: "testing.json");

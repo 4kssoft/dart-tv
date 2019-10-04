@@ -9,6 +9,7 @@ import '../elements/entities.dart';
 import '../elements/types.dart';
 import '../js/js.dart' as js;
 import '../js_backend/native_data.dart' show NativeBasicData;
+import '../serialization/serialization.dart';
 import '../universe/side_effects.dart' show SideEffects;
 import 'js.dart';
 
@@ -23,8 +24,10 @@ class SpecialType {
   /// The type Object, but no subtypes:
   static const JsObject = const SpecialType._('=Object');
 
+  @override
   int get hashCode => name.hashCode;
 
+  @override
   String toString() => name;
 
   static SpecialType fromName(String name) {
@@ -37,15 +40,15 @@ class SpecialType {
 }
 
 /// Description of the exception behaviour of native code.
-///
-/// TODO(sra): Replace with something that better supports specialization on
-/// first argument properties.
 class NativeThrowBehavior {
-  static const NativeThrowBehavior NEVER = const NativeThrowBehavior._(0);
-  static const NativeThrowBehavior MAY_THROW_ONLY_ON_FIRST_ARGUMENT_ACCESS =
-      const NativeThrowBehavior._(1);
-  static const NativeThrowBehavior MAY = const NativeThrowBehavior._(2);
-  static const NativeThrowBehavior MUST = const NativeThrowBehavior._(3);
+  static const NativeThrowBehavior NEVER = NativeThrowBehavior._(0);
+  static const NativeThrowBehavior MAY = NativeThrowBehavior._(1);
+
+  /// Throws only if first argument is null.
+  static const NativeThrowBehavior NULL_NSM = NativeThrowBehavior._(2);
+
+  /// Throws if first argument is null, then may throw.
+  static const NativeThrowBehavior NULL_NSM_THEN_MAY = NativeThrowBehavior._(3);
 
   final int _bits;
   const NativeThrowBehavior._(this._bits);
@@ -54,76 +57,109 @@ class NativeThrowBehavior {
 
   /// Does this behavior always throw a noSuchMethod check on a null first
   /// argument before any side effect or other exception?
-  // TODO(sra): Extend NativeThrowBehavior with the concept of NSM guard
-  // followed by other potential behavior.
-  bool get isNullNSMGuard => this == MAY_THROW_ONLY_ON_FIRST_ARGUMENT_ACCESS;
+  bool get isNullNSMGuard => this == NULL_NSM || this == NULL_NSM_THEN_MAY;
 
   /// Does this behavior always act as a null noSuchMethod check, and has no
   /// other throwing behavior?
-  bool get isOnlyNullNSMGuard =>
-      this == MAY_THROW_ONLY_ON_FIRST_ARGUMENT_ACCESS;
+  bool get isOnlyNullNSMGuard => this == NULL_NSM;
 
   /// Returns the behavior if we assume the first argument is not null.
   NativeThrowBehavior get onNonNull {
-    if (this == MAY_THROW_ONLY_ON_FIRST_ARGUMENT_ACCESS) return NEVER;
+    if (this == NULL_NSM) return NEVER;
+    if (this == NULL_NSM_THEN_MAY) return MAY;
     return this;
   }
 
+  @override
   String toString() {
     if (this == NEVER) return 'never';
     if (this == MAY) return 'may';
-    if (this == MAY_THROW_ONLY_ON_FIRST_ARGUMENT_ACCESS) return 'null(1)';
-    if (this == MUST) return 'must';
+    if (this == NULL_NSM) return 'null(1)';
+    if (this == NULL_NSM_THEN_MAY) return 'null(1)+may';
     return 'NativeThrowBehavior($_bits)';
   }
 
   /// Canonical list of marker values.
   ///
   /// Added to make [NativeThrowBehavior] enum-like.
-  static const List<NativeThrowBehavior> values = const <NativeThrowBehavior>[
+  static const List<NativeThrowBehavior> values = [
     NEVER,
-    MAY_THROW_ONLY_ON_FIRST_ARGUMENT_ACCESS,
     MAY,
-    MUST,
+    NULL_NSM,
+    NULL_NSM_THEN_MAY,
   ];
 
   /// Index to this marker within [values].
   ///
   /// Added to make [NativeThrowBehavior] enum-like.
   int get index => values.indexOf(this);
+
+  /// Deserializer helper.
+  static NativeThrowBehavior _bitsToValue(int bits) {
+    switch (bits) {
+      case 0:
+        return NEVER;
+      case 1:
+        return MAY;
+      case 2:
+        return NULL_NSM;
+      case 3:
+        return NULL_NSM_THEN_MAY;
+      default:
+        return null;
+    }
+  }
+
+  /// Sequence operator.
+  NativeThrowBehavior then(NativeThrowBehavior second) {
+    if (this == NEVER) return second;
+    if (this == MAY) return MAY;
+    if (this == NULL_NSM_THEN_MAY) return NULL_NSM_THEN_MAY;
+    assert(this == NULL_NSM);
+    if (second == NEVER) return this;
+    return NULL_NSM_THEN_MAY;
+  }
+
+  /// Choice operator.
+  NativeThrowBehavior or(NativeThrowBehavior other) {
+    if (this == other) return this;
+    return MAY;
+  }
 }
 
-/**
- * A summary of the behavior of a native element.
- *
- * Native code can return values of one type and cause native subtypes of
- * another type to be instantiated.  By default, we compute both from the
- * declared type.
- *
- * A field might yield any native type that 'is' the field type.
- *
- * A method might create and return instances of native subclasses of its
- * declared return type, and a callback argument may be called with instances of
- * the callback parameter type (e.g. Event).
- *
- * If there is one or more `@Creates` annotations, the union of the named types
- * replaces the inferred instantiated type, and the return type is ignored for
- * the purpose of inferring instantiated types.
- *
- *     @Creates('IDBCursor')    // Created asynchronously.
- *     @Creates('IDBRequest')   // Created synchronously (for return value).
- *     IDBRequest openCursor();
- *
- * If there is one or more `@Returns` annotations, the union of the named types
- * replaces the declared return type.
- *
- *     @Returns('IDBRequest')
- *     IDBRequest openCursor();
- *
- * Types in annotations are non-nullable, so include `@Returns('Null')` if
- * `null` may be returned.
- */
+/// A summary of the behavior of a native element.
+///
+/// Native code can return values of one type and cause native subtypes of
+/// another type to be instantiated.  By default, we compute both from the
+/// declared type.
+///
+/// A field might yield any native type that 'is' the field type.
+///
+/// A method might create and return instances of native subclasses of its
+/// declared return type, and a callback argument may be called with instances
+/// of the callback parameter type (e.g. Event).
+///
+/// If there is one or more `@Creates` annotations, the union of the named types
+/// replaces the inferred instantiated type, and the return type is ignored for
+/// the purpose of inferring instantiated types.
+///
+///     @Creates('IDBCursor')    // Created asynchronously.
+///     @Creates('IDBRequest')   // Created synchronously (for return value).
+///     IDBRequest openCursor();
+///
+/// If there is one or more `@Returns` annotations, the union of the named types
+/// replaces the declared return type.
+///
+///     @Returns('IDBRequest')
+///     IDBRequest openCursor();
+///
+/// Types in annotations are non-nullable, so include `@Returns('Null')` if
+/// `null` may be returned.
 class NativeBehavior {
+  /// Tag used for identifying serialized [NativeBehavior] objects in a
+  /// debugging data stream.
+  static const String tag = 'native-behavior';
+
   /// [DartType]s or [SpecialType]s returned or yielded by the native
   /// element.
   final List typesReturned = [];
@@ -156,6 +192,76 @@ class NativeBehavior {
 
   NativeBehavior.internal(this.sideEffects);
 
+  /// Deserializes a [NativeBehavior] object from [source].
+  factory NativeBehavior.readFromDataSource(DataSource source) {
+    source.begin(tag);
+
+    List readTypes() {
+      List types = [];
+      types.addAll(source.readDartTypes());
+      int specialCount = source.readInt();
+      for (int i = 0; i < specialCount; i++) {
+        String name = source.readString();
+        types.add(SpecialType.fromName(name));
+      }
+      return types;
+    }
+
+    List typesReturned = readTypes();
+    List typesInstantiated = readTypes();
+    String codeTemplateText = source.readStringOrNull();
+    SideEffects sideEffects = new SideEffects.readFromDataSource(source);
+    int throwBehavior = source.readInt();
+    bool isAllocation = source.readBool();
+    bool useGvn = source.readBool();
+    source.end(tag);
+
+    NativeBehavior behavior = new NativeBehavior.internal(sideEffects);
+    behavior.typesReturned.addAll(typesReturned);
+    behavior.typesInstantiated.addAll(typesInstantiated);
+    if (codeTemplateText != null) {
+      behavior.codeTemplateText = codeTemplateText;
+      behavior.codeTemplate = js.js.parseForeignJS(codeTemplateText);
+    }
+    behavior.throwBehavior = NativeThrowBehavior._bitsToValue(throwBehavior);
+    assert(behavior.throwBehavior._bits == throwBehavior);
+    behavior.isAllocation = isAllocation;
+    behavior.useGvn = useGvn;
+    return behavior;
+  }
+
+  /// Serializes this [NativeBehavior] to [sink].
+  void writeToDataSink(DataSink sink) {
+    sink.begin(tag);
+
+    void writeTypes(List types) {
+      List<DartType> dartTypes = [];
+      List<SpecialType> specialTypes = [];
+      for (var type in types) {
+        if (type is DartType) {
+          dartTypes.add(type);
+        } else {
+          specialTypes.add(type);
+        }
+      }
+      sink.writeDartTypes(dartTypes);
+      sink.writeInt(specialTypes.length);
+      for (SpecialType type in specialTypes) {
+        sink.writeString(type.name);
+      }
+    }
+
+    writeTypes(typesReturned);
+    writeTypes(typesInstantiated);
+    sink.writeStringOrNull(codeTemplateText);
+    sideEffects.writeToDataSink(sink);
+    sink.writeInt(throwBehavior._bits);
+    sink.writeBool(isAllocation);
+    sink.writeBool(useGvn);
+    sink.end(tag);
+  }
+
+  @override
   String toString() {
     return 'NativeBehavior('
         'returns: ${typesReturned}'
@@ -234,12 +340,12 @@ class NativeBehavior {
   ///    indicated with 'no-static'. The flags 'effects' and 'depends' must be
   ///    used in unison (either both are present or none is).
   ///
-  ///    The <throws-string> values are 'never', 'may', 'must', and 'null(1)'.
-  ///    The default if unspecified is 'may'. 'null(1)' means that the template
-  ///    expression throws if and only if the first template parameter is `null`
-  ///    or `undefined`.
-  ///    TODO(sra): Can we simplify to must/may/never and add null(1) by
-  ///    inspection as an orthogonal attribute?
+  ///    The <throws-string> values are 'never', 'may', 'null(1)', and
+  ///    'null(1)+may'.  The default if unspecified is 'may'. 'null(1)' means
+  ///    that the template expression throws if and only if the first template
+  ///    parameter is `null` or `undefined`, and 'null(1)+may' throws if the
+  ///    first argument is `null` / `undefined`, and then may throw for other
+  ///    reasons.
   ///
   ///    <gvn-string> values are 'true' and 'false'. The default if unspecified
   ///    is 'false'.
@@ -393,14 +499,14 @@ class NativeBehavior {
       });
     }
 
-    const throwsOption = const <String, NativeThrowBehavior>{
+    const throwsOption = <String, NativeThrowBehavior>{
       'never': NativeThrowBehavior.NEVER,
-      'null(1)': NativeThrowBehavior.MAY_THROW_ONLY_ON_FIRST_ARGUMENT_ACCESS,
       'may': NativeThrowBehavior.MAY,
-      'must': NativeThrowBehavior.MUST
+      'null(1)': NativeThrowBehavior.NULL_NSM,
+      'null(1)+may': NativeThrowBehavior.NULL_NSM_THEN_MAY,
     };
 
-    const boolOptions = const <String, bool>{'true': true, 'false': false};
+    const boolOptions = <String, bool>{'true': true, 'false': false};
 
     SideEffects sideEffects =
         processEffects(reportError, values['effects'], values['depends']);
@@ -634,14 +740,12 @@ abstract class BehaviorBuilder {
 
   NativeBehavior _behavior;
 
-  void _overrideWithAnnotations(
-      Iterable<ConstantValue> metadata, TypeLookup lookupType) {
-    if (metadata.isEmpty) return;
+  void _overrideWithAnnotations(Iterable<String> createsAnnotations,
+      Iterable<String> returnsAnnotations, TypeLookup lookupType) {
+    if (createsAnnotations.isEmpty && returnsAnnotations.isEmpty) return;
 
-    List creates =
-        _collect(metadata, commonElements.annotationCreatesClass, lookupType);
-    List returns =
-        _collect(metadata, commonElements.annotationReturnsClass, lookupType);
+    List creates = _collect(createsAnnotations, lookupType);
+    List returns = _collect(returnsAnnotations, lookupType);
 
     if (creates != null) {
       _behavior.typesInstantiated
@@ -655,27 +759,12 @@ abstract class BehaviorBuilder {
     }
   }
 
-  /**
-   * Returns a list of type constraints from the annotations of
-   * [annotationClass].
-   * Returns `null` if no constraints.
-   */
-  List _collect(Iterable<ConstantValue> metadata, ClassEntity annotationClass,
-      TypeLookup lookupType) {
+  /// Returns a list of type constraints from the annotations of
+  /// [annotationClass].
+  /// Returns `null` if no constraints.
+  List _collect(Iterable<String> annotations, TypeLookup lookupType) {
     var types = null;
-    for (ConstantValue value in metadata) {
-      if (!value.isConstructedObject) continue;
-      ConstructedConstantValue constructedObject = value;
-      if (constructedObject.type.element != annotationClass) continue;
-
-      Iterable<ConstantValue> fields = constructedObject.fields.values;
-      // TODO(sra): Better validation of the constant.
-      if (fields.length != 1 || !fields.single.isString) {
-        reporter.internalError(CURRENT_ELEMENT_SPANNABLE,
-            'Annotations needs one string: ${value.toStructuredText()}');
-      }
-      StringConstantValue specStringConstant = fields.single;
-      String specString = specStringConstant.stringValue;
+    for (String specString in annotations) {
       for (final typeString in specString.split('|')) {
         var type = NativeBehavior._parseType(typeString, lookupType);
         if (types == null) types = [];
@@ -747,7 +836,10 @@ abstract class BehaviorBuilder {
   }
 
   NativeBehavior buildFieldLoadBehavior(
-      DartType type, Iterable<ConstantValue> metadata, TypeLookup lookupType,
+      DartType type,
+      Iterable<String> createsAnnotations,
+      Iterable<String> returnsAnnotations,
+      TypeLookup lookupType,
       {bool isJsInterop}) {
     _behavior = new NativeBehavior();
     // TODO(sigmund,sra): consider doing something better for numeric types.
@@ -757,7 +849,8 @@ abstract class BehaviorBuilder {
     // Declared types are nullable.
     _behavior.typesReturned.add(commonElements.nullType);
     _capture(type, isJsInterop);
-    _overrideWithAnnotations(metadata, lookupType);
+    _overrideWithAnnotations(
+        createsAnnotations, returnsAnnotations, lookupType);
     return _behavior;
   }
 
@@ -769,8 +862,11 @@ abstract class BehaviorBuilder {
     return _behavior;
   }
 
-  NativeBehavior buildMethodBehavior(FunctionType type,
-      Iterable<ConstantValue> metadata, TypeLookup lookupType,
+  NativeBehavior buildMethodBehavior(
+      FunctionType type,
+      Iterable<String> createAnnotations,
+      Iterable<String> returnsAnnotations,
+      TypeLookup lookupType,
       {bool isJsInterop}) {
     _behavior = new NativeBehavior();
     DartType returnType = type.returnType;
@@ -799,7 +895,40 @@ abstract class BehaviorBuilder {
       _escape(type, isJsInterop);
     }
 
-    _overrideWithAnnotations(metadata, lookupType);
+    _overrideWithAnnotations(createAnnotations, returnsAnnotations, lookupType);
     return _behavior;
   }
+}
+
+List<String> _getAnnotations(DiagnosticReporter reporter,
+    Iterable<ConstantValue> metadata, ClassEntity cls) {
+  List<String> annotations = [];
+  for (ConstantValue value in metadata) {
+    if (!value.isConstructedObject) continue;
+    ConstructedConstantValue constructedObject = value;
+    if (constructedObject.type.element != cls) continue;
+
+    Iterable<ConstantValue> fields = constructedObject.fields.values;
+    // TODO(sra): Better validation of the constant.
+    if (fields.length != 1 || !fields.single.isString) {
+      reporter.internalError(CURRENT_ELEMENT_SPANNABLE,
+          'Annotations needs one string: ${value.toStructuredText()}');
+    }
+    StringConstantValue specStringConstant = fields.single;
+    String specString = specStringConstant.stringValue;
+    annotations.add(specString);
+  }
+  return annotations;
+}
+
+List<String> getCreatesAnnotations(DiagnosticReporter reporter,
+    CommonElements commonElements, Iterable<ConstantValue> metadata) {
+  return _getAnnotations(
+      reporter, metadata, commonElements.annotationCreatesClass);
+}
+
+List<String> getReturnsAnnotations(DiagnosticReporter reporter,
+    CommonElements commonElements, Iterable<ConstantValue> metadata) {
+  return _getAnnotations(
+      reporter, metadata, commonElements.annotationReturnsClass);
 }

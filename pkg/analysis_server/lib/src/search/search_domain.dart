@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -10,9 +10,9 @@ import 'package:analysis_server/src/analysis_server.dart';
 import 'package:analysis_server/src/protocol_server.dart' as protocol;
 import 'package:analysis_server/src/search/element_references.dart';
 import 'package:analysis_server/src/search/type_hierarchy.dart';
+import 'package:analysis_server/src/search/workspace_symbols.dart' as search;
 import 'package:analysis_server/src/services/search/search_engine.dart';
 import 'package:analyzer/dart/element/element.dart';
-import 'package:analyzer/src/dart/analysis/search.dart' as search;
 
 /**
  * Instances of the class [SearchDomainHandler] implement a [RequestHandler]
@@ -155,9 +155,6 @@ class SearchDomainHandler implements protocol.RequestHandler {
       }
     }
 
-    var files = new LinkedHashSet<String>();
-    var declarations = <search.Declaration>[];
-
     protocol.ElementKind getElementKind(search.DeclarationKind kind) {
       switch (kind) {
         case search.DeclarationKind.CLASS:
@@ -180,6 +177,8 @@ class SearchDomainHandler implements protocol.RequestHandler {
           return protocol.ElementKind.GETTER;
         case search.DeclarationKind.METHOD:
           return protocol.ElementKind.METHOD;
+        case search.DeclarationKind.MIXIN:
+          return protocol.ElementKind.MIXIN;
         case search.DeclarationKind.SETTER:
           return protocol.ElementKind.SETTER;
         case search.DeclarationKind.VARIABLE:
@@ -189,20 +188,15 @@ class SearchDomainHandler implements protocol.RequestHandler {
       }
     }
 
+    var tracker = server.declarationsTracker;
+    var files = LinkedHashSet<String>();
     int remainingMaxResults = params.maxResults;
-    for (var driver in server.driverMap.values.toList()) {
-      var driverDeclarations = await driver.search.declarations(
-          regExp, remainingMaxResults, files,
-          onlyForFile: params.file);
-      declarations.addAll(driverDeclarations);
-
-      if (remainingMaxResults != null) {
-        remainingMaxResults -= driverDeclarations.length;
-        if (remainingMaxResults <= 0) {
-          break;
-        }
-      }
-    }
+    var declarations = search.WorkspaceSymbols(tracker).declarations(
+      regExp,
+      remainingMaxResults,
+      files,
+      onlyForFile: params.file,
+    );
 
     List<protocol.ElementDeclaration> elementDeclarations =
         declarations.map((declaration) {
@@ -216,6 +210,7 @@ class SearchDomainHandler implements protocol.RequestHandler {
           declaration.codeOffset,
           declaration.codeLength,
           className: declaration.className,
+          mixinName: declaration.mixinName,
           parameters: declaration.parameters);
     }).toList();
 

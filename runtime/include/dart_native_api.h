@@ -27,6 +27,12 @@
  * kTypedData. The specific type from dart:typed_data is in the type
  * field of the as_typed_data structure. The length in the
  * as_typed_data structure is always in bytes.
+ *
+ * The data for kTypedData is copied on message send and ownership remains with
+ * the caller. The ownership of data for kExternalTyped is passed to the VM on
+ * message send and returned when the VM invokes the
+ * Dart_WeakPersistentHandleFinalizer callback; a non-NULL callback must be
+ * provided.
  */
 typedef enum {
   Dart_CObject_kNull = 0,
@@ -116,7 +122,6 @@ DART_EXPORT bool Dart_PostInteger(Dart_Port port_id, int64_t message);
  * data references from the message are allocated by the caller and
  * will be reclaimed when returning to it.
  */
-
 typedef void (*Dart_NativeMessageHandler)(Dart_Port dest_port_id,
                                           Dart_CObject* message);
 
@@ -163,10 +168,17 @@ DART_EXPORT bool Dart_CloseNativePort(Dart_Port native_port_id);
  */
 DART_EXPORT DART_WARN_UNUSED_RESULT Dart_Handle Dart_CompileAll();
 
+DART_EXPORT DART_WARN_UNUSED_RESULT Dart_Handle Dart_ReadAllBytecode();
+
 /**
- * Parses all loaded functions in the current isolate..
- *
+ * Finalizes all classes.
  */
-DART_EXPORT DART_WARN_UNUSED_RESULT Dart_Handle Dart_ParseAll();
+DART_EXPORT DART_WARN_UNUSED_RESULT Dart_Handle Dart_FinalizeAllClasses();
+
+/*  This function is intentionally undocumented.
+ *
+ *  It should not be used outside internal tests.
+ */
+DART_EXPORT void* Dart_ExecuteInternalCommand(const char* command, void* arg);
 
 #endif /* INCLUDE_DART_NATIVE_API_H_ */ /* NOLINT */

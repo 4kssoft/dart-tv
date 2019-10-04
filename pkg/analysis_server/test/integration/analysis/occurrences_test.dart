@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -12,9 +12,6 @@ import '../support/integration_tests.dart';
 main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(OccurrencesTest);
-    // TODO(scheglov): Restore similar test coverage when the front-end API
-    // allows it.  See https://github.com/dart-lang/sdk/issues/32258.
-    // defineReflectiveTests(OccurrencesTest_UseCFE);
   });
 }
 
@@ -67,10 +64,4 @@ main() {
       check('sum', ['sum = 0', 'sum +=', 'sum)']);
     });
   }
-}
-
-@reflectiveTest
-class OccurrencesTest_UseCFE extends OccurrencesTest {
-  @override
-  bool get useCFE => true;
 }

@@ -53,10 +53,23 @@ convertNativeToDart_AcceptStructuredClone(object, {mustCopy: false}) =>
         .convertNativeToDart_AcceptStructuredClone(object, mustCopy: mustCopy);
 
 class _StructuredCloneDart2Js extends _StructuredClone {
+  JSObject newJsObject() => JS('JSObject', '{}');
+
+  void forEachObjectKey(object, action(key, value)) {
+    for (final key
+        in JS('returns:JSExtendableArray;new:true', 'Object.keys(#)', object)) {
+      action(key, JS('var', '#[#]', object, key));
+    }
+  }
+
+  void putIntoObject(object, key, value) =>
+      JS('void', '#[#] = #', object, key, value);
+
   newJsMap() => JS('var', '{}');
   putIntoMap(map, key, value) => JS('void', '#[#] = #', map, key, value);
   newJsList(length) => JS('JSExtendableArray', 'new Array(#)', length);
-  cloneNotRequired(e) => (e is NativeByteBuffer || e is NativeTypedData);
+  cloneNotRequired(e) =>
+      (e is NativeByteBuffer || e is NativeTypedData || e is MessagePort);
 }
 
 class _AcceptStructuredCloneDart2Js extends _AcceptStructuredClone {
@@ -96,7 +109,7 @@ Future convertNativePromiseToDartFuture(promise) {
 
 const String _serializedScriptValue = 'num|String|bool|'
     'JSExtendableArray|=Object|'
-    'Blob|File|NativeByteBuffer|NativeTypedData'
+    'Blob|File|NativeByteBuffer|NativeTypedData|MessagePort'
     // TODO(sra): Add Date, RegExp.
     ;
 const annotation_Creates_SerializedScriptValue =

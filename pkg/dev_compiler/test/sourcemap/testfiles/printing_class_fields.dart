@@ -3,14 +3,14 @@
 // BSD-style license that can be found in the LICENSE file.
 
 /*Debugger:stepOver*/
-main() {
+void main() {
   /*bl*/
-  /*sl:1*/ Foo foo = new Foo(1, 2);
+  /*sl:1*/ Foo foo = Foo(1, 2);
   /*sl:2*/ print(foo.x);
   /*sl:3*/ print(foo.y);
   /*sl:4*/ print(foo.z);
 
-  /*sl:5*/ foo = new Foo.named();
+  /*sl:5*/ foo = Foo.named();
   /*sl:6*/ print(foo.x);
   /*sl:7*/ print(foo.y);
   /*sl:8*/ print(foo.z);

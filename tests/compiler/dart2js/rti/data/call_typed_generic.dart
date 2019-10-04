@@ -3,19 +3,20 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:expect/expect.dart';
-import 'package:meta/dart2js.dart';
 
-/*!strong.class: A:needsArgs*/
 /*strong.class: A:direct,explicit=[A.T],needsArgs*/
+/*omit.class: A:*/
 class A<T> {
-  /*element: A.call:needsSignature*/
+  /*strong.member: A.call:*/
+  /*omit.member: A.call:*/
   call(T t) {}
 }
 
-@noInline
+@pragma('dart2js:noInline')
 test(o) => o is Function(int);
 
 main() {
-  Expect.isTrue(test(new A<int>()));
+  Expect.isFalse(test(new A<int>()));
   Expect.isFalse(test(new A<String>()));
+  new A().call(null); // Use .call to ensure it is live.
 }

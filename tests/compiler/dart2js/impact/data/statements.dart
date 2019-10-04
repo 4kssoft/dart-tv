@@ -2,7 +2,7 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-/*element: main:
+/*member: main:
  static=[
   testAssert(0),
   testAssertWithMessage(0),
@@ -31,7 +31,7 @@ main() {
   testAssertWithMessage();
 }
 
-/*element: testIfThen:
+/*member: testIfThen:
  type=[
   inst:JSBool,
   inst:JSDouble,
@@ -47,7 +47,7 @@ testIfThen() {
   return 1;
 }
 
-/*element: testIfThenElse:
+/*member: testIfThenElse:
  type=[
   inst:JSBool,
   inst:JSDouble,
@@ -65,23 +65,12 @@ testIfThenElse() {
     return 1;
 }
 
-/*kernel.element: testForIn:
+/*member: testForIn:
  dynamic=[
-  current,
-  iterator,
-  moveNext(0)],
- static=[
-  checkConcurrentModificationError],
- type=[
-  inst:JSNull,
-  inst:Null]
-*/
-/*strong.element: testForIn:
- dynamic=[
-  current,
-  iterator,
-  moveNext(0)],
- static=[checkConcurrentModificationError],
+  Iterator.current,
+  Iterator.iterator,
+  Iterator.moveNext(0)],
+ static=[checkConcurrentModificationError(2)],
  type=[
   impl:Iterable<dynamic>,
   inst:JSBool,
@@ -93,24 +82,12 @@ testForIn(o) {
   for (var e in o) {}
 }
 
-/*kernel.element: testForInTyped:
+/*member: testForInTyped:
  dynamic=[
-  current,
-  iterator,
-  moveNext(0)],
- static=[
-  checkConcurrentModificationError],
- type=[
-  check:int,
-  inst:JSNull,
-  inst:Null]
-*/
-/*strong.element: testForInTyped:
- dynamic=[
-  current,
-  iterator,
-  moveNext(0)],
- static=[checkConcurrentModificationError],
+  Iterator.current,
+  Iterator.iterator,
+  Iterator.moveNext(0)],
+ static=[checkConcurrentModificationError(2)],
  type=[
   impl:Iterable<dynamic>,
   impl:int,
@@ -123,8 +100,8 @@ testForInTyped(o) {
   for (int e in o) {}
 }
 
-/*element: testTryCatch:
- static=[unwrapException],
+/*member: testTryCatch:
+ static=[unwrapException(1)],
  type=[
   inst:PlainJavaScriptObject,
   inst:UnknownJavaScriptObject]
@@ -133,8 +110,8 @@ testTryCatch() {
   try {} catch (e) {}
 }
 
-/*element: testTryCatchOn:
- static=[unwrapException],
+/*member: testTryCatchOn:
+ static=[unwrapException(1)],
  type=[
   catch:String,
   inst:JSBool,
@@ -146,10 +123,10 @@ testTryCatchOn() {
   try {} on String catch (e) {}
 }
 
-/*element: testTryCatchStackTrace:
+/*member: testTryCatchStackTrace:
  static=[
-  getTraceFromException,
-  unwrapException],
+  getTraceFromException(1),
+  unwrapException(1)],
  type=[
   inst:PlainJavaScriptObject,
   inst:UnknownJavaScriptObject,
@@ -160,15 +137,15 @@ testTryCatchStackTrace() {
   try {} catch (e, s) {}
 }
 
-/*element: testTryFinally:*/
+/*member: testTryFinally:*/
 testTryFinally() {
   try {} finally {}
 }
 
-/*element: testSwitchWithoutFallthrough:
+/*member: testSwitchWithoutFallthrough:
  static=[
-  throwExpression,
-  wrapException],
+  throwExpression(1),
+  wrapException(1)],
  type=[
   inst:JSDouble,
   inst:JSInt,
@@ -194,12 +171,12 @@ testSwitchWithoutFallthrough(o) {
   }
 }
 
-/*element: testAssert:static=[assertHelper],type=[inst:JSBool]*/
+/*member: testAssert:static=[assertHelper(1)],type=[inst:JSBool]*/
 testAssert() {
   assert(true);
 }
 
-/*element: testAssertWithMessage:static=[assertTest,assertThrow],type=[inst:JSBool,inst:JSString]*/
+/*member: testAssertWithMessage:static=[assertTest(1),assertThrow(1)],type=[inst:JSBool,inst:JSString]*/
 testAssertWithMessage() {
   assert(true, 'ok');
 }

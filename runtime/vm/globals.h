@@ -36,7 +36,11 @@ const intptr_t kSmiMin32 = -(static_cast<intptr_t>(1) << kSmiBits32);
 const intptr_t kBytesPerBigIntDigit = 4;
 
 // The default old gen heap size in MB, where 0 == unlimited.
-const intptr_t kDefaultMaxOldGenHeapSize = (kWordSize <= 4) ? 1536 : 0;
+// 32-bit: OS limit is 2 or 3 GB
+// 64-bit: OS limit is 2^16 page table entries * 256 KB HeapPages = 16 GB
+// Set the VM limit below the OS limit to increase the likelihood of failing
+// gracefully with a Dart OutOfMemory exception instead of SIGABORT.
+const intptr_t kDefaultMaxOldGenHeapSize = (kWordSize <= 4) ? 1536 : 15360;
 
 #define kPosInfinity bit_cast<double>(DART_UINT64_C(0x7ff0000000000000))
 #define kNegInfinity bit_cast<double>(DART_UINT64_C(0xfff0000000000000))
@@ -49,7 +53,54 @@ const intptr_t kDefaultMaxOldGenHeapSize = (kWordSize <= 4) ? 1536 : 0;
   ((sizeof(array) / sizeof(*(array))) /                                        \
    static_cast<intptr_t>(!(sizeof(array) % sizeof(*(array)))))  // NOLINT
 
-#if defined(ARCH_IS_64_BIT)
+#if defined(PRODUCT) && defined(DEBUG)
+#error Both PRODUCT and DEBUG defined.
+#endif  // defined(PRODUCT) && defined(DEBUG)
+
+#if defined(PRODUCT)
+#define NOT_IN_PRODUCT(code)
+#else  // defined(PRODUCT)
+#define NOT_IN_PRODUCT(code) code
+#endif  // defined(PRODUCT)
+
+#if defined(DART_PRECOMPILED_RUNTIME) && defined(DART_PRECOMPILER)
+#error DART_PRECOMPILED_RUNTIME and DART_PRECOMPILER are mutually exclusive
+#endif  // defined(DART_PRECOMPILED_RUNTIME) && defined(DART_PRECOMPILER)
+
+#if defined(DART_PRECOMPILED_RUNTIME) && defined(DART_NOSNAPSHOT)
+#error DART_PRECOMPILED_RUNTIME and DART_NOSNAPSHOT are mutually exclusive
+#endif  // defined(DART_PRECOMPILED_RUNTIME) && defined(DART_NOSNAPSHOT)
+
+#if defined(DART_PRECOMPILED_RUNTIME)
+#define NOT_IN_PRECOMPILED(code)
+#else
+#define NOT_IN_PRECOMPILED(code) code
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
+
+#if defined(TARGET_ARCH_DBC)
+#define NOT_IN_DBC(code)
+#else
+#define NOT_IN_DBC(code) code
+#endif  // defined(TARGET_ARCH_DBC)
+
+#if defined(TARGET_ARCH_ARM) || defined(TARGET_ARCH_ARM64) ||                  \
+    defined(TARGET_ARCH_X64)
+#define ONLY_IN_ARM_ARM64_X64(code) code
+#else
+#define ONLY_IN_ARM_ARM64_X64(code)
+#endif
+
+#if defined(DART_PRECOMPILED_RUNTIME)
+#define NOT_IN_PRECOMPILED_RUNTIME(code)
+#else
+#define NOT_IN_PRECOMPILED_RUNTIME(code) code
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
+
+#if !defined(PRODUCT) || defined(HOST_OS_FUCHSIA) || defined(TARGET_OS_FUCHSIA)
+#define SUPPORT_TIMELINE 1
+#endif
+
+#if defined(ARCH_IS_64_BIT) && !defined(IS_SIMARM_X64)
 #define HASH_IN_OBJECT_HEADER 1
 #endif
 
@@ -132,6 +183,17 @@ static const uword kZapUninitializedWord = 0xabababababababab;
   fp = reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
 
 #endif  // !defined(HOST_OS_WINDOWS))
+
+#if defined(TARGET_ARCH_ARM) || defined(TARGET_ARCH_ARM64) ||                  \
+    defined(TARGET_ARCH_X64)
+#define TARGET_USES_OBJECT_POOL 1
+#endif
+
+#if defined(DART_PRECOMPILER) &&                                               \
+    (defined(TARGET_ARCH_X64) || defined(TARGET_ARCH_ARM) ||                   \
+     defined(TARGET_ARCH_ARM64))
+#define DART_SUPPORT_PRECOMPILATION 1
+#endif
 
 }  // namespace dart
 

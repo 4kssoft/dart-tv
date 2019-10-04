@@ -2,17 +2,17 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'package:kernel/ast.dart' as ir;
 import '../common.dart';
 import '../elements/entities.dart';
 import '../elements/types.dart';
-import '../types/abstract_value_domain.dart';
-import '../universe/selector.dart';
 import '../world.dart';
+import 'abstract_value_domain.dart';
 import 'type_graph_nodes.dart';
 
 /// Strategy for creating type information from members and parameters and type
 /// information for nodes.
-abstract class TypeSystemStrategy<T> {
+abstract class TypeSystemStrategy {
   /// Creates [MemberTypeInformation] for [member].
   MemberTypeInformation createMemberTypeInformation(
       AbstractValueDomain abstractValueDomain, MemberEntity member);
@@ -21,51 +21,58 @@ abstract class TypeSystemStrategy<T> {
   ParameterTypeInformation createParameterTypeInformation(
       AbstractValueDomain abstractValueDomain,
       Local parameter,
-      TypeSystem<T> types);
+      TypeSystem types);
 
   /// Calls [f] for each parameter in [function].
   void forEachParameter(FunctionEntity function, void f(Local parameter));
 
   /// Returns whether [node] is valid as a general phi node.
-  bool checkPhiNode(T node);
+  bool checkPhiNode(ir.Node node);
 
   /// Returns whether [node] is valid as a loop phi node.
-  bool checkLoopPhiNode(T node);
+  bool checkLoopPhiNode(ir.Node node);
 
   /// Returns whether [node] is valid as a list allocation node.
-  bool checkListNode(T node);
+  bool checkListNode(ir.Node node);
+
+  /// Returns whether [node] is valid as a set allocation node.
+  bool checkSetNode(ir.Node node);
 
   /// Returns whether [node] is valid as a map allocation node.
-  bool checkMapNode(T node);
+  bool checkMapNode(ir.Node node);
 
   /// Returns whether [cls] is valid as a type mask base class.
   bool checkClassEntity(ClassEntity cls);
 }
 
-/**
- * The class [SimpleInferrerVisitor] will use when working on types.
- */
-class TypeSystem<T> {
+/// The class [SimpleInferrerVisitor] will use when working on types.
+class TypeSystem {
   final JClosedWorld _closedWorld;
-  final TypeSystemStrategy<T> strategy;
+  final TypeSystemStrategy strategy;
 
   /// [parameterTypeInformations] and [memberTypeInformations] ordered by
   /// creation time. This is used as the inference enqueueing order.
   final List<TypeInformation> _orderedTypeInformations = <TypeInformation>[];
 
   /// [ParameterTypeInformation]s for parameters.
-  final Map<Local, TypeInformation> parameterTypeInformations =
-      new Map<Local, TypeInformation>();
+  final Map<Local, ParameterTypeInformation> parameterTypeInformations =
+      new Map<Local, ParameterTypeInformation>();
 
   /// [MemberTypeInformation]s for members.
-  final Map<MemberEntity, TypeInformation> memberTypeInformations =
-      new Map<MemberEntity, TypeInformation>();
+  final Map<MemberEntity, MemberTypeInformation> memberTypeInformations =
+      new Map<MemberEntity, MemberTypeInformation>();
 
   /// [ListTypeInformation] for allocated lists.
-  final Map<T, TypeInformation> allocatedLists = new Map<T, TypeInformation>();
+  final Map<ir.TreeNode, ListTypeInformation> allocatedLists =
+      new Map<ir.TreeNode, ListTypeInformation>();
+
+  /// [SetTypeInformation] for allocated Sets.
+  final Map<ir.TreeNode, SetTypeInformation> allocatedSets =
+      new Map<ir.TreeNode, SetTypeInformation>();
 
   /// [MapTypeInformation] for allocated Maps.
-  final Map<T, TypeInformation> allocatedMaps = new Map<T, TypeInformation>();
+  final Map<ir.TreeNode, TypeInformation> allocatedMaps =
+      new Map<ir.TreeNode, TypeInformation>();
 
   /// Closures found during the analysis.
   final Set<TypeInformation> allocatedClosures = new Set<TypeInformation>();
@@ -91,6 +98,7 @@ class TypeSystem<T> {
         parameterTypeInformations.values,
         memberTypeInformations.values,
         allocatedLists.values,
+        allocatedSets.values,
         allocatedMaps.values,
         allocatedClosures,
         concreteTypes.values,
@@ -204,6 +212,14 @@ class TypeSystem<T> {
         getConcreteTypeFor(_abstractValueDomain.growableListType);
   }
 
+  TypeInformation setTypeCache;
+  TypeInformation get setType =>
+      setTypeCache ??= getConcreteTypeFor(_abstractValueDomain.setType);
+
+  TypeInformation constSetTypeCache;
+  TypeInformation get constSetType => constSetTypeCache ??=
+      getConcreteTypeFor(_abstractValueDomain.constSetType);
+
   TypeInformation mapTypeCache;
   TypeInformation get mapType {
     if (mapTypeCache != null) return mapTypeCache;
@@ -271,10 +287,8 @@ class TypeSystem<T> {
         _abstractValueDomain, value, _abstractValueDomain.boolType);
   }
 
-  /**
-   * Returns the least upper bound between [firstType] and
-   * [secondType].
-   */
+  /// Returns the least upper bound between [firstType] and
+  /// [secondType].
   TypeInformation computeLUB(
       TypeInformation firstType, TypeInformation secondType) {
     if (firstType == null) return secondType;
@@ -288,62 +302,34 @@ class TypeSystem<T> {
         _abstractValueDomain.union(firstType.type, secondType.type));
   }
 
-  /**
-   * Returns `true` if `selector` should be updated to reflect the new
-   * `receiverType`.
-   */
+  /// Returns `true` if `selector` should be updated to reflect the new
+  /// `receiverType`.
   bool selectorNeedsUpdate(TypeInformation info, AbstractValue mask) {
     return info.type != mask;
   }
 
-  /**
-   * Returns a new receiver type for this [selector] applied to
-   * [receiverType].
-   *
-   * The option [isConditional] is true when [selector] was seen in a
-   * conditional send (e.g.  `a?.selector`), in which case the returned type may
-   * be null.
-   */
-  TypeInformation refineReceiver(
-      Selector selector, AbstractValue mask, TypeInformation receiver,
-      {bool isConditional}) {
-    if (_abstractValueDomain.isExact(receiver.type)) return receiver;
-    AbstractValue otherType = _closedWorld.computeReceiverType(selector, mask);
-    // Conditional sends (a?.b) can still narrow the possible types of `a`,
-    // however, we still need to consider that `a` may be null.
-    if (isConditional) {
-      // Note: we don't check that receiver.type.isNullable here because this is
-      // called during the graph construction.
-      otherType = _abstractValueDomain.includeNull(otherType);
-    }
-    // If this is refining to nullable subtype of `Object` just return
-    // the receiver. We know the narrowing is useless.
-    if (_abstractValueDomain.canBeNull(otherType) &&
-        _abstractValueDomain.containsAll(otherType)) {
-      return receiver;
-    }
-    TypeInformation newType =
-        new NarrowTypeInformation(_abstractValueDomain, receiver, otherType);
-    allocatedTypes.add(newType);
-    return newType;
-  }
+  bool _isNonNullNarrow(TypeInformation type) =>
+      type is NarrowTypeInformation &&
+      _abstractValueDomain.isNull(type.typeAnnotation).isDefinitelyFalse;
 
-  /**
-   * Returns the intersection between [type] and [annotation].
-   * [isNullable] indicates whether the annotation implies a null
-   * type.
-   */
+  /// Returns the intersection between [type] and [annotation].
+  /// [isNullable] indicates whether the annotation implies a null
+  /// type.
   TypeInformation narrowType(TypeInformation type, DartType annotation,
       {bool isNullable: true}) {
-    if (annotation.treatAsDynamic) return type;
-    if (annotation.isVoid) return type;
     AbstractValue otherType;
-    if (annotation.isInterfaceType) {
+    if (annotation.isVoid) return type;
+    if (annotation.treatAsDynamic) {
+      if (isNullable) return type;
+      // If the input is already narrowed to be not-null, there is no value
+      // in adding another narrowing node.
+      if (_isNonNullNarrow(type)) return type;
+      otherType = _abstractValueDomain.excludeNull(dynamicType.type);
+    } else if (annotation.isInterfaceType) {
       InterfaceType interface = annotation;
       if (interface.element == _closedWorld.commonElements.objectClass) {
-        if (isNullable) {
-          return type;
-        }
+        if (isNullable) return type;
+        if (_isNonNullNarrow(type)) return type;
         otherType = _abstractValueDomain.excludeNull(dynamicType.type);
       } else {
         otherType =
@@ -362,25 +348,9 @@ class TypeSystem<T> {
     if (isNullable) {
       otherType = _abstractValueDomain.includeNull(otherType);
     }
-    if (_abstractValueDomain.isExact(type.type)) {
-      return type;
-    } else {
-      TypeInformation newType =
-          new NarrowTypeInformation(_abstractValueDomain, type, otherType);
-      allocatedTypes.add(newType);
-      return newType;
-    }
-  }
-
-  /**
-   * Returns the non-nullable type of [type].
-   */
-  TypeInformation narrowNotNull(TypeInformation type) {
-    if (_abstractValueDomain.isExact(type.type)) {
-      return type;
-    }
-    TypeInformation newType = new NarrowTypeInformation(_abstractValueDomain,
-        type, _abstractValueDomain.excludeNull(dynamicType.type));
+    if (_abstractValueDomain.isExact(type.type).isDefinitelyTrue) return type;
+    TypeInformation newType =
+        new NarrowTypeInformation(_abstractValueDomain, type, otherType);
     allocatedTypes.add(newType);
     return newType;
   }
@@ -395,20 +365,30 @@ class TypeSystem<T> {
     });
   }
 
+  void forEachParameterType(
+      void f(Local parameter, ParameterTypeInformation typeInformation)) {
+    parameterTypeInformations.forEach(f);
+  }
+
   MemberTypeInformation getInferredTypeOfMember(MemberEntity member) {
     assert(!member.isAbstract,
         failedAt(member, "Unexpected abstract member $member."));
-    return memberTypeInformations.putIfAbsent(member, () {
-      MemberTypeInformation typeInformation =
-          strategy.createMemberTypeInformation(_abstractValueDomain, member);
-      _orderedTypeInformations.add(typeInformation);
-      return typeInformation;
-    });
+    return memberTypeInformations[member] ??= _getInferredTypeOfMember(member);
   }
 
-  /**
-   * Returns the internal inferrer representation for [mask].
-   */
+  void forEachMemberType(
+      void f(MemberEntity member, MemberTypeInformation typeInformation)) {
+    memberTypeInformations.forEach(f);
+  }
+
+  MemberTypeInformation _getInferredTypeOfMember(MemberEntity member) {
+    MemberTypeInformation typeInformation =
+        strategy.createMemberTypeInformation(_abstractValueDomain, member);
+    _orderedTypeInformations.add(typeInformation);
+    return typeInformation;
+  }
+
+  /// Returns the internal inferrer representation for [mask].
   ConcreteTypeInformation getConcreteTypeFor(AbstractValue mask) {
     assert(mask != null);
     return concreteTypes.putIfAbsent(mask, () {
@@ -451,13 +431,15 @@ class TypeSystem<T> {
   }
 
   TypeInformation allocateList(
-      TypeInformation type, T node, MemberEntity enclosing,
+      TypeInformation type, ir.TreeNode node, MemberEntity enclosing,
       [TypeInformation elementType, int length]) {
     assert(strategy.checkListNode(node));
     ClassEntity typedDataClass = _closedWorld.commonElements.typedDataClass;
     bool isTypedArray = typedDataClass != null &&
-        _closedWorld.isInstantiated(typedDataClass) &&
-        _abstractValueDomain.isInstanceOfOrNull(type.type, typedDataClass);
+        _closedWorld.classHierarchy.isInstantiated(typedDataClass) &&
+        _abstractValueDomain
+            .isInstanceOfOrNull(type.type, typedDataClass)
+            .isDefinitelyTrue;
     bool isConst = (type.type == _abstractValueDomain.constListType);
     bool isFixed = (type.type == _abstractValueDomain.fixedListType) ||
         isConst ||
@@ -489,29 +471,64 @@ class TypeSystem<T> {
     return result;
   }
 
+  TypeInformation allocateSet(
+      TypeInformation type, ir.TreeNode node, MemberEntity enclosing,
+      [TypeInformation elementType]) {
+    assert(strategy.checkSetNode(node));
+    bool isConst = type.type == _abstractValueDomain.constSetType;
+
+    AbstractValue elementTypeMask =
+        isConst ? elementType.type : dynamicType.type;
+    AbstractValue mask = _abstractValueDomain.createSetValue(
+        type.type, node, enclosing, elementTypeMask);
+    ElementInSetTypeInformation element = new ElementInSetTypeInformation(
+        _abstractValueDomain, currentMember, elementType);
+    element.inferred = isConst;
+
+    allocatedTypes.add(element);
+    return allocatedSets[node] =
+        new SetTypeInformation(currentMember, mask, element);
+  }
+
   TypeInformation allocateMap(
-      ConcreteTypeInformation type, T node, MemberEntity element,
+      ConcreteTypeInformation type, ir.TreeNode node, MemberEntity element,
       [List<TypeInformation> keyTypes, List<TypeInformation> valueTypes]) {
     assert(strategy.checkMapNode(node));
     assert(keyTypes.length == valueTypes.length);
     bool isFixed = (type.type == _abstractValueDomain.constMapType);
 
-    AbstractValue keyType, valueType;
+    TypeInformation keyType, valueType;
+    for (int i = 0; i < keyTypes.length; ++i) {
+      TypeInformation type = keyTypes[i];
+      keyType = keyType == null
+          ? allocatePhi(null, null, type, isTry: false)
+          : addPhiInput(null, keyType, type);
+
+      type = valueTypes[i];
+      valueType = valueType == null
+          ? allocatePhi(null, null, type, isTry: false)
+          : addPhiInput(null, valueType, type);
+    }
+
+    keyType =
+        keyType == null ? nonNullEmpty() : simplifyPhi(null, null, keyType);
+    valueType =
+        valueType == null ? nonNullEmpty() : simplifyPhi(null, null, valueType);
+
+    AbstractValue keyTypeMask, valueTypeMask;
     if (isFixed) {
-      keyType = keyTypes.fold(nonNullEmptyType.type,
-          (type, info) => _abstractValueDomain.union(type, info.type));
-      valueType = valueTypes.fold(nonNullEmptyType.type,
-          (type, info) => _abstractValueDomain.union(type, info.type));
+      keyTypeMask = keyType.type;
+      valueTypeMask = valueType.type;
     } else {
-      keyType = valueType = dynamicType.type;
+      keyTypeMask = valueTypeMask = dynamicType.type;
     }
     AbstractValue mask = _abstractValueDomain.createMapValue(
-        type.type, node, element, keyType, valueType);
+        type.type, node, element, keyTypeMask, valueTypeMask);
 
-    TypeInformation keyTypeInfo =
-        new KeyInMapTypeInformation(_abstractValueDomain, currentMember, null);
+    TypeInformation keyTypeInfo = new KeyInMapTypeInformation(
+        _abstractValueDomain, currentMember, keyType);
     TypeInformation valueTypeInfo = new ValueInMapTypeInformation(
-        _abstractValueDomain, currentMember, null);
+        _abstractValueDomain, currentMember, valueType);
     allocatedTypes.add(keyTypeInfo);
     allocatedTypes.add(valueTypeInfo);
 
@@ -539,12 +556,10 @@ class TypeSystem<T> {
     return info.isConcrete ? info.type : mask;
   }
 
-  /**
-   * Returns a new type that unions [firstInput] and [secondInput].
-   */
+  /// Returns a new type that unions [firstInput] and [secondInput].
   TypeInformation allocateDiamondPhi(
       TypeInformation firstInput, TypeInformation secondInput) {
-    PhiElementTypeInformation<T> result = new PhiElementTypeInformation<T>(
+    PhiElementTypeInformation result = new PhiElementTypeInformation(
         _abstractValueDomain, currentMember, null, null,
         isTry: false);
     result.addAssignment(firstInput);
@@ -553,9 +568,9 @@ class TypeSystem<T> {
     return result;
   }
 
-  PhiElementTypeInformation<T> _addPhi(
-      T node, Local variable, TypeInformation inputType, bool isTry) {
-    PhiElementTypeInformation<T> result = new PhiElementTypeInformation<T>(
+  PhiElementTypeInformation _addPhi(
+      ir.Node node, Local variable, TypeInformation inputType, bool isTry) {
+    PhiElementTypeInformation result = new PhiElementTypeInformation(
         _abstractValueDomain, currentMember, node, variable,
         isTry: isTry);
     allocatedTypes.add(result);
@@ -563,12 +578,10 @@ class TypeSystem<T> {
     return result;
   }
 
-  /**
-   * Returns a new type for holding the potential types of [element].
-   * [inputType] is the first incoming type of the phi.
-   */
-  PhiElementTypeInformation<T> allocatePhi(
-      T node, Local variable, TypeInformation inputType,
+  /// Returns a new type for holding the potential types of [element].
+  /// [inputType] is the first incoming type of the phi.
+  PhiElementTypeInformation allocatePhi(
+      ir.Node node, Local variable, TypeInformation inputType,
       {bool isTry}) {
     assert(strategy.checkPhiNode(node));
     // Check if [inputType] is a phi for a local updated in
@@ -582,38 +595,32 @@ class TypeSystem<T> {
     return _addPhi(node, variable, inputType, isTry);
   }
 
-  /**
-   * Returns a new type for holding the potential types of [element].
-   * [inputType] is the first incoming type of the phi. [allocateLoopPhi]
-   * only differs from [allocatePhi] in that it allows the underlying
-   * implementation of [TypeSystem] to differentiate Phi nodes due to loops
-   * from other merging uses.
-   */
-  PhiElementTypeInformation<T> allocateLoopPhi(
-      T node, Local variable, TypeInformation inputType,
+  /// Returns a new type for holding the potential types of [element].
+  /// [inputType] is the first incoming type of the phi. [allocateLoopPhi]
+  /// only differs from [allocatePhi] in that it allows the underlying
+  /// implementation of [TypeSystem] to differentiate Phi nodes due to loops
+  /// from other merging uses.
+  PhiElementTypeInformation allocateLoopPhi(
+      ir.Node node, Local variable, TypeInformation inputType,
       {bool isTry}) {
     assert(strategy.checkLoopPhiNode(node));
     return _addPhi(node, variable, inputType, isTry);
   }
 
-  /**
-   * Simplies the phi representing [element] and of the type
-   * [phiType]. For example, if this phi has one incoming input, an
-   * implementation of this method could just return that incoming
-   * input type.
-   */
+  /// Simplies the phi representing [element] and of the type
+  /// [phiType]. For example, if this phi has one incoming input, an
+  /// implementation of this method could just return that incoming
+  /// input type.
   TypeInformation simplifyPhi(
-      T node, Local variable, PhiElementTypeInformation<T> phiType) {
+      ir.Node node, Local variable, PhiElementTypeInformation phiType) {
     assert(phiType.branchNode == node);
     if (phiType.assignments.length == 1) return phiType.assignments.first;
     return phiType;
   }
 
-  /**
-   * Adds [newType] as an input of [phiType].
-   */
-  PhiElementTypeInformation<T> addPhiInput(Local variable,
-      PhiElementTypeInformation<T> phiType, TypeInformation newType) {
+  /// Adds [newType] as an input of [phiType].
+  PhiElementTypeInformation addPhiInput(Local variable,
+      PhiElementTypeInformation phiType, TypeInformation newType) {
     phiType.addAssignment(newType);
     return phiType;
   }
@@ -628,12 +635,20 @@ class TypeSystem<T> {
     // mapped iterable, we save the intermediate results to avoid computing them
     // again.
     var list = [];
+    bool isDynamicIngoringNull = false;
+    bool mayBeNull = false;
     for (AbstractValue mask in masks) {
       // Don't do any work on computing unions if we know that after all that
       // work the result will be `dynamic`.
       // TODO(sigmund): change to `mask == dynamicType` so we can continue to
       // track the non-nullable bit.
-      if (_abstractValueDomain.containsAll(mask)) return dynamicType;
+      if (_abstractValueDomain.containsAll(mask).isPotentiallyTrue) {
+        isDynamicIngoringNull = true;
+      }
+      if (_abstractValueDomain.isNull(mask).isPotentiallyTrue) {
+        mayBeNull = true;
+      }
+      if (isDynamicIngoringNull && mayBeNull) return dynamicType;
       list.add(mask);
     }
 
@@ -642,7 +657,13 @@ class TypeSystem<T> {
       newType =
           newType == null ? mask : _abstractValueDomain.union(newType, mask);
       // Likewise - stop early if we already reach dynamic.
-      if (_abstractValueDomain.containsAll(newType)) return dynamicType;
+      if (_abstractValueDomain.containsAll(newType).isPotentiallyTrue) {
+        isDynamicIngoringNull = true;
+      }
+      if (_abstractValueDomain.isNull(newType).isPotentiallyTrue) {
+        mayBeNull = true;
+      }
+      if (isDynamicIngoringNull && mayBeNull) return dynamicType;
     }
 
     return newType ?? _abstractValueDomain.emptyType;

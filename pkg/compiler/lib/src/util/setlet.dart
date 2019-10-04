@@ -29,11 +29,9 @@ class Setlet<E> extends SetBase<E> {
 
   static Set<R> _newSet<R>() => new Setlet<R>();
 
+  @override
   Set<R> cast<R>() => Set.castFrom<E, R>(this, newSet: _newSet);
-
-  @Deprecated("Use cast instead.")
-  Set<R> retype<R>() => cast<R>();
-
+  @override
   Iterator<E> get iterator {
     if (_extra == null) {
       return new _SetletSingleIterator<E>(_contents);
@@ -44,6 +42,7 @@ class Setlet<E> extends SetBase<E> {
     }
   }
 
+  @override
   int get length {
     if (_extra == null) {
       return (_MARKER == _contents) ? 0 : 1;
@@ -54,6 +53,7 @@ class Setlet<E> extends SetBase<E> {
     }
   }
 
+  @override
   bool get isEmpty {
     if (_extra == null) {
       return _MARKER == _contents;
@@ -64,6 +64,7 @@ class Setlet<E> extends SetBase<E> {
     }
   }
 
+  @override
   bool contains(Object element) {
     if (_extra == null) {
       return _contents == element;
@@ -80,6 +81,7 @@ class Setlet<E> extends SetBase<E> {
     }
   }
 
+  @override
   bool add(E element) {
     if (_extra == null) {
       if (_MARKER == _contents) {
@@ -146,10 +148,12 @@ class Setlet<E> extends SetBase<E> {
     }
   }
 
+  @override
   void addAll(Iterable<E> elements) {
     elements.forEach((each) => add(each));
   }
 
+  @override
   E lookup(Object element) {
     if (_extra == null) {
       return _contents == element ? _contents : null;
@@ -166,6 +170,7 @@ class Setlet<E> extends SetBase<E> {
     }
   }
 
+  @override
   bool remove(Object element) {
     if (_extra == null) {
       if (_contents == element) {
@@ -191,10 +196,12 @@ class Setlet<E> extends SetBase<E> {
     }
   }
 
+  @override
   void removeAll(Iterable<Object> other) {
     other.forEach(remove);
   }
 
+  @override
   void removeWhere(bool test(E element)) {
     if (_extra == null) {
       if (test(_contents)) {
@@ -215,15 +222,18 @@ class Setlet<E> extends SetBase<E> {
     }
   }
 
+  @override
   void retainWhere(bool test(E element)) {
     removeWhere((E element) => !test(element));
   }
 
+  @override
   void retainAll(Iterable<Object> elements) {
     Set set = elements is Set ? elements : elements.toSet();
     removeWhere((E element) => !set.contains(element));
   }
 
+  @override
   void forEach(void action(E element)) {
     if (_extra == null) {
       if (_MARKER != _contents) action(_contents);
@@ -239,27 +249,32 @@ class Setlet<E> extends SetBase<E> {
     }
   }
 
+  @override
   bool containsAll(Iterable<Object> other) {
     for (E e in other) {
       if (!this.contains(e)) return false;
     }
-    ;
     return true;
   }
 
+  @override
   clear() {
     _contents = _MARKER;
     _extra = null;
   }
 
+  @override
   Set<E> union(Set<E> other) => new Set<E>.from(this)..addAll(other);
 
+  @override
   Setlet<E> intersection(Set<Object> other) =>
       new Setlet<E>.from(this.where((e) => other.contains(e)));
 
+  @override
   Setlet<E> difference(Set<Object> other) =>
       new Setlet<E>.from(this.where((e) => !other.contains(e)));
 
+  @override
   Setlet<E> toSet() {
     Setlet<E> result = new Setlet<E>();
     if (_extra == null) {
@@ -277,6 +292,7 @@ class Setlet<E> extends SetBase<E> {
 
 class _SetletMarker {
   const _SetletMarker();
+  @override
   toString() => "-";
 }
 
@@ -285,8 +301,10 @@ class _SetletSingleIterator<E> implements Iterator<E> {
   E _current;
   _SetletSingleIterator(this._element);
 
+  @override
   E get current => _current;
 
+  @override
   bool moveNext() {
     if (Setlet._MARKER == _element) {
       _current = null;
@@ -305,8 +323,10 @@ class _SetletListIterator<E> implements Iterator<E> {
   E _current;
   _SetletListIterator(this._list, this._remaining);
 
+  @override
   E get current => _current;
 
+  @override
   bool moveNext() {
     while (_remaining > 0) {
       var candidate = _list[_index++];

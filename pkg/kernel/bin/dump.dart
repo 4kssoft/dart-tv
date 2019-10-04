@@ -6,8 +6,7 @@
 import 'dart:io';
 
 import 'package:kernel/kernel.dart';
-
-import 'util.dart';
+import 'package:kernel/src/tool/command_line_util.dart';
 
 void usage() {
   print("Prints a dill file as a textual format.");
@@ -25,8 +24,8 @@ void usage() {
 
 main(List<String> args) {
   CommandLineHelper.requireVariableArgumentCount([1, 2], args, usage);
-  CommandLineHelper.requireFileExists(args[0], usage);
-  var binary = CommandLineHelper.tryLoadDill(args[0], usage);
+  CommandLineHelper.requireFileExists(args[0]);
+  var binary = CommandLineHelper.tryLoadDill(args[0]);
   writeComponentToText(binary,
       path: args.length > 1 ? args[1] : null,
       showOffsets: const bool.fromEnvironment("showOffsets"));

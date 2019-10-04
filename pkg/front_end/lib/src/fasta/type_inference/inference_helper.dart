@@ -2,18 +2,37 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'package:kernel/ast.dart' show FunctionType;
+import 'dart:core' hide MapEntry;
+
+import 'package:kernel/ast.dart';
+
+import 'package:kernel/core_types.dart' show CoreTypes;
 
 import '../fasta_codes.dart' show LocatedMessage, Message;
 
-abstract class InferenceHelper<Expression, Statement, Arguments> {
-  Expression wrapInCompileTimeError(Expression expression, Message message);
+import '../kernel/forest.dart';
 
-  Expression buildCompileTimeError(Message message, int charOffset, int length,
-      {List<LocatedMessage> context});
+abstract class InferenceHelper {
+  CoreTypes get coreTypes;
+
+  Uri get uri;
+
+  Forest get forest;
+
+  set transformSetLiterals(bool value);
+
+  Expression buildProblem(Message message, int charOffset, int length,
+      {List<LocatedMessage> context, bool suppressMessage});
 
   LocatedMessage checkArgumentsForType(
       FunctionType function, Arguments arguments, int offset);
 
-  void addProblem(Message message, int charOffset, int length);
+  void addProblem(Message message, int charOffset, int length,
+      {List<LocatedMessage> context, bool wasHandled});
+
+  Expression wrapInProblem(Expression expression, Message message, int length,
+      {List<LocatedMessage> context});
+
+  String constructorNameForDiagnostics(String name,
+      {String className, bool isSuper});
 }

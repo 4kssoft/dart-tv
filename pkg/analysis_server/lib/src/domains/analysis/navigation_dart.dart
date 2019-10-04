@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -8,17 +8,22 @@ import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/type.dart';
+import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/src/dart/ast/utilities.dart';
 import 'package:analyzer/src/dart/element/element.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer_plugin/utilities/navigation/navigation.dart';
 
-NavigationCollector computeDartNavigation(NavigationCollector collector,
-    CompilationUnit unit, int offset, int length) {
+NavigationCollector computeDartNavigation(
+    ResourceProvider resourceProvider,
+    NavigationCollector collector,
+    CompilationUnit unit,
+    int offset,
+    int length) {
   _DartNavigationCollector dartCollector =
       new _DartNavigationCollector(collector);
   _DartNavigationComputerVisitor visitor =
-      new _DartNavigationComputerVisitor(dartCollector);
+      new _DartNavigationComputerVisitor(resourceProvider, dartCollector);
   if (offset == null || length == null) {
     unit.accept(visitor);
   } else {
@@ -87,9 +92,10 @@ class _DartNavigationCollector {
 }
 
 class _DartNavigationComputerVisitor extends RecursiveAstVisitor {
+  final ResourceProvider resourceProvider;
   final _DartNavigationCollector computer;
 
-  _DartNavigationComputerVisitor(this.computer);
+  _DartNavigationComputerVisitor(this.resourceProvider, this.computer);
 
   @override
   visitAnnotation(Annotation node) {
@@ -118,14 +124,14 @@ class _DartNavigationComputerVisitor extends RecursiveAstVisitor {
   @override
   visitAssignmentExpression(AssignmentExpression node) {
     node.leftHandSide?.accept(this);
-    computer._addRegionForToken(node.operator, node.bestElement);
+    computer._addRegionForToken(node.operator, node.staticElement);
     node.rightHandSide?.accept(this);
   }
 
   @override
   visitBinaryExpression(BinaryExpression node) {
     node.leftOperand?.accept(this);
-    computer._addRegionForToken(node.operator, node.bestElement);
+    computer._addRegionForToken(node.operator, node.staticElement);
     node.rightOperand?.accept(this);
   }
 
@@ -155,7 +161,7 @@ class _DartNavigationComputerVisitor extends RecursiveAstVisitor {
       }
       if (firstNode != null && lastNode != null) {
         computer._addRegion_nodeStart_nodeEnd(
-            firstNode, lastNode, node.element);
+            firstNode, lastNode, node.declaredElement);
       }
     }
     super.visitConstructorDeclaration(node);
@@ -178,7 +184,7 @@ class _DartNavigationComputerVisitor extends RecursiveAstVisitor {
     if (node.type == null) {
       Token token = node.keyword;
       if (token?.keyword == Keyword.VAR) {
-        DartType inferredType = node.identifier?.bestType;
+        DartType inferredType = node.identifier?.staticType;
         Element element = inferredType?.element;
         if (element != null) {
           computer._addRegionForToken(token, element);
@@ -211,7 +217,7 @@ class _DartNavigationComputerVisitor extends RecursiveAstVisitor {
   @override
   visitIndexExpression(IndexExpression node) {
     super.visitIndexExpression(node);
-    MethodElement element = node.bestElement;
+    MethodElement element = node.staticElement;
     computer._addRegionForToken(node.leftBracket, element);
     computer._addRegionForToken(node.rightBracket, element);
   }
@@ -236,12 +242,12 @@ class _DartNavigationComputerVisitor extends RecursiveAstVisitor {
   @override
   visitPostfixExpression(PostfixExpression node) {
     super.visitPostfixExpression(node);
-    computer._addRegionForToken(node.operator, node.bestElement);
+    computer._addRegionForToken(node.operator, node.staticElement);
   }
 
   @override
   visitPrefixExpression(PrefixExpression node) {
-    computer._addRegionForToken(node.operator, node.bestElement);
+    computer._addRegionForToken(node.operator, node.staticElement);
     super.visitPrefixExpression(node);
   }
 
@@ -263,7 +269,7 @@ class _DartNavigationComputerVisitor extends RecursiveAstVisitor {
     if (node.parent is ConstructorDeclaration) {
       return;
     }
-    Element element = node.bestElement;
+    Element element = node.staticElement;
     computer._addRegionForNode(node, element);
   }
 
@@ -288,12 +294,12 @@ class _DartNavigationComputerVisitor extends RecursiveAstVisitor {
      * inferred type.
      */
     Element getCommonElement(List<VariableDeclaration> variables) {
-      Element firstElement = variables[0].name?.bestType?.element;
+      Element firstElement = variables[0].name?.staticType?.element;
       if (firstElement == null) {
         return null;
       }
       for (int i = 1; i < variables.length; i++) {
-        Element element = variables[1].name?.bestType?.element;
+        Element element = variables[1].name?.staticType?.element;
         if (element != firstElement) {
           return null;
         }
@@ -350,9 +356,9 @@ class _DartNavigationComputerVisitor extends RecursiveAstVisitor {
    * then add the navigation region from the [node] to the [element].
    */
   void _addUriDirectiveRegion(UriBasedDirective node, Element element) {
-    if (element != null) {
-      Source source = element.source;
-      if (element.context.exists(source)) {
+    Source source = element?.source;
+    if (source != null) {
+      if (resourceProvider.getResource(source.fullName).exists) {
         computer._addRegionForNode(node.uri, element);
       }
     }

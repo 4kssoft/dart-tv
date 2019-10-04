@@ -6,7 +6,8 @@ library fasta.target;
 
 import 'dart:async' show Future;
 
-import 'package:kernel/ast.dart';
+import 'package:kernel/ast.dart' show Component;
+
 import 'ticker.dart' show Ticker;
 
 /// A compilation target.
@@ -18,9 +19,6 @@ abstract class Target {
   final Ticker ticker;
 
   Target(this.ticker);
-
-  /// Instructs this target to include [uri] in its result.
-  void read(Uri uri);
 
   /// Build and return outlines for all libraries.
   Future<Component> buildOutlines();

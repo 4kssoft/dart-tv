@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -15,9 +15,6 @@ import '../support/integration_tests.dart';
 main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(AnalysisGetImportedElementsIntegrationTest);
-    // TODO(scheglov): Restore similar test coverage when the front-end API
-    // allows it.  See https://github.com/dart-lang/sdk/issues/32258.
-    // defineReflectiveTests(AnalysisGetImportedElementsIntegrationTest_UseCFE);
   });
 }
 
@@ -87,7 +84,7 @@ class AnalysisGetImportedElementsIntegrationTest
    * Check that an analysis.getImportedElements request on the region matching
    * [target] produces an empty list of elements.
    */
-  Future<Null> checkNoElements(String target) async {
+  Future<void> checkNoElements(String target) async {
     int offset = text.indexOf(target);
     AnalysisGetImportedElementsResult result =
         await sendAnalysisGetImportedElements(pathname, offset, target.length);
@@ -140,11 +137,4 @@ $selection
       ]);
     }
   }
-}
-
-@reflectiveTest
-class AnalysisGetImportedElementsIntegrationTest_UseCFE
-    extends AnalysisGetImportedElementsIntegrationTest {
-  @override
-  bool get useCFE => true;
 }

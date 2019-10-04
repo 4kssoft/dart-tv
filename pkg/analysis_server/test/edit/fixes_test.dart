@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -16,6 +16,7 @@ import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import '../analysis_abstract.dart';
+import '../mocks.dart';
 
 main() {
   defineReflectiveSuite(() {
@@ -35,19 +36,20 @@ class FixesTest extends AbstractAnalysisTest {
     createProject();
     addTestFile('''
 main() {
-  Future<String> x = null;
+  Completer<String> x = null;
+  print(x);
 }
 ''');
     await waitForTasksFinished();
-    List<AnalysisErrorFixes> errorFixes = await _getFixesAt('Future<String>');
+    doAllDeclarationsTrackerWork();
+    List<AnalysisErrorFixes> errorFixes =
+        await _getFixesAt('Completer<String>');
     expect(errorFixes, hasLength(1));
-    AnalysisError error = errorFixes[0].error;
-    expect(error.severity, AnalysisErrorSeverity.WARNING);
-    expect(error.type, AnalysisErrorType.STATIC_WARNING);
     List<SourceChange> fixes = errorFixes[0].fixes;
-    expect(fixes, hasLength(2));
+    expect(fixes, hasLength(3));
     expect(fixes[0].message, matches('Import library'));
     expect(fixes[1].message, matches('Create class'));
+    expect(fixes[2].message, matches('Create mixin'));
   }
 
   test_fromPlugins() async {
@@ -94,6 +96,26 @@ bar() {
     }
   }
 
+  test_invalidFilePathFormat_notAbsolute() async {
+    var request = new EditGetFixesParams('test.dart', 0).toRequest('0');
+    var response = await waitResponse(request);
+    expect(
+      response,
+      isResponseFailure('0', RequestErrorCode.INVALID_FILE_PATH_FORMAT),
+    );
+  }
+
+  test_invalidFilePathFormat_notNormalized() async {
+    var request =
+        new EditGetFixesParams(convertPath('/foo/../bar/test.dart'), 0)
+            .toRequest('0');
+    var response = await waitResponse(request);
+    expect(
+      response,
+      isResponseFailure('0', RequestErrorCode.INVALID_FILE_PATH_FORMAT),
+    );
+  }
+
   test_overlayOnlyFile() async {
     createProject();
     testCode = '''
@@ -110,17 +132,20 @@ print(1)
   }
 
   test_suggestImportFromDifferentAnalysisRoot() async {
-    String asFileUri(String input) =>
-        new Uri.file(convertPath(input)).toString();
     newFolder('/aaa');
     newFile('/aaa/.packages', content: '''
-aaa:${asFileUri('/aaa/lib')}
-bbb:${asFileUri('/bbb/lib')}
+aaa:${toUri('/aaa/lib')}
+bbb:${toUri('/bbb/lib')}
 ''');
-    // Ensure that the target is analyzed as an implicit source.
-    newFile('/aaa/lib/foo.dart', content: 'import "package:bbb/target.dart";');
+    newFile('/aaa/pubspec.yaml', content: r'''
+dependencies:
+  bbb: any
+''');
 
     newFolder('/bbb');
+    newFile('/bbb/.packages', content: '''
+bbb:${toUri('/bbb/lib')}
+''');
     newFile('/bbb/lib/target.dart', content: 'class Foo() {}');
 
     handleSuccessfulRequest(
@@ -129,11 +154,12 @@ bbb:${asFileUri('/bbb/lib')}
         handler: analysisHandler);
 
     // Configure the test file.
-    testFile = resourceProvider.convertPath('/aaa/main.dart');
+    testFile = convertPath('/aaa/main.dart');
     testCode = 'main() { new Foo(); }';
     _addOverlay(testFile, testCode);
 
     await waitForTasksFinished();
+    doAllDeclarationsTrackerWork();
 
     List<String> fixes = (await _getFixesAt('Foo()'))
         .single

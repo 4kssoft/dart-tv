@@ -21,7 +21,7 @@ import 'package:compiler/src/universe/use.dart';
 import 'package:compiler/src/universe/world_builder.dart';
 import 'package:compiler/src/world.dart';
 import 'package:expect/expect.dart';
-import '../memory_compiler.dart';
+import '../helpers/memory_compiler.dart';
 
 class Test {
   final String name;
@@ -71,6 +71,7 @@ class Impact {
   const Impact.invoke(this.clsName, this.memberName)
       : this.kind = ImpactKind.invoke;
 
+  @override
   String toString() =>
       'Impact(kind=$kind,clsName=$clsName,memberName=$memberName)';
 }
@@ -155,7 +156,6 @@ ${test.code}
 main() {}
 '''
   }, options: [
-    Flags.strongMode,
     Flags.disableInlining,
   ]);
 
@@ -178,8 +178,8 @@ main() {}
         elementEnvironment.lookupConstructor(cls, '');
     InterfaceType type = elementEnvironment.getRawType(cls);
     WorldImpact impact = new WorldImpactBuilderImpl()
-      ..registerStaticUse(new StaticUse.typedConstructorInvoke(
-          constructor, constructor.parameterStructure.callStructure, type));
+      ..registerStaticUse(new StaticUse.typedConstructorInvoke(constructor,
+          constructor.parameterStructure.callStructure, type, null));
     enqueuer.applyImpact(impact);
   }
 
@@ -195,8 +195,8 @@ main() {}
         new Name(methodName, elementEnvironment.mainLibrary),
         CallStructure.NO_ARGS);
     WorldImpact impact = new WorldImpactBuilderImpl()
-      ..registerDynamicUse(new ConstrainedDynamicUse(
-          selector, createConstraint(cls), const <DartType>[]));
+      ..registerDynamicUse(
+          new DynamicUse(selector, createConstraint(cls), const <DartType>[]));
     enqueuer.applyImpact(impact);
   }
 
@@ -251,7 +251,8 @@ main() {}
     checkInvariant(enqueuer, elementEnvironment);
 
     Object createConstraint(ClassEntity cls) {
-      return new StrongModeConstraint(cls);
+      return new StrongModeConstraint(compiler.frontendStrategy.commonElements,
+          compiler.frontendStrategy.nativeBasicData, cls);
     }
 
     for (Impact impact in impacts) {

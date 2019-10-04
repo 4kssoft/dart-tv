@@ -6,14 +6,14 @@ import "package:async_helper/async_helper.dart";
 import "package:expect/expect.dart";
 import 'package:compiler/src/inferrer/typemasks/masks.dart';
 import "package:compiler/src/world.dart";
-import '../type_test_helper.dart';
+import '../helpers/type_test_helper.dart';
 
 main() {
   runTest() async {
     TypeEnvironment env = await TypeEnvironment.create(r"""
       class A {}
       class B {}
-      """, mainSource: r"""
+
       main() {
         new A();
         new B();

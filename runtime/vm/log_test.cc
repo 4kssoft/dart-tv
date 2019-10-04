@@ -17,6 +17,8 @@
 namespace dart {
 
 static const char* test_output_ = NULL;
+
+PRINTF_ATTRIBUTE(1, 2)
 static void TestPrinter(const char* format, ...) {
   // Measure.
   va_list args;
@@ -38,7 +40,7 @@ static void TestPrinter(const char* format, ...) {
   test_output_ = buffer;
 
   // Also print to stdout to see the overall result.
-  OS::Print("%s", test_output_);
+  OS::PrintErr("%s", test_output_);
 }
 
 class LogTestHelper : public AllStatic {

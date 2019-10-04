@@ -1,16 +1,13 @@
-// Copyright (c) 2013, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2013, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-library analyzer.test.utils;
-
 import 'package:analyzer/dart/ast/ast.dart';
-import 'package:analyzer/dart/ast/standard_resolution_map.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer/src/generated/resolver.dart' show TypeProvider;
+import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer/src/generated/testing/element_search.dart';
-import 'package:front_end/src/base/source.dart';
 import 'package:test/test.dart';
 
 /**
@@ -72,7 +69,7 @@ class AstFinder {
         return unitMember;
       }
     }
-    Source source = resolutionMap.elementDeclaredByCompilationUnit(unit).source;
+    Source source = unit.declaredElement.source;
     fail('No class named $className in $source');
   }
 
@@ -218,7 +215,7 @@ class AstFinder {
  */
 class TypeAssertions {
   // TODO(leafp): Make these matchers.
-  // https://www.dartdocs.org/documentation/matcher/0.12.0%2B1/matcher/Matcher-class.html
+  // https://pub.dev/documentation/matcher/latest/matcher/Matcher-class.html
 
   /**
    * Provides primitive types for basic type assertions.
@@ -240,12 +237,12 @@ class TypeAssertions {
   /**
    * Primitive assertion for the list type
    */
-  Asserter<DartType> get isList => hasElementOf(_typeProvider.listType);
+  Asserter<DartType> get isList => hasElement(_typeProvider.listElement);
 
   /**
    * Primitive assertion for the map type
    */
-  Asserter<DartType> get isMap => hasElementOf(_typeProvider.mapType);
+  Asserter<DartType> get isMap => hasElement(_typeProvider.mapElement);
 
   /**
    * Primitive assertion for the Null type
@@ -272,12 +269,6 @@ class TypeAssertions {
    */
   Asserter<DartType> hasElement(Element expected) =>
       (DartType type) => expect(expected, type.element);
-
-  /**
-   * Assert that a type has the element that is equal to the element of the
-   * given [type].
-   */
-  Asserter<DartType> hasElementOf(DartType type) => hasElement(type.element);
 
   /**
    * Given assertions for the argument and return types, produce an

@@ -2,13 +2,16 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'graph_builder.dart';
+import 'builder_kernel.dart';
 import 'nodes.dart';
 import '../elements/entities.dart';
 import '../elements/types.dart';
+import '../inferrer/abstract_value_domain.dart';
+import '../js_model/type_recipe.dart';
 import '../io/source_information.dart';
-import '../types/abstract_value_domain.dart';
+import '../options.dart';
 import '../universe/use.dart' show TypeUse;
+import '../world.dart';
 
 /// Enum that defines how a member has access to the current type variables.
 enum ClassTypeVariableAccess {
@@ -35,8 +38,14 @@ enum ClassTypeVariableAccess {
 /// Functions to insert type checking, coercion, and instruction insertion
 /// depending on the environment for dart code.
 abstract class TypeBuilder {
-  final GraphBuilder builder;
+  final KernelSsaGraphBuilder builder;
+
   TypeBuilder(this.builder);
+
+  JClosedWorld get _closedWorld => builder.closedWorld;
+
+  AbstractValueDomain get _abstractValueDomain =>
+      _closedWorld.abstractValueDomain;
 
   /// Create a type mask for 'trusting' a DartType. Returns `null` if there is
   /// no approximating type mask (i.e. the type mask would be `dynamic`).
@@ -46,10 +55,10 @@ abstract class TypeBuilder {
     type = type.unaliased;
     if (type.isDynamic) return null;
     if (!type.isInterfaceType) return null;
-    if (type == builder.commonElements.objectType) return null;
+    if (type == _closedWorld.commonElements.objectType) return null;
     // The type element is either a class or the void element.
     ClassEntity element = (type as InterfaceType).element;
-    return builder.abstractValueDomain.createNullableSubtype(element);
+    return _abstractValueDomain.createNullableSubtype(element);
   }
 
   /// Create an instruction to simply trust the provided type.
@@ -62,10 +71,11 @@ abstract class TypeBuilder {
 
   /// Produces code that checks the runtime type is actually the type specified
   /// by attempting a type conversion.
-  HInstruction _checkType(HInstruction original, DartType type, int kind) {
+  HInstruction _checkType(HInstruction original, DartType type) {
     assert(type != null);
     type = builder.localsHandler.substInContext(type);
-    HInstruction other = buildTypeConversion(original, type, kind);
+    HInstruction other =
+        buildTypeConversion(original, type, HTypeConversion.TYPE_CHECK);
     // TODO(johnniwinther): This operation on `registry` may be inconsistent.
     // If it is needed then it seems likely that similar invocations of
     // `buildTypeConversion` in `SsaBuilder.visitAs` should also be followed by
@@ -75,7 +85,23 @@ abstract class TypeBuilder {
     if (other is HTypeConversion && other.isRedundant(builder.closedWorld)) {
       return original;
     }
+    if (other is HAsCheck && other.isRedundant(builder.closedWorld)) {
+      return original;
+    }
     return other;
+  }
+
+  /// Produces code that checks the runtime type is actually the type specified
+  /// by attempting a type conversion.
+  HInstruction _checkBoolConverion(HInstruction original) {
+    var checkInstruction =
+        HBoolConversion(original, _abstractValueDomain.boolType);
+    if (checkInstruction.isRedundant(_closedWorld)) {
+      return original;
+    }
+    DartType boolType = _closedWorld.commonElements.boolType;
+    builder.registry?.registerTypeUse(new TypeUse.isCheck(boolType));
+    return checkInstruction;
   }
 
   HInstruction trustTypeOfParameter(HInstruction original, DartType type) {
@@ -90,14 +116,15 @@ abstract class TypeBuilder {
   }
 
   HInstruction potentiallyCheckOrTrustTypeOfParameter(
-      HInstruction original, DartType type) {
+      MemberEntity memberContext, HInstruction original, DartType type) {
     if (type == null) return original;
     HInstruction checkedOrTrusted = original;
-    if (builder.options.parameterCheckPolicy.isTrusted) {
+    CheckPolicy parameterCheckPolicy = builder.closedWorld.annotationsData
+        .getParameterCheckPolicy(memberContext);
+    if (parameterCheckPolicy.isTrusted) {
       checkedOrTrusted = _trustType(original, type);
-    } else if (builder.options.parameterCheckPolicy.isEmitted) {
-      checkedOrTrusted =
-          _checkType(original, type, HTypeConversion.CHECKED_MODE_CHECK);
+    } else if (parameterCheckPolicy.isEmitted) {
+      checkedOrTrusted = _checkType(original, type);
     }
     if (checkedOrTrusted == original) return original;
     builder.add(checkedOrTrusted);
@@ -108,14 +135,24 @@ abstract class TypeBuilder {
   /// instruction that checks the type is what we expect or automatically
   /// trusts the written type.
   HInstruction potentiallyCheckOrTrustTypeOfAssignment(
-      HInstruction original, DartType type,
-      {int kind: HTypeConversion.CHECKED_MODE_CHECK}) {
+      MemberEntity memberContext, HInstruction original, DartType type) {
     if (type == null) return original;
+    HInstruction checkedOrTrusted = _trustType(original, type);
+    if (checkedOrTrusted == original) return original;
+    builder.add(checkedOrTrusted);
+    return checkedOrTrusted;
+  }
+
+  HInstruction potentiallyCheckOrTrustTypeOfCondition(
+      MemberEntity memberContext, HInstruction original) {
+    DartType boolType = _closedWorld.commonElements.boolType;
     HInstruction checkedOrTrusted = original;
-    if (builder.options.assignmentCheckPolicy.isTrusted) {
-      checkedOrTrusted = _trustType(original, type);
-    } else if (builder.options.assignmentCheckPolicy.isEmitted) {
-      checkedOrTrusted = _checkType(original, type, kind);
+    CheckPolicy conditionCheckPolicy = builder.closedWorld.annotationsData
+        .getConditionCheckPolicy(memberContext);
+    if (conditionCheckPolicy.isTrusted) {
+      checkedOrTrusted = _trustType(original, boolType);
+    } else if (conditionCheckPolicy.isEmitted) {
+      checkedOrTrusted = _checkBoolConverion(original);
     }
     if (checkedOrTrusted == original) return original;
     builder.add(checkedOrTrusted);
@@ -128,11 +165,6 @@ abstract class TypeBuilder {
   HInstruction addTypeVariableReference(
       TypeVariableType type, MemberEntity member,
       {SourceInformation sourceInformation}) {
-    if (type.element.typeDeclaration is! ClassEntity &&
-        !builder.options.strongMode) {
-      // GENERIC_METHODS:  We currently don't reify method type variables.
-      return builder.graph.addConstantNull(builder.closedWorld);
-    }
     Local typeVariableLocal =
         builder.localsHandler.getTypeVariableAsLocal(type);
 
@@ -185,11 +217,11 @@ abstract class TypeBuilder {
     HInstruction target =
         builder.localsHandler.readThis(sourceInformation: sourceInformation);
     HInstruction interceptor =
-        new HInterceptor(target, builder.abstractValueDomain.nonNullType)
+        new HInterceptor(target, _abstractValueDomain.nonNullType)
           ..sourceInformation = sourceInformation;
     builder.add(interceptor);
     builder.push(new HTypeInfoReadVariable.intercepted(
-        variable, interceptor, target, builder.abstractValueDomain.dynamicType)
+        variable, interceptor, target, _abstractValueDomain.dynamicType)
       ..sourceInformation = sourceInformation);
     return builder.pop();
   }
@@ -209,9 +241,9 @@ abstract class TypeBuilder {
     }
     HInstruction representation = new HTypeInfoExpression(
         TypeInfoExpressionKind.INSTANCE,
-        builder.closedWorld.elementEnvironment.getThisType(interface.element),
+        _closedWorld.elementEnvironment.getThisType(interface.element),
         inputs,
-        builder.abstractValueDomain.dynamicType)
+        _abstractValueDomain.dynamicType)
       ..sourceInformation = sourceInformation;
     return representation;
   }
@@ -219,10 +251,14 @@ abstract class TypeBuilder {
   HInstruction analyzeTypeArgument(
       DartType argument, MemberEntity sourceElement,
       {SourceInformation sourceInformation}) {
+    if (builder.options.experimentNewRti) {
+      return analyzeTypeArgumentNewRti(argument, sourceElement,
+          sourceInformation: sourceInformation);
+    }
     argument = argument.unaliased;
     if (argument.treatAsDynamic) {
       // Represent [dynamic] as [null].
-      return builder.graph.addConstantNull(builder.closedWorld);
+      return builder.graph.addConstantNull(_closedWorld);
     }
 
     if (argument.isTypeVariable) {
@@ -232,27 +268,155 @@ abstract class TypeBuilder {
 
     List<HInstruction> inputs = <HInstruction>[];
     argument.forEachTypeVariable((TypeVariableType variable) {
-      if (variable.element.typeDeclaration is ClassEntity ||
-          builder.options.strongMode) {
-        // TODO(johnniwinther): Also make this conditional on whether we have
-        // calculated we need that particular method signature.
-        inputs.add(analyzeTypeArgument(variable, sourceElement));
-      }
+      // TODO(johnniwinther): Also make this conditional on whether we have
+      // calculated we need that particular method signature.
+      inputs.add(analyzeTypeArgument(variable, sourceElement));
     });
     HInstruction result = new HTypeInfoExpression(
         TypeInfoExpressionKind.COMPLETE,
         argument,
         inputs,
-        builder.abstractValueDomain.dynamicType)
+        _abstractValueDomain.dynamicType)
       ..sourceInformation = sourceInformation;
     builder.add(result);
     return result;
   }
 
-  bool get checkOrTrustTypes =>
-      builder.options.strongMode ||
-      builder.options.enableTypeAssertions ||
-      builder.options.trustTypeAnnotations;
+  HInstruction analyzeTypeArgumentNewRti(
+      DartType argument, MemberEntity sourceElement,
+      {SourceInformation sourceInformation}) {
+    argument = argument.unaliased;
+
+    if (!argument.containsTypeVariables) {
+      HInstruction rti =
+          HLoadType.type(argument, _abstractValueDomain.dynamicType)
+            ..sourceInformation = sourceInformation;
+      builder.add(rti);
+      return rti;
+    }
+    // TODO(sra): Locate type environment.
+    _EnvironmentExpressionAndStructure environmentAccess =
+        _buildEnvironmentForType(argument, sourceElement,
+            sourceInformation: sourceInformation);
+
+    HInstruction rti = HTypeEval(
+        environmentAccess.expression,
+        environmentAccess.structure,
+        TypeExpressionRecipe(argument),
+        _abstractValueDomain.dynamicType)
+      ..sourceInformation = sourceInformation;
+    builder.add(rti);
+    return rti;
+  }
+
+  _EnvironmentExpressionAndStructure _buildEnvironmentForType(
+      DartType type, MemberEntity member,
+      {SourceInformation sourceInformation}) {
+    assert(type.containsTypeVariables);
+    // Build the environment for each access, and hope GVN reduces the larger
+    // number of expressions. Another option is to precompute the environment at
+    // procedure entry and optimize early-exits by sinking the precomputed
+    // environment.
+
+    // Split the type variables into class-scope and function-scope(s).
+    bool usesInstanceParameters = false;
+    InterfaceType interfaceType;
+    Set<TypeVariableType> parameters = Set();
+
+    void processTypeVariable(TypeVariableType type) {
+      ClassTypeVariableAccess typeVariableAccess;
+      if (type.element.typeDeclaration is ClassEntity) {
+        typeVariableAccess = computeTypeVariableAccess(member);
+        interfaceType = _closedWorld.elementEnvironment
+            .getThisType(type.element.typeDeclaration);
+      } else {
+        typeVariableAccess = ClassTypeVariableAccess.parameter;
+      }
+      switch (typeVariableAccess) {
+        case ClassTypeVariableAccess.parameter:
+          parameters.add(type);
+          return;
+        case ClassTypeVariableAccess.instanceField:
+          if (member != builder.targetElement) {
+            // When [member] is a field, we can either be generating a checked
+            // setter or inlining its initializer in a constructor. An
+            // initializer is never built standalone, so in that case [target]
+            // is not the [member] itself.
+            parameters.add(type);
+            return;
+          }
+          usesInstanceParameters = true;
+          return;
+        case ClassTypeVariableAccess.property:
+          usesInstanceParameters = true;
+          return;
+        default:
+          builder.reporter.internalError(
+              type.element, 'Unexpected type variable in static context.');
+      }
+    }
+
+    type.forEachTypeVariable(processTypeVariable);
+
+    HInstruction environment;
+    TypeEnvironmentStructure structure;
+
+    if (usesInstanceParameters) {
+      HInstruction target =
+          builder.localsHandler.readThis(sourceInformation: sourceInformation);
+      // TODO(sra): HInstanceEnvironment should probably take an interceptor to
+      // allow the getInterceptor call to be reused.
+      environment =
+          HInstanceEnvironment(target, _abstractValueDomain.dynamicType)
+            ..sourceInformation = sourceInformation;
+      builder.add(environment);
+      structure = FullTypeEnvironmentStructure(classType: interfaceType);
+    }
+
+    // TODO(sra): Visit parameters in source-order.
+    for (TypeVariableType parameter in parameters) {
+      Local typeVariableLocal =
+          builder.localsHandler.getTypeVariableAsLocal(parameter);
+      HInstruction access = builder.localsHandler
+          .readLocal(typeVariableLocal, sourceInformation: sourceInformation);
+
+      if (environment == null) {
+        environment = access;
+        structure = SingletonTypeEnvironmentStructure(parameter);
+      } else if (structure is SingletonTypeEnvironmentStructure) {
+        SingletonTypeEnvironmentStructure singletonStructure = structure;
+        // Convert a singleton environment into a singleton tuple and extend it
+        // via 'bind'. i.e. generate `env1._eval("@<0>")._bind(env2)` TODO(sra):
+        // Have a bind1 instruction.
+        // TODO(sra): Add a 'Rti._bind1' method to shorten and accelerate this
+        // common case.
+        HInstruction singletonTuple = HTypeEval(
+            environment,
+            structure,
+            FullTypeEnvironmentRecipe(types: [singletonStructure.variable]),
+            _abstractValueDomain.dynamicType)
+          ..sourceInformation = sourceInformation;
+        builder.add(singletonTuple);
+        environment =
+            HTypeBind(singletonTuple, access, _abstractValueDomain.dynamicType);
+        builder.add(environment);
+        structure = FullTypeEnvironmentStructure(
+            bindings: [singletonStructure.variable, parameter]);
+      } else if (structure is FullTypeEnvironmentStructure) {
+        FullTypeEnvironmentStructure fullStructure = structure;
+        environment =
+            HTypeBind(environment, access, _abstractValueDomain.dynamicType);
+        builder.add(environment);
+        structure = FullTypeEnvironmentStructure(
+            classType: fullStructure.classType,
+            bindings: [...fullStructure.bindings, parameter]);
+      } else {
+        builder.reporter.internalError(parameter.element, 'Unexpected');
+      }
+    }
+
+    return _EnvironmentExpressionAndStructure(environment, structure);
+  }
 
   /// Build a [HTypeConversion] for converting [original] to type [type].
   ///
@@ -261,20 +425,18 @@ abstract class TypeBuilder {
   HInstruction buildTypeConversion(
       HInstruction original, DartType type, int kind,
       {SourceInformation sourceInformation}) {
-    if (type == null) return original;
-    if (type.isTypeVariable) {
-      TypeVariableType typeVariable = type;
-      // In Dart 1, method type variables are ignored.
-      if (!builder.options.strongMode &&
-          typeVariable.element.typeDeclaration is! ClassEntity) {
-        type = const DynamicType();
-      }
+    if (builder.options.experimentNewRti) {
+      return buildAsCheck(original, type,
+          isTypeError: kind == HTypeConversion.TYPE_CHECK,
+          sourceInformation: sourceInformation);
     }
+
+    if (type == null) return original;
     type = type.unaliased;
     if (type.isInterfaceType && !type.treatAsRaw) {
       InterfaceType interfaceType = type;
-      AbstractValue subtype = builder.abstractValueDomain
-          .createNullableSubtype(interfaceType.element);
+      AbstractValue subtype =
+          _abstractValueDomain.createNullableSubtype(interfaceType.element);
       HInstruction representations = buildTypeArgumentRepresentations(
           type, builder.sourceElement, sourceInformation);
       builder.add(representations);
@@ -297,8 +459,39 @@ abstract class TypeBuilder {
           type, kind, refinedMask, original, reifiedType)
         ..sourceInformation = sourceInformation;
     } else {
-      return original.convertType(builder.closedWorld, type, kind)
+      return original.convertType(_closedWorld, type, kind)
         ..sourceInformation = sourceInformation;
     }
   }
+
+  /// Build a [HAsCheck] for converting [original] to type [type].
+  ///
+  /// Invariant: [type] must be valid in the context.
+  /// See [LocalsHandler.substInContext].
+  HInstruction buildAsCheck(HInstruction original, DartType type,
+      {bool isTypeError, SourceInformation sourceInformation}) {
+    if (type == null) return original;
+    type = type.unaliased;
+
+    if (type.isDynamic) return original;
+    if (type.isVoid) return original;
+    if (type == _closedWorld.commonElements.objectType) return original;
+
+    HInstruction reifiedType = analyzeTypeArgumentNewRti(
+        type, builder.sourceElement,
+        sourceInformation: sourceInformation);
+    AbstractValueWithPrecision checkedType =
+        _abstractValueDomain.createFromStaticType(type, nullable: true);
+    AbstractValue instructionType = _abstractValueDomain.intersection(
+        original.instructionType, checkedType.abstractValue);
+    return HAsCheck(
+        original, reifiedType, checkedType, type, isTypeError, instructionType)
+      ..sourceInformation = sourceInformation;
+  }
+}
+
+class _EnvironmentExpressionAndStructure {
+  final HInstruction expression;
+  final TypeEnvironmentStructure structure;
+  _EnvironmentExpressionAndStructure(this.expression, this.structure);
 }

@@ -5,13 +5,13 @@
 import 'package:expect/expect.dart' deferred as expect;
 
 // Synthetic getter added by kernel.
-/*kernel.element: __loadLibrary_expect:[null|subclass=Object]*/
-/*strong.element: __loadLibrary_expect:[null|exact=_Future]*/
 
-/*element: main:[null]*/
+/*member: __loadLibrary_expect:[null|exact=_Future]*/
+
+/*member: main:[null]*/
 main() {
   tearOffLoadLibrary();
 }
 
-/*element: tearOffLoadLibrary:[subclass=Closure]*/
+/*member: tearOffLoadLibrary:[subclass=Closure]*/
 tearOffLoadLibrary() => expect.loadLibrary;

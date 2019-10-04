@@ -4,22 +4,19 @@
 
 part of dart2js.js_emitter.program_builder;
 
-/**
- * Generates the code for all used classes in the program. Static fields (even
- * in classes) are ignored, since they can be treated as non-class elements.
- *
- * The code for the containing (used) methods must exist in the `universe`.
- */
+/// Generates the code for all used classes in the program. Static fields (even
+/// in classes) are ignored, since they can be treated as non-class elements.
+///
+/// The code for the containing (used) methods must exist in the `universe`.
 class Collector {
   final CompilerOptions _options;
-  final CommonElements _commonElements;
-  final ElementEnvironment _elementEnvironment;
+  final JCommonElements _commonElements;
+  final JElementEnvironment _elementEnvironment;
   final OutputUnitData _outputUnitData;
-  final CodegenWorldBuilder _worldBuilder;
+  final CodegenWorld _codegenWorld;
   // TODO(floitsch): the code-emitter task should not need a namer.
   final Namer _namer;
   final Emitter _emitter;
-  final JavaScriptConstantCompiler _constantHandler;
   final NativeData _nativeData;
   final InterceptorData _interceptorData;
   final OneShotInterceptorData _oneShotInterceptorData;
@@ -54,10 +51,9 @@ class Collector {
       this._commonElements,
       this._elementEnvironment,
       this._outputUnitData,
-      this._worldBuilder,
+      this._codegenWorld,
       this._namer,
       this._emitter,
-      this._constantHandler,
       this._nativeData,
       this._interceptorData,
       this._oneShotInterceptorData,
@@ -68,7 +64,7 @@ class Collector {
 
   Set<ClassEntity> computeInterceptorsReferencedFromConstants() {
     Set<ClassEntity> classes = new Set<ClassEntity>();
-    List<ConstantValue> constants = _worldBuilder.getConstantsForEmission();
+    Iterable<ConstantValue> constants = _codegenWorld.getConstantsForEmission();
     for (ConstantValue constant in constants) {
       if (constant is InterceptorConstantValue) {
         InterceptorConstantValue interceptorConstant = constant;
@@ -78,10 +74,8 @@ class Collector {
     return classes;
   }
 
-  /**
-   * Return a function that returns true if its argument is a class
-   * that needs to be emitted.
-   */
+  /// Return a function that returns true if its argument is a class
+  /// that needs to be emitted.
   Function computeClassFilter(Iterable<ClassEntity> backendTypeHelpers) {
     Set<ClassEntity> unneededClasses = new Set<ClassEntity>();
     // The [Bool] class is not marked as abstract, but has a factory
@@ -91,10 +85,9 @@ class Collector {
     // Go over specialized interceptors and then constants to know which
     // interceptors are needed.
     Set<ClassEntity> needed = new Set<ClassEntity>();
-    for (js.Name name
-        in _oneShotInterceptorData.specializedGetInterceptorNames) {
-      needed.addAll(
-          _oneShotInterceptorData.getSpecializedGetInterceptorsFor(name));
+    for (SpecializedGetInterceptor interceptor
+        in _oneShotInterceptorData.specializedGetInterceptors) {
+      needed.addAll(interceptor.classes);
     }
 
     // Add interceptors referenced by constants.
@@ -116,7 +109,7 @@ class Collector {
 
   // Return the classes that are just helpers for the backend's type system.
   static Iterable<ClassEntity> getBackendTypeHelpers(
-      CommonElements commonElements) {
+      JCommonElements commonElements) {
     return <ClassEntity>[
       commonElements.jsMutableArrayClass,
       commonElements.jsFixedArrayClass,
@@ -129,12 +122,10 @@ class Collector {
     ];
   }
 
-  /**
-   * Compute all the constants that must be emitted.
-   */
+  /// Compute all the constants that must be emitted.
   void computeNeededConstants() {
-    List<ConstantValue> constants =
-        _worldBuilder.getConstantsForEmission(_emitter.compareConstants);
+    Iterable<ConstantValue> constants =
+        _codegenWorld.getConstantsForEmission(_emitter.compareConstants);
     for (ConstantValue constant in constants) {
       if (_emitter.isConstantInlinedOrAlreadyEmitted(constant)) continue;
 
@@ -162,7 +153,7 @@ class Collector {
     Set<ClassEntity> instantiatedClasses =
         // TODO(johnniwinther): This should be accessed from a codegen closed
         // world.
-        _worldBuilder.directlyInstantiatedClasses
+        _codegenWorld.directlyInstantiatedClasses
             .where(computeClassFilter(backendTypeHelpers))
             .toSet();
 
@@ -269,21 +260,36 @@ class Collector {
   void computeNeededStaticNonFinalFields() {
     addToOutputUnit(FieldEntity element) {
       List<FieldEntity> list = outputStaticNonFinalFieldLists.putIfAbsent(
-          // ignore: UNNECESSARY_CAST
-          _outputUnitData.outputUnitForMember(element as MemberEntity),
+          _outputUnitData.outputUnitForMember(element),
           () => new List<FieldEntity>());
       list.add(element);
     }
 
-    Iterable<FieldEntity> fields =
-        // TODO(johnniwinther): This should be accessed from a codegen closed
-        // world.
-        _worldBuilder.allReferencedStaticFields.where((FieldEntity field) {
-      return field.isAssignable &&
-          _worldBuilder.hasConstantFieldInitializer(field);
+    List<FieldEntity> eagerFields = [];
+    _codegenWorld.forEachStaticField((FieldEntity field) {
+      if (_closedWorld.fieldAnalysis.getFieldData(field).isEager) {
+        eagerFields.add(field);
+      }
     });
 
-    _sorter.sortMembers(fields).forEach((MemberEntity e) => addToOutputUnit(e));
+    eagerFields.sort((FieldEntity a, FieldEntity b) {
+      FieldAnalysisData aFieldData = _closedWorld.fieldAnalysis.getFieldData(a);
+      FieldAnalysisData bFieldData = _closedWorld.fieldAnalysis.getFieldData(b);
+      int aIndex = aFieldData.eagerCreationIndex;
+      int bIndex = bFieldData.eagerCreationIndex;
+      if (aIndex != null && bIndex != null) {
+        return aIndex.compareTo(bIndex);
+      } else if (aIndex != null) {
+        // Sort [b] before [a].
+        return 1;
+      } else if (bIndex != null) {
+        // Sort [a] before [b].
+        return -1;
+      } else {
+        return _sorter.compareMembersByLocation(a, b);
+      }
+    });
+    eagerFields.forEach(addToOutputUnit);
   }
 
   void computeNeededLibraries() {

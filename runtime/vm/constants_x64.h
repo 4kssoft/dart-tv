@@ -5,7 +5,14 @@
 #ifndef RUNTIME_VM_CONSTANTS_X64_H_
 #define RUNTIME_VM_CONSTANTS_X64_H_
 
-namespace dart {
+#ifndef RUNTIME_VM_CONSTANTS_H_
+#error Do not include constants_x64.h directly; use constants.h instead.
+#endif
+
+#include "platform/assert.h"
+#include "platform/globals.h"
+
+namespace arch_x64 {
 
 enum Register {
   RAX = 0,
@@ -83,9 +90,12 @@ enum XmmRegister {
 
 // Architecture independent aliases.
 typedef XmmRegister FpuRegister;
-const FpuRegister FpuTMP = XMM0;
+const FpuRegister FpuTMP = XMM15;
 const int kNumberOfFpuRegisters = kNumberOfXmmRegisters;
 const FpuRegister kNoFpuRegister = kNoXmmRegister;
+
+extern const char* cpu_reg_names[kNumberOfCpuRegisters];
+extern const char* fpu_reg_names[kNumberOfXmmRegisters];
 
 enum RexBits {
   REX_NONE = 0,
@@ -103,28 +113,33 @@ const Register TMP2 = kNoRegister;  // No second assembler scratch register.
 const Register PP = R15;
 const Register SPREG = RSP;          // Stack pointer register.
 const Register FPREG = RBP;          // Frame pointer register.
-const Register ICREG = RBX;          // IC data register.
 const Register ARGS_DESC_REG = R10;  // Arguments descriptor register.
 const Register CODE_REG = R12;
 const Register THR = R14;  // Caches current thread in generated code.
 const Register CALLEE_SAVED_TEMP = RBX;
 
-// Exception object is passed in this register to the catch handlers when an
-// exception is thrown.
+// ABI for catch-clause entry point.
 const Register kExceptionObjectReg = RAX;
-
-// Stack trace object is passed in this register to the catch handlers when
-// an exception is thrown.
 const Register kStackTraceObjectReg = RDX;
+
+// ABI for write barrier stub.
+const Register kWriteBarrierObjectReg = RDX;
+const Register kWriteBarrierValueReg = RAX;
+const Register kWriteBarrierSlotReg = R13;
 
 typedef uint32_t RegList;
 const RegList kAllCpuRegistersList = 0xFFFF;
+const RegList kAllFpuRegistersList = 0xFFFF;
 
 const RegList kReservedCpuRegisters =
     (1 << SPREG) | (1 << FPREG) | (1 << TMP) | (1 << PP) | (1 << THR);
+constexpr intptr_t kNumberOfReservedCpuRegisters = 5;
 // CPU registers available to Dart allocator.
 const RegList kDartAvailableCpuRegs =
     kAllCpuRegistersList & ~kReservedCpuRegisters;
+constexpr int kNumberOfDartAvailableCpuRegs =
+    kNumberOfCpuRegisters - kNumberOfReservedCpuRegisters;
+constexpr int kStoreBufferWrapperSize = 13;
 
 enum ScaleFactor {
   TIMES_1 = 0,
@@ -132,19 +147,33 @@ enum ScaleFactor {
   TIMES_4 = 2,
   TIMES_8 = 3,
   TIMES_16 = 4,
-  TIMES_HALF_WORD_SIZE = kWordSizeLog2 - 1
+  TIMES_HALF_WORD_SIZE = ::dart::kWordSizeLog2 - 1
 };
 
 #define R(reg) (1 << (reg))
 
-#if defined(_WIN64)
 class CallingConventions {
  public:
+#if defined(_WIN64)
   static const Register kArg1Reg = RCX;
   static const Register kArg2Reg = RDX;
   static const Register kArg3Reg = R8;
   static const Register kArg4Reg = R9;
-  static const intptr_t kShadowSpaceBytes = 4 * kWordSize;
+  static const Register ArgumentRegisters[];
+  static const intptr_t kArgumentRegisters =
+      R(kArg1Reg) | R(kArg2Reg) | R(kArg3Reg) | R(kArg4Reg);
+  static const intptr_t kNumArgRegs = 4;
+
+  static const XmmRegister FpuArgumentRegisters[];
+  static const intptr_t kFpuArgumentRegisters =
+      R(XMM0) | R(XMM1) | R(XMM2) | R(XMM3);
+  static const intptr_t kNumFpuArgRegs = 4;
+
+  // can ArgumentRegisters[i] and XmmArgumentRegisters[i] both be used at the
+  // same time? (Windows no, rest yes)
+  static const bool kArgumentIntRegXorFpuReg = true;
+
+  static const intptr_t kShadowSpaceBytes = 4 * ::dart::kWordSize;
 
   static const intptr_t kVolatileCpuRegisters =
       R(RAX) | R(RCX) | R(RDX) | R(R8) | R(R9) | R(R10) | R(R11);
@@ -159,19 +188,46 @@ class CallingConventions {
       R(XMM6) | R(XMM7) | R(XMM8) | R(XMM9) | R(XMM10) | R(XMM11) | R(XMM12) |
       R(XMM13) | R(XMM14) | R(XMM15);
 
+  static const XmmRegister xmmFirstNonParameterReg = XMM4;
+
   // Windows x64 ABI specifies that small objects are passed in registers.
   // Otherwise they are passed by reference.
   static const size_t kRegisterTransferLimit = 16;
-};
+
+  static constexpr Register kReturnReg = RAX;
+  static constexpr Register kSecondReturnReg = kNoRegister;
+  static constexpr FpuRegister kReturnFpuReg = XMM0;
+
+  // Whether floating-point values should be passed as integers ("softfp" vs
+  // "hardfp").
+  static constexpr bool kAbiSoftFP = false;
+
+  // Whether 64-bit arguments must be aligned to an even register or 8-byte
+  // stack address. Not relevant on X64 since the word size is 64-bits already.
+  static constexpr bool kAlignArguments = false;
 #else
-class CallingConventions {
- public:
   static const Register kArg1Reg = RDI;
   static const Register kArg2Reg = RSI;
   static const Register kArg3Reg = RDX;
   static const Register kArg4Reg = RCX;
   static const Register kArg5Reg = R8;
   static const Register kArg6Reg = R9;
+  static const Register ArgumentRegisters[];
+  static const intptr_t kArgumentRegisters = R(kArg1Reg) | R(kArg2Reg) |
+                                             R(kArg3Reg) | R(kArg4Reg) |
+                                             R(kArg5Reg) | R(kArg6Reg);
+  static const intptr_t kNumArgRegs = 6;
+
+  static const XmmRegister FpuArgumentRegisters[];
+  static const intptr_t kFpuArgumentRegisters = R(XMM0) | R(XMM1) | R(XMM2) |
+                                                R(XMM3) | R(XMM4) | R(XMM5) |
+                                                R(XMM6) | R(XMM7);
+  static const intptr_t kNumFpuArgRegs = 8;
+
+  // can ArgumentRegisters[i] and XmmArgumentRegisters[i] both be used at the
+  // same time? (Windows no, rest yes)
+  static const bool kArgumentIntRegXorFpuReg = false;
+
   static const intptr_t kShadowSpaceBytes = 0;
 
   static const intptr_t kVolatileCpuRegisters = R(RAX) | R(RCX) | R(RDX) |
@@ -187,8 +243,35 @@ class CallingConventions {
       R(RBX) | R(R12) | R(R13) | R(R14) | R(R15);
 
   static const intptr_t kCalleeSaveXmmRegisters = 0;
-};
+
+  static const XmmRegister xmmFirstNonParameterReg = XMM8;
+
+  static constexpr Register kReturnReg = RAX;
+  static constexpr Register kSecondReturnReg = kNoRegister;
+  static constexpr FpuRegister kReturnFpuReg = XMM0;
+
+  // Whether floating-point values should be passed as integers ("softfp" vs
+  // "hardfp").
+  static constexpr bool kAbiSoftFP = false;
+
+  // Whether 64-bit arguments must be aligned to an even register or 8-byte
+  // stack address. Not relevant on X64 since the word size is 64-bits already.
+  static constexpr bool kAlignArguments = false;
 #endif
+
+  COMPILE_ASSERT((kArgumentRegisters & kReservedCpuRegisters) == 0);
+
+  static constexpr Register kFirstCalleeSavedCpuReg = RBX;
+  static constexpr Register kFirstNonArgumentRegister = RAX;
+  static constexpr Register kSecondNonArgumentRegister = RBX;
+  static constexpr Register kStackPointerRegister = SPREG;
+
+  COMPILE_ASSERT(((R(kFirstCalleeSavedCpuReg)) & kCalleeSaveCpuRegisters) != 0);
+
+  COMPILE_ASSERT(((R(kFirstNonArgumentRegister) |
+                   R(kSecondNonArgumentRegister)) &
+                  kArgumentRegisters) == 0);
+};
 
 #undef R
 
@@ -198,6 +281,7 @@ class Instr {
   // We prefer not to use the int3 instruction since it conflicts with gdb.
   static const uint8_t kBreakPointInstruction = kHltInstruction;
   static const int kBreakPointInstructionSize = 1;
+  static const uint8_t kGdbBreakpointInstruction = 0xcc;
 
   bool IsBreakPoint() {
     ASSERT(kBreakPointInstructionSize == 1);
@@ -208,7 +292,7 @@ class Instr {
   // reference to an instruction is to convert a pointer. There is no way
   // to allocate or create instances of class Instr.
   // Use the At(pc) function to create references to Instr.
-  static Instr* At(uword pc) { return reinterpret_cast<Instr*>(pc); }
+  static Instr* At(::dart::uword pc) { return reinterpret_cast<Instr*>(pc); }
 
  private:
   DISALLOW_ALLOCATION();
@@ -220,6 +304,6 @@ class Instr {
 // becomes important to us.
 const int MAX_NOP_SIZE = 8;
 
-}  // namespace dart
+}  // namespace arch_x64
 
 #endif  // RUNTIME_VM_CONSTANTS_X64_H_

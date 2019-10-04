@@ -1,7 +1,8 @@
-// Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2016, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/error/listener.dart';
@@ -29,7 +30,6 @@ class SdkPatcher {
    */
   void patch(
       ResourceProvider resourceProvider,
-      bool strongMode,
       Map<String, List<String>> allPatchPaths,
       AnalysisErrorListener errorListener,
       Source source,
@@ -59,7 +59,8 @@ class SdkPatcher {
             'The patch file ${patchFile.path} for $source does not exist.');
       }
       Source patchSource = patchFile.createSource();
-      CompilationUnit patchUnit = parse(patchSource, strongMode, errorListener);
+      CompilationUnit patchUnit =
+          parse(patchSource, errorListener, unit.featureSet);
 
       // Prepare for reporting errors.
       _baseDesc = source.toString();
@@ -406,18 +407,17 @@ class SdkPatcher {
    * Parse the given [source] into AST.
    */
   @visibleForTesting
-  static CompilationUnit parse(
-      Source source, bool strong, AnalysisErrorListener errorListener) {
+  static CompilationUnit parse(Source source,
+      AnalysisErrorListener errorListener, FeatureSet featureSet) {
     String code = source.contents.data;
 
     CharSequenceReader reader = new CharSequenceReader(code);
-    Scanner scanner = new Scanner(source, reader, errorListener);
-    scanner.scanGenericMethodComments = strong;
+    Scanner scanner = new Scanner(source, reader, errorListener)
+      ..configureFeatures(featureSet);
     Token token = scanner.tokenize();
     LineInfo lineInfo = new LineInfo(scanner.lineStarts);
 
-    Parser parser = new Parser(source, errorListener);
-    parser.parseGenericMethodComments = strong;
+    Parser parser = new Parser(source, errorListener, featureSet: featureSet);
     CompilationUnit unit = parser.parseCompilationUnit(token);
     unit.lineInfo = lineInfo;
     return unit;

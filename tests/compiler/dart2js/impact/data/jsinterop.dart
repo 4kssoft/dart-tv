@@ -7,41 +7,28 @@ library jsinterop;
 
 import 'package:js/js.dart';
 
-/*element: main:static=[testJsInteropClass(0),testJsInteropMethod(0),testOptionalGenericFunctionTypeArgument(0)]*/
+/*member: main:
+ static=[
+  testJsInteropClass(0),
+  testJsInteropMethod(0),
+  testOptionalGenericFunctionTypeArgument(0)]
+*/
 main() {
   testOptionalGenericFunctionTypeArgument();
   testJsInteropMethod();
   testJsInteropClass();
 }
 
-/*kernel.element: testJsInteropMethod:type=[check:int]*/
-/*strong.element: testJsInteropMethod:*/
+/*member: testJsInteropMethod:*/
 @JS()
 external int testJsInteropMethod();
 
 @JS()
 class JsInteropClass {
-  /*element: JsInteropClass.:static=[JavaScriptObject.(0)]*/
+  /*member: JsInteropClass.:static=[JavaScriptObject.(0)]*/
   external JsInteropClass();
 
-  /*kernel.element: JsInteropClass.method:
-   type=[
-    check:double,
-    native:ApplicationCacheErrorEvent,
-    native:DomError,
-    native:DomException,
-    native:ErrorEvent,
-    native:GenericClass<dynamic>,
-    native:JsInteropClass,
-    native:MediaError,
-    native:NavigatorUserMediaError,
-    native:OverconstrainedError,
-    native:PositionError,
-    native:SensorErrorEvent,
-    native:SpeechRecognitionError,
-    native:SqlError]
-  */
-  /*strong.element: JsInteropClass.method:
+  /*member: JsInteropClass.method:
    type=[
     native:ApplicationCacheErrorEvent,
     native:DomError,
@@ -61,28 +48,25 @@ class JsInteropClass {
   external double method();
 }
 
-/*element: testJsInteropClass:dynamic=[method(0)],static=[JsInteropClass.(0)]*/
+/*member: testJsInteropClass:
+ dynamic=[JavaScriptObject.method(0)],
+ static=[JsInteropClass.(0)]
+*/
 testJsInteropClass() => new JsInteropClass().method();
 
 typedef void Callback<T>(T value);
 
-/*element: GenericClass.:static=[JavaScriptObject.(0)]*/
+/*member: GenericClass.:static=[JavaScriptObject.(0)]*/
 @JS()
 class GenericClass<T> {
-  /*kernel.element: GenericClass.method:
-   type=[
-    check:GenericClass<dynamic>,
-    check:void Function(GenericClass.T),
-    inst:JSNull]
-  */
-  /*strong.element: GenericClass.method:
+  /*member: GenericClass.method:
    static=[
-    checkSubtype,
-    getRuntimeTypeArgument,
-    getRuntimeTypeArgumentIntercepted,
-    getRuntimeTypeInfo,
-    getTypeArgumentByIndex,
-    setRuntimeTypeInfo],
+    checkSubtype(4),
+    getRuntimeTypeArgument(3),
+    getRuntimeTypeArgumentIntercepted(4),
+    getRuntimeTypeInfo(1),
+    getTypeArgumentByIndex(2),
+    setRuntimeTypeInfo(2)],
    type=[
     inst:JSArray<dynamic>,
     inst:JSBool,
@@ -96,5 +80,8 @@ class GenericClass<T> {
   external GenericClass method([Callback<T> callback]);
 }
 
-/*element: testOptionalGenericFunctionTypeArgument:dynamic=[method(0)],static=[GenericClass.(0)]*/
+/*member: testOptionalGenericFunctionTypeArgument:
+ dynamic=[JavaScriptObject.method(0)],
+ static=[GenericClass.(0)]
+*/
 testOptionalGenericFunctionTypeArgument() => new GenericClass().method();

@@ -5,7 +5,7 @@
 
 import 'package:async_helper/async_helper.dart';
 import 'package:expect/expect.dart';
-import '../compiler_helper.dart';
+import '../helpers/compiler_helper.dart';
 
 main() {
   runTests({int numberOfParameters}) async {
@@ -47,6 +47,6 @@ main() {
   asyncTest(() async {
     // The [numberOfParameters] value is somewhat arbitrary.
     print('--test from kernel------------------------------------------------');
-    await runTests(numberOfParameters: 2000);
+    await runTests(numberOfParameters: 1000);
   });
 }

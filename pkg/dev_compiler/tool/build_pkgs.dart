@@ -5,8 +5,7 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:path/path.dart' as p;
 
-import 'package:dev_compiler/src/analyzer/command.dart' as dartdevc;
-import 'package:dev_compiler/src/kernel/command.dart' as dartdevk;
+import 'package:dev_compiler/src/compiler/shared_command.dart';
 
 final String scriptDirectory = p.dirname(p.fromUri(Platform.script));
 
@@ -38,7 +37,7 @@ String outputDirectory;
 /// summaries for the test packages against that SDK summary. Otherwise, skips
 /// generating kernel summaries.
 Future main(List<String> arguments) async {
-  var argParser = new ArgParser();
+  var argParser = ArgParser();
   argParser.addOption("analyzer-sdk",
       help: "Path to SDK analyzer summary '.sum' file");
   argParser.addOption("kernel-sdk",
@@ -72,9 +71,6 @@ Future main(List<String> arguments) async {
   await compileModule('expect', libs: ['minitest']);
   await compileModule('js', libs: ['js_util']);
   await compileModule('meta');
-  if (isTravis) {
-    await compileModule('microlytics', libs: ['html_channels']);
-  }
 
   // Under third_party/pkg.
   await compileModule('collection');
@@ -127,35 +123,32 @@ void _usageError(ArgParser parser, [String message]) {
 /// [libs] and [deps] on other modules.
 Future compileModule(String module,
     {List<String> libs = const [], List<String> deps = const []}) async {
-  makeArgs(bool kernel) {
+  makeArgs({bool kernel = false}) {
     var pkgDirectory = p.join(outputDirectory, kernel ? 'pkg_kernel' : 'pkg');
-    new Directory(pkgDirectory).createSync(recursive: true);
+    Directory(pkgDirectory).createSync(recursive: true);
+    var args = <String>[];
+    if (kernel) args.add('-k');
 
-    var args = [
+    args.addAll([
       '--dart-sdk-summary=${kernel ? kernelSummary : analyzerSummary}',
       '-o${pkgDirectory}/$module.js',
       'package:$module/$module.dart'
-    ];
+    ]);
     for (var lib in libs) {
       args.add('package:$module/$lib.dart');
     }
     for (var dep in deps) {
       args.add('-s${pkgDirectory}/$dep.${kernel ? "dill" : "sum"}');
     }
-    if (kernel) {
-      args.add('--summary-input-dir=$pkgDirectory');
-    }
     return args;
   }
 
   if (analyzerSummary != null) {
-    var args = makeArgs(false);
-    var exitCode = dartdevc.compile(args);
-    if (exitCode != 0) exit(exitCode);
+    var result = await compile(ParsedArguments.from(makeArgs()));
+    if (!result.success) exit(result.exitCode);
   }
   if (kernelSummary != null) {
-    var args = makeArgs(true);
-    var result = await dartdevk.compile(args);
-    if (!result.success) exit(1);
+    var result = await compile(ParsedArguments.from(makeArgs(kernel: true)));
+    if (!result.success) exit(result.exitCode);
   }
 }

@@ -69,20 +69,20 @@ class Dart2JSJavaScriptPrintingContext implements JavaScriptPrintingContext {
 
   @override
   void emit(String string) {
+    monitor?.emit(string);
     outBuffer.add(string);
   }
 
   @override
   void enterNode(Node node, int startPosition) {
+    monitor?.enterNode(node, startPosition);
     codePositionListener.onStartPosition(node, startPosition);
   }
 
   @override
   void exitNode(
       Node node, int startPosition, int endPosition, int closingPosition) {
-    if (monitor != null) {
-      monitor.recordAstSize(node, endPosition - startPosition);
-    }
+    monitor?.exitNode(node, startPosition, endPosition, closingPosition);
     codePositionListener.onPositions(
         node, startPosition, endPosition, closingPosition);
   }
@@ -119,7 +119,7 @@ class TokenCounter extends BaseVisitor {
 }
 
 abstract class ReferenceCountedAstNode implements Node {
-  markSeen(TokenCounter visitor);
+  void markSeen(TokenCounter visitor);
 }
 
 /// Represents the LiteralString resulting from unparsing [expression]. The
@@ -134,6 +134,7 @@ class UnparsedNode extends DeferredString implements AstContainer {
   final bool _protectForEval;
   LiteralString _cachedLiteral;
 
+  @override
   Iterable<Node> get containedNodes => [tree];
 
   /// A [js.Literal] that represents the string result of unparsing [ast].

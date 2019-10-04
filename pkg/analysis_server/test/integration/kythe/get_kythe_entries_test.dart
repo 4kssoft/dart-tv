@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -11,7 +11,6 @@ import '../support/integration_tests.dart';
 main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(GetKytheEntriesTest);
-    defineReflectiveTests(GetKytheEntriesTest_UseCFE);
   });
 }
 
@@ -37,10 +36,4 @@ class Bar {
     expect(result.entries, isNotEmpty);
     expect(result.files, isEmpty);
   }
-}
-
-@reflectiveTest
-class GetKytheEntriesTest_UseCFE extends GetKytheEntriesTest {
-  @override
-  bool get useCFE => true;
 }

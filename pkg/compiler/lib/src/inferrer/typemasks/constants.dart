@@ -4,9 +4,8 @@
 
 library types.constants;
 
-import '../../common.dart';
+import '../../constants/constant_system.dart' as constant_system;
 import '../../constants/values.dart';
-import '../../js_backend/js_backend.dart' show SyntheticConstantKind;
 import '../../world.dart' show JClosedWorld;
 import 'masks.dart';
 
@@ -29,12 +28,6 @@ class ConstantValueTypeMasks
   }
 
   @override
-  TypeMask visitDeferred(
-      DeferredConstantValue constant, JClosedWorld closedWorld) {
-    return constant.referenced.accept(this, closedWorld);
-  }
-
-  @override
   TypeMask visitDeferredGlobal(
       DeferredGlobalConstantValue constant, JClosedWorld closedWorld) {
     return constant.referenced.accept(this, closedWorld);
@@ -43,7 +36,7 @@ class ConstantValueTypeMasks
   @override
   TypeMask visitDouble(DoubleConstantValue constant, JClosedWorld closedWorld) {
     // We have to recognize double constants that are 'is int'.
-    if (closedWorld.constantSystem.isInt(constant)) {
+    if (constant_system.isInt(constant)) {
       if (constant.isMinusZero) {
         return closedWorld.abstractValueDomain.uint31Type;
       } else {
@@ -55,21 +48,20 @@ class ConstantValueTypeMasks
   }
 
   @override
-  TypeMask visitSynthetic(
-      SyntheticConstantValue constant, JClosedWorld closedWorld) {
-    switch (constant.valueKind) {
-      case SyntheticConstantKind.DUMMY_INTERCEPTOR:
-        return constant.payload;
-      case SyntheticConstantKind.EMPTY_VALUE:
-        return constant.payload;
-      case SyntheticConstantKind.TYPEVARIABLE_REFERENCE:
-        return closedWorld.abstractValueDomain.intType;
-      case SyntheticConstantKind.NAME:
-        return closedWorld.abstractValueDomain.stringType;
-      default:
-        throw failedAt(CURRENT_ELEMENT_SPANNABLE,
-            "Unexpected DummyConstantKind: ${constant.toStructuredText()}.");
-    }
+  TypeMask visitDummyInterceptor(
+      DummyInterceptorConstantValue constant, JClosedWorld closedWorld) {
+    return constant.abstractValue;
+  }
+
+  @override
+  TypeMask visitUnreachable(
+      UnreachableConstantValue constant, JClosedWorld closedWorld) {
+    return closedWorld.abstractValueDomain.emptyType;
+  }
+
+  @override
+  TypeMask visitJsName(JsNameConstantValue constant, JClosedWorld closedWorld) {
+    return closedWorld.abstractValueDomain.stringType;
   }
 
   @override
@@ -107,6 +99,11 @@ class ConstantValueTypeMasks
   @override
   TypeMask visitList(ListConstantValue constant, JClosedWorld closedWorld) {
     return closedWorld.abstractValueDomain.constListType;
+  }
+
+  @override
+  TypeMask visitSet(SetConstantValue constant, JClosedWorld closedWorld) {
+    return closedWorld.abstractValueDomain.constSetType;
   }
 
   @override

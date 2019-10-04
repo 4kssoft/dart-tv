@@ -1,8 +1,8 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'package:analyzer/analyzer.dart';
+import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/src/dart/error/syntactic_errors.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
@@ -14,6 +14,7 @@ main() {
     defineReflectiveTests(CompilationUnitMemberTest);
     defineReflectiveTests(ImportDirectiveTest);
     defineReflectiveTests(MisplacedMetadataTest);
+    defineReflectiveTests(MixinDeclarationTest);
     defineReflectiveTests(TryStatementTest);
   });
 }
@@ -102,18 +103,6 @@ class A with B extends C {}
 ''', [ParserErrorCode.WITH_BEFORE_EXTENDS], '''
 class A extends C with B {}
 ''');
-  }
-
-  void test_withWithoutExtends() {
-    testRecovery('''
-class A with B, C {}
-''', [ParserErrorCode.WITH_WITHOUT_EXTENDS], '''
-class A extends Object with B, C {}
-''', adjustValidUnitBeforeComparison: (CompilationUnit unit) {
-      ClassDeclaration declaration = unit.declarations[0];
-      declaration.extendsClause = null;
-      return unit;
-    });
   }
 }
 
@@ -334,6 +323,58 @@ class A {
 class B {
   @A(const A()) dynamic x;
 }
+''');
+  }
+}
+
+/**
+ * Test how well the parser recovers when the clauses in a mixin declaration are
+ * out of order.
+ */
+@reflectiveTest
+class MixinDeclarationTest extends AbstractRecoveryTest {
+  void test_implementsBeforeOn() {
+    testRecovery('''
+mixin A implements B on C {}
+''', [ParserErrorCode.IMPLEMENTS_BEFORE_ON], '''
+mixin A on C implements B {}
+''');
+  }
+
+  void test_multipleImplements() {
+    testRecovery('''
+mixin A implements B implements C, D {}
+''', [ParserErrorCode.MULTIPLE_IMPLEMENTS_CLAUSES], '''
+mixin A implements B, C, D {}
+''');
+  }
+
+  void test_multipleOn() {
+    testRecovery('''
+mixin A on B on C {}
+''', [ParserErrorCode.MULTIPLE_ON_CLAUSES], '''
+mixin A on B, C {}
+''');
+  }
+
+  @failingTest
+  void test_typing_implements() {
+    testRecovery('''
+mixin Foo imple
+mixin UnrelatedMixin on Bar {}
+''', [ParserErrorCode.MULTIPLE_WITH_CLAUSES], '''
+mixin Foo {}
+mixin UnrelatedMixin on Bar {}
+''');
+  }
+
+  void test_typing_implements_identifier() {
+    testRecovery('''
+mixin Foo implements CurrentlyTypingHere
+mixin UnrelatedMixin on Bar {}
+''', [ParserErrorCode.MISSING_CLASS_BODY], '''
+mixin Foo implements CurrentlyTypingHere {}
+mixin UnrelatedMixin on Bar {}
 ''');
   }
 }

@@ -4,27 +4,23 @@
 
 /// Regression test for [ClosureCallSiteTypeInformation] in loops.
 
-/*element: Class.:[exact=Class]*/
+/*member: Class.:[exact=Class]*/
 class Class<T> {
-  /*element: Class.method:[null]*/
+  /*member: Class.method:[null]*/
   method() {
     /*iterator: Container([exact=JSExtendableArray], element: [empty], length: 0)*/
     /*current: [exact=ArrayIterator]*/
     /*moveNext: [exact=ArrayIterator]*/
     for (var a in []) {
-      // ignore: invocation_of_non_function_expression
-      (T) /*invoke: [exact=TypeImpl]*/ (a);
-      // ignore: invocation_of_non_function_expression
-      (Object) /*invoke: [exact=TypeImpl]*/ ();
-      // ignore: invocation_of_non_function_expression
-      (this) /*invoke: [exact=Class]*/ ();
-      // ignore: invocation_of_non_function_expression
-      (1) /*invoke: [exact=JSUInt31]*/ ();
+      (T as dynamic) /*invoke: [exact=TypeImpl]*/ (a);
+      (Object as dynamic) /*invoke: [exact=TypeImpl]*/ ();
+      (this as dynamic) /*invoke: [exact=Class]*/ ();
+      (1 as dynamic) /*invoke: [exact=JSUInt31]*/ ();
     }
   }
 }
 
-/*element: main:[null]*/
+/*member: main:[null]*/
 main() {
   new Class(). /*invoke: [exact=Class]*/ method();
 }

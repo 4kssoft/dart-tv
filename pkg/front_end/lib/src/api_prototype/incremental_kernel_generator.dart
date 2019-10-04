@@ -4,6 +4,10 @@
 
 import 'dart:async' show Future;
 
+import 'package:kernel/class_hierarchy.dart' show ClassHierarchy;
+
+import 'package:kernel/core_types.dart' show CoreTypes;
+
 import 'package:kernel/kernel.dart'
     show Component, Procedure, DartType, TypeParameter;
 
@@ -19,20 +23,64 @@ import 'compiler_options.dart' show CompilerOptions;
 
 abstract class IncrementalKernelGenerator {
   factory IncrementalKernelGenerator(CompilerOptions options, Uri entryPoint,
-      [Uri initializeFromDillUri]) {
+      [Uri initializeFromDillUri, bool outlineOnly]) {
     return new IncrementalCompiler(
-        new CompilerContext(new ProcessedOptions(options, [entryPoint])),
-        initializeFromDillUri);
+        new CompilerContext(
+            new ProcessedOptions(options: options, inputs: [entryPoint])),
+        initializeFromDillUri,
+        outlineOnly);
+  }
+
+  /// Initialize the incremental compiler from a component.
+  ///
+  /// Notice that the component has to include the platform, and that no other
+  /// platform will be loaded.
+  factory IncrementalKernelGenerator.fromComponent(
+      CompilerOptions options, Uri entryPoint, Component component,
+      [bool outlineOnly]) {
+    return new IncrementalCompiler.fromComponent(
+        new CompilerContext(
+            new ProcessedOptions(options: options, inputs: [entryPoint])),
+        component,
+        outlineOnly);
   }
 
   /// Returns a component whose libraries are the recompiled libraries,
   /// or - in the case of [fullComponent] - a full Component.
-  Future<Component> computeDelta({Uri entryPoint, bool fullComponent});
+  Future<Component> computeDelta({List<Uri> entryPoints, bool fullComponent});
+
+  /// Returns [CoreTypes] used during compilation.
+  /// Valid after [computeDelta] is called.
+  CoreTypes getCoreTypes();
+
+  /// Returns [ClassHierarchy] used during compilation.
+  /// Valid after [computeDelta] is called.
+  ClassHierarchy getClassHierarchy();
 
   /// Remove the file associated with the given file [uri] from the set of
   /// valid files.  This guarantees that those files will be re-read on the
   /// next call to [computeDelta]).
   void invalidate(Uri uri);
+
+  /// Invalidate all libraries that were build from source.
+  ///
+  /// This is equivalent to a number of calls to [invalidate]: One for each URI
+  /// that happens to have been read from source.
+  /// Said another way, this invalidates everything not loaded from dill
+  /// (at startup) or via [setModulesToLoadOnNextComputeDelta].
+  void invalidateAllSources();
+
+  /// Set the given [components] as components to load on the next iteration
+  /// of [computeDelta].
+  ///
+  /// If specified, all libraries not compiled from source and not included in
+  /// these components will be invalidated and the libraries inside these
+  /// components will be loaded instead.
+  ///
+  /// Useful for, for instance, modular compilation, where modules
+  /// (created externally) via this functionality can be added, changed or
+  /// removed.
+  void setModulesToLoadOnNextComputeDelta(List<Component> components);
 
   /// Compile [expression] as an [Expression]. A function returning that
   /// expression is compiled.

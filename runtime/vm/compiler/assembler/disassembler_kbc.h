@@ -6,7 +6,7 @@
 #define RUNTIME_VM_COMPILER_ASSEMBLER_DISASSEMBLER_KBC_H_
 
 #include "vm/globals.h"
-#if defined(DART_USE_INTERPRETER)
+#if !defined(DART_PRECOMPILED_RUNTIME)
 
 #include "vm/compiler/assembler/disassembler.h"
 
@@ -21,15 +21,15 @@ class KernelBytecodeDisassembler : public AllStatic {
   static void Disassemble(uword start,
                           uword end,
                           DisassemblyFormatter* formatter,
-                          const Code& bytecode);
+                          const Bytecode& bytecode);
 
   static void Disassemble(uword start,
                           uword end,
                           DisassemblyFormatter* formatter) {
-    Disassemble(start, end, formatter, Code::Handle());
+    Disassemble(start, end, formatter, Bytecode::Handle());
   }
 
-  static void Disassemble(uword start, uword end, const Code& bytecode) {
+  static void Disassemble(uword start, uword end, const Bytecode& bytecode) {
 #if !defined(PRODUCT)
     DisassembleToStdout stdout_formatter;
     LogBlock lb;
@@ -71,7 +71,7 @@ class KernelBytecodeDisassembler : public AllStatic {
                                 char* human_buffer,
                                 intptr_t human_size,
                                 int* out_instr_len,
-                                const Code& bytecode,
+                                const Bytecode& bytecode,
                                 Object** object,
                                 uword pc);
 
@@ -84,6 +84,6 @@ class KernelBytecodeDisassembler : public AllStatic {
 
 }  // namespace dart
 
-#endif  // defined(DART_USE_INTERPRETER)
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
 #endif  // RUNTIME_VM_COMPILER_ASSEMBLER_DISASSEMBLER_KBC_H_

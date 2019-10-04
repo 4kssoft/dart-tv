@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -89,7 +89,7 @@ main(A a, B b, C c, D d) {
   }
 
   test_change_multipleFiles() async {
-    await indexUnit('/project/other.dart', r'''
+    await indexUnit('/home/test/lib/other.dart', r'''
 class A {
   int test() => 1;
 }
@@ -129,7 +129,7 @@ main() {
     ExecutableElement element = findElement('test', ElementKind.GETTER);
     _createRefactoringForElement(element);
     // check conditions
-    _assertInitialConditions_fatal(
+    await _assertInitialConditions_fatal(
         'Only class methods or top-level functions can be converted to getters.');
   }
 
@@ -142,7 +142,7 @@ main() {
 ''');
     _createRefactoring('test');
     // check conditions
-    _assertInitialConditions_fatal(
+    await _assertInitialConditions_fatal(
         'Only methods without parameters can be converted to getters.');
   }
 
@@ -156,7 +156,7 @@ main() {
     ExecutableElement element = findElementsByName(testUnit, 'test').single;
     _createRefactoringForElement(element);
     // check conditions
-    _assertInitialConditions_fatal(
+    await _assertInitialConditions_fatal(
         'Only top-level functions can be converted to getters.');
   }
 
@@ -168,7 +168,7 @@ class A {
 ''');
     _createRefactoring('test');
     // check conditions
-    _assertInitialConditions_fatal(
+    await _assertInitialConditions_fatal(
         'Only class methods or top-level functions can be converted to getters.');
   }
 
@@ -178,7 +178,8 @@ void test() {}
 ''');
     _createRefactoring('test');
     // check conditions
-    _assertInitialConditions_fatal('Cannot convert function returning void.');
+    await _assertInitialConditions_fatal(
+        'Cannot convert function returning void.');
   }
 
   Future _assertInitialConditions_fatal(String message) async {
@@ -205,7 +206,7 @@ void test() {}
 
   void _createRefactoringForElement(ExecutableElement element) {
     refactoring = new ConvertMethodToGetterRefactoring(
-        searchEngine, astProvider, element);
+        searchEngine, testAnalysisResult.session, element);
   }
 
   void _createRefactoringForString(String search) {

@@ -1,18 +1,24 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:mirrors';
 
-import 'package:analysis_server/src/protocol_server.dart';
+import 'package:analysis_server/src/protocol_server.dart'
+    hide DiagnosticMessage;
 import 'package:analysis_server/src/services/search/search_engine.dart';
+import 'package:analyzer/dart/analysis/results.dart';
+import 'package:analyzer/dart/analysis/session.dart';
 import 'package:analyzer/dart/ast/ast.dart' as engine;
 import 'package:analyzer/dart/element/element.dart' as engine;
 import 'package:analyzer/dart/element/type.dart' as engine;
+import 'package:analyzer/diagnostic/diagnostic.dart';
 import 'package:analyzer/error/error.dart' as engine;
+import 'package:analyzer/src/dart/analysis/results.dart' as engine;
+import 'package:analyzer/src/dart/error/lint_codes.dart';
+import 'package:analyzer/src/diagnostic/diagnostic.dart' as engine;
 import 'package:analyzer/src/error/codes.dart' as engine;
 import 'package:analyzer/src/generated/source.dart' as engine;
-import 'package:analyzer_plugin/protocol/protocol_common.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
@@ -29,17 +35,19 @@ main() {
 @reflectiveTest
 class AnalysisErrorTest {
   MockSource source = new MockSource();
-  engine.LineInfo lineInfo;
   MockAnalysisError engineError;
+  ResolvedUnitResult result;
 
   void setUp() {
     // prepare Source
     source.fullName = 'foo.dart';
-    // prepare LineInfo
-    lineInfo = new engine.LineInfo([0, 5, 9, 20]);
     // prepare AnalysisError
     engineError = new MockAnalysisError(source,
         engine.CompileTimeErrorCode.AMBIGUOUS_EXPORT, 10, 20, 'my message');
+    // prepare ResolvedUnitResult
+    engine.LineInfo lineInfo = new engine.LineInfo([0, 5, 9, 20]);
+    result = new engine.ResolvedUnitResultImpl(null, 'foo.dart', null, true,
+        null, lineInfo, false, null, [engineError]);
   }
 
   void tearDown() {
@@ -47,9 +55,47 @@ class AnalysisErrorTest {
     engineError = null;
   }
 
+  void test_fromEngine_hasContextMessage() {
+    engineError.contextMessages.add(engine.DiagnosticMessageImpl(
+        filePath: 'bar.dart', offset: 30, length: 5, message: 'context'));
+    MockAnalysisSession session = new MockAnalysisSession();
+    session.addFileResult(new engine.FileResultImpl(
+        session, 'bar.dart', null, new engine.LineInfo([0, 5, 9, 20]), false));
+    AnalysisError error = newAnalysisError_fromEngine(
+        new engine.ResolvedUnitResultImpl(session, 'foo.dart', null, true, null,
+            new engine.LineInfo([0, 5, 9, 20]), false, null, [engineError]),
+        engineError);
+    expect(error.toJson(), {
+      'severity': 'ERROR',
+      'type': 'COMPILE_TIME_ERROR',
+      'location': {
+        'file': 'foo.dart',
+        'offset': 10,
+        'length': 20,
+        'startLine': 3,
+        'startColumn': 2
+      },
+      'message': 'my message',
+      'code': 'ambiguous_export',
+      'contextMessages': [
+        {
+          'message': 'context',
+          'location': {
+            'file': 'bar.dart',
+            'offset': 30,
+            'length': 5,
+            'startLine': 4,
+            'startColumn': 11
+          }
+        }
+      ],
+      'hasFix': false
+    });
+  }
+
   void test_fromEngine_hasCorrection() {
     engineError.correction = 'my correction';
-    AnalysisError error = newAnalysisError_fromEngine(lineInfo, engineError);
+    AnalysisError error = newAnalysisError_fromEngine(result, engineError);
     expect(error.toJson(), {
       SEVERITY: 'ERROR',
       TYPE: 'COMPILE_TIME_ERROR',
@@ -67,9 +113,59 @@ class AnalysisErrorTest {
     });
   }
 
+  void test_fromEngine_hasUrl() {
+    engineError = new MockAnalysisError(
+        source,
+        new MockErrorCode(url: 'http://codes.dartlang.org/TEST_ERROR'),
+        10,
+        20,
+        'my message');
+    AnalysisError error = newAnalysisError_fromEngine(result, engineError);
+    expect(error.toJson(), {
+      SEVERITY: 'ERROR',
+      TYPE: 'COMPILE_TIME_ERROR',
+      LOCATION: {
+        FILE: 'foo.dart',
+        OFFSET: 10,
+        LENGTH: 20,
+        START_LINE: 3,
+        START_COLUMN: 2
+      },
+      MESSAGE: 'my message',
+      CODE: 'test_error',
+      URL: 'http://codes.dartlang.org/TEST_ERROR',
+      HAS_FIX: false
+    });
+  }
+
+  void test_fromEngine_lint() {
+    engineError = new MockAnalysisError(
+        source,
+        new LintCode('my_lint', 'my message', correction: 'correction'),
+        10,
+        20,
+        'my message');
+    AnalysisError error = newAnalysisError_fromEngine(result, engineError);
+    expect(error.toJson(), {
+      SEVERITY: 'INFO',
+      TYPE: 'LINT',
+      LOCATION: {
+        FILE: 'foo.dart',
+        OFFSET: 10,
+        LENGTH: 20,
+        START_LINE: 3,
+        START_COLUMN: 2
+      },
+      MESSAGE: 'my message',
+      CODE: 'my_lint',
+      URL: 'https://dart-lang.github.io/linter/lints/my_lint.html',
+      HAS_FIX: false
+    });
+  }
+
   void test_fromEngine_noCorrection() {
     engineError.correction = null;
-    AnalysisError error = newAnalysisError_fromEngine(lineInfo, engineError);
+    AnalysisError error = newAnalysisError_fromEngine(result, engineError);
     expect(error.toJson(), {
       SEVERITY: 'ERROR',
       TYPE: 'COMPILE_TIME_ERROR',
@@ -88,7 +184,10 @@ class AnalysisErrorTest {
 
   void test_fromEngine_noLineInfo() {
     engineError.correction = null;
-    AnalysisError error = newAnalysisError_fromEngine(null, engineError);
+    AnalysisError error = newAnalysisError_fromEngine(
+        new engine.ResolvedUnitResultImpl(null, 'foo.dart', null, true, null,
+            null, false, null, [engineError]),
+        engineError);
     expect(error.toJson(), {
       SEVERITY: 'ERROR',
       TYPE: 'COMPILE_TIME_ERROR',
@@ -128,9 +227,10 @@ class EnumTest {
       engine.ElementKind.DYNAMIC: ElementKind.UNKNOWN,
       engine.ElementKind.ERROR: ElementKind.UNKNOWN,
       engine.ElementKind.EXPORT: ElementKind.UNKNOWN,
-      engine.ElementKind.GENERIC_FUNCTION_TYPE: ElementKind.UNKNOWN,
+      engine.ElementKind.GENERIC_FUNCTION_TYPE: ElementKind.FUNCTION_TYPE_ALIAS,
       engine.ElementKind.IMPORT: ElementKind.UNKNOWN,
       engine.ElementKind.NAME: ElementKind.UNKNOWN,
+      engine.ElementKind.NEVER: ElementKind.UNKNOWN,
       engine.ElementKind.UNIVERSE: ElementKind.UNKNOWN
     });
   }
@@ -157,7 +257,7 @@ class EnumTester<EngineEnum, ApiEnum> {
    * the given key results in the given value.
    */
   void run(ApiEnum convert(EngineEnum value),
-      {Map<EngineEnum, ApiEnum> exceptions: const {}}) {
+      {Map<EngineEnum, ApiEnum> exceptions = const {}}) {
     ClassMirror engineClass = reflectClass(EngineEnum);
     engineClass.staticMembers.forEach((Symbol symbol, MethodMirror method) {
       if (symbol == #values) {
@@ -169,7 +269,7 @@ class EnumTester<EngineEnum, ApiEnum> {
       String enumName = MirrorSystem.getName(symbol);
       EngineEnum engineValue =
           engineClass.getField(symbol).reflectee as EngineEnum;
-      expect(engineValue, new isInstanceOf<EngineEnum>());
+      expect(engineValue, new TypeMatcher<EngineEnum>());
       if (exceptions.containsKey(engineValue)) {
         ApiEnum expectedResult = exceptions[engineValue];
         if (expectedResult == null) {
@@ -205,11 +305,74 @@ class MockAnalysisError implements engine.AnalysisError {
   String correction = null;
 
   @override
-  bool isStaticOnly;
+  int length;
 
   @override
-  int length;
+  List<DiagnosticMessage> contextMessages = <DiagnosticMessage>[];
 
   MockAnalysisError(
       this.source, this.errorCode, this.offset, this.length, this.message);
+
+  @override
+  String get correctionMessage => null;
+
+  @override
+  DiagnosticMessage get problemMessage => null;
+
+  @override
+  Severity get severity => null;
+}
+
+class MockAnalysisSession implements AnalysisSession {
+  Map<String, FileResult> fileResults = {};
+
+  void addFileResult(FileResult result) {
+    fileResults[result.path] = result;
+  }
+
+  @override
+  FileResult getFile(String path) => fileResults[path];
+
+  noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class MockErrorCode implements engine.ErrorCode {
+  @override
+  engine.ErrorType type;
+
+  @override
+  engine.ErrorSeverity errorSeverity;
+
+  @override
+  String name;
+
+  @override
+  String url;
+
+  MockErrorCode(
+      {this.type = engine.ErrorType.COMPILE_TIME_ERROR,
+      this.errorSeverity = engine.ErrorSeverity.ERROR,
+      this.name = 'TEST_ERROR',
+      this.url});
+
+  @override
+  String get correction {
+    throw new StateError('Unexpected invocation of correction');
+  }
+
+  @override
+  bool get hasPublishedDocs => false;
+
+  @override
+  bool get isUnresolvedIdentifier => false;
+
+  @override
+  String get message {
+    throw new StateError('Unexpected invocation of message');
+  }
+
+  @override
+  String get uniqueName {
+    throw new StateError('Unexpected invocation of uniqueName');
+  }
 }

@@ -13,13 +13,13 @@
 #include "vm/flags.h"
 #include "vm/growable_array.h"
 #include "vm/handles.h"
+#include "vm/heap/weak_table.h"
 #include "vm/object.h"
 #include "vm/os.h"
 #include "vm/os_thread.h"
 #include "vm/raw_object.h"
 #include "vm/thread_pool.h"
 #include "vm/visitor.h"
-#include "vm/weak_table.h"
 
 #include "vm/handles_impl.h"
 
@@ -363,8 +363,10 @@ class LocalHandles : Handles<kLocalHandleSizeInWords,
 
   // Visit all object pointers stored in the various handles.
   void VisitObjectPointers(ObjectPointerVisitor* visitor) {
+    visitor->set_gc_root_type("local handle");
     Handles<kLocalHandleSizeInWords, kLocalHandlesPerChunk,
             kOffsetOfRawPtrInLocalHandle>::VisitObjectPointers(visitor);
+    visitor->clear_gc_root_type();
   }
 
   // Reset the local handles block for reuse.
@@ -427,8 +429,10 @@ class PersistentHandles : Handles<kPersistentHandleSizeInWords,
 
   // Visit all object pointers stored in the various handles.
   void VisitObjectPointers(ObjectPointerVisitor* visitor) {
+    visitor->set_gc_root_type("persistent handle");
     Handles<kPersistentHandleSizeInWords, kPersistentHandlesPerChunk,
             kOffsetOfRawPtrInPersistentHandle>::VisitObjectPointers(visitor);
+    visitor->clear_gc_root_type();
   }
 
   // Visit all the handles.
@@ -510,10 +514,12 @@ class FinalizablePersistentHandles
 
   // Visit all object pointers stored in the various handles.
   void VisitObjectPointers(ObjectPointerVisitor* visitor) {
+    visitor->set_gc_root_type("weak persistent handle");
     Handles<kFinalizablePersistentHandleSizeInWords,
             kFinalizablePersistentHandlesPerChunk,
             kOffsetOfRawPtrInFinalizablePersistentHandle>::
         VisitObjectPointers(visitor);
+    visitor->clear_gc_root_type();
   }
 
   // Allocates a persistent handle, these have to be destroyed explicitly
@@ -709,6 +715,9 @@ class ApiState {
 
   void VisitObjectPointers(ObjectPointerVisitor* visitor) {
     persistent_handles().VisitObjectPointers(visitor);
+    if (visitor->visit_weak_persistent_handles()) {
+      weak_persistent_handles().VisitObjectPointers(visitor);
+    }
   }
 
   void VisitWeakHandles(HandleVisitor* visitor) {

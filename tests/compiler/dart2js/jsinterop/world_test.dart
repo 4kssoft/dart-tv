@@ -10,22 +10,19 @@ import 'package:compiler/src/common_elements.dart';
 import 'package:compiler/src/compiler.dart';
 import 'package:compiler/src/elements/entities.dart' show ClassEntity;
 import 'package:compiler/src/elements/names.dart';
+import 'package:compiler/src/universe/class_hierarchy.dart';
 import 'package:compiler/src/universe/selector.dart';
 import 'package:compiler/src/world.dart';
 import '../helpers/element_lookup.dart';
-import '../memory_compiler.dart';
+import '../helpers/memory_compiler.dart';
 
 void main() {
   asyncTest(() async {
-    print('--test from kernel------------------------------------------------');
-    await testClasses([]);
-    print('--test from kernel (strong mode)----------------------------------');
-    // TODO(johnniwinther): Update the test to be strong mode compliant.
-    //await testClasses([Flags.strongMode]);
+    await testClasses();
   });
 }
 
-testClasses(List<String> options) async {
+testClasses() async {
   test(String mainSource,
       {List<String> directlyInstantiated: const <String>[],
       List<String> abstractlyInstantiated: const <String>[],
@@ -36,14 +33,14 @@ import 'package:js/js.dart';
 
 @JS()
 class A {
-  get foo;
+  external get foo;
 
   external A(var foo);
 }
 
 @JS('BClass')
 class B {
-  get foo;
+  external get foo;
 
   external B(var foo);
 }
@@ -51,7 +48,7 @@ class B {
 @JS()
 @anonymous
 class C {
-  final foo;
+  external get foo;
 
   external factory C({foo});
 }
@@ -59,7 +56,7 @@ class C {
 @JS()
 @anonymous
 class D {
-  final foo;
+  external get foo;
 
   external factory D({foo});
 }
@@ -85,7 +82,7 @@ newF() => new F(5);
 
 $mainSource
 """
-    }, options: options);
+    });
     Compiler compiler = result.compiler;
     Map<String, ClassEntity> classEnvironment = <String, ClassEntity>{};
 
@@ -148,16 +145,16 @@ $mainSource
       if (directlyInstantiated.contains(name)) {
         isInstantiated = true;
         Expect.isTrue(
-            world.isDirectlyInstantiated(cls),
+            world.classHierarchy.isDirectlyInstantiated(cls),
             "Expected $name to be directly instantiated in `${mainSource}`:"
-            "\n${world.dump(cls)}");
+            "\n${world.classHierarchy.dump(cls)}");
       }
       if (abstractlyInstantiated.contains(name)) {
         isInstantiated = true;
         Expect.isTrue(
-            world.isAbstractlyInstantiated(cls),
+            world.classHierarchy.isAbstractlyInstantiated(cls),
             "Expected $name to be abstractly instantiated in `${mainSource}`:"
-            "\n${world.dump(cls)}");
+            "\n${world.classHierarchy.dump(cls)}");
         Expect.isTrue(
             world.needsNoSuchMethod(cls, nonExisting, ClassQuery.EXACT),
             "Expected $name to need noSuchMethod for $nonExisting.");
@@ -171,15 +168,15 @@ $mainSource
       if (indirectlyInstantiated.contains(name)) {
         isInstantiated = true;
         Expect.isTrue(
-            world.isIndirectlyInstantiated(cls),
+            world.classHierarchy.isIndirectlyInstantiated(cls),
             "Expected $name to be indirectly instantiated in `${mainSource}`:"
-            "\n${world.dump(cls)}");
+            "\n${world.classHierarchy.dump(cls)}");
       }
       if (!isInstantiated && (name != 'Object' && name != 'Interceptor')) {
         Expect.isFalse(
-            world.isInstantiated(cls),
+            world.classHierarchy.isInstantiated(cls),
             "Expected $name to be uninstantiated in `${mainSource}`:"
-            "\n${world.dump(cls)}");
+            "\n${world.classHierarchy.dump(cls)}");
       }
     }
   }

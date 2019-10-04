@@ -29,7 +29,9 @@ ObjectStore::~ObjectStore() {}
 
 void ObjectStore::VisitObjectPointers(ObjectPointerVisitor* visitor) {
   ASSERT(visitor != NULL);
+  visitor->set_gc_root_type("object store");
   visitor->VisitPointers(from(), to());
+  visitor->clear_gc_root_type();
 }
 
 void ObjectStore::Init(Isolate* isolate) {
@@ -77,8 +79,6 @@ RawError* ObjectStore::PreallocateObjects() {
   ASSERT(this->stack_overflow() == Instance::null());
   ASSERT(this->out_of_memory() == Instance::null());
   ASSERT(this->preallocated_stack_trace() == StackTrace::null());
-
-  this->pending_deferred_loads_ = GrowableObjectArray::New();
 
   this->closure_functions_ = GrowableObjectArray::New();
   this->resume_capabilities_ = GrowableObjectArray::New();
@@ -131,59 +131,57 @@ RawFunction* ObjectStore::PrivateObjectLookup(const String& name) {
 }
 
 void ObjectStore::InitKnownObjects() {
-#ifdef DART_PRECOMPILED_RUNTIME
-  // These objects are only needed for code generation.
-  return;
-#else
   Thread* thread = Thread::Current();
   Zone* zone = thread->zone();
+  Class& cls = Class::Handle(zone);
+  const Library& collection_lib = Library::Handle(zone, collection_library());
+  cls = collection_lib.LookupClassAllowPrivate(Symbols::_LinkedHashSet());
+  ASSERT(!cls.IsNull());
+  set_linked_hash_set_class(cls);
+
+#ifdef DART_PRECOMPILED_RUNTIME
+  // The rest of these objects are only needed for code generation.
+  return;
+#else
   Isolate* isolate = thread->isolate();
   ASSERT(isolate != NULL && isolate->object_store() == this);
 
-  const Library& async_lib = Library::Handle(async_library());
+  const Library& async_lib = Library::Handle(zone, async_library());
   ASSERT(!async_lib.IsNull());
-  Class& cls = Class::Handle(zone);
   cls = async_lib.LookupClass(Symbols::Future());
   ASSERT(!cls.IsNull());
   set_future_class(cls);
   cls = async_lib.LookupClass(Symbols::Completer());
   ASSERT(!cls.IsNull());
   set_completer_class(cls);
-  cls = async_lib.LookupClass(Symbols::StreamIterator());
-  ASSERT(!cls.IsNull());
-  set_stream_iterator_class(cls);
 
   String& function_name = String::Handle(zone);
   Function& function = Function::Handle(zone);
-  function_name ^= async_lib.PrivateName(Symbols::SetAsyncThreadStackTrace());
+  function_name = async_lib.PrivateName(Symbols::SetAsyncThreadStackTrace());
   ASSERT(!function_name.IsNull());
-  function ^=
-      Resolver::ResolveStatic(async_lib, Object::null_string(), function_name,
-                              0, 1, Object::null_array());
+  function = Resolver::ResolveStatic(async_lib, Object::null_string(),
+                                     function_name, 0, 1, Object::null_array());
   ASSERT(!function.IsNull());
   set_async_set_thread_stack_trace(function);
 
-  function_name ^= async_lib.PrivateName(Symbols::ClearAsyncThreadStackTrace());
+  function_name = async_lib.PrivateName(Symbols::ClearAsyncThreadStackTrace());
   ASSERT(!function_name.IsNull());
-  function ^=
-      Resolver::ResolveStatic(async_lib, Object::null_string(), function_name,
-                              0, 0, Object::null_array());
+  function = Resolver::ResolveStatic(async_lib, Object::null_string(),
+                                     function_name, 0, 0, Object::null_array());
   ASSERT(!function.IsNull());
   set_async_clear_thread_stack_trace(function);
 
-  function_name ^= async_lib.PrivateName(Symbols::AsyncStarMoveNextHelper());
+  function_name = async_lib.PrivateName(Symbols::AsyncStarMoveNextHelper());
   ASSERT(!function_name.IsNull());
-  function ^=
-      Resolver::ResolveStatic(async_lib, Object::null_string(), function_name,
-                              0, 1, Object::null_array());
+  function = Resolver::ResolveStatic(async_lib, Object::null_string(),
+                                     function_name, 0, 1, Object::null_array());
   ASSERT(!function.IsNull());
   set_async_star_move_next_helper(function);
 
-  function_name ^= async_lib.PrivateName(Symbols::_CompleteOnAsyncReturn());
+  function_name = async_lib.PrivateName(Symbols::_CompleteOnAsyncReturn());
   ASSERT(!function_name.IsNull());
-  function ^=
-      Resolver::ResolveStatic(async_lib, Object::null_string(), function_name,
-                              0, 2, Object::null_array());
+  function = Resolver::ResolveStatic(async_lib, Object::null_string(),
+                                     function_name, 0, 2, Object::null_array());
   ASSERT(!function.IsNull());
   set_complete_on_async_return(function);
   if (FLAG_async_debugger) {
@@ -200,7 +198,7 @@ void ObjectStore::InitKnownObjects() {
   if (FLAG_async_debugger) {
     // Disable debugging and inlining of all functions on the
     // _AsyncStarStreamController class.
-    const Array& functions = Array::Handle(cls.functions());
+    const Array& functions = Array::Handle(zone, cls.functions());
     for (intptr_t i = 0; i < functions.Length(); i++) {
       function ^= functions.At(i);
       if (function.IsNull()) {
@@ -211,11 +209,11 @@ void ObjectStore::InitKnownObjects() {
     }
   }
 
-  const Library& internal_lib = Library::Handle(_internal_library());
+  const Library& internal_lib = Library::Handle(zone, _internal_library());
   cls = internal_lib.LookupClass(Symbols::Symbol());
   set_symbol_class(cls);
 
-  const Library& core_lib = Library::Handle(core_library());
+  const Library& core_lib = Library::Handle(zone, core_library());
   cls = core_lib.LookupClassAllowPrivate(Symbols::_CompileTimeError());
   ASSERT(!cls.IsNull());
   set_compiletime_error_class(cls);
@@ -223,6 +221,14 @@ void ObjectStore::InitKnownObjects() {
   cls = core_lib.LookupClassAllowPrivate(Symbols::Pragma());
   ASSERT(!cls.IsNull());
   set_pragma_class(cls);
+  set_pragma_name(Field::Handle(zone, cls.LookupField(Symbols::name())));
+  set_pragma_options(Field::Handle(zone, cls.LookupField(Symbols::options())));
+
+  cls = core_lib.LookupClassAllowPrivate(Symbols::_GrowableList());
+  ASSERT(!cls.IsNull());
+  growable_list_factory_ =
+      cls.LookupFactoryAllowPrivate(Symbols::_GrowableListFactory());
+  ASSERT(growable_list_factory_ != Function::null());
 
   // Cache the core private functions used for fast instance of checks.
   simple_instance_of_function_ =
@@ -231,6 +237,34 @@ void ObjectStore::InitKnownObjects() {
       PrivateObjectLookup(Symbols::_simpleInstanceOfTrue());
   simple_instance_of_false_function_ =
       PrivateObjectLookup(Symbols::_simpleInstanceOfFalse());
+
+  // Ensure AddSmiSmiCheckForFastSmiStubs run by the background compiler
+  // will not create new functions.
+  const Class& smi_class = Class::Handle(zone, this->smi_class());
+  function_name =
+      Function::CreateDynamicInvocationForwarderName(Symbols::Plus());
+  Resolver::ResolveDynamicAnyArgs(zone, smi_class, function_name);
+  function_name =
+      Function::CreateDynamicInvocationForwarderName(Symbols::Minus());
+  Resolver::ResolveDynamicAnyArgs(zone, smi_class, function_name);
+  function_name =
+      Function::CreateDynamicInvocationForwarderName(Symbols::Equals());
+  Resolver::ResolveDynamicAnyArgs(zone, smi_class, function_name);
+  function_name =
+      Function::CreateDynamicInvocationForwarderName(Symbols::LAngleBracket());
+  Resolver::ResolveDynamicAnyArgs(zone, smi_class, function_name);
+  function_name =
+      Function::CreateDynamicInvocationForwarderName(Symbols::RAngleBracket());
+  Resolver::ResolveDynamicAnyArgs(zone, smi_class, function_name);
+  function_name =
+      Function::CreateDynamicInvocationForwarderName(Symbols::BitAnd());
+  Resolver::ResolveDynamicAnyArgs(zone, smi_class, function_name);
+  function_name =
+      Function::CreateDynamicInvocationForwarderName(Symbols::BitOr());
+  Resolver::ResolveDynamicAnyArgs(zone, smi_class, function_name);
+  function_name =
+      Function::CreateDynamicInvocationForwarderName(Symbols::Star());
+  Resolver::ResolveDynamicAnyArgs(zone, smi_class, function_name);
 #endif
 }
 

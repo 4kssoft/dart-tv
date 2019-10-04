@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -14,7 +14,6 @@ import '../support/integration_tests.dart';
 main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(AnalysisGetHoverIntegrationTest);
-    defineReflectiveTests(AnalysisGetHoverIntegrationTest_UseCFE);
   });
 }
 
@@ -62,29 +61,33 @@ main() {
    * match the hover parameters.  [propagatedType], if specified, is the
    * expected propagated type of the element.
    */
-  checkHover(String target, int length, List<String> descriptionRegexps,
-      String kind, List<String> staticTypeRegexps,
-      {bool isLocal: false,
-      bool isCore: false,
-      String docRegexp: null,
-      bool isLiteral: false,
-      List<String> parameterRegexps: null,
-      propagatedType: null}) {
+  Future<AnalysisGetHoverResult> checkHover(
+    String target,
+    int length,
+    List<String> descriptionRegexps,
+    String kind,
+    List<String> staticTypeRegexps, {
+    bool isLocal = false,
+    bool isCore = false,
+    String docRegexp = null,
+    bool isLiteral = false,
+    List<String> parameterRegexps = null,
+  }) {
     int offset = text.indexOf(target);
-    return sendAnalysisGetHover(pathname, offset).then((result) {
+    return sendAnalysisGetHover(pathname, offset).then((result) async {
       expect(result.hovers, hasLength(1));
       HoverInformation info = result.hovers[0];
       expect(info.offset, equals(offset));
       expect(info.length, equals(length));
       if (isCore) {
         expect(path.basename(info.containingLibraryPath), equals('core.dart'));
-        expect(info.containingLibraryName, equals('dart.core'));
+        expect(info.containingLibraryName, equals('dart:core'));
       } else if (isLocal || isLiteral) {
         expect(info.containingLibraryPath, isNull);
         expect(info.containingLibraryName, isNull);
       } else {
         expect(info.containingLibraryPath, equals(pathname));
-        expect(info.containingLibraryName, equals('lib.test'));
+        expect(info.containingLibraryName, isNotNull);
       }
       if (docRegexp == null) {
         expect(info.dartdoc, isNull);
@@ -116,6 +119,7 @@ main() {
           expect(info.staticType, matches(staticTypeRegexp));
         }
       }
+      return null;
     });
   }
 
@@ -158,7 +162,7 @@ main() {
           isCore: true, docRegexp: '.*'));
       tests.add(checkHover(
           'localVar =', 8, ['num', 'localVar'], 'local variable', ['num'],
-          isLocal: true, propagatedType: 'int'));
+          isLocal: true));
       tests.add(checkHover('topLevelVar.length;', 11, ['List', 'topLevelVar'],
           'top level variable', ['List']));
       tests.add(checkHover(
@@ -176,7 +180,7 @@ main() {
           isCore: true, docRegexp: '.*'));
       tests.add(checkHover(
           'localVar)', 8, ['num', 'localVar'], 'local variable', ['num'],
-          isLocal: true, parameterRegexps: ['.*'], propagatedType: 'int'));
+          isLocal: true, parameterRegexps: ['.*']));
       tests.add(checkHover(
           'func(35', 4, ['func', 'int', 'param'], 'function', ['int', 'void'],
           docRegexp: 'Documentation for func'));
@@ -185,19 +189,5 @@ main() {
       tests.add(checkNoHover('comment'));
       return Future.wait(tests);
     });
-  }
-}
-
-@reflectiveTest
-class AnalysisGetHoverIntegrationTest_UseCFE
-    extends AnalysisGetHoverIntegrationTest {
-  @override
-  bool get useCFE => true;
-
-  @override
-  @failingTest
-  test_getHover() {
-    // TODO(devoncarew): NoSuchMethodError: The getter 'canonicalName' was called on null.
-    return super.test_getHover();
   }
 }

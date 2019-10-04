@@ -53,8 +53,9 @@ const int PI2 = 1;
 const int PI3 = 0x1234;
 const int PI4 = 0x12345678;
 const int PI5 = 0x123456789AB;
-const int PI6 = 0x123456789ABCDEF;
-const int PI7 = 0x123456789ABCDEF0123456789ABCDEF0123456789ABCDEF;
+const int PI6 = 0x123456789ABCD00 + 0xEF;
+const int PI7 = 0x123456789ABCD * 0x1234567 * 0x1234567 * 0x1234567;
+//const int PI7 = 0x123456789ABCDEF0123456789ABCDEF0123456789ABCDEF;
 
 const int NI1 = 0 - PI1;
 const int NI2 = -PI2;
@@ -65,7 +66,8 @@ const int NI6 = -PI6;
 const int NI7 = -PI7;
 
 /// Ensures that the behaviour of `action()` is the same as `value.round()`.
-@NoInline() // To ensure 'value.round()' has a non-constant receiver.
+@pragma(
+    'dart2js:noInline') // To ensure 'value.round()' has a non-constant receiver.
 check(value, action) {
   var result1, result2;
   try {
@@ -90,7 +92,7 @@ check(value, action) {
   }
 }
 
-@NoInline()
+@pragma('dart2js:noInline')
 void unusedCall(num x) {
   x.round(); // This call should not be removed since it might throw.
 }

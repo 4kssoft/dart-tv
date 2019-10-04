@@ -2,13 +2,17 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'package:analyzer/analyzer.dart' as analyzer;
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/standard_ast_factory.dart';
+import 'package:analyzer/dart/ast/visitor.dart' show GeneralizingAstVisitor;
 import 'package:analyzer/dart/element/type.dart' show DartType;
-import 'package:analyzer/src/dart/ast/ast.dart' show FunctionBodyImpl;
-import 'package:analyzer/src/dart/ast/utilities.dart' show NodeReplacer;
-import 'package:analyzer/src/dart/element/type.dart' show DynamicTypeImpl;
+import 'package:analyzer/src/dart/ast/ast.dart'
+    show
+        FunctionBodyImpl,
+        FunctionExpressionInvocationImpl,
+        MethodInvocationImpl;
+import 'package:analyzer/src/dart/ast/utilities.dart'
+    show AstCloner, NodeReplacer;
 import 'package:analyzer/src/generated/parser.dart' show ResolutionCopier;
 import 'package:analyzer/src/task/strong/ast_properties.dart' as ast_properties;
 
@@ -17,15 +21,15 @@ import 'element_helpers.dart' show isInlineJS;
 
 // This class implements a pass which modifies (in place) the ast replacing
 // abstract coercion nodes with their dart implementations.
-class CoercionReifier extends analyzer.GeneralizingAstVisitor<Object> {
-  final cloner = new _TreeCloner();
+class CoercionReifier extends GeneralizingAstVisitor<void> {
+  final cloner = _TreeCloner();
 
   CoercionReifier._();
 
   /// Transforms the given compilation units, and returns a new AST with
   /// explicit coercion nodes in appropriate places.
   static List<CompilationUnit> reify(List<CompilationUnit> units) {
-    var cr = new CoercionReifier._();
+    var cr = CoercionReifier._();
     return units.map(cr.visitCompilationUnit).toList(growable: false);
   }
 
@@ -66,6 +70,13 @@ class CoercionReifier extends analyzer.GeneralizingAstVisitor<Object> {
   }
 
   @override
+  visitSpreadElement(SpreadElement node) {
+    // Skip visiting the expression so we can handle all casts during code
+    // generation.
+    node.expression.visitChildren(this);
+  }
+
+  @override
   visitMethodInvocation(MethodInvocation node) {
     if (isInlineJS(node.methodName.staticElement)) {
       // Don't cast our inline-JS code in SDK.
@@ -81,35 +92,32 @@ class CoercionReifier extends analyzer.GeneralizingAstVisitor<Object> {
   }
 
   @override
-  visitForEachStatement(ForEachStatement node) {
-    // Visit other children.
-    node.iterable.accept(this);
-    node.body.accept(this);
+  void visitForStatement(ForStatement node) {
+    var forLoopParts = node.forLoopParts;
+    if (forLoopParts is ForEachParts) {
+      // Visit other children.
+      forLoopParts.iterable.accept(this);
+      node.body.accept(this);
+    } else {
+      super.visitForStatement(node);
+    }
+  }
 
-    // If needed, assert a cast inside the body before the variable is read.
-    var variable = node.identifier ?? node.loopVariable.identifier;
-    var castType = ast_properties.getImplicitCast(variable);
-    if (castType != null) {
-      // Build the cast. We will place this cast in the body, so need to clone
-      // the variable's AST node and clear out its static type (otherwise we
-      // will optimize away the cast).
-      var cast = castExpression(
-          _clone(variable)..staticType = DynamicTypeImpl.instance, castType);
-
-      var body = node.body;
-      var blockBody = <Statement>[ast.expressionStatement(cast)];
-      if (body is Block) {
-        blockBody.addAll(body.statements);
-      } else {
-        blockBody.add(body);
-      }
-      _replaceNode(node, body, ast.block(blockBody));
+  @override
+  void visitForElement(ForElement node) {
+    var forLoopParts = node.forLoopParts;
+    if (forLoopParts is ForEachParts) {
+      // Visit other children.
+      forLoopParts.iterable.accept(this);
+      node.body.accept(this);
+    } else {
+      super.visitForElement(node);
     }
   }
 
   void _replaceNode(AstNode parent, AstNode oldNode, AstNode newNode) {
     if (!identical(oldNode, newNode)) {
-      var replaced = parent.accept(new NodeReplacer(oldNode, newNode));
+      var replaced = parent.accept(NodeReplacer(oldNode, newNode));
       // It looks like NodeReplacer will always return true.
       // It does throw IllegalArgumentException though, if child is not found.
       assert(replaced);
@@ -123,13 +131,19 @@ class CoercionReifier extends analyzer.GeneralizingAstVisitor<Object> {
   }
 }
 
-class _TreeCloner extends analyzer.AstCloner {
+class _TreeCloner extends AstCloner {
   void _cloneProperties(AstNode clone, AstNode node) {
     if (clone is Expression && node is Expression) {
       ast_properties.setImplicitCast(
           clone, ast_properties.getImplicitCast(node));
       ast_properties.setImplicitOperationCast(
           clone, ast_properties.getImplicitOperationCast(node));
+      ast_properties.setImplicitSpreadCast(
+          clone, ast_properties.getImplicitSpreadCast(node));
+      ast_properties.setImplicitSpreadKeyCast(
+          clone, ast_properties.getImplicitSpreadKeyCast(node));
+      ast_properties.setImplicitSpreadValueCast(
+          clone, ast_properties.getImplicitSpreadValueCast(node));
       ast_properties.setIsDynamicInvoke(
           clone, ast_properties.isDynamicInvoke(node));
     }
@@ -172,6 +186,22 @@ class _TreeCloner extends analyzer.AstCloner {
     var clone = super.visitExpressionFunctionBody(node);
     (clone as FunctionBodyImpl).localVariableInfo =
         (node as FunctionBodyImpl).localVariableInfo;
+    return clone;
+  }
+
+  @override
+  FunctionExpressionInvocation visitFunctionExpressionInvocation(
+      FunctionExpressionInvocation node) {
+    var clone = super.visitFunctionExpressionInvocation(node);
+    (clone as FunctionExpressionInvocationImpl).typeArgumentTypes =
+        node.typeArgumentTypes;
+    return clone;
+  }
+
+  @override
+  MethodInvocation visitMethodInvocation(MethodInvocation node) {
+    var clone = super.visitMethodInvocation(node);
+    (clone as MethodInvocationImpl).typeArgumentTypes = node.typeArgumentTypes;
     return clone;
   }
 

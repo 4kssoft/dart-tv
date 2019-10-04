@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -24,13 +24,13 @@ class StaticMemberContributor extends DartCompletionContributor {
     await null;
     Expression targetId = request.dotTarget;
     if (targetId is Identifier && !request.target.isCascade) {
-      Element elem = targetId.bestElement;
-      if (elem is ClassElement) {
+      Element elem = targetId.staticElement;
+      if (elem is ClassElement || elem is ExtensionElement) {
         LibraryElement containingLibrary = request.libraryElement;
         // Gracefully degrade if the library could not be determined
         // e.g. detached part file or source change
         if (containingLibrary == null) {
-          return EMPTY_LIST;
+          return const <CompletionSuggestion>[];
         }
 
         _SuggestionBuilder builder = new _SuggestionBuilder(containingLibrary);
@@ -38,7 +38,7 @@ class StaticMemberContributor extends DartCompletionContributor {
         return builder.suggestions;
       }
     }
-    return EMPTY_LIST;
+    return const <CompletionSuggestion>[];
   }
 }
 
@@ -66,14 +66,17 @@ class _SuggestionBuilder extends GeneralizingElementVisitor {
 
   @override
   visitConstructorElement(ConstructorElement element) {
-    if (element.context.analysisOptions.previewDart2) {
-      _addSuggestion(element);
-    }
+    _addSuggestion(element);
   }
 
   @override
   visitElement(Element element) {
     // ignored
+  }
+
+  @override
+  visitExtensionElement(ExtensionElement element) {
+    element.visitChildren(this);
   }
 
   @override
@@ -114,7 +117,7 @@ class _SuggestionBuilder extends GeneralizingElementVisitor {
       }
     }
     String completion = element.displayName;
-    if (completion == null || completion.length <= 0) {
+    if (completion == null || completion.isEmpty) {
       return;
     }
     CompletionSuggestion suggestion =

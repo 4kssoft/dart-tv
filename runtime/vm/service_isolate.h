@@ -12,6 +12,7 @@
 
 namespace dart {
 
+class Isolate;
 class ObjectPointerVisitor;
 class SendPort;
 
@@ -28,6 +29,17 @@ class ServiceIsolate : public AllStatic {
 
   static Dart_Port WaitForLoadPort();
   static Dart_Port LoadPort();
+
+  // Returns `true` if the request was sucessfully sent.  If it was, the
+  // [reply_port] will receive a Dart_TypedData_kUint8 response json.
+  //
+  // If sending the rpc failed and [error] is not `nullptr` then [error] might
+  // be set to a string containting the reason for the failure. If so, the
+  // caller is responsible for free()ing the error.
+  static bool SendServiceRpc(uint8_t* request_json,
+                             intptr_t request_json_length,
+                             Dart_Port reply_port,
+                             char** error);
 
   static void Run();
   static bool SendIsolateStartupMessage();
@@ -50,28 +62,42 @@ class ServiceIsolate : public AllStatic {
  private:
   static void KillServiceIsolate();
 
+  // Does not need a current thread.
+  static Dart_Port WaitForLoadPortInternal();
+
  protected:
   static void SetServicePort(Dart_Port port);
   static void SetServiceIsolate(Isolate* isolate);
   static void SetLoadPort(Dart_Port port);
   static void FinishedExiting();
   static void FinishedInitializing();
+  static void InitializingFailed(char* error);
   static void MaybeMakeServiceIsolate(Isolate* isolate);
-  static Dart_IsolateCreateCallback create_callback() {
-    return create_callback_;
+  static Dart_IsolateGroupCreateCallback create_group_callback() {
+    return create_group_callback_;
   }
 
-  static Dart_IsolateCreateCallback create_callback_;
+  static Dart_IsolateGroupCreateCallback create_group_callback_;
   static Monitor* monitor_;
-  static bool initializing_;
-  static bool shutting_down_;
+  enum State {
+    kStopped,
+    kStarting,
+    kStarted,
+    kStopping,
+  };
+  static State state_;
   static Isolate* isolate_;
   static Dart_Port port_;
   static Dart_Port load_port_;
   static Dart_Port origin_;
   static char* server_address_;
 
+  // If starting the service-isolate failed, this error might provide the reason
+  // for the failure.
+  static char* startup_failure_reason_;
+
   friend class Dart;
+  friend class Isolate;
   friend class RunServiceTask;
   friend class ServiceIsolateNatives;
 };

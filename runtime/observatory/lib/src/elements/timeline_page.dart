@@ -18,7 +18,7 @@ import 'package:observatory/src/elements/nav/refresh.dart';
 import 'package:observatory/src/elements/nav/top_menu.dart';
 import 'package:observatory/src/elements/nav/vm_menu.dart';
 
-class TimelinePageElement extends HtmlElement implements Renderable {
+class TimelinePageElement extends CustomElement implements Renderable {
   static const tag =
       const Tag<TimelinePageElement>('timeline-page', dependencies: const [
     NavTopMenuElement.tag,
@@ -50,8 +50,8 @@ class TimelinePageElement extends HtmlElement implements Renderable {
     assert(repository != null);
     assert(events != null);
     assert(notifications != null);
-    TimelinePageElement e = document.createElement(tag.name);
-    e._r = new RenderingScheduler(e, queue: queue);
+    TimelinePageElement e = new TimelinePageElement.created();
+    e._r = new RenderingScheduler<TimelinePageElement>(e, queue: queue);
     e._vm = vm;
     e._repository = repository;
     e._events = events;
@@ -59,7 +59,7 @@ class TimelinePageElement extends HtmlElement implements Renderable {
     return e;
   }
 
-  TimelinePageElement.created() : super.created();
+  TimelinePageElement.created() : super.created(tag);
 
   @override
   attached() {
@@ -72,7 +72,7 @@ class TimelinePageElement extends HtmlElement implements Renderable {
   detached() {
     super.detached();
     _r.disable(notify: true);
-    children = [];
+    children = <Element>[];
   }
 
   IFrameElement _frame;
@@ -88,16 +88,16 @@ class TimelinePageElement extends HtmlElement implements Renderable {
     if (_content == null) {
       _content = new DivElement()..classes = ['content-centered-big'];
     }
-    _content.children = [
+    _content.children = <Element>[
       new HeadingElement.h1()..text = 'Timeline settings',
       _recorder == null
           ? (new DivElement()..text = 'Loading...')
           : (new DivElement()
             ..classes = ['memberList']
-            ..children = [
+            ..children = <Element>[
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
                     ..text = 'Recorder:',
@@ -107,7 +107,7 @@ class TimelinePageElement extends HtmlElement implements Renderable {
                 ],
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
                     ..text = 'Recorded Streams Profile:',
@@ -117,48 +117,53 @@ class TimelinePageElement extends HtmlElement implements Renderable {
                 ],
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
                     ..text = 'Recorded Streams:',
                   new DivElement()
                     ..classes = ['memberValue']
-                    ..children =
-                        _availableStreams.map(_makeStreamToggle).toList()
+                    ..children = _availableStreams
+                        .map<Element>(_makeStreamToggle)
+                        .toList()
                 ]
             ])
     ];
 
-    children = [
-      navBar([
-        new NavTopMenuElement(queue: _r.queue),
-        new NavVMMenuElement(vm, _events, queue: _r.queue),
+    children = <Element>[
+      navBar(<Element>[
+        new NavTopMenuElement(queue: _r.queue).element,
+        new NavVMMenuElement(vm, _events, queue: _r.queue).element,
         navMenu('timeline', link: Uris.timeline()),
-        new NavRefreshElement(queue: _r.queue)
-          ..onRefresh.listen((e) async {
-            e.element.disabled = true;
-            await _refresh();
-            e.element.disabled = !usingVMRecorder;
-          }),
-        new NavRefreshElement(label: 'clear', queue: _r.queue)
-          ..onRefresh.listen((e) async {
-            e.element.disabled = true;
-            await _clear();
-            e.element.disabled = !usingVMRecorder;
-          }),
-        new NavRefreshElement(label: 'save', queue: _r.queue)
-          ..onRefresh.listen((e) async {
-            e.element.disabled = true;
-            await _save();
-            e.element.disabled = !usingVMRecorder;
-          }),
-        new NavRefreshElement(label: 'load', queue: _r.queue)
-          ..onRefresh.listen((e) async {
-            e.element.disabled = true;
-            await _load();
-            e.element.disabled = !usingVMRecorder;
-          }),
-        new NavNotifyElement(_notifications, queue: _r.queue)
+        (new NavRefreshElement(queue: _r.queue)
+              ..onRefresh.listen((e) async {
+                e.element.disabled = true;
+                await _refresh();
+                e.element.disabled = !usingVMRecorder;
+              }))
+            .element,
+        (new NavRefreshElement(label: 'clear', queue: _r.queue)
+              ..onRefresh.listen((e) async {
+                e.element.disabled = true;
+                await _clear();
+                e.element.disabled = !usingVMRecorder;
+              }))
+            .element,
+        (new NavRefreshElement(label: 'save', queue: _r.queue)
+              ..onRefresh.listen((e) async {
+                e.element.disabled = true;
+                await _save();
+                e.element.disabled = !usingVMRecorder;
+              }))
+            .element,
+        (new NavRefreshElement(label: 'load', queue: _r.queue)
+              ..onRefresh.listen((e) async {
+                e.element.disabled = true;
+                await _load();
+                e.element.disabled = !usingVMRecorder;
+              }))
+            .element,
+        new NavNotifyElement(_notifications, queue: _r.queue).element
       ]),
       _content,
       _createIFrameOrMessage(),
@@ -175,7 +180,7 @@ class TimelinePageElement extends HtmlElement implements Renderable {
     if (_recorder.name == "Fuchsia") {
       return new DivElement()
         ..classes = ['content-centered-big']
-        ..children = [
+        ..children = <Element>[
           new BRElement(),
           new SpanElement()
             ..text =
@@ -191,7 +196,7 @@ class TimelinePageElement extends HtmlElement implements Renderable {
     if (_recorder.name == "Systrace") {
       return new DivElement()
         ..classes = ['content-centered-big']
-        ..children = [
+        ..children = <Element>[
           new BRElement(),
           new SpanElement()
             ..text =
@@ -206,14 +211,14 @@ class TimelinePageElement extends HtmlElement implements Renderable {
 
     return new DivElement()
       ..classes = ['iframe']
-      ..children = [_frame];
+      ..children = <Element>[_frame];
   }
 
   List<Element> _createProfileSelect() {
     return [
       new SpanElement()
         ..children = (_profiles.expand((profile) {
-          return [
+          return <Element>[
             new ButtonElement()
               ..text = profile.name
               ..onClick.listen((_) {
@@ -227,8 +232,8 @@ class TimelinePageElement extends HtmlElement implements Renderable {
   }
 
   Future _refresh() async {
-    final params = new Map.from(await _repository.getIFrameParams(vm));
-    return _postMessage('refresh', params);
+    final traceData = await _repository.getTimeline(vm);
+    return _postMessage('refresh', traceData);
   }
 
   Future _clear() async {

@@ -7,25 +7,24 @@ built_in_identifier_prefix_test: Skip # A built-in identifier can _not_ be a pre
 closure_type_test: Pass # Marked as RuntimeError for all in language_2.status.
 conditional_import_string_test: Fail # Uses conditional import.
 conditional_import_test: Fail # Uses conditional import.
-config_import_corelib_test: Fail # Uses conditional import.
-config_import_test: Fail # Uses conditional import.
 const_native_factory_test: Skip # Uses `native`.
+deep_nesting_expression_test: Skip # JVM stack overflow.
+deep_nesting_statement_test: Skip # JVM stack overflow.
 double_invalid_test: Skip # Contains illegaly formatted double.
-external_test/21: Fail # Test expects `runtime error`, it is a syntax error.
+extension_methods: Skip # Not yet supported.
 getter_declaration_negative_test: Fail # Negative, uses getter with parameter.
 inst_field_initializer1_negative_test: Skip # Negative, not syntax.
 instance_call_wrong_argument_count_negative_test: Skip # Negative, not syntax.
 instance_method2_negative_test: Skip # Negative, not syntax.
 instance_method_negative_test: Skip # Negative, not syntax.
 interface2_negative_test: Skip # Negative, not syntax.
-interface_injection1_negative_test: Fail # Negative, uses interface injection.
-interface_injection2_negative_test: Fail # Negative, uses interface injection.
 interface_static_method_negative_test: Skip # Negative, not syntax.
 interface_static_non_final_fields_negative_test: Skip # Negative, not syntax.
 is_not_class1_negative_test: Fail # Negative, uses `a is "A"`.
 is_not_class4_negative_test: Fail # Negative, uses `a is A is A`.
 issue1578_negative_test: Fail # Negative, is line noise.
 issue_1751477_test: Skip # Times out: 9 levels, exponential blowup => 430 secs.
+large_class_declaration_test: Skip # JVM stack overflow.
 list_literal2_negative_test: Skip # Negative, not syntax.
 list_literal_negative_test: Fail # Negative, uses `new List<int>[1, 2]`.
 map_literal2_negative_test: Skip # Negative, not syntax.
@@ -33,6 +32,8 @@ map_literal_negative_test: Fail # Negative, uses `new Map<int>{..}`.
 new_expression1_negative_test: Fail # Negative, uses `new id`.
 new_expression2_negative_test: Fail # Negative, uses `new id(`.
 new_expression3_negative_test: Fail # Negative, uses `new id(...`.
+nnbd/syntax/opt_out_nnbd_modifiers_test: Skip # Requires opt-out of NNBD.
+nnbd/syntax/pre_nnbd_modifiers_test: Skip # Requires opt-out of NNBD.
 no_such_method_negative_test: Skip # Negative, not syntax.
 non_const_super_negative_test: Skip # Negative, not syntax.
 operator1_negative_test: Fail # Negative, declares static operator.
@@ -63,4 +64,3 @@ test_negative_test: Fail # Negative, uses non-terminated string literal.
 unary_plus_negative_test: Fail # Negative, uses non-existing unary plus.
 vm/debug_break_enabled_vm_test/01: Fail # Uses debug break.
 vm/debug_break_enabled_vm_test/none: Fail # Uses debug break.
-void_type_function_types_test: Skip # Not yet supported.

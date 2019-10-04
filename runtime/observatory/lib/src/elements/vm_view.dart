@@ -19,7 +19,7 @@ import 'package:observatory/src/elements/nav/vm_menu.dart';
 import 'package:observatory/src/elements/view_footer.dart';
 import 'package:observatory/utils.dart';
 
-class VMViewElement extends HtmlElement implements Renderable {
+class VMViewElement extends CustomElement implements Renderable {
   static const tag = const Tag<VMViewElement>('vm-view', dependencies: const [
     IsolateSummaryElement.tag,
     NavTopMenuElement.tag,
@@ -60,8 +60,8 @@ class VMViewElement extends HtmlElement implements Renderable {
     assert(notifications != null);
     assert(isolates != null);
     assert(scripts != null);
-    VMViewElement e = document.createElement(tag.name);
-    e._r = new RenderingScheduler(e, queue: queue);
+    VMViewElement e = new VMViewElement.created();
+    e._r = new RenderingScheduler<VMViewElement>(e, queue: queue);
     e._vm = vm;
     e._vms = vms;
     e._events = events;
@@ -71,7 +71,7 @@ class VMViewElement extends HtmlElement implements Renderable {
     return e;
   }
 
-  VMViewElement.created() : super.created();
+  VMViewElement.created() : super.created(tag);
 
   @override
   attached() {
@@ -89,7 +89,7 @@ class VMViewElement extends HtmlElement implements Renderable {
   detached() {
     super.detached();
     _r.disable(notify: true);
-    children = [];
+    children = <Element>[];
     _vmSubscription.cancel();
     _startSubscription.cancel();
     _exitSubscription.cancel();
@@ -98,17 +98,18 @@ class VMViewElement extends HtmlElement implements Renderable {
   void render() {
     final uptime = new DateTime.now().difference(_vm.startTime);
     final isolates = _vm.isolates.toList();
-    children = [
-      navBar([
-        new NavTopMenuElement(queue: _r.queue),
-        new NavVMMenuElement(_vm, _events, queue: _r.queue),
-        new NavRefreshElement(queue: _r.queue)
-          ..onRefresh.listen((e) async {
-            e.element.disabled = true;
-            _vm = await _vms.get(_vm);
-            _r.dirty();
-          }),
-        new NavNotifyElement(_notifications, queue: _r.queue)
+    children = <Element>[
+      navBar(<Element>[
+        new NavTopMenuElement(queue: _r.queue).element,
+        new NavVMMenuElement(_vm, _events, queue: _r.queue).element,
+        (new NavRefreshElement(queue: _r.queue)
+              ..onRefresh.listen((e) async {
+                e.element.disabled = true;
+                _vm = await _vms.get(_vm);
+                _r.dirty();
+              }))
+            .element,
+        new NavNotifyElement(_notifications, queue: _r.queue).element
       ]),
       new DivElement()
         ..classes = ['content-centered-big']
@@ -117,10 +118,10 @@ class VMViewElement extends HtmlElement implements Renderable {
           new HRElement(),
           new DivElement()
             ..classes = ['memberList']
-            ..children = [
+            ..children = <Element>[
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
                     ..text = 'name',
@@ -130,7 +131,7 @@ class VMViewElement extends HtmlElement implements Renderable {
                 ],
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
                     ..text = 'version',
@@ -140,7 +141,7 @@ class VMViewElement extends HtmlElement implements Renderable {
                 ],
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
                     ..text = 'embedder',
@@ -150,7 +151,7 @@ class VMViewElement extends HtmlElement implements Renderable {
                 ],
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
                     ..text = 'started at',
@@ -160,7 +161,7 @@ class VMViewElement extends HtmlElement implements Renderable {
                 ],
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
                     ..text = 'uptime',
@@ -170,7 +171,7 @@ class VMViewElement extends HtmlElement implements Renderable {
                 ],
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
                     ..text = 'refreshed at',
@@ -180,7 +181,7 @@ class VMViewElement extends HtmlElement implements Renderable {
                 ],
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
                     ..text = 'pid',
@@ -190,7 +191,7 @@ class VMViewElement extends HtmlElement implements Renderable {
                 ],
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
                     ..text = 'peak memory',
@@ -202,7 +203,7 @@ class VMViewElement extends HtmlElement implements Renderable {
                 ],
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
                     ..text = 'current memory',
@@ -214,7 +215,7 @@ class VMViewElement extends HtmlElement implements Renderable {
                 ],
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
                     ..text = 'native zone memory',
@@ -225,7 +226,7 @@ class VMViewElement extends HtmlElement implements Renderable {
                 ],
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
                     ..text = 'native heap memory',
@@ -240,7 +241,7 @@ class VMViewElement extends HtmlElement implements Renderable {
                 ],
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
                     ..text = 'native heap allocation count',
@@ -253,16 +254,16 @@ class VMViewElement extends HtmlElement implements Renderable {
               new BRElement(),
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
-                    ..children = [
+                    ..children = <Element>[
                       new SpanElement()..text = 'see ',
                       new AnchorElement(href: Uris.flags())..text = 'flags'
                     ],
                   new DivElement()
                     ..classes = ['memberValue']
-                    ..children = [
+                    ..children = <Element>[
                       new SpanElement()..text = 'view ',
                       new AnchorElement(href: Uris.timeline())
                         ..text = 'timeline'
@@ -270,10 +271,10 @@ class VMViewElement extends HtmlElement implements Renderable {
                 ],
               new DivElement()
                 ..classes = ['memberItem']
-                ..children = [
+                ..children = <Element>[
                   new DivElement()
                     ..classes = ['memberName']
-                    ..children = [
+                    ..children = <Element>[
                       new SpanElement()..text = 'view ',
                       new AnchorElement(href: Uris.nativeMemory())
                         ..text = 'native memory profile'
@@ -286,18 +287,19 @@ class VMViewElement extends HtmlElement implements Renderable {
           new UListElement()
             ..classes = ['list-group']
             ..children = isolates
-                .expand((i) => [
+                .expand((i) => <Element>[
                       new LIElement()
                         ..classes = ['list-group-item']
-                        ..children = [
+                        ..children = <Element>[
                           new IsolateSummaryElement(
-                              i, _isolates, _events, _scripts,
-                              queue: _r.queue)
+                                  i, _isolates, _events, _scripts,
+                                  queue: _r.queue)
+                              .element
                         ],
                       new HRElement()
                     ])
                 .toList(),
-          new ViewFooterElement(queue: _r.queue)
+          new ViewFooterElement(queue: _r.queue).element
         ]
     ];
   }

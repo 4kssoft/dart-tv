@@ -4,72 +4,26 @@
 
 library fasta.unresolved_type;
 
-import '../fasta_codes.dart' show templateTypeArgumentMismatch;
-
-import 'builder.dart'
-    show
-        ClassBuilder,
-        FunctionTypeAliasBuilder,
-        NamedTypeBuilder,
-        Scope,
-        TypeBuilder,
-        TypeDeclarationBuilder;
+import 'builder.dart' show LibraryBuilder, Scope, TypeBuilder;
 
 /// A wrapper around a type that is yet to be resolved.
-class UnresolvedType<T extends TypeBuilder> {
-  final T builder;
+class UnresolvedType {
+  final TypeBuilder builder;
   final int charOffset;
   final Uri fileUri;
 
   UnresolvedType(this.builder, this.charOffset, this.fileUri);
 
-  void resolveIn(Scope scope) => builder.resolveIn(scope, charOffset, fileUri);
+  void resolveIn(Scope scope, LibraryBuilder library) =>
+      builder.resolveIn(scope, charOffset, fileUri, library);
 
   /// Performs checks on the type after it's resolved.
-  void checkType() {
-    TypeBuilder resolvedType = builder;
-    if (resolvedType is NamedTypeBuilder) {
-      TypeDeclarationBuilder declaration = resolvedType.declaration;
-      if (declaration is ClassBuilder) {
-        if (resolvedType.arguments != null &&
-            resolvedType.arguments.length != declaration.typeVariablesCount) {
-          resolvedType.declaration = resolvedType.buildInvalidType(
-              charOffset,
-              fileUri,
-              templateTypeArgumentMismatch.withArguments(
-                  resolvedType.name, "${declaration.typeVariablesCount}"));
-        }
-      } else if (declaration is FunctionTypeAliasBuilder) {
-        if (resolvedType.arguments != null &&
-            resolvedType.arguments.length != declaration.typeVariablesCount) {
-          resolvedType.declaration = resolvedType.buildInvalidType(
-              charOffset,
-              fileUri,
-              templateTypeArgumentMismatch.withArguments(
-                  resolvedType.name, "${declaration.typeVariablesCount}"));
-        }
-      }
-    }
+  void checkType(LibraryBuilder library) {
+    return builder.check(library, charOffset, fileUri);
   }
 
   /// Normalizes the type arguments in accordance with Dart 1 semantics.
-  void normalizeType() {
-    TypeBuilder resolvedType = builder;
-    if (resolvedType is NamedTypeBuilder) {
-      TypeDeclarationBuilder declaration = resolvedType.declaration;
-      if (declaration is ClassBuilder) {
-        if (resolvedType.arguments != null &&
-            resolvedType.arguments.length != declaration.typeVariablesCount) {
-          // [resolveType.arguments] will be normalized later if they are null.
-          resolvedType.arguments = null;
-        }
-      } else if (declaration is FunctionTypeAliasBuilder) {
-        if (resolvedType.arguments != null &&
-            resolvedType.arguments.length != declaration.typeVariablesCount) {
-          // [resolveType.arguments] will be normalized later if they are null.
-          resolvedType.arguments = null;
-        }
-      }
-    }
-  }
+  void normalizeType() => builder.normalize(charOffset, fileUri);
+
+  String toString() => "UnresolvedType(@$charOffset, $builder)";
 }

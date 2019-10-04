@@ -7,11 +7,13 @@
 #include "platform/assert.h"
 #include "platform/globals.h"
 #include "vm/clustered_snapshot.h"
+#include "vm/compiler/aot/precompiler.h"
 #include "vm/compiler/assembler/assembler.h"
 #include "vm/compiler/assembler/disassembler.h"
 #include "vm/flags.h"
+#include "vm/heap/safepoint.h"
+#include "vm/interpreter.h"
 #include "vm/object_store.h"
-#include "vm/safepoint.h"
 #include "vm/snapshot.h"
 #include "vm/virtual_memory.h"
 #include "vm/visitor.h"
@@ -19,51 +21,57 @@
 namespace dart {
 
 DEFINE_FLAG(bool, disassemble_stubs, false, "Disassemble generated stubs.");
+DECLARE_FLAG(bool, precompiled_mode);
 
-StubEntry* StubCode::entries_[kNumStubEntries] = {
-#define STUB_CODE_DECLARE(name) NULL,
+DECLARE_FLAG(bool, enable_interpreter);
+
+Code* StubCode::entries_[kNumStubEntries] = {
+#define STUB_CODE_DECLARE(name) nullptr,
     VM_STUB_CODE_LIST(STUB_CODE_DECLARE)
 #undef STUB_CODE_DECLARE
 };
 
-StubEntry::StubEntry(const Code& code)
-    : code_(code.raw()),
-      entry_point_(code.UncheckedEntryPoint()),
-      checked_entry_point_(code.CheckedEntryPoint()),
-      size_(code.Size()),
-      label_(code.UncheckedEntryPoint()) {}
-
-// Visit all object pointers.
-void StubEntry::VisitObjectPointers(ObjectPointerVisitor* visitor) {
-  ASSERT(visitor != NULL);
-  visitor->VisitPointer(reinterpret_cast<RawObject**>(&code_));
-}
-
 #if defined(DART_PRECOMPILED_RUNTIME)
-void StubCode::InitOnce() {
+void StubCode::Init() {
   // Stubs will be loaded from the snapshot.
   UNREACHABLE();
 }
+
 #else
 
 #define STUB_CODE_GENERATE(name)                                               \
-  code ^= Generate("_stub_" #name, StubCode::Generate##name##Stub);            \
-  entries_[k##name##Index] = new StubEntry(code);
+  entries_[k##name##Index] = Code::ReadOnlyHandle();                           \
+  *entries_[k##name##Index] =                                                  \
+      Generate("_stub_" #name, &object_pool_builder,                           \
+               compiler::StubCodeCompiler::Generate##name##Stub);
 
-void StubCode::InitOnce() {
+#define STUB_CODE_SET_OBJECT_POOL(name)                                        \
+  entries_[k##name##Index]->set_object_pool(object_pool.raw());
+
+void StubCode::Init() {
+  compiler::ObjectPoolBuilder object_pool_builder;
+
   // Generate all the stubs.
-  Code& code = Code::Handle();
   VM_STUB_CODE_LIST(STUB_CODE_GENERATE);
+
+  const ObjectPool& object_pool =
+      ObjectPool::Handle(ObjectPool::NewFromBuilder(object_pool_builder));
+
+  VM_STUB_CODE_LIST(STUB_CODE_SET_OBJECT_POOL)
 }
 
 #undef STUB_CODE_GENERATE
+#undef STUB_CODE_SET_OBJECT_POOL
 
-RawCode* StubCode::Generate(const char* name,
-                            void (*GenerateStub)(Assembler* assembler)) {
-  Assembler assembler;
+RawCode* StubCode::Generate(
+    const char* name,
+    compiler::ObjectPoolBuilder* object_pool_builder,
+    void (*GenerateStub)(compiler::Assembler* assembler)) {
+  compiler::Assembler assembler(object_pool_builder);
   GenerateStub(&assembler);
-  const Code& code =
-      Code::Handle(Code::FinalizeCode(name, &assembler, false /* optimized */));
+  const Code& code = Code::Handle(Code::FinalizeCodeAndNotify(
+      name, nullptr, &assembler, Code::PoolAttachment::kNotAttachPool,
+      /*optimized=*/false));
 #ifndef PRODUCT
   if (FLAG_support_disassembler && FLAG_disassemble_stubs) {
     LogBlock lb;
@@ -72,42 +80,56 @@ RawCode* StubCode::Generate(const char* name,
     code.Disassemble(&formatter);
     THR_Print("}\n");
     const ObjectPool& object_pool = ObjectPool::Handle(code.object_pool());
-    object_pool.DebugPrint();
+    if (!object_pool.IsNull()) {
+      object_pool.DebugPrint();
+    }
   }
 #endif  // !PRODUCT
   return code.raw();
 }
 #endif  // defined(DART_PRECOMPILED_RUNTIME)
 
-void StubCode::VisitObjectPointers(ObjectPointerVisitor* visitor) {}
+#define STUB_CODE_CLEANUP(name) entries_[k##name##Index] = nullptr;
+
+void StubCode::Cleanup() {
+  VM_STUB_CODE_LIST(STUB_CODE_CLEANUP);
+}
+
+#undef STUB_CODE_CLEANUP
 
 bool StubCode::HasBeenInitialized() {
   // Use AsynchronousGapMarker as canary.
-  return StubCode::AsynchronousGapMarker_entry() != NULL;
+  return entries_[kAsynchronousGapMarkerIndex] != nullptr;
 }
 
 bool StubCode::InInvocationStub(uword pc, bool is_interpreted_frame) {
 #if !defined(TARGET_ARCH_DBC)
   ASSERT(HasBeenInitialized());
-#if defined(DART_USE_INTERPRETER)
-  // Recognize special marker set up by interpreter in entry frame.
-  if (is_interpreted_frame && (pc & 2) != 0) {
-    return true;
-  }
-  {
-    uword entry = StubCode::InvokeDartCodeFromBytecode_entry()->EntryPoint();
-    uword size = StubCode::InvokeDartCodeFromBytecodeSize();
-    if ((pc >= entry) && (pc < (entry + size))) {
-      return true;
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  if (FLAG_enable_interpreter) {
+    if (is_interpreted_frame) {
+      // Recognize special marker set up by interpreter in entry frame.
+      return Interpreter::IsEntryFrameMarker(
+          reinterpret_cast<const KBCInstr*>(pc));
+    }
+    {
+      uword entry = StubCode::InvokeDartCodeFromBytecode().EntryPoint();
+      uword size = StubCode::InvokeDartCodeFromBytecodeSize();
+      if ((pc >= entry) && (pc < (entry + size))) {
+        return true;
+      }
     }
   }
-#endif
-  uword entry = StubCode::InvokeDartCode_entry()->EntryPoint();
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+  uword entry = StubCode::InvokeDartCode().EntryPoint();
   uword size = StubCode::InvokeDartCodeSize();
   return (pc >= entry) && (pc < (entry + size));
-#elif defined(DART_USE_INTERPRETER)
-#error "Simultaneous usage of simulator and interpreter not yet supported."
 #else
+  if (FLAG_enable_interpreter) {
+    FATAL(
+        "Simultaneous usage of DBC simulator "
+        "and interpreter not yet supported.");
+  }
   // On DBC we use a special marker PC to signify entry frame because there is
   // no such thing as invocation stub.
   return (pc & 2) != 0;
@@ -117,7 +139,7 @@ bool StubCode::InInvocationStub(uword pc, bool is_interpreted_frame) {
 bool StubCode::InJumpToFrameStub(uword pc) {
 #if !defined(TARGET_ARCH_DBC)
   ASSERT(HasBeenInitialized());
-  uword entry = StubCode::JumpToFrame_entry()->EntryPoint();
+  uword entry = StubCode::JumpToFrame().EntryPoint();
   uword size = StubCode::JumpToFrameSize();
   return (pc >= entry) && (pc < (entry + size));
 #else
@@ -134,49 +156,65 @@ RawCode* StubCode::GetAllocationStubForClass(const Class& cls) {
   const Error& error = Error::Handle(zone, cls.EnsureIsFinalized(thread));
   ASSERT(error.IsNull());
   if (cls.id() == kArrayCid) {
-    return AllocateArray_entry()->code();
+    return AllocateArray().raw();
   }
   Code& stub = Code::Handle(zone, cls.allocation_stub());
 #if !defined(DART_PRECOMPILED_RUNTIME)
   if (stub.IsNull()) {
-    Assembler assembler;
-    const char* name = cls.ToCString();
-    StubCode::GenerateAllocationStubForClass(&assembler, cls);
+    compiler::ObjectPoolBuilder object_pool_builder;
+    Precompiler* precompiler = Precompiler::Instance();
 
-    if (thread->IsMutatorThread()) {
-      stub ^= Code::FinalizeCode(name, &assembler, false /* optimized */);
+    compiler::ObjectPoolBuilder* wrapper =
+        FLAG_use_bare_instructions && precompiler != NULL
+            ? precompiler->global_object_pool_builder()
+            : &object_pool_builder;
+
+    const auto pool_attachment =
+        FLAG_precompiled_mode && FLAG_use_bare_instructions
+            ? Code::PoolAttachment::kNotAttachPool
+            : Code::PoolAttachment::kAttachPool;
+
+    compiler::Assembler assembler(wrapper);
+    const char* name = cls.ToCString();
+    compiler::StubCodeCompiler::GenerateAllocationStubForClass(&assembler, cls);
+
+    auto mutator_fun = [&]() {
+      stub = Code::FinalizeCode(nullptr, &assembler, pool_attachment,
+                                /*optimized=*/false,
+                                /*stats=*/nullptr);
       // Check if background compilation thread has not already added the stub.
       if (cls.allocation_stub() == Code::null()) {
         stub.set_owner(cls);
         cls.set_allocation_stub(stub);
       }
-    } else {
-      // This part of stub code generation must be at a safepoint.
-      // Stop mutator thread before creating the instruction object and
-      // installing code.
-      // Mutator thread may not run code while we are creating the
-      // instruction object, since the creation of instruction object
-      // changes code page access permissions (makes them temporary not
-      // executable).
-      {
-        SafepointOperationScope safepoint_scope(thread);
-        stub = cls.allocation_stub();
-        // Check if stub was already generated.
-        if (!stub.IsNull()) {
-          return stub.raw();
-        }
-        // Do not Garbage collect during this stage and instead allow the
-        // heap to grow.
-        NoHeapGrowthControlScope no_growth_control;
-        stub ^= Code::FinalizeCode(name, &assembler, false /* optimized */);
-        stub.set_owner(cls);
-        cls.set_allocation_stub(stub);
+    };
+    auto bg_compiler_fun = [&]() {
+      ForceGrowthSafepointOperationScope safepoint_scope(thread);
+      stub = cls.allocation_stub();
+      // Check if stub was already generated.
+      if (!stub.IsNull()) {
+        return;
       }
-      Isolate* isolate = thread->isolate();
-      if (isolate->heap()->NeedsGarbageCollection()) {
-        isolate->heap()->CollectAllGarbage();
-      }
-    }
+      stub = Code::FinalizeCode(nullptr, &assembler, pool_attachment,
+                                /*optimized=*/false, /*stats=*/nullptr);
+      stub.set_owner(cls);
+      cls.set_allocation_stub(stub);
+    };
+
+    // We have to ensure no mutators are running, because:
+    //
+    //   a) We allocate an instructions object, which might cause us to
+    //      temporarily flip page protections from (RX -> RW -> RX).
+    //
+    //   b) To ensure only one thread succeeds installing an allocation for the
+    //      given class.
+    //
+    thread->isolate_group()->RunWithStoppedMutators(
+        mutator_fun, bg_compiler_fun, /*use_force_growth=*/true);
+
+    // We notify code observers after finalizing the code in order to be
+    // outside a [SafepointOperationScope].
+    Code::NotifyCodeObservers(name, stub, /*optimized=*/false);
 #ifndef PRODUCT
     if (FLAG_support_disassembler && FLAG_disassemble_stubs) {
       LogBlock lb;
@@ -185,7 +223,9 @@ RawCode* StubCode::GetAllocationStubForClass(const Class& cls) {
       stub.Disassemble(&formatter);
       THR_Print("}\n");
       const ObjectPool& object_pool = ObjectPool::Handle(stub.object_pool());
-      object_pool.DebugPrint();
+      if (!object_pool.IsNull()) {
+        object_pool.DebugPrint();
+      }
     }
 #endif  // !PRODUCT
   }
@@ -196,35 +236,84 @@ RawCode* StubCode::GetAllocationStubForClass(const Class& cls) {
   return Code::null();
 }
 
-const StubEntry* StubCode::UnoptimizedStaticCallEntry(
-    intptr_t num_args_tested) {
+#if !defined(TARGET_ARCH_DBC) && !defined(TARGET_ARCH_IA32)
+RawCode* StubCode::GetBuildMethodExtractorStub(
+    compiler::ObjectPoolBuilder* pool) {
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  auto thread = Thread::Current();
+  auto Z = thread->zone();
+  auto object_store = thread->isolate()->object_store();
+
+  const auto& closure_class =
+      Class::ZoneHandle(Z, object_store->closure_class());
+  const auto& closure_allocation_stub =
+      Code::ZoneHandle(Z, StubCode::GetAllocationStubForClass(closure_class));
+  const auto& context_allocation_stub = StubCode::AllocateContext();
+
+  compiler::ObjectPoolBuilder object_pool_builder;
+  compiler::Assembler assembler(pool != nullptr ? pool : &object_pool_builder);
+  compiler::StubCodeCompiler::GenerateBuildMethodExtractorStub(
+      &assembler, closure_allocation_stub, context_allocation_stub);
+
+  const char* name = "BuildMethodExtractor";
+  const Code& stub = Code::Handle(Code::FinalizeCodeAndNotify(
+      name, nullptr, &assembler, Code::PoolAttachment::kNotAttachPool,
+      /*optimized=*/false));
+
+  if (pool == nullptr) {
+    stub.set_object_pool(ObjectPool::NewFromBuilder(object_pool_builder));
+  }
+
+#ifndef PRODUCT
+  if (FLAG_support_disassembler && FLAG_disassemble_stubs) {
+    LogBlock lb;
+    THR_Print("Code for isolate stub '%s': {\n", name);
+    DisassembleToStdout formatter;
+    stub.Disassemble(&formatter);
+    THR_Print("}\n");
+    const ObjectPool& object_pool = ObjectPool::Handle(stub.object_pool());
+    if (!object_pool.IsNull()) {
+      object_pool.DebugPrint();
+    }
+  }
+#endif  // !PRODUCT
+  return stub.raw();
+#else   // !defined(DART_PRECOMPILED_RUNTIME)
+  UNIMPLEMENTED();
+  return nullptr;
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+}
+#endif  // !defined(TARGET_ARCH_DBC)
+
+const Code& StubCode::UnoptimizedStaticCallEntry(intptr_t num_args_tested) {
 // These stubs are not used by DBC.
 #if !defined(TARGET_ARCH_DBC)
   switch (num_args_tested) {
     case 0:
-      return ZeroArgsUnoptimizedStaticCall_entry();
+      return ZeroArgsUnoptimizedStaticCall();
     case 1:
-      return OneArgUnoptimizedStaticCall_entry();
+      return OneArgUnoptimizedStaticCall();
     case 2:
-      return TwoArgsUnoptimizedStaticCall_entry();
+      return TwoArgsUnoptimizedStaticCall();
     default:
       UNIMPLEMENTED();
-      return NULL;
+      return Code::Handle();
   }
 #else
-  return NULL;
+  return Code::Handle();
 #endif
 }
 
 const char* StubCode::NameOfStub(uword entry_point) {
 #define VM_STUB_CODE_TESTER(name)                                              \
-  if ((name##_entry() != NULL) &&                                              \
-      (entry_point == name##_entry()->EntryPoint())) {                         \
+  if (entries_[k##name##Index] != nullptr &&                                   \
+      !entries_[k##name##Index]->IsNull() &&                                   \
+      entries_[k##name##Index]->EntryPoint() == entry_point) {                 \
     return "" #name;                                                           \
   }
   VM_STUB_CODE_LIST(VM_STUB_CODE_TESTER);
 #undef VM_STUB_CODE_TESTER
-  return NULL;
+  return nullptr;
 }
 
 }  // namespace dart

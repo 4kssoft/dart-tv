@@ -53,6 +53,7 @@ class Check {
     return ' $indent';
   }
 
+  @override
   String toString() {
     StringBuffer sb = new StringBuffer();
     printOn(sb, '');
@@ -442,6 +443,11 @@ class DartTypePrinter implements DartTypeVisitor {
   @override
   visitDynamicType(DynamicType type, _) {
     sb.write('dynamic');
+  }
+
+  @override
+  visitAnyType(AnyType type, _) {
+    sb.write('any');
   }
 
   @override

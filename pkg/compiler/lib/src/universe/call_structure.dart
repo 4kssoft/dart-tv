@@ -6,6 +6,7 @@ library dart2js.call_structure;
 
 import '../common/names.dart' show Names;
 import '../elements/entities.dart' show ParameterStructure;
+import '../serialization/serialization.dart';
 import '../util/util.dart';
 import 'selector.dart' show Selector;
 
@@ -14,6 +15,10 @@ import 'selector.dart' show Selector;
 // TODO(johnniwinther): Should isGetter/isSetter be part of the call structure
 // instead of the selector?
 class CallStructure {
+  /// Tag used for identifying serialized [CallStructure] objects in a debugging
+  /// data stream.
+  static const String tag = 'call-structure';
+
   static const CallStructure NO_ARGS = const CallStructure.unnamed(0);
   static const CallStructure ONE_ARG = const CallStructure.unnamed(1);
   static const CallStructure TWO_ARGS = const CallStructure.unnamed(2);
@@ -43,6 +48,34 @@ class CallStructure {
         argumentCount, namedArguments, typeArgumentCount);
   }
 
+  /// Deserializes a [CallStructure] object from [source].
+  factory CallStructure.readFromDataSource(DataSource source) {
+    source.begin(tag);
+    int argumentCount = source.readInt();
+    List<String> namedArguments = source.readStrings();
+    int typeArgumentCount = source.readInt();
+    source.end(tag);
+    return new CallStructure(argumentCount, namedArguments, typeArgumentCount);
+  }
+
+  /// Serializes this [CallStructure] to [sink].
+  void writeToDataSink(DataSink sink) {
+    sink.begin(tag);
+    sink.writeInt(argumentCount);
+    sink.writeStrings(namedArguments);
+    sink.writeInt(typeArgumentCount);
+    sink.end(tag);
+  }
+
+  /// Returns `true` if this call structure is normalized, that is, its named
+  /// arguments are sorted.
+  bool get isNormalized => true;
+
+  /// Returns the normalized version of this call structure.
+  ///
+  /// A [CallStructure] is normalized if its named arguments are sorted.
+  CallStructure toNormalized() => this;
+
   CallStructure withTypeArgumentCount(int typeArgumentCount) =>
       new CallStructure(argumentCount, namedArguments, typeArgumentCount);
 
@@ -62,6 +95,19 @@ class CallStructure {
       ? this
       : new CallStructure(argumentCount, namedArguments);
 
+  /// Short textual representation use for testing.
+  String get shortText {
+    StringBuffer sb = new StringBuffer();
+    sb.write('(');
+    sb.write(positionalArgumentCount);
+    if (namedArgumentCount > 0) {
+      sb.write(',');
+      sb.write(getOrderedNamedArguments().join(','));
+    }
+    sb.write(')');
+    return sb.toString();
+  }
+
   /// A description of the argument structure.
   String structureToString() {
     StringBuffer sb = new StringBuffer();
@@ -72,6 +118,7 @@ class CallStructure {
     return sb.toString();
   }
 
+  @override
   String toString() => 'CallStructure(${structureToString()})';
 
   Selector get callSelector => new Selector.call(Names.call, this);
@@ -85,6 +132,7 @@ class CallStructure {
   }
 
   // TODO(johnniwinther): Cache hash code?
+  @override
   int get hashCode {
     return Hashing.listHash(
         namedArguments,
@@ -92,6 +140,7 @@ class CallStructure {
             Hashing.objectHash(typeArgumentCount, namedArguments.length)));
   }
 
+  @override
   bool operator ==(other) {
     if (other is! CallStructure) return false;
     return match(other);
@@ -145,16 +194,21 @@ class CallStructure {
   }
 }
 
-///
+/// Call structure with named arguments.
 class NamedCallStructure extends CallStructure {
+  @override
   final List<String> namedArguments;
-  final List<String> _orderedNamedArguments = <String>[];
+  final List<String> _orderedNamedArguments;
 
   NamedCallStructure(
-      int argumentCount, this.namedArguments, int typeArgumentCount)
-      : super.unnamed(argumentCount, typeArgumentCount) {
-    assert(namedArguments.isNotEmpty);
-  }
+      int argumentCount, List<String> namedArguments, int typeArgumentCount)
+      : this.internal(
+            argumentCount, namedArguments, typeArgumentCount, <String>[]);
+
+  NamedCallStructure.internal(int argumentCount, this.namedArguments,
+      int typeArgumentCount, this._orderedNamedArguments)
+      : assert(namedArguments.isNotEmpty),
+        super.unnamed(argumentCount, typeArgumentCount);
 
   @override
   bool get isNamed => true;
@@ -167,6 +221,16 @@ class NamedCallStructure extends CallStructure {
 
   @override
   int get positionalArgumentCount => argumentCount - namedArgumentCount;
+
+  @override
+  bool get isNormalized => namedArguments == _orderedNamedArguments;
+
+  @override
+  CallStructure toNormalized() => new NamedCallStructure.internal(
+      argumentCount,
+      getOrderedNamedArguments(),
+      typeArgumentCount,
+      getOrderedNamedArguments());
 
   @override
   List<String> getOrderedNamedArguments() {

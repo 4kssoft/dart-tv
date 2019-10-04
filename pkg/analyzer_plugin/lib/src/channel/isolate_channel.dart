@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -121,7 +121,7 @@ class PluginIsolateChannel implements PluginCommunicationChannel {
   void listen(void onRequest(Request request),
       {Function onError, void onDone()}) {
     void onData(data) {
-      Map<String, Object> requestMap = data;
+      Map<String, Object> requestMap = data as Map<String, Object>;
       Request request = new Request.fromJson(requestMap);
       if (request != null) {
         onRequest(request);
@@ -226,9 +226,9 @@ abstract class ServerIsolateChannel implements ServerCommunicationChannel {
   }
 
   @override
-  Future<Null> listen(void onResponse(Response response),
+  Future<void> listen(void onResponse(Response response),
       void onNotification(Notification notification),
-      {Function onError, void onDone()}) async {
+      {void onError(dynamic error), void onDone()}) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     if (_isolate != null) {
@@ -264,7 +264,7 @@ abstract class ServerIsolateChannel implements ServerCommunicationChannel {
       close();
       return null;
     }
-    Completer<Null> channelReady = new Completer<Null>();
+    Completer<void> channelReady = new Completer<void>();
     _receivePort.listen((dynamic input) {
       if (input is SendPort) {
         _sendPort = input;

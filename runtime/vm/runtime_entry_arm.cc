@@ -42,14 +42,28 @@ uword RuntimeEntry::GetEntryPoint() const {
 //   SP : points to the arguments and return value array.
 //   R9 : address of the runtime function to call.
 //   R4 : number of arguments to the call.
-void RuntimeEntry::Call(Assembler* assembler, intptr_t argument_count) const {
-  if (is_leaf()) {
-    ASSERT(argument_count == this->argument_count());
-    __ BranchLinkOffset(THR, Thread::OffsetFromThread(this));
+void RuntimeEntry::CallInternal(const RuntimeEntry* runtime_entry,
+                                compiler::Assembler* assembler,
+                                intptr_t argument_count) {
+  if (runtime_entry->is_leaf()) {
+    ASSERT(argument_count == runtime_entry->argument_count());
+    __ LoadFromOffset(
+        kWord, TMP, THR,
+        compiler::target::Thread::OffsetFromThread(runtime_entry));
+    __ str(TMP,
+           compiler::Address(THR, compiler::target::Thread::vm_tag_offset()));
+    __ blx(TMP);
+    __ LoadImmediate(TMP, VMTag::kDartCompiledTagId);
+    __ str(TMP,
+           compiler::Address(THR, compiler::target::Thread::vm_tag_offset()));
+    ASSERT((kAbiPreservedCpuRegs & (1 << THR)) != 0);
+    ASSERT((kAbiPreservedCpuRegs & (1 << PP)) != 0);
   } else {
     // Argument count is not checked here, but in the runtime entry for a more
     // informative error message.
-    __ LoadFromOffset(kWord, R9, THR, Thread::OffsetFromThread(this));
+    __ LoadFromOffset(
+        kWord, R9, THR,
+        compiler::target::Thread::OffsetFromThread(runtime_entry));
     __ LoadImmediate(R4, argument_count);
     __ BranchLinkToRuntime();
   }

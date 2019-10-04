@@ -5,7 +5,7 @@
 
 import 'dart:io';
 import 'package:kernel/kernel.dart';
-import 'util.dart';
+import 'package:kernel/src/tool/command_line_util.dart';
 
 void usage() {
   print("Enumerates the different node types in the provided dill file");
@@ -18,8 +18,9 @@ void usage() {
 }
 
 main(List<String> args) {
-  CommandLineHelper.requireExactlyOneArgument(true, args, usage);
-  Component component = CommandLineHelper.tryLoadDill(args[0], usage);
+  CommandLineHelper.requireExactlyOneArgument(args, usage,
+      requireFileExists: true);
+  Component component = CommandLineHelper.tryLoadDill(args[0]);
   TypeCounter counter = new TypeCounter();
   component.accept(counter);
   counter.printStats();

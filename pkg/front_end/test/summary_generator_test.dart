@@ -14,9 +14,12 @@ main() {
     var summary = await summarize(['a.dart'], allSources);
     var component = loadComponentFromBytes(summary);
 
-    // Note: the kernel representation always has a null key in the map,
-    // but otherwise no other data is included here.
-    expect(component.uriToSource.keys.single, null);
+    // Note: the kernel representation always includes the Uri entries, but
+    // doesn't include the actual source here.
+    for (Source source in component.uriToSource.values) {
+      expect(source.source.length, 0);
+      expect(source.lineStarts.length, 0);
+    }
   });
 
   test('summary includes declarations, but no method bodies', () async {
@@ -49,7 +52,7 @@ main() {
 
   test('non-sdk dependencies are marked external', () async {
     var summaryA = await summarize(['a.dart'], allSources);
-    var sourcesWithA = new Map.from(allSources);
+    var sourcesWithA = new Map<String, dynamic>.from(allSources);
     sourcesWithA['a.dill'] = summaryA;
     var summaryB =
         await summarize(['b.dart'], sourcesWithA, inputSummaries: ['a.dill']);
@@ -63,13 +66,13 @@ main() {
 
   test('dependencies can be combined without conflict', () async {
     var summaryA = await summarize(['a.dart'], allSources);
-    var sourcesWithA = new Map.from(allSources);
+    var sourcesWithA = new Map<String, dynamic>.from(allSources);
     sourcesWithA['a.dill'] = summaryA;
 
     var summaryBC = await summarize(['b.dart', 'c.dart'], sourcesWithA,
         inputSummaries: ['a.dill']);
 
-    var sourcesWithABC = new Map.from(sourcesWithA);
+    var sourcesWithABC = new Map<String, dynamic>.from(sourcesWithA);
     sourcesWithABC['bc.dill'] = summaryBC;
 
     // Note: a is loaded first, bc.dill have a.dart as an external reference so
@@ -82,16 +85,16 @@ main() {
 
   test('dependencies can be combined in any order', () async {
     var summaryA = await summarize(['a.dart'], allSources);
-    var sourcesWithA = new Map.from(allSources);
+    var sourcesWithA = new Map<String, dynamic>.from(allSources);
     sourcesWithA['a.dill'] = summaryA;
 
     var summaryBC = await summarize(['b.dart', 'c.dart'], sourcesWithA,
         inputSummaries: ['a.dill']);
 
-    var sourcesWithABC = new Map.from(sourcesWithA);
+    var sourcesWithABC = new Map<String, dynamic>.from(sourcesWithA);
     sourcesWithABC['bc.dill'] = summaryBC;
 
-    // Note: unlinke the previous test now bc.dill is loaded first and contains
+    // Note: unlike the previous test now bc.dill is loaded first and contains
     // an external definition of library a.dart. Using this order also works
     // because we share a CanonicalName root to resolve names across multiple
     // dill files and because of how the kernel loader merges definitions.
@@ -108,7 +111,7 @@ main() {
     expect(
         component.libraries.single.importUri.path.endsWith('a.dart'), isTrue);
 
-    var sourcesWithA = new Map.from(allSources);
+    var sourcesWithA = new Map<String, dynamic>.from(allSources);
     sourcesWithA['a.dill'] = summaryA;
     var summaryB = await summarize(['b.dart'], sourcesWithA,
         inputSummaries: ['a.dill'], truncate: true);
@@ -120,7 +123,7 @@ main() {
 
   test('summarization by default is not hermetic', () async {
     var errors = [];
-    var options = new CompilerOptions()..onError = (e) => errors.add(e);
+    var options = new CompilerOptions()..onDiagnostic = errors.add;
     await summarize(['b.dart'], allSources, options: options);
     expect(errors, isEmpty);
   });
@@ -128,7 +131,7 @@ main() {
   // TODO(sigmund): test trimDependencies when it is part of the public API.
 }
 
-var allSources = {
+var allSources = <String, String>{
   'a.dart': 'class A { foo() { print("hi"); } }',
   'b.dart': 'import "a.dart"; class B extends A {}',
   'c.dart': 'class C { bar() => 1; }',

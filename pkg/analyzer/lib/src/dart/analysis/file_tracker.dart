@@ -1,17 +1,19 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:collection';
 
 import 'package:analyzer/src/dart/analysis/file_state.dart';
-import 'package:front_end/src/base/performance_logger.dart';
+import 'package:analyzer/src/dart/analysis/performance_logger.dart';
 
 /**
  * Callback used by [FileTracker] to report to its client that files have been
  * added, changed, or removed, and therefore more analysis may be necessary.
+ * [path] is the path of the file that was added, changed, or removed,
+ * or `null` if multiple files were added, changed, or removed.
  */
-typedef void FileTrackerChangeHook();
+typedef void FileTrackerChangeHook(String path);
 
 /**
  * Maintains the file system state needed by the analysis driver, as well as
@@ -147,7 +149,7 @@ class FileTracker {
     _fsState.markFileForReading(path);
     addedFiles.add(path);
     _pendingFiles.add(path);
-    _changeHook();
+    _changeHook(path);
   }
 
   /**
@@ -156,7 +158,7 @@ class FileTracker {
   void addFiles(Iterable<String> paths) {
     addedFiles.addAll(paths);
     _pendingFiles.addAll(paths);
-    _changeHook();
+    _changeHook(null);
   }
 
   /**
@@ -168,7 +170,7 @@ class FileTracker {
       _pendingChangedFiles.add(path);
     }
     _fsState.markFileForReading(path);
-    _changeHook();
+    _changeHook(path);
   }
 
   /**
@@ -207,7 +209,14 @@ class FileTracker {
     // files seems extreme.
     _fsState.removeFile(path);
     _pendingFiles.addAll(addedFiles);
-    _changeHook();
+    _changeHook(path);
+  }
+
+  /**
+   * Schedule all added files for analysis.
+   */
+  void scheduleAllAddedFiles() {
+    _pendingFiles.addAll(addedFiles);
   }
 
   /**
@@ -216,6 +225,8 @@ class FileTracker {
    */
   FileState verifyApiSignature(String path) {
     return _logger.run('Verify API signature of $path', () {
+      _logger.writeln('Work in ${_fsState.contextName}');
+
       bool anyApiChanged = false;
       List<FileState> files = _fsState.getFilesForPath(path);
       for (FileState file in files) {
@@ -225,7 +236,7 @@ class FileTracker {
         }
       }
       if (anyApiChanged) {
-        _logger.writeln('API signatures mismatch found for $path');
+        _logger.writeln('API signatures mismatch found.');
         // TODO(scheglov) schedule analysis of only affected files
         var pendingChangedFiles = new LinkedHashSet<String>();
         var pendingImportFiles = new LinkedHashSet<String>();

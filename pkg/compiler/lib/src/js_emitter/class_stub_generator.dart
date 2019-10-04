@@ -4,17 +4,18 @@
 
 library dart2js.js_emitter.class_stub_generator;
 
-import '../common/names.dart' show Identifiers;
+import '../common/names.dart' show Identifiers, Selectors;
 import '../common_elements.dart' show CommonElements;
 import '../elements/entities.dart';
 import '../js/js.dart' as jsAst;
 import '../js/js.dart' show js;
+import '../js_backend/field_analysis.dart';
 import '../js_backend/namer.dart' show Namer;
 import '../js_backend/interceptor_data.dart' show InterceptorData;
 import '../options.dart';
+import '../universe/codegen_world_builder.dart';
 import '../universe/selector.dart' show Selector;
-import '../universe/world_builder.dart'
-    show CodegenWorldBuilder, SelectorConstraints;
+import '../universe/world_builder.dart' show SelectorConstraints;
 import '../world.dart' show JClosedWorld;
 
 import 'code_emitter_task.dart';
@@ -22,74 +23,21 @@ import 'model.dart';
 
 class ClassStubGenerator {
   final Namer _namer;
-  final CodegenWorldBuilder _worldBuilder;
+  final CodegenWorld _codegenWorld;
   final JClosedWorld _closedWorld;
   final bool enableMinification;
   final Emitter _emitter;
   final CommonElements _commonElements;
 
   ClassStubGenerator(this._emitter, this._commonElements, this._namer,
-      this._worldBuilder, this._closedWorld,
+      this._codegenWorld, this._closedWorld,
       {this.enableMinification});
 
   InterceptorData get _interceptorData => _closedWorld.interceptorData;
 
-  jsAst.Expression generateClassConstructor(
-      ClassEntity classElement, List<jsAst.Name> fields, bool hasRtiField) {
-    // TODO(sra): Implement placeholders in VariableDeclaration position:
-    //
-    //     String constructorName = namer.getNameOfClass(classElement);
-    //     return js.statement('function #(#) { #; }',
-    //        [ constructorName, fields,
-    //            fields.map(
-    //                (name) => js('this.# = #', [name, name]))]));
-    dynamic typeParameters = const <jsAst.Parameter>[];
-    dynamic typeInits = const <jsAst.Expression>[];
-    if (hasRtiField) {
-      dynamic rtiName = _namer.rtiFieldJsName;
-      typeParameters = rtiName;
-      typeInits = js('this.# = #', [rtiName, rtiName]);
-    }
-    List<jsAst.Parameter> parameters = new List<jsAst.Parameter>.generate(
-        fields.length, (i) => new jsAst.Parameter('t$i'));
-    List<jsAst.Expression> fieldInitializers =
-        new List<jsAst.Expression>.generate(fields.length, (i) {
-      return js('this.# = #', [fields[i], parameters[i]]);
-    });
-    return js('function(#, #) { #; #; this.#();}', [
-      parameters,
-      typeParameters,
-      fieldInitializers,
-      typeInits,
-      _namer.deferredAction
-    ]);
-  }
-
-  jsAst.Expression generateGetter(MemberEntity member, jsAst.Name fieldName) {
-    ClassEntity cls = member.enclosingClass;
-    String receiver =
-        _interceptorData.isInterceptedClass(cls) ? 'receiver' : 'this';
-    List<String> args =
-        _interceptorData.isInterceptedMethod(member) ? ['receiver'] : [];
-    return js('function(#) { return #.# }', [args, receiver, fieldName]);
-  }
-
-  jsAst.Expression generateSetter(MemberEntity member, jsAst.Name fieldName) {
-    ClassEntity cls = member.enclosingClass;
-    String receiver =
-        _interceptorData.isInterceptedClass(cls) ? 'receiver' : 'this';
-    List<String> args =
-        _interceptorData.isInterceptedMethod(member) ? ['receiver'] : [];
-    // TODO(floitsch): remove 'return'?
-    return js(
-        'function(#, v) { return #.# = v; }', [args, receiver, fieldName]);
-  }
-
-  /**
-   * Documentation wanted -- johnniwinther
-   *
-   * Invariant: [member] must be a declaration element.
-   */
+  /// Documentation wanted -- johnniwinther
+  ///
+  /// Invariant: [member] must be a declaration element.
   Map<jsAst.Name, jsAst.Expression> generateCallStubsForGetter(
       MemberEntity member, Map<Selector, SelectorConstraints> selectors) {
     // If the method is intercepted, the stub gets the
@@ -110,8 +58,14 @@ class ClassStubGenerator {
         }
         return js('#.#()', [receiver, getterName]);
       } else {
-        jsAst.Name fieldName = _namer.instanceFieldPropertyName(member);
-        return js('#.#', [receiver, fieldName]);
+        FieldAnalysisData fieldData =
+            _closedWorld.fieldAnalysis.getFieldData(member);
+        if (fieldData.isEffectivelyConstant) {
+          return _emitter.constantReference(fieldData.constantValue);
+        } else {
+          jsAst.Name fieldName = _namer.instanceFieldPropertyName(member);
+          return js('#.#', [receiver, fieldName]);
+        }
       }
     }
 
@@ -125,7 +79,8 @@ class ClassStubGenerator {
     for (Selector selector in selectors.keys) {
       if (generatedSelectors.contains(selector)) continue;
       if (!selector.appliesUnnamed(member)) continue;
-      if (selectors[selector].applies(member, selector, _closedWorld)) {
+      if (selectors[selector]
+          .canHit(member, selector.memberName, _closedWorld)) {
         generatedSelectors.add(selector);
 
         jsAst.Name invocationName = _namer.invocationName(selector);
@@ -158,13 +113,23 @@ class ClassStubGenerator {
     Map<jsAst.Name, Selector> jsNames = <jsAst.Name, Selector>{};
 
     // Do not generate no such method handlers if there is no class.
-    if (_worldBuilder.directlyInstantiatedClasses.isEmpty) {
+    if (_codegenWorld.directlyInstantiatedClasses.isEmpty) {
       return jsNames;
     }
 
     void addNoSuchMethodHandlers(
         String ignore, Map<Selector, SelectorConstraints> selectors) {
       for (Selector selector in selectors.keys) {
+        if (selector == Selectors.runtimeType_ ||
+            selector == Selectors.equals ||
+            selector == Selectors.toString_ ||
+            selector == Selectors.hashCode_ ||
+            selector == Selectors.noSuchMethod_) {
+          // Skip Object methods since these need no noSuchMethod handling
+          // regardless of the precision of the selector constraints.
+          continue;
+        }
+
         SelectorConstraints maskSet = selectors[selector];
         if (maskSet.needsNoSuchMethodHandling(selector, _closedWorld)) {
           jsAst.Name jsName = _namer.invocationMirrorInternalName(selector);
@@ -173,9 +138,9 @@ class ClassStubGenerator {
       }
     }
 
-    _worldBuilder.forEachInvokedName(addNoSuchMethodHandlers);
-    _worldBuilder.forEachInvokedGetter(addNoSuchMethodHandlers);
-    _worldBuilder.forEachInvokedSetter(addNoSuchMethodHandlers);
+    _codegenWorld.forEachInvokedName(addNoSuchMethodHandlers);
+    _codegenWorld.forEachInvokedGetter(addNoSuchMethodHandlers);
+    _codegenWorld.forEachInvokedSetter(addNoSuchMethodHandlers);
     return jsNames;
   }
 
@@ -234,11 +199,13 @@ class ClassStubGenerator {
 ///
 /// `tearOff` takes the following arguments:
 ///   * `funcs`: a list of functions. These are the functions representing the
-///    member that is torn off. There can be more than one, since a member
-///    can have several stubs.
-///    Each function must have the `$callName` property set.
+///     member that is torn off. There can be more than one, since a member
+///     can have several stubs.
+///     Each function must have the `$callName` property set.
+///   * `applyTrampolineIndex` is the index of the stub to be used for
+///     Function.apply
 ///   * `reflectionInfo`: contains reflective information, and the function
-///    type. TODO(floitsch): point to where this is specified.
+///     type. TODO(floitsch): point to where this is specified.
 ///   * `isStatic`.
 ///   * `name`.
 ///   * `isIntercepted.
@@ -268,22 +235,22 @@ List<jsAst.Statement> buildTearOffCode(CompilerOptions options, Emitter emitter,
     jsAst.Expression tearOffAccessText = new jsAst.UnparsedNode(
         tearOffAccessExpression, options.enableMinification, false);
     tearOffGetter = js.statement('''
-function tearOffGetter(funcs, reflectionInfo, name, isIntercepted) {
+function tearOffGetter(funcs, applyTrampolineIndex, reflectionInfo, name, isIntercepted) {
   return isIntercepted
-      ? new Function("funcs", "reflectionInfo", "name",
+      ? new Function("funcs", "applyTrampolineIndex", "reflectionInfo", "name",
                      #tearOffGlobalObjectString, "c",
-          "return function tearOff_" + name + (functionCounter++) + "(x) {" +
+          "return function tearOff_" + name + (functionCounter++) + "(receiver) {" +
             "if (c === null) c = " + #tearOffAccessText + "(" +
-                "this, funcs, reflectionInfo, false, [x], name);" +
-                "return new c(this, funcs[0], x, name);" +
-                "}")(funcs, reflectionInfo, name, #tearOffGlobalObject, null)
-      : new Function("funcs", "reflectionInfo", "name",
+                "this, funcs, applyTrampolineIndex, reflectionInfo, false, true, name);" +
+                "return new c(this, funcs[0], receiver, name);" +
+           "}")(funcs, applyTrampolineIndex, reflectionInfo, name, #tearOffGlobalObject, null)
+      : new Function("funcs", "applyTrampolineIndex", "reflectionInfo", "name",
                      #tearOffGlobalObjectString, "c",
           "return function tearOff_" + name + (functionCounter++)+ "() {" +
             "if (c === null) c = " + #tearOffAccessText + "(" +
-                "this, funcs, reflectionInfo, false, [], name);" +
+                "this, funcs, applyTrampolineIndex, reflectionInfo, false, false, name);" +
                 "return new c(this, funcs[0], null, name);" +
-                "}")(funcs, reflectionInfo, name, #tearOffGlobalObject, null);
+             "}")(funcs, applyTrampolineIndex, reflectionInfo, name, #tearOffGlobalObject, null);
 }''', {
       'tearOffAccessText': tearOffAccessText,
       'tearOffGlobalObject': tearOffGlobalObject,
@@ -291,32 +258,35 @@ function tearOffGetter(funcs, reflectionInfo, name, isIntercepted) {
     });
   } else {
     tearOffGetter = js.statement('''
-      function tearOffGetter(funcs, reflectionInfo, name, isIntercepted) {
+      function tearOffGetter(funcs, applyTrampolineIndex, reflectionInfo, name, isIntercepted) {
         var cache = null;
         return isIntercepted
-            ? function(x) {
+            ? function(receiver) {
                 if (cache === null) cache = #(
-                    this, funcs, reflectionInfo, false, [x], name);
-                return new cache(this, funcs[0], x, name);
+                    this, funcs, applyTrampolineIndex, reflectionInfo, false, true, name);
+                return new cache(this, funcs[0], receiver, name);
               }
             : function() {
                 if (cache === null) cache = #(
-                    this, funcs, reflectionInfo, false, [], name);
+                    this, funcs, applyTrampolineIndex, reflectionInfo, false, false, name);
                 return new cache(this, funcs[0], null, name);
               };
       }''', [tearOffAccessExpression, tearOffAccessExpression]);
   }
 
   jsAst.Statement tearOff = js.statement('''
-    function tearOff(funcs, reflectionInfo, isStatic, name, isIntercepted) {
-      var cache;
+      function tearOff(funcs, applyTrampolineIndex,
+          reflectionInfo, isStatic, name, isIntercepted) {
+      var cache = null;
       return isStatic
           ? function() {
-              if (cache === void 0) cache = #tearOff(
-                  this, funcs, reflectionInfo, true, [], name).prototype;
+              if (cache === null) cache = #tearOff(
+                  this, funcs, applyTrampolineIndex,
+                  reflectionInfo, true, false, name).prototype;
               return cache;
             }
-          : tearOffGetter(funcs, reflectionInfo, name, isIntercepted);
+          : tearOffGetter(funcs, applyTrampolineIndex,
+              reflectionInfo, name, isIntercepted);
     }''', {'tearOff': tearOffAccessExpression});
 
   return <jsAst.Statement>[tearOffGetter, tearOff];

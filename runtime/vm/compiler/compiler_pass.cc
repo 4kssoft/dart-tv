@@ -9,7 +9,10 @@
 #include "vm/compiler/backend/block_scheduler.h"
 #include "vm/compiler/backend/branch_optimizer.h"
 #include "vm/compiler/backend/constant_propagator.h"
+#include "vm/compiler/backend/flow_graph_checker.h"
+#include "vm/compiler/backend/il_deserializer.h"
 #include "vm/compiler/backend/il_printer.h"
+#include "vm/compiler/backend/il_serializer.h"
 #include "vm/compiler/backend/inliner.h"
 #include "vm/compiler/backend/linearscan.h"
 #include "vm/compiler/backend/range_analysis.h"
@@ -18,6 +21,7 @@
 #include "vm/compiler/call_specializer.h"
 #if defined(DART_PRECOMPILER)
 #include "vm/compiler/aot/aot_call_specializer.h"
+#include "vm/compiler/aot/precompiler.h"
 #endif
 #include "vm/timeline.h"
 
@@ -52,6 +56,14 @@ DEFINE_OPTION_HANDLER(CompilerPass::ParseFilters,
                       "List of comma separated compilation passes flags. "
                       "Use -Name to disable a pass, Name to print IL after it. "
                       "Do --compiler-passes=help for more information.");
+DEFINE_FLAG(bool,
+            early_round_trip_serialization,
+            false,
+            "Perform early round trip serialization compiler pass.");
+DEFINE_FLAG(bool,
+            late_round_trip_serialization,
+            false,
+            "Perform late round trip serialization compiler pass.");
 DECLARE_FLAG(bool, print_flow_graph);
 DECLARE_FLAG(bool, print_flow_graph_optimized);
 
@@ -173,11 +185,12 @@ void CompilerPass::Run(CompilerPassState* state) const {
 
     PrintGraph(state, kTraceBefore, round);
     {
-      NOT_IN_PRODUCT(
-          TimelineDurationScope tds2(thread, state->compiler_timeline, name()));
+      TIMELINE_DURATION(thread, CompilerVerbose, name());
       repeat = DoBody(state);
-      DEBUG_ASSERT(state->flow_graph->VerifyUseLists());
       thread->CheckForSafepoint();
+#if defined(DEBUG)
+      FlowGraphChecker(state->flow_graph).Check(name());
+#endif
     }
     PrintGraph(state, kTraceAfter, round);
   }
@@ -205,9 +218,65 @@ void CompilerPass::PrintGraph(CompilerPassState* state,
 #define INVOKE_PASS(Name)                                                      \
   CompilerPass::Get(CompilerPass::k##Name)->Run(pass_state);
 
-void CompilerPass::RunPipeline(PipelineMode mode,
-                               CompilerPassState* pass_state) {
+void CompilerPass::RunGraphIntrinsicPipeline(CompilerPassState* pass_state) {
+  INVOKE_PASS(AllocateRegistersForGraphIntrinsic);
+}
+
+void CompilerPass::RunInliningPipeline(PipelineMode mode,
+                                       CompilerPassState* pass_state) {
+  INVOKE_PASS(ApplyClassIds);
+  INVOKE_PASS(TypePropagation);
+  INVOKE_PASS(ApplyICData);
+  INVOKE_PASS(Canonicalize);
+  // Run constant propagation to make sure we specialize for
+  // (optional) constant arguments passed into the inlined method.
+  INVOKE_PASS(ConstantPropagation);
+  // Optimize (a << b) & c patterns, merge instructions. Must occur
+  // before 'SelectRepresentations' which inserts conversion nodes.
+  INVOKE_PASS(TryOptimizePatterns);
+}
+
+FlowGraph* CompilerPass::RunForceOptimizedPipeline(
+    PipelineMode mode,
+    CompilerPassState* pass_state) {
   INVOKE_PASS(ComputeSSA);
+  if (FLAG_early_round_trip_serialization) {
+    INVOKE_PASS(RoundTripSerialization);
+  }
+  INVOKE_PASS(TypePropagation);
+  INVOKE_PASS(Canonicalize);
+  INVOKE_PASS(BranchSimplify);
+  INVOKE_PASS(IfConvert);
+  INVOKE_PASS(ConstantPropagation);
+  INVOKE_PASS(TypePropagation);
+  INVOKE_PASS(WidenSmiToInt32);
+  INVOKE_PASS(SelectRepresentations);
+  INVOKE_PASS(TypePropagation);
+  INVOKE_PASS(TryCatchOptimization);
+  INVOKE_PASS(EliminateEnvironments);
+  INVOKE_PASS(EliminateDeadPhis);
+  INVOKE_PASS(Canonicalize);
+  INVOKE_PASS(WriteBarrierElimination);
+  INVOKE_PASS(FinalizeGraph);
+#if defined(DART_PRECOMPILER)
+  if (mode == kAOT) {
+    INVOKE_PASS(SerializeGraph);
+  }
+#endif
+  if (FLAG_late_round_trip_serialization) {
+    INVOKE_PASS(RoundTripSerialization);
+  }
+  INVOKE_PASS(AllocateRegisters);
+  INVOKE_PASS(ReorderBlocks);
+  return pass_state->flow_graph;
+}
+
+FlowGraph* CompilerPass::RunPipeline(PipelineMode mode,
+                                     CompilerPassState* pass_state) {
+  INVOKE_PASS(ComputeSSA);
+  if (FLAG_early_round_trip_serialization) {
+    INVOKE_PASS(RoundTripSerialization);
+  }
 #if defined(DART_PRECOMPILER)
   if (mode == kAOT) {
     INVOKE_PASS(ApplyClassIds);
@@ -223,6 +292,7 @@ void CompilerPass::RunPipeline(PipelineMode mode,
   INVOKE_PASS(TypePropagation);
   INVOKE_PASS(ApplyClassIds);
   INVOKE_PASS(TypePropagation);
+  INVOKE_PASS(ApplyICData);
   INVOKE_PASS(Canonicalize);
   INVOKE_PASS(BranchSimplify);
   INVOKE_PASS(IfConvert);
@@ -230,6 +300,18 @@ void CompilerPass::RunPipeline(PipelineMode mode,
   INVOKE_PASS(ConstantPropagation);
   INVOKE_PASS(OptimisticallySpecializeSmiPhis);
   INVOKE_PASS(TypePropagation);
+#if defined(DART_PRECOMPILER)
+  if (mode == kAOT) {
+    // The extra call specialization pass in AOT is able to specialize more
+    // calls after ConstantPropagation, which removes unreachable code, and
+    // TypePropagation, which can infer more accurate types after removing
+    // unreachable code.
+    INVOKE_PASS(ApplyICData);
+  }
+  if (mode == kAOT) {
+    INVOKE_PASS(OptimizeTypedDataAccesses);
+  }
+#endif
   INVOKE_PASS(WidenSmiToInt32);
   INVOKE_PASS(SelectRepresentations);
   INVOKE_PASS(CSE);
@@ -252,20 +334,33 @@ void CompilerPass::RunPipeline(PipelineMode mode,
   INVOKE_PASS(EliminateStackOverflowChecks);
   INVOKE_PASS(Canonicalize);
   INVOKE_PASS(AllocationSinking_DetachMaterializations);
+  INVOKE_PASS(WriteBarrierElimination);
+  INVOKE_PASS(FinalizeGraph);
 #if defined(DART_PRECOMPILER)
   if (mode == kAOT) {
-    INVOKE_PASS(ReplaceArrayBoundChecksForAOT);
+    // If we are serializing the flow graph, do it now before we start
+    // doing register allocation.
+    INVOKE_PASS(SerializeGraph);
   }
 #endif
-  INVOKE_PASS(FinalizeGraph);
-  INVOKE_PASS(AllocateRegisters);
-  if (mode == kJIT) {
-    INVOKE_PASS(ReorderBlocks);
+  if (FLAG_late_round_trip_serialization) {
+    INVOKE_PASS(RoundTripSerialization);
   }
+  INVOKE_PASS(AllocateRegisters);
+  INVOKE_PASS(ReorderBlocks);
+  return pass_state->flow_graph;
+}
+
+FlowGraph* CompilerPass::RunPipelineWithPasses(
+    CompilerPassState* state,
+    std::initializer_list<CompilerPass::Id> passes) {
+  for (auto pass_id : passes) {
+    passes_[pass_id]->Run(state);
+  }
+  return state->flow_graph;
 }
 
 COMPILER_PASS(ComputeSSA, {
-  CSTAT_TIMER_SCOPE(state->thread, ssa_timer);
   // Transform to SSA (virtual register 0 and no inlining arguments).
   flow_graph->ComputeSSA(0, NULL);
 });
@@ -278,7 +373,6 @@ COMPILER_PASS(SetOuterInliningId,
               { FlowGraphInliner::SetInliningId(flow_graph, 0); });
 
 COMPILER_PASS(Inlining, {
-  CSTAT_TIMER_SCOPE(state->thread, graphinliner_timer);
   FlowGraphInliner inliner(
       flow_graph, &state->inline_id_to_function, &state->inline_id_to_token_pos,
       &state->caller_inline_id, state->speculative_policy, state->precompiler);
@@ -339,7 +433,7 @@ COMPILER_PASS(LICM, {
   DEBUG_ASSERT(flow_graph->VerifyRedefinitions());
   LICM licm(flow_graph);
   licm.Optimize();
-  flow_graph->RemoveRedefinitions();
+  flow_graph->RemoveRedefinitions(/*keep_checks*/ true);
 });
 
 COMPILER_PASS(DSE, { DeadStoreElimination::Optimize(flow_graph); });
@@ -359,8 +453,12 @@ COMPILER_PASS(OptimizeBranches, {
   ConstantPropagator::OptimizeBranches(flow_graph);
 });
 
-COMPILER_PASS(TryCatchOptimization,
-              { TryCatchAnalyzer::Optimize(flow_graph); });
+COMPILER_PASS(OptimizeTypedDataAccesses,
+              { TypedDataSpecializer::Optimize(flow_graph); });
+
+COMPILER_PASS(TryCatchOptimization, {
+  OptimizeCatchEntryStates(flow_graph, /*is_aot=*/FLAG_precompiled_mode);
+});
 
 COMPILER_PASS(EliminateEnvironments, { flow_graph->EliminateEnvironments(); });
 
@@ -369,7 +467,7 @@ COMPILER_PASS(EliminateDeadPhis,
 
 COMPILER_PASS(AllocationSinking_Sink, {
   // TODO(vegorov): Support allocation sinking with try-catch.
-  if (flow_graph->graph_entry()->SuccessorCount() == 1) {
+  if (flow_graph->graph_entry()->catch_entries().is_empty()) {
     state->sinking = new AllocationSinking(flow_graph);
     state->sinking->Optimize();
   }
@@ -386,29 +484,97 @@ COMPILER_PASS(AllocationSinking_DetachMaterializations, {
 });
 
 COMPILER_PASS(AllocateRegisters, {
+  // Ensure loop hierarchy has been computed.
+  flow_graph->GetLoopHierarchy();
   // Perform register allocation on the SSA graph.
   FlowGraphAllocator allocator(*flow_graph);
   allocator.AllocateRegisters();
 });
 
+COMPILER_PASS(AllocateRegistersForGraphIntrinsic, {
+  // Ensure loop hierarchy has been computed.
+  flow_graph->GetLoopHierarchy();
+  // Perform register allocation on the SSA graph.
+  FlowGraphAllocator allocator(*flow_graph, /*intrinsic_mode=*/true);
+  allocator.AllocateRegisters();
+});
+
 COMPILER_PASS(ReorderBlocks, {
   if (state->reorder_blocks) {
-    state->block_scheduler->ReorderBlocks();
+    BlockScheduler::ReorderBlocks(flow_graph);
   }
 });
 
+static void WriteBarrierElimination(FlowGraph* flow_graph) {
+  for (BlockIterator block_it = flow_graph->reverse_postorder_iterator();
+       !block_it.Done(); block_it.Advance()) {
+    BlockEntryInstr* block = block_it.Current();
+    Definition* last_allocated = nullptr;
+    for (ForwardInstructionIterator it(block); !it.Done(); it.Advance()) {
+      Instruction* current = it.Current();
+      if (!current->CanTriggerGC()) {
+        if (StoreInstanceFieldInstr* instr = current->AsStoreInstanceField()) {
+          if (instr->instance()->definition() == last_allocated) {
+            instr->set_emit_store_barrier(kNoStoreBarrier);
+          }
+          continue;
+        }
+      }
+
+      if (AllocationInstr* alloc = current->AsAllocation()) {
+        if (alloc->WillAllocateNewOrRemembered()) {
+          last_allocated = alloc;
+          continue;
+        }
+      }
+
+      if (current->CanTriggerGC()) {
+        last_allocated = nullptr;
+      }
+    }
+  }
+}
+
+COMPILER_PASS(WriteBarrierElimination,
+              { WriteBarrierElimination(flow_graph); });
+
 COMPILER_PASS(FinalizeGraph, {
-  // Compute and store graph informations (call & instruction counts)
-  // to be later used by the inliner.
-  FlowGraphInliner::CollectGraphInfo(flow_graph, true);
+  // At the end of the pipeline, force recomputing and caching graph
+  // information (instruction and call site counts) for the (assumed)
+  // non-specialized case with better values, for future inlining.
+  intptr_t instruction_count = 0;
+  intptr_t call_site_count = 0;
+  FlowGraphInliner::CollectGraphInfo(flow_graph,
+                                     /*constants_count*/ 0,
+                                     /*force*/ true, &instruction_count,
+                                     &call_site_count);
   flow_graph->function().set_inlining_depth(state->inlining_depth);
+  // Remove redefinitions for the rest of the pipeline.
   flow_graph->RemoveRedefinitions();
 });
 
 #if defined(DART_PRECOMPILER)
-COMPILER_PASS(ReplaceArrayBoundChecksForAOT,
-              { AotCallSpecializer::ReplaceArrayBoundChecks(flow_graph); })
+COMPILER_PASS(SerializeGraph, {
+  if (state->precompiler == nullptr) return state;
+  if (auto stream = state->precompiler->il_serialization_stream()) {
+    auto file_write = Dart::file_write_callback();
+    ASSERT(file_write != nullptr);
+
+    const intptr_t kInitialBufferSize = 1 * MB;
+    TextBuffer buffer(kInitialBufferSize);
+    StackZone stack_zone(Thread::Current());
+    FlowGraphSerializer::SerializeToBuffer(stack_zone.GetZone(), flow_graph,
+                                           &buffer);
+
+    file_write(buffer.buf(), buffer.length(), stream);
+  }
+});
 #endif
+
+COMPILER_PASS(RoundTripSerialization, {
+  FlowGraphDeserializer::RoundTripSerialization(state);
+  ASSERT(state->flow_graph != nullptr);
+})
 
 }  // namespace dart
 

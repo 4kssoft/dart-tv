@@ -7,7 +7,6 @@ library fasta.redirecting_factory_body;
 import 'package:kernel/ast.dart'
     show
         DartType,
-        DynamicType,
         Expression,
         ExpressionStatement,
         FunctionNode,
@@ -22,6 +21,8 @@ import 'package:kernel/ast.dart'
         VariableDeclaration;
 
 import 'package:kernel/type_algebra.dart' show Substitution;
+
+import 'body_builder.dart' show EnsureLoaded;
 
 const String letName = "#redirecting_factory";
 
@@ -38,12 +39,12 @@ class RedirectingFactoryBody extends ExpressionStatement {
       : this.internal(new StringLiteral(name));
 
   Member get target {
-    var value = getValue(expression);
+    dynamic value = getValue(expression);
     return value is StaticGet ? value.target : null;
   }
 
   String get unresolvedName {
-    var value = getValue(expression);
+    dynamic value = getValue(expression);
     return value is StringLiteral ? value.value : null;
   }
 
@@ -71,7 +72,7 @@ class RedirectingFactoryBody extends ExpressionStatement {
 
   static void restoreFromDill(Procedure factory) {
     // This is a hack / work around for storing redirecting constructors in
-    // dill files. See `KernelClassBuilder.addRedirectingConstructor` in
+    // dill files. See `ClassBuilder.addRedirectingConstructor` in
     // [kernel_class_builder.dart](kernel_class_builder.dart).
     FunctionNode function = factory.function;
     ExpressionStatement statement = function.body;
@@ -114,10 +115,13 @@ class RedirectingFactoryBody extends ExpressionStatement {
   }
 }
 
+bool isRedirectingFactory(Member member, {EnsureLoaded helper}) {
+  assert(helper == null || helper.isLoaded(member));
+  return member is Procedure && member.function.body is RedirectingFactoryBody;
+}
+
 RedirectingFactoryBody getRedirectingFactoryBody(Member member) {
-  return member is Procedure && member.function.body is RedirectingFactoryBody
-      ? member.function.body
-      : null;
+  return isRedirectingFactory(member) ? member.function.body : null;
 }
 
 class RedirectionTarget {
@@ -127,7 +131,7 @@ class RedirectionTarget {
   RedirectionTarget(this.target, this.typeArguments);
 }
 
-RedirectionTarget getRedirectionTarget(Procedure member, {bool strongMode}) {
+RedirectionTarget getRedirectionTarget(Procedure member, EnsureLoaded helper) {
   List<DartType> typeArguments = <DartType>[]..length =
       member.function.typeParameters.length;
   for (int i = 0; i < typeArguments.length; i++) {
@@ -140,38 +144,31 @@ RedirectionTarget getRedirectionTarget(Procedure member, {bool strongMode}) {
   Member tortoise = member;
   RedirectingFactoryBody tortoiseBody = getRedirectingFactoryBody(tortoise);
   Member hare = tortoiseBody?.target;
+  helper.ensureLoaded(hare);
   RedirectingFactoryBody hareBody = getRedirectingFactoryBody(hare);
   while (tortoise != hare) {
-    if (tortoiseBody?.isUnresolved ?? true)
+    if (tortoiseBody?.isUnresolved ?? true) {
       return new RedirectionTarget(tortoise, typeArguments);
+    }
     Member nextTortoise = tortoiseBody.target;
+    helper.ensureLoaded(nextTortoise);
     List<DartType> nextTypeArguments = tortoiseBody.typeArguments;
-    if (strongMode && nextTypeArguments == null) {
+    if (nextTypeArguments == null) {
       nextTypeArguments = <DartType>[];
     }
 
-    if (strongMode || nextTypeArguments != null) {
-      Substitution sub = Substitution.fromPairs(
-          tortoise.function.typeParameters, typeArguments);
-      typeArguments = <DartType>[]..length = nextTypeArguments.length;
-      for (int i = 0; i < typeArguments.length; i++) {
-        typeArguments[i] = sub.substituteType(nextTypeArguments[i]);
-      }
-    } else {
-      // In Dart 1, we need to throw away the extra type arguments and use
-      // `dynamic` in place of the missing ones.
-      int typeArgumentCount = typeArguments.length;
-      int nextTypeArgumentCount =
-          nextTortoise.enclosingClass.typeParameters.length;
-      typeArguments.length = nextTypeArgumentCount;
-      for (int i = typeArgumentCount; i < nextTypeArgumentCount; i++) {
-        typeArguments[i] = const DynamicType();
-      }
+    Substitution sub =
+        Substitution.fromPairs(tortoise.function.typeParameters, typeArguments);
+    typeArguments = <DartType>[]..length = nextTypeArguments.length;
+    for (int i = 0; i < typeArguments.length; i++) {
+      typeArguments[i] = sub.substituteType(nextTypeArguments[i]);
     }
 
     tortoise = nextTortoise;
     tortoiseBody = getRedirectingFactoryBody(tortoise);
+    helper.ensureLoaded(hareBody?.target);
     hare = getRedirectingFactoryBody(hareBody?.target)?.target;
+    helper.ensureLoaded(hare);
     hareBody = getRedirectingFactoryBody(hare);
   }
   return null;

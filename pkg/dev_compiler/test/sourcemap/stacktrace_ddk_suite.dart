@@ -7,23 +7,26 @@ import 'sourcemaps_ddk_suite.dart' as ddk;
 
 Future<ChainContext> createContext(
     Chain suite, Map<String, String> environment) async {
-  return new StackTraceContext();
+  return StackTraceContext();
 }
 
 class StackTraceContext extends ChainContextWithCleanupHelper
     implements WithCompilerState {
+  @override
   fe.InitializedCompilerState compilerState;
 
   List<Step> _steps;
 
+  @override
   List<Step> get steps {
     return _steps ??= <Step>[
       const Setup(),
       const SetCwdToSdkRoot(),
-      new TestStackTrace(new ddk.DevCompilerRunner(this, false), "ddk.",
-          const ["ddk.", "ddc."]),
+      TestStackTrace(ddk.DevCompilerRunner(this, debugging: false), "ddk",
+          const ["ddk", "ddc"]),
     ];
   }
 }
 
-main(List<String> arguments) => runMe(arguments, createContext, "testing.json");
+void main(List<String> arguments) =>
+    runMe(arguments, createContext, configurationPath: "testing.json");

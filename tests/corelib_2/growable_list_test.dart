@@ -37,9 +37,6 @@ class EfficientTestIterable extends TestIterableBase implements Set<int> {
   // Avoid warnings because we don't actually implement Set.
   noSuchMethod(i) => super.noSuchMethod(i);
   Set<R> cast<R>() => throw "not used by test";
-
-  @Deprecated("Use cast instead.")
-  Set<R> retype<R>() => cast<R>();
 }
 
 class CallbackIterator implements Iterator<int> {
@@ -93,8 +90,9 @@ void testConstructor() {
   testGrowable(new List<int>()..length = 5);
   testGrowable(new List<int>.filled(5, null, growable: true));
   Expect.throwsArgumentError(() => new List<int>(-1), "-1");
-  // There must be limits. Fix this test if we ever allow 10^30 elements.
-  Expect.throwsArgumentError(() => new List<int>(0x7fffffffffffffff), "bignum");
+  // There must be limits. Fix this test if we ever allow 2^63 elements.
+  Expect.throws(() => new List<int>(0x7ffffffffffff000),
+      (e) => e is OutOfMemoryError || e is ArgumentError, "bignum");
   Expect.throwsArgumentError(() => new List<int>(null), "null");
   testThrowsOrTypeError(
       () => new List([] as Object), // Cast to avoid warning.

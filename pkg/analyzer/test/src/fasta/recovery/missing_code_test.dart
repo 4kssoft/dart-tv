@@ -1,7 +1,8 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/src/dart/error/syntactic_errors.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
@@ -13,6 +14,7 @@ main() {
     defineReflectiveTests(MapLiteralTest);
     defineReflectiveTests(MissingCodeTest);
     defineReflectiveTests(ParameterListTest);
+    defineReflectiveTests(TypedefTest);
   });
 }
 
@@ -36,6 +38,22 @@ f() => [a, b c];
 f() => [a, b, c];
 ''');
   }
+
+  void test_missingComma_afterIf() {
+    testRecovery('''
+f() => [a, if (x) b c];
+''', [ParserErrorCode.EXPECTED_ELSE_OR_COMMA], '''
+f() => [a, if (x) b, c];
+''', featureSet: controlFlow);
+  }
+
+  void test_missingComma_afterIfElse() {
+    testRecovery('''
+f() => [a, if (x) b else y c];
+''', [ParserErrorCode.EXPECTED_TOKEN], '''
+f() => [a, if (x) b else y, c];
+''', featureSet: controlFlow);
+  }
 }
 
 /**
@@ -43,6 +61,8 @@ f() => [a, b, c];
  */
 @reflectiveTest
 class MapLiteralTest extends AbstractRecoveryTest {
+  final beforeUiAsCode = FeatureSet.forTesting(sdkVersion: '2.2.0');
+
   void test_extraComma() {
     testRecovery('''
 f() => {a: b, , c: d};
@@ -52,15 +72,15 @@ f() => {a: b, , c: d};
       ParserErrorCode.MISSING_IDENTIFIER
     ], '''
 f() => {a: b, _s_: _s_, c: d};
-''');
+''', featureSet: beforeUiAsCode);
   }
 
   void test_missingColonAndValue_last() {
     testRecovery('''
-f() => {a };
+f() => {a: b, c };
 ''', [ParserErrorCode.EXPECTED_TOKEN, ParserErrorCode.MISSING_IDENTIFIER], '''
-f() => {a: _s_};
-''');
+f() => {a: b, c: _s_};
+''', featureSet: beforeUiAsCode);
   }
 
   void test_missingComma() {
@@ -69,6 +89,22 @@ f() => {a: b, c: d e: f};
 ''', [ParserErrorCode.EXPECTED_TOKEN], '''
 f() => {a: b, c: d, e: f};
 ''');
+  }
+
+  void test_missingComma_afterIf() {
+    testRecovery('''
+f() => {a: b, if (x) c: d e: f};
+''', [ParserErrorCode.EXPECTED_ELSE_OR_COMMA], '''
+f() => {a: b, if (x) c: d, e: f};
+''', featureSet: controlFlow);
+  }
+
+  void test_missingComma_afterIfElse() {
+    testRecovery('''
+f() => {a: b, if (x) c: d else y: z e: f};
+''', [ParserErrorCode.EXPECTED_TOKEN], '''
+f() => {a: b, if (x) c: d else y: z, e: f};
+''', featureSet: controlFlow);
   }
 
   void test_missingKey() {
@@ -115,24 +151,6 @@ class MissingCodeTest extends AbstractRecoveryTest {
 convert(x) => as T;
 ''', [ParserErrorCode.EXPECTED_TYPE_NAME], '''
 convert(x) => _s_ as T;
-''');
-  }
-
-  @failingTest
-  void test_initializerList_missingComma() {
-    // https://github.com/dart-lang/sdk/issues/33241
-    testRecovery('''
-class Test {
-  Test()
-    : assert(true)
-      assert(true);
-}
-''', [ParserErrorCode.EXPECTED_TOKEN], '''
-class Test {
-  Test()
-    : assert(true),
-      assert(true);
-}
 ''');
   }
 
@@ -196,6 +214,14 @@ import 'bar.dart' deferred as _s_;
 ''');
   }
 
+  void test_comma_missing() {
+    testRecovery('''
+f(int a int b) { }
+''', [ParserErrorCode.EXPECTED_TOKEN], '''
+f(int a, int b) { }
+''');
+  }
+
   void test_conditionalExpression_else() {
     testRecovery('''
 f() => x ? y : 
@@ -218,6 +244,22 @@ f() => x ? _s_ : z;
 
   void test_equalEqual_super() {
     testUserDefinableOperatorWithSuper('==');
+  }
+
+  void test_expressionBody_missingGt() {
+    testRecovery('''
+f(x) = x;
+''', [ParserErrorCode.MISSING_FUNCTION_BODY], '''
+f(x) => x;
+''');
+  }
+
+  void test_expressionBody_return() {
+    testRecovery('''
+f(x) return x;
+''', [ParserErrorCode.MISSING_FUNCTION_BODY], '''
+f(x) => x;
+''');
   }
 
   void test_greaterThan() {
@@ -250,6 +292,57 @@ f() => x ? _s_ : z;
 
   void test_hat_super() {
     testUserDefinableOperatorWithSuper('^');
+  }
+
+  void test_initializerList_missingComma_assert() {
+    // https://github.com/dart-lang/sdk/issues/33241
+    testRecovery('''
+class Test {
+  Test()
+    : assert(true)
+      assert(true);
+}
+''', [ParserErrorCode.EXPECTED_TOKEN], '''
+class Test {
+  Test()
+    : assert(true),
+      assert(true);
+}
+''');
+  }
+
+  void test_initializerList_missingComma_field() {
+    // https://github.com/dart-lang/sdk/issues/33241
+    testRecovery('''
+class Test {
+  Test()
+    : assert(true)
+      x = 2;
+}
+''', [ParserErrorCode.EXPECTED_TOKEN], '''
+class Test {
+  Test()
+    : assert(true),
+      x = 2;
+}
+''');
+  }
+
+  void test_initializerList_missingComma_thisField() {
+    // https://github.com/dart-lang/sdk/issues/33241
+    testRecovery('''
+class Test {
+  Test()
+    : assert(true)
+      this.x = 2;
+}
+''', [ParserErrorCode.EXPECTED_TOKEN], '''
+class Test {
+  Test()
+    : assert(true),
+      this.x = 2;
+}
+''');
   }
 
   void test_isExpression_missingLeft() {
@@ -389,10 +482,16 @@ f() {
     testUserDefinableOperatorWithSuper('*');
   }
 
+  @failingTest
   void test_stringInterpolation_unclosed() {
     // https://github.com/dart-lang/sdk/issues/946
     // TODO(brianwilkerson) Try to recover better. Ideally there would be a
     // single error about an unterminated interpolation block.
+
+    // https://github.com/dart-lang/sdk/issues/36101
+    // TODO(danrubel): improve recovery so that the scanner/parser associates
+    // `${` with a synthetic `}` inside the " " rather than the `}` at the end.
+
     testRecovery(r'''
 f() {
   print("${42");
@@ -701,6 +800,21 @@ f({a: 0}) {}
 f(a = 0) {}
 ''', [ParserErrorCode.POSITIONAL_PARAMETER_OUTSIDE_GROUP], '''
 f([a = 0]) {}
+''');
+  }
+}
+
+/**
+ * Test how well the parser recovers when tokens are missing in a typedef.
+ */
+@reflectiveTest
+class TypedefTest extends AbstractRecoveryTest {
+  @failingTest
+  void test_missingFunction() {
+    testRecovery('''
+typedef Predicate = bool <E>(E element);
+''', [ParserErrorCode.MISSING_IDENTIFIER], '''
+typedef Predicate = bool Function<E>(E element);
 ''');
   }
 }

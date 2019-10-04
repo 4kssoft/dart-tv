@@ -5,6 +5,7 @@
 #include "vm/compiler/method_recognizer.h"
 
 #include "vm/object.h"
+#include "vm/reusable_handles.h"
 #include "vm/symbols.h"
 
 namespace dart {
@@ -14,24 +15,79 @@ MethodRecognizer::Kind MethodRecognizer::RecognizeKind(
   return function.recognized_kind();
 }
 
-bool MethodRecognizer::AlwaysInline(const Function& function) {
-  return function.always_inline();
-}
-
 bool MethodRecognizer::PolymorphicTarget(const Function& function) {
   return function.is_polymorphic_target();
 }
 
-intptr_t MethodRecognizer::ResultCid(const Function& function) {
-  switch (function.recognized_kind()) {
-#define DEFINE_CASE(cname, fname, ename, result_type, fingerprint)             \
-  case k##ename:                                                               \
-    return k##result_type##Cid;
-    RECOGNIZED_LIST(DEFINE_CASE)
-#undef DEFINE_CASE
+intptr_t MethodRecognizer::NumArgsCheckedForStaticCall(
+    const Function& function) {
+  switch (RecognizeKind(function)) {
+    case MethodRecognizer::kDoubleFromInteger:
+    case MethodRecognizer::kMathMin:
+    case MethodRecognizer::kMathMax:
+      return 2;
     default:
-      return kDynamicCid;
+      return 0;
   }
+}
+
+intptr_t MethodRecognizer::ResultCidFromPragma(
+    const Object& function_or_field) {
+  auto T = Thread::Current();
+  auto Z = T->zone();
+  auto& option = Object::Handle(Z);
+  if (Library::FindPragma(T, /*only_core=*/true, function_or_field,
+                          Symbols::vm_exact_result_type(), &option)) {
+    if (option.IsType()) {
+      return Type::Cast(option).type_class_id();
+    } else if (option.IsString()) {
+      auto& str = String::Cast(option);
+      // 'str' should match the pattern '([^#]+)#([^#\?]+)' where group 1
+      // is the library URI and group 2 is the class name.
+      bool parse_failure = false;
+      intptr_t library_end = -1;
+      for (intptr_t i = 0; i < str.Length(); ++i) {
+        if (str.CharAt(i) == '#') {
+          if (library_end != -1) {
+            parse_failure = true;
+            break;
+          } else {
+            library_end = i;
+          }
+        }
+      }
+      if (!parse_failure && library_end > 0) {
+        auto& tmp =
+            String::Handle(String::SubString(str, 0, library_end, Heap::kOld));
+        const auto& library = Library::Handle(Library::LookupLibrary(T, tmp));
+        if (!library.IsNull()) {
+          tmp = String::SubString(str, library_end + 1,
+                                  str.Length() - library_end - 1, Heap::kOld);
+          const auto& klass =
+              Class::Handle(library.LookupClassAllowPrivate(tmp));
+          if (!klass.IsNull()) {
+            return klass.id();
+          }
+        }
+      }
+    }
+  }
+
+  return kDynamicCid;
+}
+
+bool MethodRecognizer::HasNonNullableResultTypeFromPragma(
+    const Object& function_or_field) {
+  auto T = Thread::Current();
+  auto Z = T->zone();
+  auto& option = Object::Handle(Z);
+  if (Library::FindPragma(T, /*only_core=*/true, function_or_field,
+                          Symbols::vm_non_nullable_result_type(), &option)) {
+    return true;
+  }
+
+  // If nothing said otherwise, the return type is nullable.
+  return false;
 }
 
 intptr_t MethodRecognizer::MethodKindToReceiverCid(Kind kind) {
@@ -97,6 +153,10 @@ intptr_t MethodRecognizer::MethodKindToReceiverCid(Kind kind) {
     case kInt64ArraySetIndexed:
       return kTypedDataInt64ArrayCid;
 
+    case kUint64ArrayGetIndexed:
+    case kUint64ArraySetIndexed:
+      return kTypedDataUint64ArrayCid;
+
     case kFloat32x4ArrayGetIndexed:
     case kFloat32x4ArraySetIndexed:
       return kTypedDataFloat32x4ArrayCid;
@@ -116,8 +176,7 @@ intptr_t MethodRecognizer::MethodKindToReceiverCid(Kind kind) {
   return kIllegalCid;
 }
 
-#define KIND_TO_STRING(class_name, function_name, enum_name, type, fp)         \
-  #enum_name,
+#define KIND_TO_STRING(class_name, function_name, enum_name, fp) #enum_name,
 static const char* recognized_list_method_name[] = {
     "Unknown", RECOGNIZED_LIST(KIND_TO_STRING)};
 #undef KIND_TO_STRING
@@ -134,7 +193,7 @@ void MethodRecognizer::InitializeState() {
   Libraries(&libs);
   Function& func = Function::Handle();
 
-#define SET_RECOGNIZED_KIND(class_name, function_name, enum_name, type, fp)    \
+#define SET_RECOGNIZED_KIND(class_name, function_name, enum_name, fp)          \
   func = Library::GetFunction(libs, #class_name, #function_name);              \
   if (!func.IsNull()) {                                                        \
     CHECK_FINGERPRINT3(func, class_name, function_name, enum_name, fp);        \
@@ -156,22 +215,13 @@ void MethodRecognizer::InitializeState() {
     UNREACHABLE();                                                             \
   }
 
-#define SET_IS_ALWAYS_INLINE(class_name, function_name, dest, fp)              \
-  SET_FUNCTION_BIT(class_name, function_name, dest, fp, set_always_inline, true)
-
-#define SET_IS_NEVER_INLINE(class_name, function_name, dest, fp)               \
-  SET_FUNCTION_BIT(class_name, function_name, dest, fp, set_is_inlinable, false)
-
 #define SET_IS_POLYMORPHIC_TARGET(class_name, function_name, dest, fp)         \
   SET_FUNCTION_BIT(class_name, function_name, dest, fp,                        \
                    set_is_polymorphic_target, true)
 
-  INLINE_WHITE_LIST(SET_IS_ALWAYS_INLINE);
-  INLINE_BLACK_LIST(SET_IS_NEVER_INLINE);
   POLYMORPHIC_TARGET_LIST(SET_IS_POLYMORPHIC_TARGET);
 
 #undef SET_RECOGNIZED_KIND
-#undef SET_IS_ALWAYS_INLINE
 #undef SET_IS_POLYMORPHIC_TARGET
 #undef SET_FUNCTION_BIT
 }
@@ -184,6 +234,7 @@ void MethodRecognizer::Libraries(GrowableArray<Library*>* libs) {
   libs->Add(&Library::ZoneHandle(Library::InternalLibrary()));
   libs->Add(&Library::ZoneHandle(Library::DeveloperLibrary()));
   libs->Add(&Library::ZoneHandle(Library::AsyncLibrary()));
+  libs->Add(&Library::ZoneHandle(Library::FfiLibrary()));
 }
 
 RawGrowableObjectArray* MethodRecognizer::QueryRecognizedMethods(Zone* zone) {
@@ -194,7 +245,7 @@ RawGrowableObjectArray* MethodRecognizer::QueryRecognizedMethods(Zone* zone) {
   GrowableArray<Library*> libs(3);
   Libraries(&libs);
 
-#define ADD_RECOGNIZED_METHOD(class_name, function_name, enum_name, type, fp)  \
+#define ADD_RECOGNIZED_METHOD(class_name, function_name, enum_name, fp)        \
   func = Library::GetFunction(libs, #class_name, #function_name);              \
   methods.Add(func);
 
@@ -205,8 +256,15 @@ RawGrowableObjectArray* MethodRecognizer::QueryRecognizedMethods(Zone* zone) {
 }
 #endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
-Token::Kind MethodTokenRecognizer::RecognizeTokenKind(const String& name) {
+Token::Kind MethodTokenRecognizer::RecognizeTokenKind(const String& name_) {
+  Thread* thread = Thread::Current();
+  REUSABLE_STRING_HANDLESCOPE(thread);
+  String& name = thread->StringHandle();
+  name = name_.raw();
   ASSERT(name.IsSymbol());
+  if (Function::IsDynamicInvocationForwarderName(name)) {
+    name = Function::DemangleDynamicInvocationForwarderName(name);
+  }
   if (name.raw() == Symbols::Plus().raw()) {
     return Token::kADD;
   } else if (name.raw() == Symbols::Minus().raw()) {
@@ -251,6 +309,59 @@ Token::Kind MethodTokenRecognizer::RecognizeTokenKind(const String& name) {
     return Token::kSET;
   }
   return Token::kILLEGAL;
+}
+
+#define RECOGNIZE_FACTORY(symbol, class_name, constructor_name, cid, fp)       \
+  {Symbols::k##symbol##Id, cid, fp, #symbol ", " #cid},  // NOLINT
+
+static struct {
+  intptr_t symbol_id;
+  intptr_t cid;
+  uint32_t finger_print;
+  const char* name;
+} factory_recognizer_list[] = {RECOGNIZED_LIST_FACTORY_LIST(RECOGNIZE_FACTORY){
+    Symbols::kIllegal, -1, 0, NULL}};
+
+#undef RECOGNIZE_FACTORY
+
+intptr_t FactoryRecognizer::ResultCid(const Function& factory) {
+  ASSERT(factory.IsFactory());
+  const Class& function_class = Class::Handle(factory.Owner());
+  const Library& lib = Library::Handle(function_class.library());
+  ASSERT((lib.raw() == Library::CoreLibrary()) ||
+         (lib.raw() == Library::TypedDataLibrary()));
+  const String& factory_name = String::Handle(factory.name());
+  for (intptr_t i = 0;
+       factory_recognizer_list[i].symbol_id != Symbols::kIllegal; i++) {
+    if (String::EqualsIgnoringPrivateKey(
+            factory_name,
+            Symbols::Symbol(factory_recognizer_list[i].symbol_id))) {
+      return factory_recognizer_list[i].cid;
+    }
+  }
+  return kDynamicCid;
+}
+
+intptr_t FactoryRecognizer::GetResultCidOfListFactory(Zone* zone,
+                                                      const Function& function,
+                                                      intptr_t argument_count) {
+  if (!function.IsFactory()) {
+    return kDynamicCid;
+  }
+
+  const Class& owner = Class::Handle(zone, function.Owner());
+  if ((owner.library() != Library::CoreLibrary()) &&
+      (owner.library() != Library::TypedDataLibrary())) {
+    return kDynamicCid;
+  }
+
+  if ((owner.Name() == Symbols::List().raw()) &&
+      (function.name() == Symbols::ListFactory().raw())) {
+    ASSERT(argument_count == 1 || argument_count == 2);
+    return (argument_count == 1) ? kGrowableObjectArrayCid : kArrayCid;
+  }
+
+  return ResultCid(function);
 }
 
 }  // namespace dart

@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -33,7 +33,7 @@ main() {
   });
 }
 
-ContextRoot _newContextRoot(String root, {List<String> exclude: const []}) {
+ContextRoot _newContextRoot(String root, {List<String> exclude = const []}) {
   return new ContextRoot(root, exclude, pathContext: path.context);
 }
 
@@ -202,6 +202,9 @@ class PluginManagerFromDiskTest extends PluginTestSupport {
         notificationManager, InstrumentationService.NULL_SERVICE);
   }
 
+  @SkippedTest(
+      reason: 'flaky timeouts',
+      issue: 'https://github.com/dart-lang/sdk/issues/38629')
   test_addPluginToContextRoot() async {
     io.Directory pkg1Dir = io.Directory.systemTemp.createTempSync('pkg1');
     String pkgPath = pkg1Dir.resolveSymbolicLinksSync();
@@ -233,6 +236,9 @@ class PluginManagerFromDiskTest extends PluginTestSupport {
 //    pkg1Dir.deleteSync(recursive: true);
   }
 
+  @SkippedTest(
+      reason: 'flaky timeouts',
+      issue: 'https://github.com/dart-lang/sdk/issues/38629')
   test_broadcastRequest_many() async {
     io.Directory pkg1Dir = io.Directory.systemTemp.createTempSync('pkg1');
     String pkgPath = pkg1Dir.resolveSymbolicLinksSync();
@@ -259,6 +265,9 @@ class PluginManagerFromDiskTest extends PluginTestSupport {
     pkg1Dir.deleteSync(recursive: true);
   }
 
+  @SkippedTest(
+      reason: 'flaky timeouts',
+      issue: 'https://github.com/dart-lang/sdk/issues/38629')
   test_broadcastRequest_many_noContextRoot() async {
     io.Directory pkg1Dir = io.Directory.systemTemp.createTempSync('pkg1');
     String pkgPath = pkg1Dir.resolveSymbolicLinksSync();
@@ -283,6 +292,9 @@ class PluginManagerFromDiskTest extends PluginTestSupport {
     pkg1Dir.deleteSync(recursive: true);
   }
 
+  @SkippedTest(
+      reason: 'flaky timeouts',
+      issue: 'https://github.com/dart-lang/sdk/issues/38629')
   test_broadcastWatchEvent() async {
     io.Directory pkg1Dir = io.Directory.systemTemp.createTempSync('pkg1');
     String pkgPath = pkg1Dir.resolveSymbolicLinksSync();
@@ -306,6 +318,9 @@ class PluginManagerFromDiskTest extends PluginTestSupport {
     pkg1Dir.deleteSync(recursive: true);
   }
 
+  @SkippedTest(
+      reason: 'flaky timeouts',
+      issue: 'https://github.com/dart-lang/sdk/issues/38629')
   test_pluginsForContextRoot_multiple() async {
     io.Directory pkg1Dir = io.Directory.systemTemp.createTempSync('pkg1');
     String pkgPath = pkg1Dir.resolveSymbolicLinksSync();
@@ -333,6 +348,9 @@ class PluginManagerFromDiskTest extends PluginTestSupport {
     pkg1Dir.deleteSync(recursive: true);
   }
 
+  @SkippedTest(
+      reason: 'flaky timeouts',
+      issue: 'https://github.com/dart-lang/sdk/issues/38629')
   test_pluginsForContextRoot_one() async {
     io.Directory pkg1Dir = io.Directory.systemTemp.createTempSync('pkg1');
     String pkgPath = pkg1Dir.resolveSymbolicLinksSync();
@@ -349,6 +367,9 @@ class PluginManagerFromDiskTest extends PluginTestSupport {
     pkg1Dir.deleteSync(recursive: true);
   }
 
+  @SkippedTest(
+      reason: 'flaky timeouts',
+      issue: 'https://github.com/dart-lang/sdk/issues/38629')
   test_removedContextRoot() async {
     io.Directory pkg1Dir = io.Directory.systemTemp.createTempSync('pkg1');
     String pkgPath = pkg1Dir.resolveSymbolicLinksSync();
@@ -363,6 +384,10 @@ class PluginManagerFromDiskTest extends PluginTestSupport {
     pkg1Dir.deleteSync(recursive: true);
   }
 
+  @TestTimeout(const Timeout.factor(4))
+  @SkippedTest(
+      reason: 'flaky timeouts',
+      issue: 'https://github.com/dart-lang/sdk/issues/38629')
   test_restartPlugins() async {
     io.Directory pkg1Dir = io.Directory.systemTemp.createTempSync('pkg1');
     String pkg1Path = pkg1Dir.resolveSymbolicLinksSync();
@@ -404,7 +429,7 @@ class PluginManagerFromDiskTest extends PluginTestSupport {
 }
 
 @reflectiveTest
-class PluginManagerTest extends Object with ResourceProviderMixin {
+class PluginManagerTest with ResourceProviderMixin {
   String byteStorePath;
   String sdkPath;
   TestNotificationManager notificationManager;
@@ -513,6 +538,9 @@ class PluginManagerTest extends Object with ResourceProviderMixin {
 
 @reflectiveTest
 class PluginSessionFromDiskTest extends PluginTestSupport {
+  @SkippedTest(
+      reason: 'flaky timeouts',
+      issue: 'https://github.com/dart-lang/sdk/issues/38629')
   test_start_notRunning() async {
     await withPlugin(test: (String pluginPath) async {
       String packagesPath = path.join(pluginPath, '.packages');
@@ -534,7 +562,7 @@ class PluginSessionFromDiskTest extends PluginTestSupport {
 }
 
 @reflectiveTest
-class PluginSessionTest extends Object with ResourceProviderMixin {
+class PluginSessionTest with ResourceProviderMixin {
   TestNotificationManager notificationManager;
   String pluginPath;
   String executionPath;
@@ -671,10 +699,10 @@ abstract class PluginTestSupport {
    * content that implements a minimal plugin if the contents are not given. The
    * [test] function will be passed the path of the directory that was created.
    */
-  Future<Null> withPlugin(
+  Future<void> withPlugin(
       {String content,
       String pluginName,
-      Future<Null> test(String pluginPath)}) async {
+      Future<void> test(String pluginPath)}) async {
     io.Directory tempDirectory =
         io.Directory.systemTemp.createTempSync(pluginName ?? 'test_plugin');
     try {
@@ -719,10 +747,10 @@ abstract class PluginTestSupport {
    * content that implements a minimal plugin if the contents are not given. The
    * [test] function will be passed the path of the directory that was created.
    */
-  Future<Null> withPubspecPlugin(
+  Future<void> withPubspecPlugin(
       {String content,
       String pluginName,
-      Future<Null> test(String pluginPath)}) async {
+      Future<void> test(String pluginPath)}) async {
     io.Directory tempDirectory =
         io.Directory.systemTemp.createTempSync(pluginName ?? 'test_plugin');
     try {
@@ -905,7 +933,7 @@ class TestServerCommunicationChannel implements ServerCommunicationChannel {
   @override
   void listen(void onResponse(Response response),
       void onNotification(Notification notification),
-      {Function onError, void onDone()}) {
+      {void onError(dynamic error), void onDone()}) {
     fail('Unexpected invocation of listen');
   }
 

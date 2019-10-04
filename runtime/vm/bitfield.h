@@ -5,6 +5,7 @@
 #ifndef RUNTIME_VM_BITFIELD_H_
 #define RUNTIME_VM_BITFIELD_H_
 
+#include "platform/assert.h"
 #include "platform/globals.h"
 
 namespace dart {
@@ -16,6 +17,9 @@ static const uword kUwordOne = 1U;
 template <typename S, typename T, int position, int size>
 class BitField {
  public:
+  static_assert((sizeof(S) * kBitsPerByte) >= (position + size),
+                "BitField does not fit into the type.");
+
   static const intptr_t kNextBit = position + size;
 
   // Tells whether the provided value fits into the bit field.
@@ -24,22 +28,23 @@ class BitField {
   }
 
   // Returns a S mask of the bit field.
-  static S mask() { return (kUwordOne << size) - 1; }
+  static constexpr S mask() { return (kUwordOne << size) - 1; }
 
   // Returns a S mask of the bit field which can be applied directly to
   // to the raw unshifted bits.
-  static S mask_in_place() { return ((kUwordOne << size) - 1) << position; }
+  static constexpr S mask_in_place() {
+    return ((kUwordOne << size) - 1) << position;
+  }
 
   // Returns the shift count needed to right-shift the bit field to
   // the least-significant bits.
-  static int shift() { return position; }
+  static constexpr int shift() { return position; }
 
   // Returns the size of the bit field.
-  static int bitsize() { return size; }
+  static constexpr int bitsize() { return size; }
 
   // Returns an S with the bit field value encoded.
   static S encode(T value) {
-    COMPILE_ASSERT((sizeof(S) * kBitsPerByte) >= (position + size));
     ASSERT(is_valid(value));
     return static_cast<S>(value) << position;
   }

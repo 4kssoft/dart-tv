@@ -6,7 +6,7 @@
 #define RUNTIME_VM_INTERPRETER_H_
 
 #include "vm/globals.h"
-#if defined(DART_USE_INTERPRETER)
+#if !defined(DART_PRECOMPILED_RUNTIME)
 
 #include "vm/compiler/method_recognizer.h"
 #include "vm/constants_kbc.h"
@@ -24,7 +24,42 @@ class RawImmutableArray;
 class RawArray;
 class RawObjectPool;
 class RawFunction;
+class RawString;
+class RawSubtypeTestCache;
+class RawTypeArguments;
 class ObjectPointerVisitor;
+
+class LookupCache : public ValueObject {
+ public:
+  LookupCache() {
+    ASSERT(Utils::IsPowerOfTwo(sizeof(Entry)));
+    ASSERT(Utils::IsPowerOfTwo(sizeof(kNumEntries)));
+    Clear();
+  }
+
+  void Clear();
+  bool Lookup(intptr_t receiver_cid,
+              RawString* function_name,
+              RawArray* arguments_descriptor,
+              RawFunction** target) const;
+  void Insert(intptr_t receiver_cid,
+              RawString* function_name,
+              RawArray* arguments_descriptor,
+              RawFunction* target);
+
+ private:
+  struct Entry {
+    intptr_t receiver_cid;
+    RawString* function_name;
+    RawArray* arguments_descriptor;
+    RawFunction* target;
+  };
+
+  static const intptr_t kNumEntries = 1024;
+  static const intptr_t kTableMask = kNumEntries - 1;
+
+  Entry entries_[kNumEntries];
+};
 
 // Interpreter intrinsic handler. It is invoked on entry to the intrinsified
 // function via Intrinsic bytecode before the frame is setup.
@@ -38,6 +73,8 @@ typedef bool (*IntrinsicHandler)(Thread* thread,
 class Interpreter {
  public:
   static const uword kInterpreterStackUnderflowSize = 0x80;
+  // The entry frame pc marker must be non-zero (a valid exception handler pc).
+  static const word kEntryFramePcMarker = -1;
 
   Interpreter();
   ~Interpreter();
@@ -48,152 +85,176 @@ class Interpreter {
 
   // Low address (KBC stack grows up).
   uword stack_base() const { return stack_base_; }
+  // Limit for StackOverflowError.
+  uword overflow_stack_limit() const { return overflow_stack_limit_; }
   // High address (KBC stack grows up).
   uword stack_limit() const { return stack_limit_; }
 
-  // The thread's top_exit_frame_info refers to a Dart frame in the interpreter
-  // stack. The interpreter's top_exit_frame_info refers to a C++ frame in the
-  // native stack.
-  uword top_exit_frame_info() const { return top_exit_frame_info_; }
-  void set_top_exit_frame_info(uword value) { top_exit_frame_info_ = value; }
-
   // Returns true if the interpreter's stack contains the given frame.
-  // TODO(regis): Once the interpreter shares the native stack, we may rely on
-  // a new thread vm_tag to identify an interpreter frame and we will not need
-  // this HasFrame() method.
+  // TODO(regis): We should rely on a new thread vm_tag to identify an
+  // interpreter frame and not need this HasFrame() method.
   bool HasFrame(uword frame) const {
-    return frame >= stack_base() && frame <= get_fp();
+    return frame >= stack_base() && frame < stack_limit();
   }
 
-  // Call on program start.
-  static void InitOnce();
+  // Identify an entry frame by looking at its pc marker value.
+  static bool IsEntryFrameMarker(const KBCInstr* pc) {
+    return reinterpret_cast<word>(pc) == kEntryFramePcMarker;
+  }
 
-  RawObject* Call(const Code& code,
+  RawObject* Call(const Function& function,
                   const Array& arguments_descriptor,
                   const Array& arguments,
+                  Thread* thread);
+
+  RawObject* Call(RawFunction* function,
+                  RawArray* argdesc,
+                  intptr_t argc,
+                  RawObject* const* argv,
                   Thread* thread);
 
   void JumpToFrame(uword pc, uword sp, uword fp, Thread* thread);
 
   uword get_sp() const { return reinterpret_cast<uword>(fp_); }  // Yes, fp_.
   uword get_fp() const { return reinterpret_cast<uword>(fp_); }
-  uword get_pc() const { return pc_; }
+  uword get_pc() const { return reinterpret_cast<uword>(pc_); }
 
-  enum IntrinsicId {
-#define V(test_class_name, test_function_name, enum_name, type, fp)            \
-  k##enum_name##Intrinsic,
-    ALL_INTRINSICS_LIST(V) GRAPH_INTRINSICS_LIST(V)
-#undef V
-        kIntrinsicCount,
-  };
-
-  static bool IsSupportedIntrinsic(IntrinsicId id) {
-    return intrinsics_[id] != NULL;
-  }
-
-  enum SpecialIndex {
-    kExceptionSpecialIndex,
-    kStackTraceSpecialIndex,
-    kSpecialIndexCount
-  };
+  void Unexit(Thread* thread);
 
   void VisitObjectPointers(ObjectPointerVisitor* visitor);
+  void ClearLookupCache() { lookup_cache_.Clear(); }
+
+#ifndef PRODUCT
+  void set_is_debugging(bool value) { is_debugging_ = value; }
+  bool is_debugging() const { return is_debugging_; }
+#endif  // !PRODUCT
 
  private:
   uintptr_t* stack_;
   uword stack_base_;
+  uword overflow_stack_limit_;
   uword stack_limit_;
 
-  RawObject** fp_;
-  uword pc_;
+  RawObject** volatile fp_;
+  const KBCInstr* volatile pc_;
   DEBUG_ONLY(uint64_t icount_;)
 
   InterpreterSetjmpBuffer* last_setjmp_buffer_;
-  uword top_exit_frame_info_;
 
   RawObjectPool* pp_;  // Pool Pointer.
   RawArray* argdesc_;  // Arguments Descriptor: used to pass information between
                        // call instruction and the function entry.
-  RawObject* special_[kSpecialIndexCount];
+  RawObject* special_[KernelBytecode::kSpecialIndexCount];
 
-  static IntrinsicHandler intrinsics_[kIntrinsicCount];
+  LookupCache lookup_cache_;
 
   void Exit(Thread* thread,
             RawObject** base,
             RawObject** exit_frame,
-            uint32_t* pc);
+            const KBCInstr* pc);
 
-  void CallRuntime(Thread* thread,
-                   RawObject** base,
-                   RawObject** exit_frame,
-                   uint32_t* pc,
-                   intptr_t argc_tag,
-                   RawObject** args,
-                   RawObject** result,
-                   uword target);
-
-  void Invoke(Thread* thread,
+  bool Invoke(Thread* thread,
               RawObject** call_base,
               RawObject** call_top,
-              uint32_t** pc,
+              const KBCInstr** pc,
               RawObject*** FP,
               RawObject*** SP);
 
   bool InvokeCompiled(Thread* thread,
                       RawFunction* function,
-                      RawArray* argdesc,
                       RawObject** call_base,
                       RawObject** call_top,
-                      uint32_t** pc,
+                      const KBCInstr** pc,
                       RawObject*** FP,
                       RawObject*** SP);
 
-  bool Deoptimize(Thread* thread,
-                  uint32_t** pc,
-                  RawObject*** FP,
-                  RawObject*** SP,
-                  bool is_lazy);
+  bool InvokeBytecode(Thread* thread,
+                      RawFunction* function,
+                      RawObject** call_base,
+                      RawObject** call_top,
+                      const KBCInstr** pc,
+                      RawObject*** FP,
+                      RawObject*** SP);
 
-  void InlineCacheMiss(int checked_args,
-                       Thread* thread,
-                       RawICData* icdata,
-                       RawObject** call_base,
-                       RawObject** top,
-                       uint32_t* pc,
+  bool InstanceCall(Thread* thread,
+                    RawString* target_name,
+                    RawObject** call_base,
+                    RawObject** call_top,
+                    const KBCInstr** pc,
+                    RawObject*** FP,
+                    RawObject*** SP);
+
+  bool CopyParameters(Thread* thread,
+                      const KBCInstr** pc,
+                      RawObject*** FP,
+                      RawObject*** SP,
+                      const intptr_t num_fixed_params,
+                      const intptr_t num_opt_pos_params,
+                      const intptr_t num_opt_named_params);
+
+  bool AssertAssignable(Thread* thread,
+                        const KBCInstr* pc,
+                        RawObject** FP,
+                        RawObject** call_top,
+                        RawObject** args,
+                        RawSubtypeTestCache* cache);
+
+  bool AllocateMint(Thread* thread,
+                    int64_t value,
+                    const KBCInstr* pc,
+                    RawObject** FP,
+                    RawObject** SP);
+  bool AllocateDouble(Thread* thread,
+                      double value,
+                      const KBCInstr* pc,
+                      RawObject** FP,
+                      RawObject** SP);
+  bool AllocateFloat32x4(Thread* thread,
+                         simd128_value_t value,
+                         const KBCInstr* pc,
+                         RawObject** FP,
+                         RawObject** SP);
+  bool AllocateFloat64x2(Thread* thread,
+                         simd128_value_t value,
+                         const KBCInstr* pc,
+                         RawObject** FP,
+                         RawObject** SP);
+  bool AllocateArray(Thread* thread,
+                     RawTypeArguments* type_args,
+                     RawObject* length,
+                     const KBCInstr* pc,
+                     RawObject** FP,
+                     RawObject** SP);
+  bool AllocateContext(Thread* thread,
+                       intptr_t num_variables,
+                       const KBCInstr* pc,
+                       RawObject** FP,
+                       RawObject** SP);
+  bool AllocateClosure(Thread* thread,
+                       const KBCInstr* pc,
                        RawObject** FP,
                        RawObject** SP);
 
-  void InstanceCall1(Thread* thread,
-                     RawICData* icdata,
-                     RawObject** call_base,
-                     RawObject** call_top,
-                     uint32_t** pc,
-                     RawObject*** FP,
-                     RawObject*** SP,
-                     bool optimized);
-
-  void InstanceCall2(Thread* thread,
-                     RawICData* icdata,
-                     RawObject** call_base,
-                     RawObject** call_top,
-                     uint32_t** pc,
-                     RawObject*** FP,
-                     RawObject*** SP,
-                     bool optimized);
-
-  void PrepareForTailCall(RawCode* code,
-                          RawImmutableArray* args_desc,
-                          RawObject** FP,
-                          RawObject*** SP,
-                          uint32_t** pc);
-
-#if !defined(PRODUCT)
+#if defined(DEBUG)
   // Returns true if tracing of executed instructions is enabled.
   bool IsTracingExecution() const;
 
   // Prints bytecode instruction at given pc for instruction tracing.
-  void TraceInstruction(uint32_t* pc) const;
-#endif  // !defined(PRODUCT)
+  void TraceInstruction(const KBCInstr* pc) const;
+
+  bool IsWritingTraceFile() const;
+  void FlushTraceBuffer();
+  void WriteInstructionToTrace(const KBCInstr* pc);
+
+  void* trace_file_;
+  uint64_t trace_file_bytes_written_;
+
+  static const intptr_t kTraceBufferSizeInBytes = 10 * KB;
+  static const intptr_t kTraceBufferInstrs =
+      kTraceBufferSizeInBytes / sizeof(KBCInstr);
+  KBCInstr* trace_buffer_;
+  intptr_t trace_buffer_idx_;
+#endif  // defined(DEBUG)
 
   // Longjmp support for exceptions.
   InterpreterSetjmpBuffer* last_setjmp_buffer() { return last_setjmp_buffer_; }
@@ -201,12 +262,20 @@ class Interpreter {
     last_setjmp_buffer_ = buffer;
   }
 
+#ifndef PRODUCT
+  bool is_debugging_;
+#endif  // !PRODUCT
+
+  bool supports_unboxed_doubles_;
+  bool supports_unboxed_simd128_;
+
   friend class InterpreterSetjmpBuffer;
+
   DISALLOW_COPY_AND_ASSIGN(Interpreter);
 };
 
 }  // namespace dart
 
-#endif  // defined(DART_USE_INTERPRETER)
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
 #endif  // RUNTIME_VM_INTERPRETER_H_

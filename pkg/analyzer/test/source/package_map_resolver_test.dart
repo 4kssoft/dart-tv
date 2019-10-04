@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -76,10 +76,8 @@ class _PackageMapUriResolverTest {
     provider.newFile(pkgFileB, 'library lib_b;');
     PackageMapUriResolver resolver =
         new PackageMapUriResolver(provider, <String, List<Folder>>{
-      'pkgA': <Folder>[
-        provider.getResource(provider.convertPath('/pkgA/lib/'))
-      ],
-      'pkgB': <Folder>[provider.getResource(provider.convertPath('/pkgB/lib/'))]
+      'pkgA': <Folder>[provider.getResource(provider.convertPath('/pkgA/lib'))],
+      'pkgB': <Folder>[provider.getResource(provider.convertPath('/pkgB/lib'))]
     });
     {
       Uri uri = Uri.parse('package:pkgA/libA.dart');
@@ -134,10 +132,8 @@ class _PackageMapUriResolverTest {
     provider.newFile(pkgFileB, 'library lib_b;');
     PackageMapUriResolver resolver =
         new PackageMapUriResolver(provider, <String, List<Folder>>{
-      'pkgA': <Folder>[
-        provider.getResource(provider.convertPath('/pkgA/lib/'))
-      ],
-      'pkgB': <Folder>[provider.getResource(provider.convertPath('/pkgB/lib/'))]
+      'pkgA': <Folder>[provider.getResource(provider.convertPath('/pkgA/lib'))],
+      'pkgB': <Folder>[provider.getResource(provider.convertPath('/pkgB/lib'))]
     });
     {
       Source source =

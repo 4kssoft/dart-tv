@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -14,7 +14,7 @@ import 'operation.dart';
 final SPACE = ' '.codeUnitAt(0);
 
 void _printColumn(StringBuffer sb, String text, int keyLen,
-    {bool rightJustified: false}) {
+    {bool rightJustified = false}) {
   if (!rightJustified) {
     sb.write(text);
     sb.write(',');
@@ -272,7 +272,7 @@ class Results {
    * Record the elapsed time for the given operation.
    */
   void record(String tag, Duration elapsed,
-      {bool notification: false, bool success: true}) {
+      {bool notification = false, bool success = true}) {
     Measurement measurement = measurements[tag];
     if (measurement == null) {
       measurement = new Measurement(tag, notification);

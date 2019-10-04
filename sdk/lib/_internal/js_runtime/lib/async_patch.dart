@@ -58,7 +58,6 @@ class _AsyncRun {
         storedCallback = callback;
         // Because of a broken shadow-dom polyfill we have to change the
         // children instead a cheap property.
-        // See https://github.com/Polymer/ShadowDOM/issues/468
         JS('', '#.firstChild ? #.removeChild(#): #.appendChild(#)', div, div,
             span, div, span);
       };
@@ -74,7 +73,6 @@ class _AsyncRun {
       callback();
     }
 
-    ;
     JS('void', 'self.scheduleImmediate(#)',
         convertDartClosureToJS(internalCallback, 0));
   }
@@ -84,7 +82,6 @@ class _AsyncRun {
       callback();
     }
 
-    ;
     JS('void', 'self.setImmediate(#)',
         convertDartClosureToJS(internalCallback, 0));
   }
@@ -193,35 +190,29 @@ bool _hasTimer() {
 }
 
 class _AsyncAwaitCompleter<T> implements Completer<T> {
-  final _completer = new Completer<T>.sync();
+  final _future = new _Future<T>();
   bool isSync;
 
   _AsyncAwaitCompleter() : isSync = false;
 
   void complete([FutureOr<T> value]) {
-    if (isSync) {
-      _completer.complete(value);
-    } else if (value is Future<T>) {
-      value.then(_completer.complete, onError: _completer.completeError);
+    if (!isSync || value is Future<T>) {
+      _future._asyncComplete(value);
     } else {
-      scheduleMicrotask(() {
-        _completer.complete(value);
-      });
+      _future._completeWithValue(value);
     }
   }
 
   void completeError(e, [st]) {
     if (isSync) {
-      _completer.completeError(e, st);
+      _future._completeError(e, st);
     } else {
-      scheduleMicrotask(() {
-        _completer.completeError(e, st);
-      });
+      _future._asyncCompleteError(e, st);
     }
   }
 
-  Future<T> get future => _completer.future;
-  bool get isCompleted => _completer.isCompleted;
+  Future<T> get future => _future;
+  bool get isCompleted => !_future._mayComplete;
 }
 
 /// Creates a Completer for an `async` function.
@@ -229,13 +220,6 @@ class _AsyncAwaitCompleter<T> implements Completer<T> {
 /// Used as part of the runtime support for the async/await transformation.
 Completer<T> _makeAsyncAwaitCompleter<T>() {
   return new _AsyncAwaitCompleter<T>();
-}
-
-/// Creates a Completer for an `async` function.
-///
-/// Used as part of the runtime support for the async/await transformation.
-Completer<T> _makeSyncCompleter<T>() {
-  return new Completer<T>.sync();
 }
 
 /// Initiates the computation of an `async` function and starts the body
@@ -250,19 +234,6 @@ dynamic _asyncStartSync(
     _WrappedAsyncBody bodyFunction, _AsyncAwaitCompleter completer) {
   bodyFunction(async_error_codes.SUCCESS, null);
   completer.isSync = true;
-  return completer.future;
-}
-
-/// Initiates the computation of an `async` function.
-///
-/// Used as part of the runtime support for the async/await transformation.
-///
-/// This function sets up the first call into the transformed [bodyFunction].
-/// Independently, it takes the [completer] and returns the future of the
-/// completer for convenience of the transformed code.
-dynamic _asyncStart(_WrappedAsyncBody bodyFunction, Completer completer) {
-  // TODO(sra): Specialize this implementation of `await null`.
-  _awaitOnObject(null, bodyFunction);
   return completer.future;
 }
 
@@ -318,15 +289,14 @@ void _awaitOnObject(object, _WrappedAsyncBody bodyFunction) {
   if (object is _Future) {
     // We can skip the zone registration, since the bodyFunction is already
     // registered (see [_wrapJsFunctionForAsync]).
-    object._thenNoZoneRegistration(thenCallback, errorCallback);
+    object._thenAwait(thenCallback, errorCallback);
   } else if (object is Future) {
     object.then(thenCallback, onError: errorCallback);
   } else {
-    _Future future = new _Future();
-    future._setValue(object);
+    _Future future = new _Future().._setValue(object);
     // We can skip the zone registration, since the bodyFunction is already
     // registered (see [_wrapJsFunctionForAsync]).
-    future._thenNoZoneRegistration(thenCallback, null);
+    future._thenAwait(thenCallback, null);
   }
 }
 
@@ -404,7 +374,7 @@ void _asyncStarHelper(
   if (identical(bodyFunctionOrErrorCode, async_error_codes.SUCCESS)) {
     // This happens on return from the async* function.
     if (controller.isCanceled) {
-      controller.cancelationCompleter.complete();
+      controller.cancelationFuture._completeWithValue(null);
     } else {
       controller.close();
     }
@@ -412,7 +382,7 @@ void _asyncStarHelper(
   } else if (identical(bodyFunctionOrErrorCode, async_error_codes.ERROR)) {
     // The error is a js-error.
     if (controller.isCanceled) {
-      controller.cancelationCompleter.completeError(
+      controller.cancelationFuture._completeError(
           unwrapException(object), getTraceFromException(object));
     } else {
       controller.addError(
@@ -488,13 +458,13 @@ class _AsyncStarStreamController<T> {
 
   bool get isPaused => controller.isPaused;
 
-  Completer cancelationCompleter = null;
+  _Future cancelationFuture = null;
 
   /// True after the StreamSubscription has been cancelled.
   /// When this is true, errors thrown from the async* body should go to the
-  /// [cancelationCompleter] instead of adding them to [controller], and
-  /// returning from the async function should complete [cancelationCompleter].
-  bool get isCanceled => cancelationCompleter != null;
+  /// [cancelationFuture] instead of adding them to [controller], and
+  /// returning from the async function should complete [cancelationFuture].
+  bool get isCanceled => cancelationFuture != null;
 
   add(event) => controller.add(event);
 
@@ -526,7 +496,7 @@ class _AsyncStarStreamController<T> {
     }, onCancel: () {
       // If the async* is finished we ignore cancel events.
       if (!controller.isClosed) {
-        cancelationCompleter = new Completer();
+        cancelationFuture = new _Future();
         if (isSuspended) {
           // Resume the suspended async* function to run finalizers.
           isSuspended = false;
@@ -534,7 +504,7 @@ class _AsyncStarStreamController<T> {
             body(async_error_codes.STREAM_WAS_CANCELED, null);
           });
         }
-        return cancelationCompleter.future;
+        return cancelationFuture;
       }
     });
   }
@@ -685,11 +655,7 @@ class _SyncStarIterator<T> implements Iterator<T> {
         }
       } else {
         // TODO(32956): Remove this test.
-        if (JS_GET_FLAG('STRONG_MODE')) {
-          _current = JS<T>('', '#', value);
-        } else {
-          _current = value;
-        }
+        _current = JS<T>('', '#', value);
         return true;
       }
     }

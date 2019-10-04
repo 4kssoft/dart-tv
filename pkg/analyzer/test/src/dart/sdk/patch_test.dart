@@ -1,15 +1,16 @@
-// Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2016, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/file_system/file_system.dart';
-import 'package:analyzer/file_system/memory_file_system.dart';
 import 'package:analyzer/src/dart/sdk/patch.dart';
 import 'package:analyzer/src/dart/sdk/sdk.dart';
 import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/generated/source.dart';
+import 'package:analyzer/src/test_utilities/resource_provider_mixin.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
@@ -20,8 +21,9 @@ main() {
 }
 
 @reflectiveTest
-class SdkPatcherTest {
-  MemoryResourceProvider provider = new MemoryResourceProvider();
+class SdkPatcherTest with ResourceProviderMixin {
+  final featureSet = FeatureSet.forTesting(sdkVersion: '2.2.2');
+
   Folder sdkFolder;
   FolderBasedDartSdk sdk;
 
@@ -29,7 +31,7 @@ class SdkPatcherTest {
   RecordingErrorListener listener = new RecordingErrorListener();
 
   void setUp() {
-    sdkFolder = provider.getFolder(_p('/sdk'));
+    sdkFolder = getFolder('/sdk');
   }
 
   test_class_constructor_append_fail_notPrivate_named() {
@@ -627,7 +629,7 @@ class C {
     ClassDeclaration cls = unit.declarations[0];
     MethodDeclaration method = cls.members[0];
     FormalParameter parameter = method.parameters.parameters[0];
-    expect(parameter, new isInstanceOf<DefaultFormalParameter>());
+    expect(parameter, new TypeMatcher<DefaultFormalParameter>());
   }
 
   test_class_method_patch_success_implicitReturnType() {
@@ -717,12 +719,12 @@ final Map<String, LibraryInfo> LIBRARIES = const <String, LibraryInfo> {
 };''');
       _createSdk();
       var patchPaths = {
-        'dart:test': [_p('/sdk/lib/does_not_exist.dart')]
+        'dart:test': [convertPath('/sdk/lib/does_not_exist.dart')]
       };
-      File file = provider.newFile(_p('/sdk/lib/test/test.dart'), '');
+      File file = newFile('/sdk/lib/test/test.dart');
       Source source = file.createSource(Uri.parse('dart:test'));
-      CompilationUnit unit = SdkPatcher.parse(source, true, listener);
-      patcher.patch(provider, true, patchPaths, listener, source, unit);
+      CompilationUnit unit = SdkPatcher.parse(source, listener, featureSet);
+      patcher.patch(resourceProvider, patchPaths, listener, source, unit);
     }, throwsArgumentError);
   }
 
@@ -733,16 +735,16 @@ final Map<String, LibraryInfo> LIBRARIES = const <String, LibraryInfo> {
     'internal/internal.dart'),
 };''');
     var patchPaths = {
-      'dart:_internal': [_p('/sdk/lib/internal/internal_patch.dart')]
+      'dart:_internal': [convertPath('/sdk/lib/internal/internal_patch.dart')]
     };
-    File file = provider.newFile(_p('/sdk/lib/internal/internal.dart'), r'''
+    File file = newFile('/sdk/lib/internal/internal.dart', content: r'''
 library dart._internal;
 class A {}
 class B {
   B();
 }
 ''');
-    provider.newFile(_p('/sdk/lib/internal/internal_patch.dart'), r'''
+    newFile(convertPath('/sdk/lib/internal/internal_patch.dart'), content: r'''
 @patch
 class B {
   int newField;
@@ -756,8 +758,8 @@ int newFunction() => 2;
     _createSdk();
 
     Source source = file.createSource(Uri.parse('dart:_internal'));
-    CompilationUnit unit = SdkPatcher.parse(source, true, listener);
-    patcher.patch(provider, true, patchPaths, listener, source, unit);
+    CompilationUnit unit = SdkPatcher.parse(source, listener, featureSet);
+    patcher.patch(resourceProvider, patchPaths, listener, source, unit);
     _assertUnitCode(
         unit,
         'library dart._internal; class A {} '
@@ -782,12 +784,12 @@ final Map<String, LibraryInfo> LIBRARIES = const <String, LibraryInfo> {
     patches: {VM_PLATFORM: ['test/test_patch.dart']}),
 };''');
     var patchPaths = {
-      'dart:test': [_p('/sdk/lib/test/test_patch.dart')]
+      'dart:test': [convertPath('/sdk/lib/test/test_patch.dart')]
     };
-    File fileLib = provider.newFile(_p('/sdk/lib/test/test.dart'), baseLibCode);
+    File fileLib = newFile('/sdk/lib/test/test.dart', content: baseLibCode);
     File filePart =
-        provider.newFile(_p('/sdk/lib/test/test_part.dart'), basePartCode);
-    provider.newFile(_p('/sdk/lib/test/test_patch.dart'), r'''
+        newFile('/sdk/lib/test/test_part.dart', content: basePartCode);
+    newFile('/sdk/lib/test/test_patch.dart', content: r'''
 import 'foo.dart';
 
 @patch
@@ -808,8 +810,8 @@ class _C {}
     {
       Uri uri = Uri.parse('dart:test');
       Source source = fileLib.createSource(uri);
-      CompilationUnit unit = SdkPatcher.parse(source, true, listener);
-      patcher.patch(provider, true, patchPaths, listener, source, unit);
+      CompilationUnit unit = SdkPatcher.parse(source, listener, featureSet);
+      patcher.patch(resourceProvider, patchPaths, listener, source, unit);
       _assertUnitCode(
           unit,
           "library test; part 'test_part.dart'; import 'foo.dart'; "
@@ -819,8 +821,8 @@ class _C {}
     {
       Uri uri = Uri.parse('dart:test/test_part.dart');
       Source source = filePart.createSource(uri);
-      CompilationUnit unit = SdkPatcher.parse(source, true, listener);
-      patcher.patch(provider, true, patchPaths, listener, source, unit);
+      CompilationUnit unit = SdkPatcher.parse(source, listener, featureSet);
+      patcher.patch(resourceProvider, patchPaths, listener, source, unit);
       _assertUnitCode(unit, "part of test; class B {int _b() => 1;}");
     }
   }
@@ -1053,8 +1055,8 @@ int _bar;
   }
 
   void _createSdk() {
-    sdk = new FolderBasedDartSdk(provider, sdkFolder);
-    sdk.analysisOptions = new AnalysisOptionsImpl()..strongMode = true;
+    sdk = new FolderBasedDartSdk(resourceProvider, sdkFolder);
+    sdk.analysisOptions = new AnalysisOptionsImpl();
   }
 
   CompilationUnit _doTopLevelPatching(String baseCode, String patchCode) {
@@ -1064,24 +1066,24 @@ final Map<String, LibraryInfo> LIBRARIES = const <String, LibraryInfo> {
     'test/test.dart'),
 };''');
     var patchPaths = {
-      'dart:test': [_p('/sdk/lib/test/test_patch.dart')]
+      'dart:test': [convertPath('/sdk/lib/test/test_patch.dart')]
     };
-    File file = provider.newFile(_p('/sdk/lib/test/test.dart'), baseCode);
-    provider.newFile(_p('/sdk/lib/test/test_patch.dart'), patchCode);
+    File file = newFile('/sdk/lib/test/test.dart', content: baseCode);
+    newFile('/sdk/lib/test/test_patch.dart', content: patchCode);
 
     _createSdk();
 
     Source source = file.createSource(Uri.parse('dart:test'));
-    CompilationUnit unit = SdkPatcher.parse(source, true, listener);
-    patcher.patch(provider, true, patchPaths, listener, source, unit);
+    CompilationUnit unit = SdkPatcher.parse(source, listener, featureSet);
+    patcher.patch(resourceProvider, patchPaths, listener, source, unit);
     return unit;
   }
 
-  String _p(String path) => provider.convertPath(path);
-
   void _setSdkLibraries(String code) {
-    provider.newFile(
-        _p('/sdk/lib/_internal/sdk_library_metadata/lib/libraries.dart'), code);
+    newFile(
+      '/sdk/lib/_internal/sdk_library_metadata/lib/libraries.dart',
+      content: code,
+    );
   }
 
   static void _assertPrevNextToken(Token prev, Token next) {

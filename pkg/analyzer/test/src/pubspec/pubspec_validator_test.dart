@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -20,7 +20,7 @@ main() {
 }
 
 @reflectiveTest
-class PubspecValidatorTest extends Object with ResourceProviderMixin {
+class PubspecValidatorTest with ResourceProviderMixin {
   PubspecValidator validator;
 
   /**
@@ -51,6 +51,25 @@ class PubspecValidatorTest extends Object with ResourceProviderMixin {
     File pubspecFile = getFile('/sample/pubspec.yaml');
     Source source = pubspecFile.createSource();
     validator = new PubspecValidator(resourceProvider, source);
+  }
+
+  test_assetDirectoryDoesExists_noError() {
+    newFolder('/sample/assets/logos');
+    assertNoErrors('''
+name: sample
+flutter:
+  assets:
+    - assets/logos/
+''');
+  }
+
+  test_assetDirectoryDoesNotExist_error() {
+    assertErrors('''
+name: sample
+flutter:
+  assets:
+    - assets/logos/
+''', [PubspecWarningCode.ASSET_DIRECTORY_DOES_NOT_EXIST]);
   }
 
   test_assetDoesNotExist_path_error() {
@@ -159,25 +178,10 @@ flutter:
 ''');
   }
 
-  test_dependenciesFieldNotMap_dev_error_bool() {
-    assertErrors('''
-name: sample
-dev_dependencies: true
-''', [PubspecWarningCode.DEPENDENCIES_FIELD_NOT_MAP]);
-  }
-
-  test_dependenciesFieldNotMap_dev_error_empty() {
-    assertErrors('''
-name: sample
-dev_dependencies:
-''', [PubspecWarningCode.DEPENDENCIES_FIELD_NOT_MAP]);
-  }
-
-  test_dependenciesFieldNotMap_dev_noError() {
+  test_dependenciesField_empty() {
     assertNoErrors('''
 name: sample
-dev_dependencies:
-  a: any
+dependencies:
 ''');
   }
 
@@ -185,13 +189,6 @@ dev_dependencies:
     assertErrors('''
 name: sample
 dependencies: true
-''', [PubspecWarningCode.DEPENDENCIES_FIELD_NOT_MAP]);
-  }
-
-  test_dependenciesFieldNotMap_error_empty() {
-    assertErrors('''
-name: sample
-dependencies:
 ''', [PubspecWarningCode.DEPENDENCIES_FIELD_NOT_MAP]);
   }
 
@@ -203,11 +200,26 @@ dependencies:
 ''');
   }
 
-  test_flutterFieldNotMap_error_bool() {
+  test_devDependenciesField_empty() {
+    assertNoErrors('''
+name: sample
+dev_dependencies:
+''');
+  }
+
+  test_devDependenciesFieldNotMap_dev_error_bool() {
     assertErrors('''
 name: sample
-flutter: true
-''', [PubspecWarningCode.FLUTTER_FIELD_NOT_MAP]);
+dev_dependencies: true
+''', [PubspecWarningCode.DEPENDENCIES_FIELD_NOT_MAP]);
+  }
+
+  test_devDependenciesFieldNotMap_dev_noError() {
+    assertNoErrors('''
+name: sample
+dev_dependencies:
+  a: any
+''');
   }
 
   test_flutterField_empty_noError() {
@@ -221,6 +233,13 @@ name: sample
 flutter:
 
 ''');
+  }
+
+  test_flutterFieldNotMap_error_bool() {
+    assertErrors('''
+name: sample
+flutter: true
+''', [PubspecWarningCode.FLUTTER_FIELD_NOT_MAP]);
   }
 
   test_flutterFieldNotMap_noError() {

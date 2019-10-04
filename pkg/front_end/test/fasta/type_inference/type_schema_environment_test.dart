@@ -39,11 +39,11 @@ class TypeSchemaEnvironmentTest {
     coreTypes = new CoreTypes(component);
   }
 
-  InterfaceType get doubleType => coreTypes.doubleClass.rawType;
+  InterfaceType get doubleType => coreTypes.doubleLegacyRawType;
 
-  InterfaceType get functionType => coreTypes.functionClass.rawType;
+  InterfaceType get functionType => coreTypes.functionLegacyRawType;
 
-  InterfaceType get intType => coreTypes.intClass.rawType;
+  InterfaceType get intType => coreTypes.intLegacyRawType;
 
   Class get iterableClass => coreTypes.iterableClass;
 
@@ -51,20 +51,20 @@ class TypeSchemaEnvironmentTest {
 
   Class get mapClass => coreTypes.mapClass;
 
-  InterfaceType get nullType => coreTypes.nullClass.rawType;
+  InterfaceType get nullType => coreTypes.nullType;
 
-  InterfaceType get numType => coreTypes.numClass.rawType;
+  InterfaceType get numType => coreTypes.numLegacyRawType;
 
   Class get objectClass => coreTypes.objectClass;
 
-  InterfaceType get objectType => objectClass.rawType;
+  InterfaceType get objectType => coreTypes.objectLegacyRawType;
 
   void test_addLowerBound() {
-    var A = _addClass(_class('A')).rawType;
-    var B =
-        _addClass(_class('B', supertype: A.classNode.asThisSupertype)).rawType;
-    var C =
-        _addClass(_class('C', supertype: A.classNode.asThisSupertype)).rawType;
+    var A = coreTypes.legacyRawType(_addClass(_class('A')));
+    var B = coreTypes.legacyRawType(
+        _addClass(_class('B', supertype: A.classNode.asThisSupertype)));
+    var C = coreTypes.legacyRawType(
+        _addClass(_class('C', supertype: A.classNode.asThisSupertype)));
     var env = _makeEnv();
     var typeConstraint = new TypeConstraint();
     expect(typeConstraint.lower, same(unknownType));
@@ -75,11 +75,13 @@ class TypeSchemaEnvironmentTest {
   }
 
   void test_addUpperBound() {
-    var A = _addClass(_class('A')).rawType;
-    var B =
-        _addClass(_class('B', supertype: A.classNode.asThisSupertype)).rawType;
-    var C =
-        _addClass(_class('C', supertype: A.classNode.asThisSupertype)).rawType;
+    var A = coreTypes.rawType(_addClass(_class('A')), Nullability.legacy);
+    var B = coreTypes.rawType(
+        _addClass(_class('B', supertype: A.classNode.asThisSupertype)),
+        Nullability.legacy);
+    var C = coreTypes.rawType(
+        _addClass(_class('C', supertype: A.classNode.asThisSupertype)),
+        Nullability.legacy);
     var env = _makeEnv();
     var typeConstraint = new TypeConstraint();
     expect(typeConstraint.upper, same(unknownType));
@@ -92,43 +94,44 @@ class TypeSchemaEnvironmentTest {
   }
 
   void test_glb_bottom() {
-    var A = _addClass(_class('A')).rawType;
+    var A = coreTypes.rawType(_addClass(_class('A')), Nullability.legacy);
     var env = _makeEnv();
-    expect(env.getGreatestLowerBound(bottomType, A), same(bottomType));
-    expect(env.getGreatestLowerBound(A, bottomType), same(bottomType));
+    expect(env.getStandardLowerBound(bottomType, A), same(bottomType));
+    expect(env.getStandardLowerBound(A, bottomType), same(bottomType));
   }
 
   void test_glb_function() {
-    var A = _addClass(_class('A')).rawType;
-    var B =
-        _addClass(_class('B', supertype: A.classNode.asThisSupertype)).rawType;
+    var A = coreTypes.rawType(_addClass(_class('A')), Nullability.legacy);
+    var B = coreTypes.rawType(
+        _addClass(_class('B', supertype: A.classNode.asThisSupertype)),
+        Nullability.legacy);
     var env = _makeEnv();
     // GLB(() -> A, () -> B) = () -> B
     expect(
-        env.getGreatestLowerBound(
+        env.getStandardLowerBound(
             new FunctionType([], A), new FunctionType([], B)),
         new FunctionType([], B));
     // GLB(() -> void, (A, B) -> void) = ([A, B]) -> void
     expect(
-        env.getGreatestLowerBound(
+        env.getStandardLowerBound(
             new FunctionType([], voidType), new FunctionType([A, B], voidType)),
         new FunctionType([A, B], voidType, requiredParameterCount: 0));
     expect(
-        env.getGreatestLowerBound(
+        env.getStandardLowerBound(
             new FunctionType([A, B], voidType), new FunctionType([], voidType)),
         new FunctionType([A, B], voidType, requiredParameterCount: 0));
     // GLB((A) -> void, (B) -> void) = (A) -> void
     expect(
-        env.getGreatestLowerBound(
+        env.getStandardLowerBound(
             new FunctionType([A], voidType), new FunctionType([B], voidType)),
         new FunctionType([A], voidType));
     expect(
-        env.getGreatestLowerBound(
+        env.getStandardLowerBound(
             new FunctionType([B], voidType), new FunctionType([A], voidType)),
         new FunctionType([A], voidType));
     // GLB(({a: A}) -> void, ({b: B}) -> void) = ({a: A, b: B}) -> void
     expect(
-        env.getGreatestLowerBound(
+        env.getStandardLowerBound(
             new FunctionType([], voidType,
                 namedParameters: [new NamedType('a', A)]),
             new FunctionType([], voidType,
@@ -136,7 +139,7 @@ class TypeSchemaEnvironmentTest {
         new FunctionType([], voidType,
             namedParameters: [new NamedType('a', A), new NamedType('b', B)]));
     expect(
-        env.getGreatestLowerBound(
+        env.getStandardLowerBound(
             new FunctionType([], voidType,
                 namedParameters: [new NamedType('b', B)]),
             new FunctionType([], voidType,
@@ -146,7 +149,7 @@ class TypeSchemaEnvironmentTest {
     // GLB(({a: A, c: A}) -> void, ({b: B, d: B}) -> void)
     //     = ({a: A, b: B, c: A, d: B}) -> void
     expect(
-        env.getGreatestLowerBound(
+        env.getStandardLowerBound(
             new FunctionType([], voidType,
                 namedParameters: [
                   new NamedType('a', A),
@@ -167,7 +170,7 @@ class TypeSchemaEnvironmentTest {
     // GLB(({a: A, b: B}) -> void, ({a: B, b: A}) -> void)
     //     = ({a: A, b: A}) -> void
     expect(
-        env.getGreatestLowerBound(
+        env.getStandardLowerBound(
             new FunctionType([], voidType,
                 namedParameters: [
                   new NamedType('a', A),
@@ -181,7 +184,7 @@ class TypeSchemaEnvironmentTest {
         new FunctionType([], voidType,
             namedParameters: [new NamedType('a', A), new NamedType('b', A)]));
     expect(
-        env.getGreatestLowerBound(
+        env.getStandardLowerBound(
             new FunctionType([], voidType,
                 namedParameters: [
                   new NamedType('a', B),
@@ -196,7 +199,7 @@ class TypeSchemaEnvironmentTest {
             namedParameters: [new NamedType('a', A), new NamedType('b', A)]));
     // GLB((B, {a: A}) -> void, (B) -> void) = (B, {a: A}) -> void
     expect(
-        env.getGreatestLowerBound(
+        env.getStandardLowerBound(
             new FunctionType([B], voidType,
                 namedParameters: [new NamedType('a', A)]),
             new FunctionType([B], voidType)),
@@ -204,14 +207,14 @@ class TypeSchemaEnvironmentTest {
             namedParameters: [new NamedType('a', A)]));
     // GLB(({a: A}) -> void, (B) -> void) = bottom
     expect(
-        env.getGreatestLowerBound(
+        env.getStandardLowerBound(
             new FunctionType([], voidType,
                 namedParameters: [new NamedType('a', A)]),
             new FunctionType([B], voidType)),
         same(bottomType));
     // GLB(({a: A}) -> void, ([B]) -> void) = bottom
     expect(
-        env.getGreatestLowerBound(
+        env.getStandardLowerBound(
             new FunctionType([], voidType,
                 namedParameters: [new NamedType('a', A)]),
             new FunctionType([B], voidType, requiredParameterCount: 0)),
@@ -219,44 +222,45 @@ class TypeSchemaEnvironmentTest {
   }
 
   void test_glb_identical() {
-    var A = _addClass(_class('A')).rawType;
+    var A = coreTypes.rawType(_addClass(_class('A')), Nullability.legacy);
     var env = _makeEnv();
-    expect(env.getGreatestLowerBound(A, A), same(A));
-    expect(env.getGreatestLowerBound(new InterfaceType(A.classNode), A), A);
+    expect(env.getStandardLowerBound(A, A), same(A));
+    expect(env.getStandardLowerBound(new InterfaceType(A.classNode), A), A);
   }
 
   void test_glb_subtype() {
-    var A = _addClass(_class('A')).rawType;
-    var B =
-        _addClass(_class('B', supertype: A.classNode.asThisSupertype)).rawType;
+    var A = coreTypes.rawType(_addClass(_class('A')), Nullability.legacy);
+    var B = coreTypes.rawType(
+        _addClass(_class('B', supertype: A.classNode.asThisSupertype)),
+        Nullability.legacy);
     var env = _makeEnv();
-    expect(env.getGreatestLowerBound(A, B), same(B));
-    expect(env.getGreatestLowerBound(B, A), same(B));
+    expect(env.getStandardLowerBound(A, B), same(B));
+    expect(env.getStandardLowerBound(B, A), same(B));
   }
 
   void test_glb_top() {
-    var A = _addClass(_class('A')).rawType;
+    var A = coreTypes.rawType(_addClass(_class('A')), Nullability.legacy);
     var env = _makeEnv();
-    expect(env.getGreatestLowerBound(dynamicType, A), same(A));
-    expect(env.getGreatestLowerBound(A, dynamicType), same(A));
-    expect(env.getGreatestLowerBound(objectType, A), same(A));
-    expect(env.getGreatestLowerBound(A, objectType), same(A));
-    expect(env.getGreatestLowerBound(voidType, A), same(A));
-    expect(env.getGreatestLowerBound(A, voidType), same(A));
+    expect(env.getStandardLowerBound(dynamicType, A), same(A));
+    expect(env.getStandardLowerBound(A, dynamicType), same(A));
+    expect(env.getStandardLowerBound(objectType, A), same(A));
+    expect(env.getStandardLowerBound(A, objectType), same(A));
+    expect(env.getStandardLowerBound(voidType, A), same(A));
+    expect(env.getStandardLowerBound(A, voidType), same(A));
   }
 
   void test_glb_unknown() {
-    var A = _addClass(_class('A')).rawType;
+    var A = coreTypes.rawType(_addClass(_class('A')), Nullability.legacy);
     var env = _makeEnv();
-    expect(env.getGreatestLowerBound(A, unknownType), same(A));
-    expect(env.getGreatestLowerBound(unknownType, A), same(A));
+    expect(env.getStandardLowerBound(A, unknownType), same(A));
+    expect(env.getStandardLowerBound(unknownType, A), same(A));
   }
 
   void test_glb_unrelated() {
-    var A = _addClass(_class('A')).rawType;
-    var B = _addClass(_class('B')).rawType;
+    var A = coreTypes.rawType(_addClass(_class('A')), Nullability.legacy);
+    var B = coreTypes.rawType(_addClass(_class('B')), Nullability.legacy);
     var env = _makeEnv();
-    expect(env.getGreatestLowerBound(A, B), same(bottomType));
+    expect(env.getStandardLowerBound(A, B), same(bottomType));
   }
 
   void test_inferGenericFunctionOrType() {
@@ -350,73 +354,80 @@ class TypeSchemaEnvironmentTest {
     // B C
     // |X|
     // D E
-    var A = _addClass(_class('A')).rawType;
-    var B =
-        _addClass(_class('B', supertype: A.classNode.asThisSupertype)).rawType;
-    var C =
-        _addClass(_class('C', supertype: A.classNode.asThisSupertype)).rawType;
-    var D = _addClass(_class('D', implementedTypes: [
-      B.classNode.asThisSupertype,
-      C.classNode.asThisSupertype
-    ])).rawType;
-    var E = _addClass(_class('E', implementedTypes: [
-      B.classNode.asThisSupertype,
-      C.classNode.asThisSupertype
-    ])).rawType;
+    var A = coreTypes.rawType(_addClass(_class('A')), Nullability.legacy);
+    var B = coreTypes.rawType(
+        _addClass(_class('B', supertype: A.classNode.asThisSupertype)),
+        Nullability.legacy);
+    var C = coreTypes.rawType(
+        _addClass(_class('C', supertype: A.classNode.asThisSupertype)),
+        Nullability.legacy);
+    var D = coreTypes.rawType(
+        _addClass(_class('D', implementedTypes: [
+          B.classNode.asThisSupertype,
+          C.classNode.asThisSupertype
+        ])),
+        Nullability.legacy);
+    var E = coreTypes.rawType(
+        _addClass(_class('E', implementedTypes: [
+          B.classNode.asThisSupertype,
+          C.classNode.asThisSupertype
+        ])),
+        Nullability.legacy);
     var env = _makeEnv();
-    expect(env.getLeastUpperBound(D, E), A);
+    expect(env.getStandardUpperBound(D, E), A);
   }
 
   void test_lub_commonClass() {
     var env = _makeEnv();
-    expect(env.getLeastUpperBound(_list(intType), _list(doubleType)),
+    expect(env.getStandardUpperBound(_list(intType), _list(doubleType)),
         _list(numType));
   }
 
   void test_lub_function() {
-    var A = _addClass(_class('A')).rawType;
-    var B =
-        _addClass(_class('B', supertype: A.classNode.asThisSupertype)).rawType;
+    var A = coreTypes.rawType(_addClass(_class('A')), Nullability.legacy);
+    var B = coreTypes.rawType(
+        _addClass(_class('B', supertype: A.classNode.asThisSupertype)),
+        Nullability.legacy);
     var env = _makeEnv();
     // LUB(() -> A, () -> B) = () -> A
     expect(
-        env.getLeastUpperBound(
+        env.getStandardUpperBound(
             new FunctionType([], A), new FunctionType([], B)),
         new FunctionType([], A));
     // LUB(([A]) -> void, (A) -> void) = Function
     expect(
-        env.getLeastUpperBound(
+        env.getStandardUpperBound(
             new FunctionType([A], voidType, requiredParameterCount: 0),
             new FunctionType([A], voidType)),
         functionType);
     // LUB(() -> void, (A, B) -> void) = Function
     expect(
-        env.getLeastUpperBound(
+        env.getStandardUpperBound(
             new FunctionType([], voidType), new FunctionType([A, B], voidType)),
         functionType);
     expect(
-        env.getLeastUpperBound(
+        env.getStandardUpperBound(
             new FunctionType([A, B], voidType), new FunctionType([], voidType)),
         functionType);
     // LUB((A) -> void, (B) -> void) = (B) -> void
     expect(
-        env.getLeastUpperBound(
+        env.getStandardUpperBound(
             new FunctionType([A], voidType), new FunctionType([B], voidType)),
         new FunctionType([B], voidType));
     expect(
-        env.getLeastUpperBound(
+        env.getStandardUpperBound(
             new FunctionType([B], voidType), new FunctionType([A], voidType)),
         new FunctionType([B], voidType));
     // LUB(({a: A}) -> void, ({b: B}) -> void) = () -> void
     expect(
-        env.getLeastUpperBound(
+        env.getStandardUpperBound(
             new FunctionType([], voidType,
                 namedParameters: [new NamedType('a', A)]),
             new FunctionType([], voidType,
                 namedParameters: [new NamedType('b', B)])),
         new FunctionType([], voidType));
     expect(
-        env.getLeastUpperBound(
+        env.getStandardUpperBound(
             new FunctionType([], voidType,
                 namedParameters: [new NamedType('b', B)]),
             new FunctionType([], voidType,
@@ -424,7 +435,7 @@ class TypeSchemaEnvironmentTest {
         new FunctionType([], voidType));
     // LUB(({a: A, c: A}) -> void, ({b: B, d: B}) -> void) = () -> void
     expect(
-        env.getLeastUpperBound(
+        env.getStandardUpperBound(
             new FunctionType([], voidType,
                 namedParameters: [
                   new NamedType('a', A),
@@ -439,7 +450,7 @@ class TypeSchemaEnvironmentTest {
     // LUB(({a: A, b: B}) -> void, ({a: B, b: A}) -> void)
     //     = ({a: B, b: B}) -> void
     expect(
-        env.getLeastUpperBound(
+        env.getStandardUpperBound(
             new FunctionType([], voidType,
                 namedParameters: [
                   new NamedType('a', A),
@@ -453,7 +464,7 @@ class TypeSchemaEnvironmentTest {
         new FunctionType([], voidType,
             namedParameters: [new NamedType('a', B), new NamedType('b', B)]));
     expect(
-        env.getLeastUpperBound(
+        env.getStandardUpperBound(
             new FunctionType([], voidType,
                 namedParameters: [
                   new NamedType('a', B),
@@ -468,21 +479,21 @@ class TypeSchemaEnvironmentTest {
             namedParameters: [new NamedType('a', B), new NamedType('b', B)]));
     // LUB((B, {a: A}) -> void, (B) -> void) = (B) -> void
     expect(
-        env.getLeastUpperBound(
+        env.getStandardUpperBound(
             new FunctionType([B], voidType,
                 namedParameters: [new NamedType('a', A)]),
             new FunctionType([B], voidType)),
         new FunctionType([B], voidType));
     // LUB(({a: A}) -> void, (B) -> void) = Function
     expect(
-        env.getLeastUpperBound(
+        env.getStandardUpperBound(
             new FunctionType([], voidType,
                 namedParameters: [new NamedType('a', A)]),
             new FunctionType([B], voidType)),
         functionType);
     // GLB(({a: A}) -> void, ([B]) -> void) = () -> void
     expect(
-        env.getLeastUpperBound(
+        env.getStandardUpperBound(
             new FunctionType([], voidType,
                 namedParameters: [new NamedType('a', A)]),
             new FunctionType([B], voidType, requiredParameterCount: 0)),
@@ -490,44 +501,46 @@ class TypeSchemaEnvironmentTest {
   }
 
   void test_lub_identical() {
-    var A = _addClass(_class('A')).rawType;
+    var A = coreTypes.rawType(_addClass(_class('A')), Nullability.legacy);
     var env = _makeEnv();
-    expect(env.getLeastUpperBound(A, A), same(A));
-    expect(env.getLeastUpperBound(new InterfaceType(A.classNode), A), A);
+    expect(env.getStandardUpperBound(A, A), same(A));
+    expect(env.getStandardUpperBound(new InterfaceType(A.classNode), A), A);
   }
 
   void test_lub_sameClass() {
-    var A = _addClass(_class('A')).rawType;
-    var B =
-        _addClass(_class('B', supertype: A.classNode.asThisSupertype)).rawType;
+    var A = coreTypes.rawType(_addClass(_class('A')), Nullability.legacy);
+    var B = coreTypes.rawType(
+        _addClass(_class('B', supertype: A.classNode.asThisSupertype)),
+        Nullability.legacy);
     var env = _makeEnv();
-    expect(env.getLeastUpperBound(_map(A, B), _map(B, A)), _map(A, A));
+    expect(env.getStandardUpperBound(_map(A, B), _map(B, A)), _map(A, A));
   }
 
   void test_lub_subtype() {
     var env = _makeEnv();
-    expect(env.getLeastUpperBound(_list(intType), _iterable(numType)),
+    expect(env.getStandardUpperBound(_list(intType), _iterable(numType)),
         _iterable(numType));
-    expect(env.getLeastUpperBound(_iterable(numType), _list(intType)),
+    expect(env.getStandardUpperBound(_iterable(numType), _list(intType)),
         _iterable(numType));
   }
 
   void test_lub_top() {
-    var A = _addClass(_class('A')).rawType;
+    var A = coreTypes.rawType(_addClass(_class('A')), Nullability.legacy);
     var env = _makeEnv();
-    expect(env.getLeastUpperBound(dynamicType, A), same(dynamicType));
-    expect(env.getLeastUpperBound(A, dynamicType), same(dynamicType));
-    expect(env.getLeastUpperBound(objectType, A), same(objectType));
-    expect(env.getLeastUpperBound(A, objectType), same(objectType));
-    expect(env.getLeastUpperBound(voidType, A), same(voidType));
-    expect(env.getLeastUpperBound(A, voidType), same(voidType));
-    expect(env.getLeastUpperBound(dynamicType, objectType), same(dynamicType));
-    // TODO(paulberry): see dartbug.com/28513.
-    expect(env.getLeastUpperBound(objectType, dynamicType), same(objectType));
-    expect(env.getLeastUpperBound(dynamicType, voidType), same(dynamicType));
-    expect(env.getLeastUpperBound(voidType, dynamicType), same(dynamicType));
-    expect(env.getLeastUpperBound(objectType, voidType), same(voidType));
-    expect(env.getLeastUpperBound(voidType, objectType), same(voidType));
+    expect(env.getStandardUpperBound(dynamicType, A), same(dynamicType));
+    expect(env.getStandardUpperBound(A, dynamicType), same(dynamicType));
+    expect(env.getStandardUpperBound(objectType, A), same(objectType));
+    expect(env.getStandardUpperBound(A, objectType), same(objectType));
+    expect(env.getStandardUpperBound(voidType, A), same(voidType));
+    expect(env.getStandardUpperBound(A, voidType), same(voidType));
+    expect(
+        env.getStandardUpperBound(dynamicType, objectType), same(dynamicType));
+    expect(
+        env.getStandardUpperBound(objectType, dynamicType), same(dynamicType));
+    expect(env.getStandardUpperBound(dynamicType, voidType), same(voidType));
+    expect(env.getStandardUpperBound(voidType, dynamicType), same(voidType));
+    expect(env.getStandardUpperBound(objectType, voidType), same(voidType));
+    expect(env.getStandardUpperBound(voidType, objectType), same(voidType));
   }
 
   void test_lub_typeParameter() {
@@ -537,27 +550,28 @@ class TypeSchemaEnvironmentTest {
     U.parameter.bound = _list(bottomType);
     var env = _makeEnv();
     // LUB(T, T) = T
-    expect(env.getLeastUpperBound(T, T), same(T));
+    expect(env.getStandardUpperBound(T, T), same(T));
     // LUB(T, List<Bottom>) = LUB(List<Object>, List<Bottom>) = List<Object>
-    expect(env.getLeastUpperBound(T, _list(bottomType)), _list(objectType));
-    expect(env.getLeastUpperBound(_list(bottomType), T), _list(objectType));
+    expect(env.getStandardUpperBound(T, _list(bottomType)), _list(objectType));
+    expect(env.getStandardUpperBound(_list(bottomType), T), _list(objectType));
     // LUB(T, U) = LUB(List<Object>, U) = LUB(List<Object>, List<Bottom>)
     // = List<Object>
-    expect(env.getLeastUpperBound(T, U), _list(objectType));
-    expect(env.getLeastUpperBound(U, T), _list(objectType));
+    expect(env.getStandardUpperBound(T, U), _list(objectType));
+    expect(env.getStandardUpperBound(U, T), _list(objectType));
   }
 
   void test_lub_unknown() {
-    var A = _addClass(_class('A')).rawType;
+    var A = coreTypes.rawType(_addClass(_class('A')), Nullability.legacy);
     var env = _makeEnv();
-    expect(env.getGreatestLowerBound(A, unknownType), same(A));
-    expect(env.getGreatestLowerBound(unknownType, A), same(A));
+    expect(env.getStandardLowerBound(A, unknownType), same(A));
+    expect(env.getStandardLowerBound(unknownType, A), same(A));
   }
 
   void test_solveTypeConstraint() {
-    var A = _addClass(_class('A')).rawType;
-    var B =
-        _addClass(_class('B', supertype: A.classNode.asThisSupertype)).rawType;
+    var A = coreTypes.rawType(_addClass(_class('A')), Nullability.legacy);
+    var B = coreTypes.rawType(
+        _addClass(_class('B', supertype: A.classNode.asThisSupertype)),
+        Nullability.legacy);
     var env = _makeEnv();
     // Solve(? <: T <: ?) => ?
     expect(env.solveTypeConstraint(_makeConstraint()), same(unknownType));
@@ -652,15 +666,19 @@ class TypeSchemaEnvironmentTest {
   }
 
   void test_typeSatisfiesConstraint() {
-    var A = _addClass(_class('A')).rawType;
-    var B =
-        _addClass(_class('B', supertype: A.classNode.asThisSupertype)).rawType;
-    var C =
-        _addClass(_class('C', supertype: B.classNode.asThisSupertype)).rawType;
-    var D =
-        _addClass(_class('D', supertype: C.classNode.asThisSupertype)).rawType;
-    var E =
-        _addClass(_class('E', supertype: D.classNode.asThisSupertype)).rawType;
+    var A = coreTypes.rawType(_addClass(_class('A')), Nullability.legacy);
+    var B = coreTypes.rawType(
+        _addClass(_class('B', supertype: A.classNode.asThisSupertype)),
+        Nullability.legacy);
+    var C = coreTypes.rawType(
+        _addClass(_class('C', supertype: B.classNode.asThisSupertype)),
+        Nullability.legacy);
+    var D = coreTypes.rawType(
+        _addClass(_class('D', supertype: C.classNode.asThisSupertype)),
+        Nullability.legacy);
+    var E = coreTypes.rawType(
+        _addClass(_class('E', supertype: D.classNode.asThisSupertype)),
+        Nullability.legacy);
     var env = _makeEnv();
     var typeConstraint = _makeConstraint(upper: B, lower: D);
     expect(env.typeSatisfiesConstraint(A, typeConstraint), isFalse);
@@ -671,13 +689,13 @@ class TypeSchemaEnvironmentTest {
   }
 
   void test_unknown_at_bottom() {
-    var A = _addClass(_class('A')).rawType;
+    var A = coreTypes.rawType(_addClass(_class('A')), Nullability.legacy);
     var env = _makeEnv();
     expect(env.isSubtypeOf(unknownType, A), isTrue);
   }
 
   void test_unknown_at_top() {
-    var A = _addClass(_class('A')).rawType;
+    var A = coreTypes.rawType(_addClass(_class('A')), Nullability.legacy);
     var env = _makeEnv();
     expect(env.isSubtypeOf(A, unknownType), isTrue);
   }
@@ -713,8 +731,7 @@ class TypeSchemaEnvironmentTest {
   }
 
   TypeSchemaEnvironment _makeEnv() {
-    return new TypeSchemaEnvironment(
-        coreTypes, new ClassHierarchy(component), true);
+    return new TypeSchemaEnvironment(coreTypes, new ClassHierarchy(component));
   }
 
   DartType _map(DartType key, DartType value) =>

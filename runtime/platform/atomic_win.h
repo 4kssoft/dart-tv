@@ -102,6 +102,18 @@ inline void AtomicOperations::DecrementBy(intptr_t* p, intptr_t value) {
 #endif
 }
 
+inline uint32_t AtomicOperations::FetchOrRelaxedUint32(uint32_t* ptr,
+                                                       uint32_t value) {
+  return static_cast<uint32_t>(InterlockedOrNoFence(
+      reinterpret_cast<LONG*>(ptr), static_cast<LONG>(value)));
+}
+
+inline uint32_t AtomicOperations::FetchAndRelaxedUint32(uint32_t* ptr,
+                                                        uint32_t value) {
+  return static_cast<uint32_t>(InterlockedAndNoFence(
+      reinterpret_cast<LONG*>(ptr), static_cast<LONG>(value)));
+}
+
 inline uword AtomicOperations::CompareAndSwapWord(uword* ptr,
                                                   uword old_value,
                                                   uword new_value) {
@@ -124,6 +136,24 @@ inline uint32_t AtomicOperations::CompareAndSwapUint32(uint32_t* ptr,
   return static_cast<uint32_t>(InterlockedCompareExchange(
       reinterpret_cast<LONG*>(ptr), static_cast<LONG>(new_value),
       static_cast<LONG>(old_value)));
+#else
+#error Unsupported host architecture.
+#endif
+}
+
+template <typename T>
+inline T AtomicOperations::LoadAcquire(T* ptr) {
+#if (defined(HOST_ARCH_X64) || defined(HOST_ARCH_IA32))
+  return *ptr;
+#else
+#error Unsupported host architecture.
+#endif
+}
+
+template <typename T>
+inline void AtomicOperations::StoreRelease(T* ptr, T value) {
+#if (defined(HOST_ARCH_X64) || defined(HOST_ARCH_IA32))
+  *ptr = value;
 #else
 #error Unsupported host architecture.
 #endif

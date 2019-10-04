@@ -95,19 +95,19 @@ abstract class ZoneSpecification {
    * the ones in [other].
    */
   factory ZoneSpecification.from(ZoneSpecification other,
-      {HandleUncaughtErrorHandler handleUncaughtError: null,
-      RunHandler run: null,
-      RunUnaryHandler runUnary: null,
-      RunBinaryHandler runBinary: null,
-      RegisterCallbackHandler registerCallback: null,
-      RegisterUnaryCallbackHandler registerUnaryCallback: null,
-      RegisterBinaryCallbackHandler registerBinaryCallback: null,
-      ErrorCallbackHandler errorCallback: null,
-      ScheduleMicrotaskHandler scheduleMicrotask: null,
-      CreateTimerHandler createTimer: null,
-      CreatePeriodicTimerHandler createPeriodicTimer: null,
-      PrintHandler print: null,
-      ForkHandler fork: null}) {
+      {HandleUncaughtErrorHandler handleUncaughtError,
+      RunHandler run,
+      RunUnaryHandler runUnary,
+      RunBinaryHandler runBinary,
+      RegisterCallbackHandler registerCallback,
+      RegisterUnaryCallbackHandler registerUnaryCallback,
+      RegisterBinaryCallbackHandler registerBinaryCallback,
+      ErrorCallbackHandler errorCallback,
+      ScheduleMicrotaskHandler scheduleMicrotask,
+      CreateTimerHandler createTimer,
+      CreatePeriodicTimerHandler createPeriodicTimer,
+      PrintHandler print,
+      ForkHandler fork}) {
     return new ZoneSpecification(
         handleUncaughtError: handleUncaughtError ?? other.handleUncaughtError,
         run: run ?? other.run,
@@ -150,19 +150,19 @@ abstract class ZoneSpecification {
  */
 class _ZoneSpecification implements ZoneSpecification {
   const _ZoneSpecification(
-      {this.handleUncaughtError: null,
-      this.run: null,
-      this.runUnary: null,
-      this.runBinary: null,
-      this.registerCallback: null,
-      this.registerUnaryCallback: null,
-      this.registerBinaryCallback: null,
-      this.errorCallback: null,
-      this.scheduleMicrotask: null,
-      this.createTimer: null,
-      this.createPeriodicTimer: null,
-      this.print: null,
-      this.fork: null});
+      {this.handleUncaughtError,
+      this.run,
+      this.runUnary,
+      this.runBinary,
+      this.registerCallback,
+      this.registerUnaryCallback,
+      this.registerBinaryCallback,
+      this.errorCallback,
+      this.scheduleMicrotask,
+      this.createTimer,
+      this.createPeriodicTimer,
+      this.print,
+      this.fork});
 
   final HandleUncaughtErrorHandler handleUncaughtError;
   final RunHandler run;
@@ -284,8 +284,6 @@ abstract class Zone {
    * desired behavior.
    */
   static const Zone root = _rootZone;
-  @Deprecated("Use root instead")
-  static const Zone ROOT = root;
 
   /** The currently running zone. */
   static Zone _current = _rootZone;
@@ -1110,7 +1108,7 @@ class _CustomZone extends _Zone {
 void _rootHandleUncaughtError(
     Zone self, ZoneDelegate parent, Zone zone, error, StackTrace stackTrace) {
   _schedulePriorityAsyncCallback(() {
-    if (error == null) error = new NullThrownError();
+    error ??= new NullThrownError();
     if (stackTrace == null) throw error;
     _rethrow(error, stackTrace);
   });
@@ -1279,7 +1277,7 @@ class _RootZone extends _Zone {
   /// This is always a [HashMap].
   Map get _map => _rootMap;
 
-  static Map _rootMap = new HashMap();
+  static final _rootMap = new HashMap();
 
   static ZoneDelegate _rootDelegate;
 
@@ -1466,10 +1464,10 @@ R runZoned<R>(R body(),
   }
   void Function(Object) unaryOnError;
   void Function(Object, StackTrace) binaryOnError;
-  if (onError is void Function(Object)) {
-    unaryOnError = onError;
-  } else if (onError is void Function(Object, StackTrace)) {
+  if (onError is void Function(Object, StackTrace)) {
     binaryOnError = onError;
+  } else if (onError is void Function(Object)) {
+    unaryOnError = onError;
   } else {
     throw new ArgumentError("onError callback must take either an Object "
         "(the error), or both an Object (the error) and a StackTrace.");

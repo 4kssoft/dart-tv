@@ -1,4 +1,4 @@
-// Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2016, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -53,14 +53,14 @@ main() {
       ]);
 
       DartSdk sdk = driver.sdk;
-      expect(sdk, new isInstanceOf<FolderBasedDartSdk>());
+      expect(sdk, const TypeMatcher<FolderBasedDartSdk>());
       expect((sdk as FolderBasedDartSdk).useSummary, isFalse);
     }));
   });
 }
 
 /// Wrap a function call to dump stdout and stderr in case of an exception.
-Function wrap(Function f) {
+dynamic Function() wrap(dynamic Function() f) {
   return () async {
     try {
       await f();

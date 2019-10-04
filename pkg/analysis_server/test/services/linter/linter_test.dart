@@ -1,8 +1,9 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'package:analyzer/analyzer.dart';
+import 'package:analyzer/error/error.dart';
+import 'package:analyzer/error/listener.dart';
 import 'package:analyzer/src/analysis_options/analysis_options_provider.dart';
 import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/generated/source.dart';
@@ -74,6 +75,9 @@ linter:
 }
 
 class _TestSource implements Source {
+  @override
+  String get fullName => '/package/lib/test.dart';
+
   @override
   noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

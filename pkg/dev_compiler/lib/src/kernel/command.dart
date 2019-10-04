@@ -8,36 +8,48 @@ import 'dart:io';
 
 import 'package:args/args.dart';
 import 'package:build_integration/file_system/multi_root.dart';
-import 'package:front_end/src/api_prototype/standard_file_system.dart';
+import 'package:cli_util/cli_util.dart' show getSdkPath;
 import 'package:front_end/src/api_unstable/ddc.dart' as fe;
-import 'package:kernel/kernel.dart';
+import 'package:kernel/kernel.dart' hide MapEntry;
+import 'package:kernel/target/targets.dart';
 import 'package:kernel/text/ast_to_text.dart' as kernel show Printer;
 import 'package:kernel/binary/ast_to_binary.dart' as kernel show BinaryPrinter;
-import 'package:path/path.dart' as path;
+import 'package:path/path.dart' as p;
 import 'package:source_maps/source_maps.dart' show SourceMapBuilder;
 
-import '../compiler/js_names.dart' as JS;
+import '../compiler/js_names.dart' as js_ast;
 import '../compiler/module_builder.dart';
 import '../compiler/shared_command.dart';
-import '../js_ast/js_ast.dart' as JS;
+import '../compiler/shared_compiler.dart';
+import '../js_ast/js_ast.dart' as js_ast;
+import '../js_ast/js_ast.dart' show js;
 import '../js_ast/source_map_printer.dart' show SourceMapPrintingContext;
+
+import 'analyzer_to_kernel.dart';
 import 'compiler.dart';
 import 'target.dart';
 
-const _binaryName = 'dartdevk';
+const _binaryName = 'dartdevc -k';
 
 /// Invoke the compiler with [args].
 ///
 /// Returns `true` if the program compiled without any fatal errors.
 Future<CompilerResult> compile(List<String> args,
-    {fe.InitializedCompilerState compilerState}) async {
+    {fe.InitializedCompilerState compilerState,
+    bool isWorker = false,
+    bool useIncrementalCompiler = false,
+    Map<Uri, List<int>> inputDigests}) async {
   try {
-    return await _compile(args, compilerState: compilerState);
+    return await _compile(args,
+        compilerState: compilerState,
+        isWorker: isWorker,
+        useIncrementalCompiler: useIncrementalCompiler,
+        inputDigests: inputDigests);
   } catch (error, stackTrace) {
     print('''
 We're sorry, you've found a bug in our compiler.
 You can report this bug at:
-    https://github.com/dart-lang/sdk/issues/labels/area-dev-compiler
+    https://github.com/dart-lang/sdk/issues/labels/web-dev-compiler
 Please include the information below in your report, along with
 any other information that may help us track it down. Thanks!
 -------------------- %< --------------------
@@ -47,7 +59,7 @@ any other information that may help us track it down. Thanks!
 $error
 $stackTrace
 ''');
-    rethrow;
+    return CompilerResult(70);
   }
 }
 
@@ -57,149 +69,71 @@ String _usageMessage(ArgParser ddcArgParser) =>
     'Usage: $_binaryName [options...] <sources...>\n\n'
     '${ddcArgParser.usage}';
 
-/// Resolve [s] as a URI, possibly relative to the current directory.
-Uri stringToUri(String s, {bool windows}) {
-  windows ??= Platform.isWindows;
-  if (windows) {
-    s = s.replaceAll("\\", "/");
-  }
-
-  Uri result = Uri.base.resolve(s);
-  if (windows && result.scheme.length == 1) {
-    // Assume c: or similar --- interpret as file path.
-    return new Uri.file(s, windows: true);
-  }
-  return result;
-}
-
-/// Resolve [s] as a URI, and if the URI is a uri under a directory in [roots],
-/// then return a custom URI containing only the subpath from that root and the
-/// provided [scheme]. For example,
-///
-///    stringToCustomUri('a/b/c.dart', [Uri.base.resolve('a/')], 'foo')
-///
-/// returns:
-///
-///    foo:/b/c.dart
-///
-/// This is used to create machine agnostic URIs both for input files and for
-/// summaries. We do so for input files to ensure we don't leak any
-/// user-specific paths into non-package library names, and we do so for input
-/// summaries to be able to easily derive a module name from the summary path.
-Uri stringToCustomUri(String s, List<Uri> roots, String scheme) {
-  Uri resolvedUri = stringToUri(s);
-  if (resolvedUri.scheme != 'file') return resolvedUri;
-  for (var root in roots) {
-    if (resolvedUri.path.startsWith(root.path)) {
-      var path = resolvedUri.path.substring(root.path.length);
-      return Uri.parse('$scheme:///$path');
-    }
-  }
-  return resolvedUri;
-}
-
-class CompilerResult {
-  final fe.InitializedCompilerState compilerState;
-  final bool success;
-
-  CompilerResult(this.compilerState, this.success);
-
-  CompilerResult.noState(this.success) : compilerState = null;
-}
-
 Future<CompilerResult> _compile(List<String> args,
-    {fe.InitializedCompilerState compilerState}) async {
+    {fe.InitializedCompilerState compilerState,
+    bool isWorker = false,
+    bool useIncrementalCompiler = false,
+    Map<Uri, List<int>> inputDigests}) async {
   // TODO(jmesserly): refactor options to share code with dartdevc CLI.
-  var argParser = new ArgParser(allowTrailingOptions: true)
+  var argParser = ArgParser(allowTrailingOptions: true)
     ..addFlag('help',
         abbr: 'h', help: 'Display this message.', negatable: false)
-    ..addOption('out', abbr: 'o', help: 'Output file (required).')
+    ..addMultiOption('out', abbr: 'o', help: 'Output file (required).')
     ..addOption('packages', help: 'The package spec file to use.')
-    ..addFlag('summarize',
-        help: 'emit API summary in a .dill file', defaultsTo: true)
-    // TODO(jmesserly): should default to `false` and be hidden.
-    // For now this is very helpful in debugging the compiler.
+    // TODO(jmesserly): is this still useful for us, or can we remove it now?
     ..addFlag('summarize-text',
-        help: 'emit API summary in a .js.txt file', defaultsTo: true)
+        help: 'emit API summary in a .js.txt file',
+        defaultsTo: false,
+        hide: true)
+    ..addFlag('track-widget-creation',
+        help: 'enable inspecting of Flutter widgets', hide: true)
     // TODO(jmesserly): add verbose help to show hidden options
     ..addOption('dart-sdk-summary',
         help: 'The path to the Dart SDK summary file.', hide: true)
-    // TODO(jmesserly): this help description length is too long.
-    //
-    // Also summary-input-dir and custom-app-scheme should be removed.
-    // They are undocumented and not necessary.
-    //
-    // URIs can be passed to `--summary` (including relative ones if desired),
-    // and we can easily add logic to prevert absolute file URIs in source maps.
-    //
-    // It appears to have been added in this change, but none of the flags are
-    // described there:
-    // https://github.com/dart-lang/sdk/commit/226602dc189555d9a43785c2a2f599b1622c1890
-    //
-    // Looking at the code, it appears to be solving a similar problem as
-    // `--module-root` in our old Analyzer-based backend.
-    // See https://github.com/dart-lang/sdk/issues/32272 for context on removing
-    // --module-root.
-    ..addMultiOption('summary',
-        abbr: 's',
-        help: 'path to a summary of a transitive dependency of this module.\n'
-            'This path should be under a provided summary-input-dir')
-    ..addFlag('source-map', help: 'emit source mapping', defaultsTo: true)
-    ..addMultiOption('summary-input-dir')
-    ..addOption('custom-app-scheme', defaultsTo: 'org-dartlang-app')
-    ..addFlag('emit-metadata',
-        help: '(deprecated) enables dart:mirrors for this module', hide: true)
-    ..addFlag('enable-asserts', help: 'enable assertions', defaultsTo: true)
-    // Ignore dart2js options that we don't support in DDC.
-    // TODO(jmesserly): add ignore-unrecognized-flag support.
-    ..addFlag('enable-enum', hide: true)
-    ..addFlag('experimental-trust-js-interop-type-annotations', hide: true)
-    ..addFlag('trust-type-annotations', hide: true)
-    ..addFlag('supermixin', hide: true);
-
-  addModuleFormatOptions(argParser, singleOutFile: false);
+    ..addOption('multi-root-scheme',
+        help: 'The custom scheme to indicate a multi-root uri.',
+        defaultsTo: 'org-dartlang-app')
+    ..addMultiOption('multi-root',
+        help: 'The directories to search when encountering uris with the '
+            'specified multi-root scheme.',
+        defaultsTo: [Uri.base.path])
+    ..addOption('multi-root-output-path',
+        help: 'Path to set multi-root files relative to.', hide: true)
+    ..addOption('dart-sdk',
+        help: '(unsupported with --kernel) path to the Dart SDK.', hide: true)
+    ..addFlag('compile-sdk',
+        help: 'Build an SDK module.', defaultsTo: false, hide: true)
+    ..addOption('libraries-file',
+        help: 'The path to the libraries.json file for the sdk.')
+    ..addOption('used-inputs-file',
+        help: 'If set, the file to record inputs used.', hide: true);
+  SharedCompilerOptions.addArguments(argParser);
 
   var declaredVariables = parseAndRemoveDeclaredVariables(args);
-  var argResults = argParser.parse(args);
+  ArgResults argResults;
+  try {
+    argResults = argParser.parse(filterUnknownArguments(args, argParser));
+  } on FormatException catch (error) {
+    print(error);
+    print(_usageMessage(argParser));
+    return CompilerResult(64);
+  }
+
+  var outPaths = argResults['out'] as List<String>;
+  var moduleFormats = parseModuleFormatOption(argResults);
+  if (outPaths.isEmpty) {
+    print('Please specify the output file location. For example:\n'
+        '    -o PATH/TO/OUTPUT_FILE.js');
+    return CompilerResult(64);
+  } else if (outPaths.length != moduleFormats.length) {
+    print('Number of output files (${outPaths.length}) must match '
+        'number of module formats (${moduleFormats.length}).');
+    return CompilerResult(64);
+  }
 
   if (argResults['help'] as bool || args.isEmpty) {
     print(_usageMessage(argParser));
-    return new CompilerResult.noState(true);
-  }
-
-  var moduleFormat = parseModuleFormatOption(argResults).first;
-  var ddcPath = path.dirname(path.dirname(path.fromUri(Platform.script)));
-
-  var multiRoots = <Uri>[];
-  for (var s in argResults['summary-input-dir'] as List<String>) {
-    var uri = stringToUri(s);
-    if (!uri.path.endsWith('/')) {
-      uri = uri.replace(path: '${uri.path}/');
-    }
-    multiRoots.add(uri);
-  }
-  multiRoots.add(Uri.base);
-
-  var customScheme = argResults['custom-app-scheme'] as String;
-  var summaryUris = (argResults['summary'] as List<String>)
-      .map((s) => stringToCustomUri(s, multiRoots, customScheme))
-      .toList();
-
-  var sdkSummaryPath =
-      argResults['dart-sdk-summary'] as String ?? defaultSdkSummaryPath;
-
-  var packageFile = argResults['packages'] as String ??
-      path.absolute(ddcPath, '..', '..', '.packages');
-
-  var inputs = argResults.rest
-      .map((s) => stringToCustomUri(s, [Uri.base], customScheme))
-      .toList();
-
-  var succeeded = true;
-  void errorHandler(fe.CompilationMessage error) {
-    if (error.severity == fe.Severity.error) {
-      succeeded = false;
-    }
+    return CompilerResult(0);
   }
 
   // To make the output .dill agnostic of the current working directory,
@@ -207,35 +141,218 @@ Future<CompilerResult> _compile(List<String> args,
   // lib folder). The following [FileSystem] will resolve those references to
   // the correct location and keeps the real file location hidden from the
   // front end.
-  var fileSystem = new MultiRootFileSystem(
-      customScheme, multiRoots, StandardFileSystem.instance);
+  var multiRootScheme = argResults['multi-root-scheme'] as String;
+  var multiRootPaths = (argResults['multi-root'] as Iterable<String>)
+      .map(Uri.base.resolve)
+      .toList();
+  var multiRootOutputPath = argResults['multi-root-output-path'] as String;
+  if (multiRootOutputPath == null) {
+    if (outPaths.length > 1) {
+      print(
+          'If multiple output files (found ${outPaths.length}) are specified, '
+          'then --multi-root-output-path must be explicitly provided.');
+      return CompilerResult(64);
+    }
+    var jsOutputUri = sourcePathToUri(p.absolute(outPaths.first));
+    multiRootOutputPath = _longestPrefixingPath(jsOutputUri, multiRootPaths);
+  }
 
+  var fileSystem = MultiRootFileSystem(
+      multiRootScheme, multiRootPaths, fe.StandardFileSystem.instance);
+
+  Uri toCustomUri(Uri uri) {
+    if (uri.scheme == '') {
+      return Uri(scheme: multiRootScheme, path: '/' + uri.path);
+    }
+    return uri;
+  }
+
+  // TODO(jmesserly): this is a workaround for the CFE, which does not
+  // understand relative URIs, and we'd like to avoid absolute file URIs
+  // being placed in the summary if possible.
+  // TODO(jmesserly): investigate if Analyzer has a similar issue.
+  Uri sourcePathToCustomUri(String source) {
+    return toCustomUri(sourcePathToRelativeUri(source));
+  }
+
+  var options = SharedCompilerOptions.fromArguments(argResults);
+  var summaryPaths = options.summaryModules.keys.toList();
+  var summaryModules = Map.fromIterables(
+      summaryPaths.map(sourcePathToUri), options.summaryModules.values);
+  var useAnalyzer = summaryPaths.any((s) => !s.endsWith('.dill'));
+  var sdkSummaryPath = argResults['dart-sdk-summary'] as String;
+  var librarySpecPath = argResults['libraries-file'] as String;
+  if (sdkSummaryPath == null) {
+    sdkSummaryPath =
+        useAnalyzer ? defaultAnalyzerSdkSummaryPath : defaultSdkSummaryPath;
+    librarySpecPath ??= defaultLibrarySpecPath;
+  }
+
+  if (librarySpecPath == null) {
+    // TODO(jmesserly): the `isSupported` bit should be included in the SDK
+    // summary, but front_end requires a separate file, so we have to work
+    // around that, while not requiring yet another command line option.
+    //
+    // Right now we search two locations: one level above the SDK summary
+    // (this works for the build and SDK layouts) or next to the SDK summary
+    // (if the user is doing something custom).
+    //
+    // Another option: we could make an in-memory file with the relevant info.
+    librarySpecPath =
+        p.join(p.dirname(p.dirname(sdkSummaryPath)), "libraries.json");
+    if (!File(librarySpecPath).existsSync()) {
+      librarySpecPath = p.join(p.dirname(sdkSummaryPath), "libraries.json");
+    }
+  }
+
+  useAnalyzer = useAnalyzer || !sdkSummaryPath.endsWith('.dill');
+
+  /// The .packages file path provided by the user.
+  //
+  // TODO(jmesserly): the default location is based on the current working
+  // directory, to match the behavior of dartanalyzer/dartdevc. However the
+  // Dart VM, CFE (and dart2js?) use the script file location instead. The
+  // difference may be due to the lack of a single entry point for DDC/Analyzer.
+  // Ultimately this is just the default behavior; in practice users call DDC
+  // through a build tool, which generally passes in `--packages=`.
+  //
+  // TODO(jmesserly): conceptually CFE should not need a .packages file to
+  // resolve package URIs that are in the input summaries, but it seems to.
+  // This needs further investigation.
+  var packageFile = argResults['packages'] as String ?? _findPackagesFilePath();
+
+  var inputs = argResults.rest.map(sourcePathToCustomUri).toList();
+
+  var succeeded = true;
+  void diagnosticMessageHandler(fe.DiagnosticMessage message) {
+    if (message.severity == fe.Severity.error) {
+      succeeded = false;
+    }
+    fe.printDiagnosticMessage(message, print);
+  }
+
+  var experiments = fe.parseExperimentalFlags(options.experiments,
+      onError: stderr.writeln, onWarning: print);
+
+  bool trackWidgetCreation =
+      argResults['track-widget-creation'] as bool ?? false;
+
+  var compileSdk = argResults['compile-sdk'] == true;
   var oldCompilerState = compilerState;
-  compilerState = await fe.initializeCompiler(
-      oldCompilerState,
-      stringToUri(sdkSummaryPath),
-      stringToUri(packageFile),
-      summaryUris,
-      new DevCompilerTarget(),
-      fileSystem: fileSystem);
-  fe.DdcResult result = await fe.compile(compilerState, inputs, errorHandler);
+  List<Component> doneInputSummaries;
+  fe.IncrementalCompiler incrementalCompiler;
+  fe.WorkerInputComponent cachedSdkInput;
+  bool recordUsedInputs = argResults['used-inputs-file'] != null;
+  List<Uri> inputSummaries = summaryModules.keys.toList();
+  if (useAnalyzer || !useIncrementalCompiler) {
+    compilerState = await fe.initializeCompiler(
+        oldCompilerState,
+        compileSdk,
+        sourcePathToUri(getSdkPath()),
+        compileSdk ? null : sourcePathToUri(sdkSummaryPath),
+        sourcePathToUri(packageFile),
+        sourcePathToUri(librarySpecPath),
+        inputSummaries,
+        DevCompilerTarget(
+            TargetFlags(trackWidgetCreation: trackWidgetCreation)),
+        fileSystem: fileSystem,
+        experiments: experiments,
+        environmentDefines: declaredVariables);
+  } else {
+    // If digests weren't given and if not in worker mode, create fake data and
+    // ensure we don't have a previous state (as that wouldn't be safe with
+    // fake input digests).
+    if (!isWorker && (inputDigests == null || inputDigests.isEmpty)) {
+      oldCompilerState = null;
+      inputDigests ??= {};
+      if (!compileSdk) {
+        inputDigests[sourcePathToUri(sdkSummaryPath)] = const [0];
+      }
+      for (Uri uri in summaryModules.keys) {
+        inputDigests[uri] = const [0];
+      }
+    }
+
+    doneInputSummaries = List<Component>(summaryModules.length);
+    compilerState = await fe.initializeIncrementalCompiler(
+        oldCompilerState,
+        {
+          "trackWidgetCreation=$trackWidgetCreation",
+          "multiRootScheme=${fileSystem.markerScheme}",
+          "multiRootRoots=${fileSystem.roots}",
+        },
+        doneInputSummaries,
+        compileSdk,
+        sourcePathToUri(getSdkPath()),
+        compileSdk ? null : sourcePathToUri(sdkSummaryPath),
+        sourcePathToUri(packageFile),
+        sourcePathToUri(librarySpecPath),
+        inputSummaries,
+        inputDigests,
+        DevCompilerTarget(
+            TargetFlags(trackWidgetCreation: trackWidgetCreation)),
+        fileSystem: fileSystem,
+        experiments: experiments,
+        environmentDefines: declaredVariables,
+        trackNeededDillLibraries: recordUsedInputs);
+    incrementalCompiler = compilerState.incrementalCompiler;
+    cachedSdkInput =
+        compilerState.workerInputCache[sourcePathToUri(sdkSummaryPath)];
+  }
+
+  // TODO(jmesserly): is there a cleaner way to do this?
+  //
+  // Ideally we'd manage our own batch compilation caching rather than rely on
+  // `initializeCompiler`. Also we should be able to pass down Components for
+  // SDK and summaries.
+  //
+  if (useAnalyzer && !identical(oldCompilerState, compilerState)) {
+    var opts = compilerState.processedOpts;
+    var converter = AnalyzerToKernel(sdkSummaryPath, summaryPaths);
+    opts.sdkSummaryComponent = converter.convertSdk();
+    opts.inputSummariesComponents = converter.convertSummaries();
+  }
+
+  fe.DdcResult result;
+  if (useAnalyzer || !useIncrementalCompiler) {
+    result = await fe.compile(compilerState, inputs, diagnosticMessageHandler);
+  } else {
+    compilerState.options.onDiagnostic = diagnosticMessageHandler;
+    Component incrementalComponent = await incrementalCompiler.computeDelta(
+        entryPoints: inputs, fullComponent: true);
+    result = fe.DdcResult(incrementalComponent, doneInputSummaries,
+        incrementalCompiler.userCode.loader.hierarchy);
+
+    // Workaround for DDC relying on isExternal being set to true.
+    for (var lib in cachedSdkInput.component.libraries) {
+      lib.isExternal = true;
+    }
+    for (Component c in doneInputSummaries) {
+      for (Library lib in c.libraries) {
+        lib.isExternal = true;
+      }
+    }
+  }
+  compilerState.options.onDiagnostic = null; // See http://dartbug.com/36983.
+
   if (result == null || !succeeded) {
-    return new CompilerResult(compilerState, false);
+    return CompilerResult(1, kernelState: compilerState);
   }
 
   var component = result.component;
-  var emitMetadata = argResults['emit-metadata'] as bool;
-  if (!emitMetadata && _checkForDartMirrorsImport(component)) {
-    return new CompilerResult(compilerState, false);
+  if (!options.emitMetadata && _checkForDartMirrorsImport(component)) {
+    return CompilerResult(1, kernelState: compilerState);
   }
-
-  String output = argResults['out'];
-  var file = new File(output);
-  await file.parent.create(recursive: true);
 
   // Output files can be written in parallel, so collect the futures.
   var outFiles = <Future>[];
   if (argResults['summarize'] as bool) {
+    if (outPaths.length > 1) {
+      print(
+          'If multiple output files (found ${outPaths.length}) are specified, '
+          'the --summarize option is not supported.');
+      return CompilerResult(64);
+    }
     // TODO(jmesserly): CFE mutates the Kernel tree, so we can't save the dill
     // file if we successfully reused a cached library. If compiler state is
     // unchanged, it means we used the cache.
@@ -245,37 +362,80 @@ Future<CompilerResult> _compile(List<String> args,
     if (identical(compilerState, oldCompilerState)) {
       component.unbindCanonicalNames();
     }
-    var sink = new File(path.withoutExtension(output) + '.dill').openWrite();
-    new kernel.BinaryPrinter(sink).writeComponentFile(component);
+    var sink = File(p.withoutExtension(outPaths.first) + '.dill').openWrite();
+    // TODO(jmesserly): this appears to save external libraries.
+    // Do we need to run them through an outlining step so they can be saved?
+    kernel.BinaryPrinter(sink).writeComponentFile(component);
     outFiles.add(sink.flush().then((_) => sink.close()));
   }
   if (argResults['summarize-text'] as bool) {
-    var sink = new File(output + '.txt').openWrite();
-    new kernel.Printer(sink, showExternal: false).writeComponentFile(component);
-    outFiles.add(sink.flush().then((_) => sink.close()));
+    if (outPaths.length > 1) {
+      print(
+          'If multiple output files (found ${outPaths.length}) are specified, '
+          'the --summarize-text option is not supported.');
+      return CompilerResult(64);
+    }
+    StringBuffer sb = StringBuffer();
+    kernel.Printer(sb, showExternal: false).writeComponentFile(component);
+    outFiles.add(File(outPaths.first + '.txt').writeAsString(sb.toString()));
   }
 
-  var compiler = new ProgramCompiler(component,
-      declaredVariables: declaredVariables,
-      emitMetadata: emitMetadata,
-      enableAsserts: argResults['enable-asserts'] as bool);
-  var jsModule =
-      compiler.emitModule(component, result.inputSummaries, summaryUris);
+  var compiler = ProgramCompiler(component, result.classHierarchy, options);
 
-  var jsCode = jsProgramToCode(jsModule, moduleFormat,
-      buildSourceMap: argResults['source-map'] as bool,
-      jsUrl: path.toUri(output).toString(),
-      mapUrl: path.toUri(output + '.map').toString(),
-      customScheme: customScheme);
+  var jsModule = compiler.emitModule(
+      component, result.inputSummaries, inputSummaries, summaryModules);
 
-  outFiles.add(file.writeAsString(jsCode.code));
-  if (jsCode.sourceMap != null) {
-    outFiles.add(
-        new File(output + '.map').writeAsString(json.encode(jsCode.sourceMap)));
+  // Also the old Analyzer backend had some code to make debugging better when
+  // --single-out-file is used, but that option does not appear to be used by
+  // any of our build systems.
+  for (var i = 0; i < outPaths.length; ++i) {
+    var output = outPaths[i];
+    var moduleFormat = moduleFormats[i];
+    var file = File(output);
+    await file.parent.create(recursive: true);
+    var jsCode = jsProgramToCode(jsModule, moduleFormat,
+        buildSourceMap: options.sourceMap,
+        inlineSourceMap: options.inlineSourceMap,
+        jsUrl: p.toUri(output).toString(),
+        mapUrl: p.toUri(output + '.map').toString(),
+        bazelMapping: options.bazelMapping,
+        customScheme: multiRootScheme,
+        multiRootOutputPath: multiRootOutputPath);
+
+    outFiles.add(file.writeAsString(jsCode.code));
+    if (jsCode.sourceMap != null) {
+      outFiles.add(
+          File(output + '.map').writeAsString(json.encode(jsCode.sourceMap)));
+    }
+  }
+
+  if (recordUsedInputs) {
+    Set<Uri> usedOutlines = Set<Uri>();
+    if (!useAnalyzer && useIncrementalCompiler) {
+      compilerState.incrementalCompiler
+          .updateNeededDillLibrariesWithHierarchy(result.classHierarchy, null);
+      for (Library lib
+          in compilerState.incrementalCompiler.neededDillLibraries) {
+        if (lib.importUri.scheme == "dart") continue;
+        Uri uri = compilerState.libraryToInputDill[lib.importUri];
+        if (uri == null) {
+          throw StateError("Library ${lib.importUri} was recorded as used, "
+              "but was not in the list of known libraries.");
+        }
+        usedOutlines.add(uri);
+      }
+    } else {
+      // Used inputs wasn't recorded: Say we used everything.
+      usedOutlines.addAll(summaryModules.keys);
+    }
+
+    var outputUsedFile = File(argResults['used-inputs-file'] as String);
+    outputUsedFile.createSync(recursive: true);
+    outputUsedFile.writeAsStringSync(usedOutlines.join("\n"));
   }
 
   await Future.wait(outFiles);
-  return new CompilerResult(compilerState, true);
+  return CompilerResult(0, kernelState: compilerState);
 }
 
 /// The output of compiling a JavaScript module in a particular format.
@@ -296,105 +456,51 @@ class JSCode {
   JSCode(this.code, this.sourceMap);
 }
 
-JSCode jsProgramToCode(JS.Program moduleTree, ModuleFormat format,
-    {bool buildSourceMap: false,
+JSCode jsProgramToCode(js_ast.Program moduleTree, ModuleFormat format,
+    {bool buildSourceMap = false,
+    bool inlineSourceMap = false,
     String jsUrl,
     String mapUrl,
-    String customScheme}) {
-  var opts = new JS.JavaScriptPrintingOptions(
+    Map<String, String> bazelMapping,
+    String customScheme,
+    String multiRootOutputPath}) {
+  var opts = js_ast.JavaScriptPrintingOptions(
       allowKeywordsInProperties: true, allowSingleLineIfStatements: true);
-  JS.SimpleJavaScriptPrintingContext printer;
+  js_ast.SimpleJavaScriptPrintingContext printer;
   SourceMapBuilder sourceMap;
   if (buildSourceMap) {
-    var sourceMapContext = new SourceMapPrintingContext();
+    var sourceMapContext = SourceMapPrintingContext();
     sourceMap = sourceMapContext.sourceMap;
     printer = sourceMapContext;
   } else {
-    printer = new JS.SimpleJavaScriptPrintingContext();
+    printer = js_ast.SimpleJavaScriptPrintingContext();
   }
 
   var tree = transformModuleFormat(format, moduleTree);
   tree.accept(
-      new JS.Printer(opts, printer, localNamer: new JS.TemporaryNamer(tree)));
+      js_ast.Printer(opts, printer, localNamer: js_ast.TemporaryNamer(tree)));
 
   Map builtMap;
   if (buildSourceMap && sourceMap != null) {
     builtMap = placeSourceMap(
-        sourceMap.build(jsUrl), mapUrl, <String, String>{}, customScheme);
-    var jsDir = path.dirname(path.fromUri(jsUrl));
-    var relative = path.relative(path.fromUri(mapUrl), from: jsDir);
-    var relativeMapUrl = path.toUri(relative).toString();
-    assert(path.dirname(jsUrl) == path.dirname(mapUrl));
+        sourceMap.build(jsUrl), mapUrl, bazelMapping, customScheme,
+        multiRootOutputPath: multiRootOutputPath);
+    var jsDir = p.dirname(p.fromUri(jsUrl));
+    var relative = p.relative(p.fromUri(mapUrl), from: jsDir);
+    var relativeMapUrl = p.toUri(relative).toString();
+    assert(p.dirname(jsUrl) == p.dirname(mapUrl));
     printer.emit('\n//# sourceMappingURL=');
     printer.emit(relativeMapUrl);
     printer.emit('\n');
   }
 
   var text = printer.getText();
+  var rawSourceMap = inlineSourceMap
+      ? js.escapedString(json.encode(builtMap), "'").value
+      : 'null';
+  text = text.replaceFirst(SharedCompiler.sourceMapLocationID, rawSourceMap);
 
-  return new JSCode(text, builtMap);
-}
-
-/// This was copied from module_compiler.dart.
-/// Adjusts the source paths in [sourceMap] to be relative to [sourceMapPath],
-/// and returns the new map.  Relative paths are in terms of URIs ('/'), not
-/// local OS paths (e.g., windows '\').
-// TODO(jmesserly): find a new home for this.
-// TODO(sigmund): delete bazelMappings - customScheme should be used instead.
-Map placeSourceMap(Map sourceMap, String sourceMapPath,
-    Map<String, String> bazelMappings, String customScheme) {
-  var map = new Map.from(sourceMap);
-  // Convert to a local file path if it's not.
-  sourceMapPath = path.fromUri(_sourceToUri(sourceMapPath, customScheme));
-  var sourceMapDir = path.dirname(path.absolute(sourceMapPath));
-  var list = (map['sources'] as List).toList();
-  map['sources'] = list;
-
-  String makeRelative(String sourcePath) {
-    var uri = _sourceToUri(sourcePath, customScheme);
-    if (uri.scheme == 'dart' ||
-        uri.scheme == 'package' ||
-        uri.scheme == customScheme) {
-      return sourcePath;
-    }
-
-    // Convert to a local file path if it's not.
-    sourcePath = path.absolute(path.fromUri(uri));
-
-    // Allow bazel mappings to override.
-    var match = bazelMappings[sourcePath];
-    if (match != null) return match;
-
-    // Fall back to a relative path against the source map itself.
-    sourcePath = path.relative(sourcePath, from: sourceMapDir);
-
-    // Convert from relative local path to relative URI.
-    return path.toUri(sourcePath).path;
-  }
-
-  for (int i = 0; i < list.length; i++) {
-    list[i] = makeRelative(list[i] as String);
-  }
-  map['file'] = makeRelative(map['file'] as String);
-  return map;
-}
-
-/// This was copied from module_compiler.dart.
-/// Convert a source string to a Uri.  The [source] may be a Dart URI, a file
-/// URI, or a local win/mac/linux path.
-Uri _sourceToUri(String source, customScheme) {
-  var uri = Uri.parse(source);
-  var scheme = uri.scheme;
-  if (scheme == "dart" ||
-      scheme == "package" ||
-      scheme == "file" ||
-      scheme == customScheme) {
-    // A valid URI.
-    return uri;
-  }
-  // Assume a file path.
-  // TODO(jmesserly): shouldn't this be `path.toUri(path.absolute)`?
-  return new Uri.file(path.absolute(source));
+  return JSCode(text, builtMap);
 }
 
 /// Parses Dart's non-standard `-Dname=value` syntax for declared variables,
@@ -408,7 +514,7 @@ Map<String, String> parseAndRemoveDeclaredVariables(List<String> args) {
       var eq = rest.indexOf('=');
       if (eq <= 0) {
         var kind = eq == 0 ? 'name' : 'value';
-        throw new FormatException('no $kind given to -D option `$arg`');
+        throw FormatException('no $kind given to -D option `$arg`');
       }
       var name = rest.substring(0, eq);
       var value = rest.substring(eq + 1);
@@ -426,15 +532,17 @@ Map<String, String> parseAndRemoveDeclaredVariables(List<String> args) {
 }
 
 /// The default path of the kernel summary for the Dart SDK.
-final defaultSdkSummaryPath = path.join(
-    path.dirname(path.dirname(Platform.resolvedExecutable)),
-    'lib',
-    '_internal',
-    'ddc_sdk.dill');
+final defaultSdkSummaryPath =
+    p.join(getSdkPath(), 'lib', '_internal', 'ddc_sdk.dill');
+
+final defaultLibrarySpecPath = p.join(getSdkPath(), 'lib', 'libraries.json');
+
+final defaultAnalyzerSdkSummaryPath =
+    p.join(getSdkPath(), 'lib', '_internal', 'ddc_sdk.sum');
 
 bool _checkForDartMirrorsImport(Component component) {
   for (var library in component.libraries) {
-    if (library.isExternal) continue;
+    if (library.isExternal || library.importUri.scheme == 'dart') continue;
     for (var dep in library.dependencies) {
       var uri = dep.targetLibrary.importUri;
       if (uri.scheme == 'dart' && uri.path == 'mirrors') {
@@ -445,4 +553,42 @@ bool _checkForDartMirrorsImport(Component component) {
     }
   }
   return false;
+}
+
+/// Returns the absolute path to the default `.packages` file, or `null` if one
+/// could not be found.
+///
+/// Checks for a `.packages` file in the current working directory, or in any
+/// parent directory.
+String _findPackagesFilePath() {
+  // TODO(jmesserly): this was copied from package:package_config/discovery.dart
+  // Unfortunately the relevant function is not public. CFE APIs require a URI
+  // to the .packages file, rather than letting us provide the package map data.
+  var dir = Directory.current;
+  if (!dir.isAbsolute) dir = dir.absolute;
+  if (!dir.existsSync()) return null;
+
+  // Check for $cwd/.packages
+  while (true) {
+    var file = File(p.join(dir.path, ".packages"));
+    if (file.existsSync()) return file.path;
+
+    // If we didn't find it, search the parent directory.
+    // Stop the search if we're already at the root.
+    var parent = dir.parent;
+    if (dir.path == parent.path) return null;
+    dir = parent;
+  }
+}
+
+/// Inputs must be absolute paths. Returns null if no prefixing path is found.
+String _longestPrefixingPath(Uri baseUri, List<Uri> prefixingPaths) {
+  var basePath = baseUri.path;
+  return prefixingPaths.fold(null, (String previousValue, Uri element) {
+    if (basePath.startsWith(element.path) &&
+        (previousValue == null || previousValue.length < element.path.length)) {
+      return element.path;
+    }
+    return previousValue;
+  });
 }

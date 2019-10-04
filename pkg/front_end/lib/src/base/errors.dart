@@ -1,4 +1,4 @@
-// Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2016, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -26,6 +26,12 @@ abstract class ErrorCode {
   final String correction;
 
   /**
+   * Return `true` if diagnostics with this code have documentation for them
+   * that has been published.
+   */
+  final bool hasPublishedDocs;
+
+  /**
    * Whether this error is caused by an unresolved identifier.
    */
   final bool isUnresolvedIdentifier;
@@ -36,7 +42,8 @@ abstract class ErrorCode {
    * template. The correction associated with the error will be created from the
    * given [correction] template.
    */
-  const ErrorCode(this.name, this.message, [this.correction])
+  const ErrorCode(this.name, this.message,
+      [this.correction, this.hasPublishedDocs = false])
       : isUnresolvedIdentifier = false;
 
   /**
@@ -46,7 +53,9 @@ abstract class ErrorCode {
    * given [correction] template.
    */
   const ErrorCode.temporary(this.name, this.message,
-      {this.correction, this.isUnresolvedIdentifier: false});
+      {this.correction,
+      this.isUnresolvedIdentifier: false,
+      this.hasPublishedDocs = false});
 
   /**
    * The severity of the error.
@@ -62,6 +71,17 @@ abstract class ErrorCode {
    * The unique name of this error code.
    */
   String get uniqueName => "$runtimeType.$name";
+
+  /**
+   * Return a URL that can be used to access documentation for diagnostics with
+   * this code, or `null` if there is no published documentation.
+   */
+  String get url {
+    if (hasPublishedDocs) {
+      return 'https://dart.dev/tools/diagnostic-messages#${name.toLowerCase()}';
+    }
+    return null;
+  }
 
   @override
   String toString() => uniqueName;

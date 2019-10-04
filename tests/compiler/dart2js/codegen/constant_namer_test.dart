@@ -4,17 +4,19 @@
 
 import 'package:async_helper/async_helper.dart';
 import 'package:expect/expect.dart';
-import '../compiler_helper.dart';
+import '../helpers/compiler_helper.dart';
 
 const String TEST_ONE = r"""
   class Token {
+    @pragma('dart2js:noElision')
     final name;
+    @pragma('dart2js:noElision')
     final value;
     const Token(this.name, [this.value]);
     use() { print(this); }
   }
   test() {
-    const [12,53].use();
+    (const [12,53] as dynamic).use();
     const Token('start').use();
     const Token('end').use();
     const Token('yes', 12).use();

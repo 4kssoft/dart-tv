@@ -1,18 +1,25 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-library analyzer_cli.src.build_mode;
-
 import 'dart:async';
 import 'dart:io' as io;
+import 'dart:isolate';
 
 import 'package:analyzer/dart/analysis/declared_variables.dart';
+import 'package:analyzer/dart/analysis/results.dart';
+import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/error/error.dart';
 import 'package:analyzer/file_system/file_system.dart';
+import 'package:analyzer/src/dart/analysis/byte_store.dart';
+import 'package:analyzer/src/dart/analysis/cache.dart';
 import 'package:analyzer/src/dart/analysis/driver.dart';
 import 'package:analyzer/src/dart/analysis/file_state.dart';
+import 'package:analyzer/src/dart/analysis/performance_logger.dart';
+import 'package:analyzer/src/dart/analysis/restricted_analysis_context.dart';
+import 'package:analyzer/src/dart/analysis/session.dart';
 import 'package:analyzer/src/dart/sdk/sdk.dart';
+import 'package:analyzer/src/generated/engine.dart' show AnalysisOptionsImpl;
 import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/generated/sdk.dart';
 import 'package:analyzer/src/generated/source.dart';
@@ -20,11 +27,13 @@ import 'package:analyzer/src/generated/source_io.dart';
 import 'package:analyzer/src/source/source_resource.dart';
 import 'package:analyzer/src/summary/format.dart';
 import 'package:analyzer/src/summary/idl.dart';
-import 'package:analyzer/src/summary/link.dart';
 import 'package:analyzer/src/summary/package_bundle_reader.dart';
-import 'package:analyzer/src/summary/summarize_ast.dart';
 import 'package:analyzer/src/summary/summarize_elements.dart';
 import 'package:analyzer/src/summary/summary_sdk.dart' show SummaryBasedDartSdk;
+import 'package:analyzer/src/summary2/link.dart' as summary2;
+import 'package:analyzer/src/summary2/linked_bundle_context.dart' as summary2;
+import 'package:analyzer/src/summary2/linked_element_factory.dart' as summary2;
+import 'package:analyzer/src/summary2/reference.dart' as summary2;
 import 'package:analyzer_cli/src/context_cache.dart';
 import 'package:analyzer_cli/src/driver.dart';
 import 'package:analyzer_cli/src/error_formatter.dart';
@@ -34,9 +43,6 @@ import 'package:analyzer_cli/src/options.dart';
 import 'package:bazel_worker/bazel_worker.dart';
 import 'package:collection/collection.dart';
 import 'package:convert/convert.dart';
-import 'package:front_end/src/api_prototype/byte_store.dart';
-import 'package:front_end/src/base/performance_logger.dart';
-import 'package:front_end/src/byte_store/cache.dart';
 
 /**
  * Persistent Bazel worker.
@@ -57,6 +63,15 @@ class AnalyzerWorkerLoop extends AsyncWorkerLoop {
         resourceProvider, logger, 256 * 1024 * 1024);
   }
 
+  factory AnalyzerWorkerLoop.sendPort(
+      ResourceProvider resourceProvider, SendPort sendPort,
+      {String dartSdkPath}) {
+    AsyncWorkerConnection connection =
+        new SendPortAsyncWorkerConnection(sendPort);
+    return new AnalyzerWorkerLoop(resourceProvider, connection,
+        dartSdkPath: dartSdkPath);
+  }
+
   factory AnalyzerWorkerLoop.std(ResourceProvider resourceProvider,
       {io.Stdin stdinStream, io.Stdout stdoutStream, String dartSdkPath}) {
     AsyncWorkerConnection connection = new StdAsyncWorkerConnection(
@@ -68,10 +83,8 @@ class AnalyzerWorkerLoop extends AsyncWorkerLoop {
   /**
    * Performs analysis with given [options].
    */
-  Future<Null> analyze(
+  Future<void> analyze(
       CommandLineOptions options, Map<String, WorkerInput> inputs) async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
     var packageBundleProvider =
         new WorkerPackageBundleProvider(packageBundleCache, inputs);
     var buildMode = new BuildMode(
@@ -90,11 +103,7 @@ class AnalyzerWorkerLoop extends AsyncWorkerLoop {
    */
   @override
   Future<WorkResponse> performRequest(WorkRequest request) async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
     return logger.runAsync('Perform request', () async {
-      // TODO(brianwilkerson) Determine whether this await is necessary.
-      await null;
       errorBuffer.clear();
       outBuffer.clear();
       try {
@@ -138,13 +147,11 @@ class AnalyzerWorkerLoop extends AsyncWorkerLoop {
    * Run the worker loop.
    */
   @override
-  Future<Null> run() async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
+  Future<void> run() async {
     errorSink = errorBuffer;
     outSink = outBuffer;
     exitHandler = (int exitCode) {
-      return throw new StateError('Exit called: $exitCode');
+      throw new StateError('Exit called: $exitCode');
     };
     await super.run();
   }
@@ -164,7 +171,7 @@ class AnalyzerWorkerLoop extends AsyncWorkerLoop {
 /**
  * Analyzer used when the "--build-mode" option is supplied.
  */
-class BuildMode extends Object with HasContextMixin {
+class BuildMode with HasContextMixin {
   final ResourceProvider resourceProvider;
   final CommandLineOptions options;
   final AnalysisStats stats;
@@ -174,22 +181,31 @@ class BuildMode extends Object with HasContextMixin {
   final ContextCache contextCache;
 
   SummaryDataStore summaryDataStore;
-  AnalysisOptions analysisOptions;
+  AnalysisOptionsImpl analysisOptions;
   Map<Uri, File> uriToFileMap;
   final List<Source> explicitSources = <Source>[];
   final List<PackageBundle> unlinkedBundles = <PackageBundle>[];
 
+  SourceFactory sourceFactory;
+  DeclaredVariables declaredVariables;
   AnalysisDriver analysisDriver;
 
   PackageBundleAssembler assembler;
-  final Set<Source> processedSources = new Set<Source>();
-  final Map<String, UnlinkedUnit> uriToUnit = <String, UnlinkedUnit>{};
+
+  final Map<String, ParsedUnitResult> inputParsedUnitResults = {};
+  summary2.LinkedElementFactory elementFactory;
+
+  // May be null.
+  final DependencyTracker dependencyTracker;
 
   BuildMode(this.resourceProvider, this.options, this.stats, this.contextCache,
       {PerformanceLog logger, PackageBundleProvider packageBundleProvider})
       : logger = logger ?? new PerformanceLog(null),
         packageBundleProvider = packageBundleProvider ??
-            new DirectPackageBundleProvider(resourceProvider);
+            new DirectPackageBundleProvider(resourceProvider),
+        dependencyTracker = options.summaryDepsOutput != null
+            ? DependencyTracker(options.summaryDepsOutput)
+            : null;
 
   bool get _shouldOutputSummary =>
       options.buildSummaryOutput != null ||
@@ -199,11 +215,7 @@ class BuildMode extends Object with HasContextMixin {
    * Perform package analysis according to the given [options].
    */
   Future<ErrorSeverity> analyze() async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
     return await logger.runAsync('Analyze', () async {
-      // TODO(brianwilkerson) Determine whether this await is necessary.
-      await null;
       // Write initial progress message.
       if (!options.machineFormat) {
         outSink.writeln("Analyzing ${options.sourceFiles.join(', ')}...");
@@ -252,30 +264,15 @@ class BuildMode extends Object with HasContextMixin {
       assembler = new PackageBundleAssembler();
       if (_shouldOutputSummary) {
         await logger.runAsync('Build and write output summary', () async {
-          // TODO(brianwilkerson) Determine whether this await is necessary.
-          await null;
           // Prepare all unlinked units.
           await logger.runAsync('Prepare unlinked units', () async {
-            // TODO(brianwilkerson) Determine whether this await is necessary.
-            await null;
             for (var src in explicitSources) {
-              await _prepareUnlinkedUnit('${src.uri}');
+              await _prepareUnit('${src.uri}');
             }
           });
 
           // Build and assemble linked libraries.
-          if (!options.buildSummaryOnlyUnlinked) {
-            // Prepare URIs of unlinked units that should be linked.
-            var unlinkedUris = new Set<String>();
-            for (var bundle in unlinkedBundles) {
-              unlinkedUris.addAll(bundle.unlinkedUnitUris);
-            }
-            for (var src in explicitSources) {
-              unlinkedUris.add('${src.uri}');
-            }
-            // Perform linking.
-            _computeLinkedLibraries(unlinkedUris);
-          }
+          _computeLinkedLibraries2();
 
           // Write the whole package bundle.
           PackageBundleBuilder bundle = assembler.assemble();
@@ -298,42 +295,92 @@ class BuildMode extends Object with HasContextMixin {
         }
       }
 
+      ErrorSeverity severity;
       if (options.buildSummaryOnly) {
-        return ErrorSeverity.NONE;
+        severity = ErrorSeverity.NONE;
       } else {
         // Process errors.
         await _printErrors(outputPath: options.buildAnalysisOutput);
-        return await _computeMaxSeverity();
+        severity = await _computeMaxSeverity();
       }
+
+      if (dependencyTracker != null) {
+        io.File file = new io.File(dependencyTracker.outputPath);
+        file.writeAsStringSync(dependencyTracker.dependencies.join('\n'));
+      }
+
+      return severity;
     });
   }
 
   /**
-   * Compute linked libraries for the given [libraryUris] using the linked
-   * libraries of the [summaryDataStore] and unlinked units in [uriToUnit], and
-   * add them to  the [assembler].
+   * Use [elementFactory] filled with input summaries, and link prepared
+   * [inputParsedUnitResults] to produce linked libraries in [assembler].
    */
-  void _computeLinkedLibraries(Set<String> libraryUris) {
-    logger.run('Link output summary', () {
-      LinkedLibrary getDependency(String absoluteUri) =>
-          summaryDataStore.linkedMap[absoluteUri];
+  void _computeLinkedLibraries2() {
+    logger.run('Link output summary2', () {
+      var inputLibraries = <summary2.LinkInputLibrary>[];
 
-      UnlinkedUnit getUnit(String absoluteUri) =>
-          summaryDataStore.unlinkedMap[absoluteUri] ?? uriToUnit[absoluteUri];
+      for (var librarySource in explicitSources) {
+        var path = librarySource.fullName;
 
-      Map<String, LinkedLibraryBuilder> linkResult = link(
-          libraryUris,
-          getDependency,
-          getUnit,
-          analysisDriver.declaredVariables.get,
-          options.strongMode);
-      linkResult.forEach(assembler.addLinkedLibrary);
+        var parseResult = inputParsedUnitResults[path];
+        if (parseResult == null) {
+          throw ArgumentError('No parsed unit for $path');
+        }
+
+        var unit = parseResult.unit;
+        var isPart = unit.directives.any((d) => d is PartOfDirective);
+        if (isPart) {
+          continue;
+        }
+
+        var inputUnits = <summary2.LinkInputUnit>[];
+        inputUnits.add(
+          summary2.LinkInputUnit(null, librarySource, false, unit),
+        );
+
+        for (var directive in unit.directives) {
+          if (directive is PartDirective) {
+            var partUri = directive.uri.stringValue;
+            var partSource = sourceFactory.resolveUri(librarySource, partUri);
+
+            // Add empty synthetic units for unresolved `part` URIs.
+            if (partSource == null) {
+              var unit = analysisDriver.fsState.unresolvedFile.parse();
+              inputUnits.add(
+                summary2.LinkInputUnit(partUri, null, true, unit),
+              );
+              continue;
+            }
+
+            var partPath = partSource.fullName;
+            var partParseResult = inputParsedUnitResults[partPath];
+            if (partParseResult == null) {
+              throw ArgumentError('No parsed unit for part $partPath in $path');
+            }
+            inputUnits.add(
+              summary2.LinkInputUnit(
+                partUri,
+                partSource,
+                false,
+                partParseResult.unit,
+              ),
+            );
+          }
+        }
+
+        inputLibraries.add(
+          summary2.LinkInputLibrary(librarySource, inputUnits),
+        );
+      }
+
+      var linkResult = summary2.link(elementFactory, inputLibraries);
+      assembler.setBundle2(linkResult.bundle);
     });
   }
 
   Future<ErrorSeverity> _computeMaxSeverity() async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
     ErrorSeverity maxSeverity = ErrorSeverity.NONE;
     if (!options.buildSuppressExitCode) {
       for (Source source in explicitSources) {
@@ -393,29 +440,29 @@ class BuildMode extends Object with HasContextMixin {
     logger.run('Add SDK bundle', () {
       PackageBundle sdkBundle;
       if (options.dartSdkSummaryPath != null) {
-        SummaryBasedDartSdk summarySdk = new SummaryBasedDartSdk(
-            options.dartSdkSummaryPath, options.strongMode);
+        SummaryBasedDartSdk summarySdk =
+            new SummaryBasedDartSdk(options.dartSdkSummaryPath, true);
         sdk = summarySdk;
         sdkBundle = summarySdk.bundle;
       } else {
-        FolderBasedDartSdk dartSdk = new FolderBasedDartSdk(
-            resourceProvider,
-            resourceProvider.getFolder(options.dartSdkPath),
-            options.strongMode);
+        FolderBasedDartSdk dartSdk = new FolderBasedDartSdk(resourceProvider,
+            resourceProvider.getFolder(options.dartSdkPath), true);
         dartSdk.analysisOptions =
             createAnalysisOptionsForCommandLineOptions(options, rootPath);
         dartSdk.useSummary = !options.buildSummaryOnly;
         sdk = dartSdk;
-        sdkBundle = dartSdk.getSummarySdkBundle(options.strongMode);
+        sdkBundle = dartSdk.getSummarySdkBundle();
       }
 
       // Include SDK bundle to avoid parsing SDK sources.
       summaryDataStore.addBundle(null, sdkBundle);
     });
 
-    var sourceFactory = new SourceFactory(<UriResolver>[
+    sourceFactory = new SourceFactory(<UriResolver>[
       new DartUriResolver(sdk),
-      new InSummaryUriResolver(resourceProvider, summaryDataStore),
+      new TrackingInSummaryUriResolver(
+          new InSummaryUriResolver(resourceProvider, summaryDataStore),
+          dependencyTracker),
       new ExplicitSourceResolver(uriToFileMap)
     ]);
 
@@ -433,10 +480,32 @@ class BuildMode extends Object with HasContextMixin {
         sourceFactory,
         analysisOptions,
         externalSummaries: summaryDataStore);
-    analysisDriver.declaredVariables =
-        new DeclaredVariables.fromMap(options.definedVariables);
+
+    declaredVariables = new DeclaredVariables.fromMap(options.definedVariables);
+    analysisDriver.declaredVariables = declaredVariables;
+
+    _createLinkedElementFactory();
 
     scheduler.start();
+  }
+
+  void _createLinkedElementFactory() {
+    var analysisContext = RestrictedAnalysisContext(
+      SynchronousSession(analysisOptions, declaredVariables),
+      sourceFactory,
+    );
+
+    elementFactory = summary2.LinkedElementFactory(
+      analysisContext,
+      null,
+      summary2.Reference.root(),
+    );
+
+    for (var bundle in summaryDataStore.bundles) {
+      elementFactory.addBundle(
+        summary2.LinkedBundleContext(elementFactory, bundle.bundle2),
+      );
+    }
   }
 
   /**
@@ -456,49 +525,41 @@ class BuildMode extends Object with HasContextMixin {
       }
       Uri uri = Uri.parse(sourceFile.substring(0, pipeIndex));
       String path = sourceFile.substring(pipeIndex + 1);
+      path = resourceProvider.pathContext.absolute(path);
+      path = resourceProvider.pathContext.normalize(path);
       uriToFileMap[uri] = resourceProvider.getFile(path);
     }
     return uriToFileMap;
   }
 
   /**
-   * Ensure that the [UnlinkedUnit] for [absoluteUri] is available.
+   * Ensure that the parsed unit for [absoluteUri] is available.
    *
    * If the unit is in the input [summaryDataStore], do nothing.
-   *
-   * Otherwise compute it and store into the [uriToUnit] and [assembler].
    */
-  Future<Null> _prepareUnlinkedUnit(String absoluteUri) async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
+  Future<void> _prepareUnit(String absoluteUri) async {
     // Maybe an input package contains the source.
     if (summaryDataStore.unlinkedMap[absoluteUri] != null) {
       return;
     }
     // Parse the source and serialize its AST.
     Uri uri = Uri.parse(absoluteUri);
-    Source source = analysisDriver.sourceFactory.forUri2(uri);
+    Source source = sourceFactory.forUri2(uri);
     if (!source.exists()) {
       // TODO(paulberry): we should report a warning/error because DDC
       // compilations are unlikely to work.
       return;
     }
     var result = await analysisDriver.parseFile(source.fullName);
-    UnlinkedUnitBuilder unlinkedUnit = serializeAstUnlinked(result.unit);
-    uriToUnit[absoluteUri] = unlinkedUnit;
-    assembler.addUnlinkedUnit(source, unlinkedUnit);
+    inputParsedUnitResults[result.path] = result;
   }
 
   /**
    * Print errors for all explicit sources.  If [outputPath] is supplied, output
    * is sent to a new file at that path.
    */
-  Future<Null> _printErrors({String outputPath}) async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
+  Future<void> _printErrors({String outputPath}) async {
     await logger.runAsync('Compute and print analysis errors', () async {
-      // TODO(brianwilkerson) Determine whether this await is necessary.
-      await null;
       StringBuffer buffer = new StringBuffer();
       var severityProcessor = (AnalysisError error) =>
           determineProcessedSeverity(error, options, analysisOptions);
@@ -509,9 +570,7 @@ class BuildMode extends Object with HasContextMixin {
               severityProcessor: severityProcessor);
       for (Source source in explicitSources) {
         var result = await analysisDriver.getErrors(source.fullName);
-        var errorInfo =
-            new AnalysisErrorInfoImpl(result.errors, result.lineInfo);
-        formatter.formatErrors([errorInfo]);
+        formatter.formatErrors([result]);
       }
       formatter.flush();
       if (!options.machineFormat) {
@@ -525,6 +584,22 @@ class BuildMode extends Object with HasContextMixin {
       }
     });
   }
+}
+
+/**
+ * Tracks paths to dependencies, really just a thin api around a Set<String>.
+ */
+class DependencyTracker {
+  final _dependencies = Set<String>();
+
+  /// The path to the file to create once tracking is done.
+  final String outputPath;
+
+  DependencyTracker(this.outputPath);
+
+  Iterable<String> get dependencies => _dependencies;
+
+  void record(String path) => _dependencies.add(path);
 }
 
 /**
@@ -562,8 +637,7 @@ class ExplicitSourceResolver extends UriResolver {
     File file = uriToFileMap[uri];
     actualUri ??= uri;
     if (file == null) {
-      return new NonExistingSource(
-          uri.toString(), actualUri, UriKind.fromScheme(actualUri.scheme));
+      return null;
     } else {
       return new FileSource(file, actualUri);
     }
@@ -594,6 +668,29 @@ abstract class PackageBundleProvider {
    * Return the [PackageBundle] for the file with the given [path].
    */
   PackageBundle get(String path);
+}
+
+/**
+ * Wrapper for [InSummaryUriResolver] that tracks accesses to summaries.
+ */
+class TrackingInSummaryUriResolver extends UriResolver {
+  // May be null.
+  final DependencyTracker dependencyTracker;
+  final InSummaryUriResolver inSummaryUriResolver;
+
+  TrackingInSummaryUriResolver(
+      this.inSummaryUriResolver, this.dependencyTracker);
+
+  @override
+  Source resolveAbsolute(Uri uri, [Uri actualUri]) {
+    var source = inSummaryUriResolver.resolveAbsolute(uri, actualUri);
+    if (dependencyTracker != null &&
+        source != null &&
+        source is InSummarySource) {
+      dependencyTracker.record(source.summaryPath);
+    }
+    return source;
+  }
 }
 
 /**

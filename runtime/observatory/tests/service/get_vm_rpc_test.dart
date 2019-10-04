@@ -1,7 +1,9 @@
 // Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-// VMOptions=--error_on_bad_type --error_on_bad_override --vm-name=Walter
+// VMOptions=--vm-name=Walter
+
+import 'dart:io';
 
 import 'package:observatory/service_io.dart';
 import 'package:unittest/unittest.dart';
@@ -16,6 +18,7 @@ var tests = <VMTest>[
     expect(result['architectureBits'], isPositive);
     expect(result['targetCPU'], new isInstanceOf<String>());
     expect(result['hostCPU'], new isInstanceOf<String>());
+    expect(result['operatingSystem'], Platform.operatingSystem);
     expect(result['version'], new isInstanceOf<String>());
     expect(result['pid'], new isInstanceOf<int>());
     expect(result['startTime'], isPositive);

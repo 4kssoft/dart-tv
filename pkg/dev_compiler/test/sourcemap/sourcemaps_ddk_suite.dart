@@ -15,27 +15,30 @@ import 'ddc_common.dart';
 
 Future<ChainContext> createContext(
     Chain suite, Map<String, String> environment) async {
-  return new SourceMapContext(environment);
+  return SourceMapContext(environment);
 }
 
 class SourceMapContext extends ChainContextWithCleanupHelper
     implements WithCompilerState {
   final Map<String, String> environment;
+  @override
   fe.InitializedCompilerState compilerState;
 
   SourceMapContext(this.environment);
 
   List<Step> _steps;
 
+  @override
   List<Step> get steps {
     return _steps ??= <Step>[
       const Setup(),
-      new Compile(new DevCompilerRunner(this, debugging())),
+      Compile(DevCompilerRunner(this, debugging: debugging())),
       const StepWithD8(),
-      new CheckSteps(debugging()),
+      CheckSteps(debugging()),
     ];
   }
 
+  @override
   bool debugging() => environment.containsKey("debug");
 }
 
@@ -43,8 +46,9 @@ class DevCompilerRunner implements CompilerRunner {
   final WithCompilerState context;
   final bool debugging;
 
-  const DevCompilerRunner(this.context, [this.debugging = false]);
+  const DevCompilerRunner(this.context, {this.debugging = false});
 
+  @override
   Future<Null> run(Uri inputFile, Uri outputFile, Uri outWrapperFile) async {
     Uri outDir = outputFile.resolve(".");
     String outputFilename = outputFile.pathSegments.last;
@@ -53,8 +57,6 @@ class DevCompilerRunner implements CompilerRunner {
     var jsSdkPath = sdkJsFile.uri;
 
     File ddcSdkSummary = findInOutDir("gen/utils/dartdevc/kernel/ddc_sdk.dill");
-
-    var ddc = getDdcDir().uri.resolve("bin/dartdevk.dart");
 
     List<String> args = <String>[
       "--packages=${sdkRoot.uri.resolve(".packages").toFilePath()}",
@@ -68,7 +70,8 @@ class DevCompilerRunner implements CompilerRunner {
     bool succeeded = false;
     try {
       var result = await compile(args, compilerState: context.compilerState);
-      context.compilerState = result.compilerState;
+      context.compilerState =
+          result.compilerState as fe.InitializedCompilerState;
       succeeded = result.success;
     } catch (e, s) {
       print('Unhandled exception:');
@@ -77,26 +80,29 @@ class DevCompilerRunner implements CompilerRunner {
     }
 
     if (!succeeded) {
+      var ddc = getDdcDir().uri.resolve("bin/dartdevc.dart");
+
       throw "Error from ddc when executing with something like "
-          "$dartExecutable ${ddc.toFilePath()} "
+          "$dartExecutable ${ddc.toFilePath()} --kernel "
           "${args.reduce((value, element) => '$value "$element"')}";
     }
 
-    var jsContent = new File.fromUri(outputFile).readAsStringSync();
-    new File.fromUri(outputFile).writeAsStringSync(jsContent.replaceFirst(
-        "from 'dart_sdk'", "from '${uriPathForwardSlashed(jsSdkPath)}'"));
+    var jsContent = File.fromUri(outputFile).readAsStringSync();
+    File.fromUri(outputFile).writeAsStringSync(jsContent.replaceFirst(
+        "from 'dart_sdk.js'", "from '${uriPathForwardSlashed(jsSdkPath)}'"));
 
     if (debugging) {
       createHtmlWrapper(
           sdkJsFile, outputFile, jsContent, outputFilename, outDir);
     }
 
-    var inputFileName = inputFile.pathSegments.last;
-    var inputFileNameNoExt =
-        inputFileName.substring(0, inputFileName.lastIndexOf("."));
-    new File.fromUri(outWrapperFile).writeAsStringSync(
+    var inputPath = inputFile.path;
+    inputPath = inputPath.substring(0, inputPath.lastIndexOf("."));
+    var inputFileNameNoExt = pathToJSIdentifier(inputPath);
+    File.fromUri(outWrapperFile).writeAsStringSync(
         getWrapperContent(jsSdkPath, inputFileNameNoExt, outputFilename));
   }
 }
 
-main(List<String> arguments) => runMe(arguments, createContext, "testing.json");
+void main(List<String> arguments) =>
+    runMe(arguments, createContext, configurationPath: "testing.json");

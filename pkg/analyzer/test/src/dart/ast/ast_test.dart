@@ -1,10 +1,11 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'dart:async';
+
 import 'package:analyzer/src/dart/ast/ast.dart';
 import 'package:analyzer/src/dart/ast/utilities.dart';
-import 'package:analyzer/src/generated/engine.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
@@ -29,7 +30,7 @@ class ExpressionImplTest extends ParserTestCase {
     expect(index >= 0, isTrue);
     NodeLocator visitor = new NodeLocator(index);
     AstNodeImpl node = visitor.searchWithin(testUnit);
-    expect(node, new isInstanceOf<ExpressionImpl>());
+    expect(node, new TypeMatcher<ExpressionImpl>());
     expect((node as ExpressionImpl).inConstantContext,
         isInContext ? isTrue : isFalse);
   }
@@ -468,104 +469,24 @@ class InstanceCreationExpressionImplTest extends ResolverTestCase {
   String testSource;
   CompilationUnitImpl testUnit;
 
-  bool get enableNewAnalysisDriver => true;
-
-  void assertCanBeConst(String snippet, bool expectedResult) {
-    int index = testSource.indexOf(snippet);
-    expect(index >= 0, isTrue);
-    NodeLocator visitor = new NodeLocator(index);
-    AstNodeImpl node = visitor.searchWithin(testUnit);
-    node = node.getAncestor((node) => node is InstanceCreationExpressionImpl);
-    expect(node, isNotNull);
-    expect((node as InstanceCreationExpressionImpl).canBeConst(),
-        expectedResult ? isTrue : isFalse);
-  }
-
   void assertIsConst(String snippet, bool expectedResult) {
     int index = testSource.indexOf(snippet);
     expect(index >= 0, isTrue);
     NodeLocator visitor = new NodeLocator(index);
     AstNodeImpl node = visitor.searchWithin(testUnit);
-    node = node.getAncestor((node) => node is InstanceCreationExpressionImpl);
+    node = node.thisOrAncestorOfType<InstanceCreationExpressionImpl>();
     expect(node, isNotNull);
     expect((node as InstanceCreationExpressionImpl).isConst,
         expectedResult ? isTrue : isFalse);
   }
 
-  void enablePreviewDart2() {
-    resetWith(options: new AnalysisOptionsImpl()..previewDart2 = true);
-  }
-
-  void resolve(String source) async {
+  Future<void> resolve(String source) async {
     testSource = source;
     testUnit = await resolveSource2('/test.dart', source);
   }
 
-  void test_canBeConst_false_argument_invocation() async {
-    enablePreviewDart2();
-    await resolve('''
-class A {}
-class B {
-  const B(A a);
-}
-A f() => A();
-B g() => B(f());
-''');
-    assertCanBeConst("B(f", false);
-  }
-
-  void test_canBeConst_false_argument_invocationInList() async {
-    enablePreviewDart2();
-    await resolve('''
-class A {}
-class B {
-  const B(a);
-}
-A f() => A();
-B g() => B([f()]);
-''');
-    assertCanBeConst("B([", false);
-  }
-
-  void test_canBeConst_false_argument_nonConstConstructor() async {
-    enablePreviewDart2();
-    await resolve('''
-class A {}
-class B {
-  const B(A a);
-}
-B f() => B(A());
-''');
-    assertCanBeConst("B(A(", false);
-  }
-
-  void test_canBeConst_false_nonConstConstructor() async {
-    enablePreviewDart2();
-    await resolve('''
-class A {}
-A f() => A();
-''');
-    assertCanBeConst("A(", false);
-  }
-
-  @failingTest
-  void test_canBeConst_true_argument_constConstructor() async {
-    enablePreviewDart2();
-    await resolve('''
-class A {
-  const A();
-}
-class B {
-  const B(A a);
-}
-B f() => B(A());
-''');
-    assertCanBeConst("B(A(", true);
-  }
-
   void
       test_isConst_notInContext_constructor_const_constParam_identifier() async {
-    enablePreviewDart2();
     await resolve('''
 var v = C(C.a);
 class C {
@@ -578,7 +499,6 @@ class C {
   }
 
   void test_isConst_notInContext_constructor_const_constParam_named() async {
-    enablePreviewDart2();
     await resolve('''
 var v = C(c: C());
 class C {
@@ -590,7 +510,6 @@ class C {
 
   void
       test_isConst_notInContext_constructor_const_constParam_named_parens() async {
-    enablePreviewDart2();
     await resolve('''
 var v = C(c: (C()));
 class C {
@@ -601,7 +520,6 @@ class C {
   }
 
   void test_isConst_notInContext_constructor_const_constParam_parens() async {
-    enablePreviewDart2();
     await resolve('''
 var v = C( (C.c()) );
 class C {
@@ -613,7 +531,6 @@ class C {
   }
 
   void test_isConst_notInContext_constructor_const_generic_named() async {
-    enablePreviewDart2();
     await resolve('''
 f() => <Object>[C<int>.n()];
 class C<E> {
@@ -625,7 +542,6 @@ class C<E> {
 
   void
       test_isConst_notInContext_constructor_const_generic_named_prefixed() async {
-    enablePreviewDart2();
     addNamedSource('/c.dart', '''
 class C<E> {
   const C.n();
@@ -639,7 +555,6 @@ f() => <Object>[p.C<int>.n()];
   }
 
   void test_isConst_notInContext_constructor_const_generic_unnamed() async {
-    enablePreviewDart2();
     await resolve('''
 f() => <Object>[C<int>()];
 class C<E> {
@@ -651,7 +566,6 @@ class C<E> {
 
   void
       test_isConst_notInContext_constructor_const_generic_unnamed_prefixed() async {
-    enablePreviewDart2();
     addNamedSource('/c.dart', '''
 class C<E> {
   const C();
@@ -666,7 +580,6 @@ f() => <Object>[p.C<int>()];
 
   void
       test_isConst_notInContext_constructor_const_nonConstParam_constructor() async {
-    enablePreviewDart2();
     await resolve('''
 f() {
   return A(B());
@@ -685,7 +598,6 @@ class B {
 
   void
       test_isConst_notInContext_constructor_const_nonConstParam_variable() async {
-    enablePreviewDart2();
     await resolve('''
 f(int i) => <Object>[C(i)];
 class C {
@@ -697,7 +609,6 @@ class C {
   }
 
   void test_isConst_notInContext_constructor_const_nonGeneric_named() async {
-    enablePreviewDart2();
     await resolve('''
 f() => <Object>[C.n()];
 class C<E> {
@@ -709,7 +620,6 @@ class C<E> {
 
   void
       test_isConst_notInContext_constructor_const_nonGeneric_named_prefixed() async {
-    enablePreviewDart2();
     addNamedSource('/c.dart', '''
 class C {
   const C.n();
@@ -723,7 +633,6 @@ f() => <Object>[p.C.n()];
   }
 
   void test_isConst_notInContext_constructor_const_nonGeneric_unnamed() async {
-    enablePreviewDart2();
     await resolve('''
 f() => <Object>[C()];
 class C {
@@ -735,7 +644,6 @@ class C {
 
   void
       test_isConst_notInContext_constructor_const_nonGeneric_unnamed_prefixed() async {
-    enablePreviewDart2();
     addNamedSource('/c.dart', '''
 class C {
   const C();
@@ -749,7 +657,6 @@ f() => <Object>[p.C()];
   }
 
   void test_isConst_notInContext_constructor_nonConst() async {
-    enablePreviewDart2();
     await resolve('''
 f() => <Object>[C()];
 class C {
@@ -762,175 +669,294 @@ class C {
 
 @reflectiveTest
 class IntegerLiteralImplTest {
-  test_isValidLiteral_dec_negative_equalMax() {
+  test_isValidAsDouble_dec_1024Bits() {
     expect(
-        IntegerLiteralImpl.isValidLiteral('9223372036854775808', true), true);
-  }
-
-  test_isValidLiteral_dec_negative_fewDigits() {
-    expect(IntegerLiteralImpl.isValidLiteral('24', true), true);
-  }
-
-  test_isValidLiteral_dec_negative_leadingZeros_overMax() {
-    expect(IntegerLiteralImpl.isValidLiteral('009923372036854775807', true),
+        IntegerLiteralImpl.isValidAsDouble(
+            '179769313486231570814527423731704356798070567525844996598917476803'
+            '157260780028538760589558632766878171540458953514382464234321326889'
+            '464182768467546703537516986049910576551282076245490090389328944075'
+            '868508455133942304583236903222948165808559332123348274797826204144'
+            '723168738177180919299881250404026184124858369'),
         false);
   }
 
-  test_isValidLiteral_dec_negative_leadingZeros_underMax() {
+  test_isValidAsDouble_dec_11ExponentBits() {
     expect(
-        IntegerLiteralImpl.isValidLiteral('004223372036854775807', true), true);
-  }
-
-  test_isValidLiteral_dec_negative_oneOverMax() {
-    expect(
-        IntegerLiteralImpl.isValidLiteral('9223372036854775809', true), false);
-  }
-
-  test_isValidLiteral_dec_negative_tooManyDigits() {
-    expect(
-        IntegerLiteralImpl.isValidLiteral('10223372036854775808', true), false);
-  }
-
-  test_isValidLiteral_dec_positive_equalMax() {
-    expect(
-        IntegerLiteralImpl.isValidLiteral('9223372036854775807', false), true);
-  }
-
-  test_isValidLiteral_dec_positive_fewDigits() {
-    expect(IntegerLiteralImpl.isValidLiteral('42', false), true);
-  }
-
-  test_isValidLiteral_dec_positive_leadingZeros_overMax() {
-    expect(IntegerLiteralImpl.isValidLiteral('009923372036854775807', false),
+        IntegerLiteralImpl.isValidAsDouble(
+            '359538626972463141629054847463408713596141135051689993197834953606'
+            '314521560057077521179117265533756343080917907028764928468642653778'
+            '928365536935093407075033972099821153102564152490980180778657888151'
+            '737016910267884609166473806445896331617118664246696549595652408289'
+            '446337476354361838599762500808052368249716736'),
         false);
   }
 
-  test_isValidLiteral_dec_positive_leadingZeros_underMax() {
-    expect(IntegerLiteralImpl.isValidLiteral('004223372036854775807', false),
+  test_isValidAsDouble_dec_16CharValue() {
+    // 16 characters is used as a cutoff point for optimization
+    expect(IntegerLiteralImpl.isValidAsDouble('9007199254740991'), true);
+  }
+
+  test_isValidAsDouble_dec_53BitsMax() {
+    expect(
+        IntegerLiteralImpl.isValidAsDouble(
+            '179769313486231570814527423731704356798070567525844996598917476803'
+            '157260780028538760589558632766878171540458953514382464234321326889'
+            '464182768467546703537516986049910576551282076245490090389328944075'
+            '868508455133942304583236903222948165808559332123348274797826204144'
+            '723168738177180919299881250404026184124858368'),
         true);
   }
 
-  test_isValidLiteral_dec_positive_oneOverMax() {
-    expect(
-        IntegerLiteralImpl.isValidLiteral('9223372036854775808', false), false);
+  test_isValidAsDouble_dec_54BitsMax() {
+    expect(IntegerLiteralImpl.isValidAsDouble('18014398509481983'), false);
   }
 
-  test_isValidLiteral_dec_positive_tooManyDigits() {
-    expect(IntegerLiteralImpl.isValidLiteral('10223372036854775808', false),
+  test_isValidAsDouble_dec_54BitsMin() {
+    expect(IntegerLiteralImpl.isValidAsDouble('9007199254740993'), false);
+  }
+
+  test_isValidAsDouble_dec_fewDigits() {
+    expect(IntegerLiteralImpl.isValidAsDouble('45'), true);
+  }
+
+  test_isValidAsDouble_dec_largest15CharValue() {
+    // 16 characters is used as a cutoff point for optimization
+    expect(IntegerLiteralImpl.isValidAsDouble('999999999999999'), true);
+  }
+
+  test_isValidAsDouble_hex_1024Bits() {
+    expect(
+        IntegerLiteralImpl.isValidAsDouble(
+            '0xFFFFFFFFFFFFF800000000000000000000000000000000000000000000000000'
+            '000000000000000000000000000000000000000000000000000000000000000000'
+            '000000000000000000000000000000000000000000000000000000000000000000'
+            '000000000000000000000000000000000000000000000000000000000001'),
         false);
   }
 
-  test_isValidLiteral_hex_negative_equalMax() {
-    expect(IntegerLiteralImpl.isValidLiteral('0x7FFFFFFFFFFFFFFF', true), true);
-  }
-
-  test_isValidLiteral_heX_negative_equalMax() {
-    expect(IntegerLiteralImpl.isValidLiteral('0X7FFFFFFFFFFFFFFF', true), true);
-  }
-
-  test_isValidLiteral_hex_negative_fewDigits() {
-    expect(IntegerLiteralImpl.isValidLiteral('0xFF', true), true);
-  }
-
-  test_isValidLiteral_heX_negative_fewDigits() {
-    expect(IntegerLiteralImpl.isValidLiteral('0XFF', true), true);
-  }
-
-  test_isValidLiteral_hex_negative_leadingZeros_overMax() {
-    expect(IntegerLiteralImpl.isValidLiteral('0x00FFFFFFFFFFFFFFFFF', true),
+  test_isValidAsDouble_hex_11ExponentBits() {
+    expect(
+        IntegerLiteralImpl.isValidAsDouble(
+            '0x1FFFFFFFFFFFFF00000000000000000000000000000000000000000000000000'
+            '000000000000000000000000000000000000000000000000000000000000000000'
+            '000000000000000000000000000000000000000000000000000000000000000000'
+            '0000000000000000000000000000000000000000000000000000000000000'),
         false);
   }
 
-  test_isValidLiteral_heX_negative_leadingZeros_overMax() {
-    expect(IntegerLiteralImpl.isValidLiteral('0X00FFFFFFFFFFFFFFFFF', true),
+  test_isValidAsDouble_hex_16CharValue() {
+    // 16 characters is used as a cutoff point for optimization
+    expect(IntegerLiteralImpl.isValidAsDouble('0x0FFFFFFFFFFFFF'), true);
+  }
+
+  test_isValidAsDouble_hex_53BitsMax() {
+    expect(
+        IntegerLiteralImpl.isValidAsDouble(
+            '0xFFFFFFFFFFFFF800000000000000000000000000000000000000000000000000'
+            '000000000000000000000000000000000000000000000000000000000000000000'
+            '000000000000000000000000000000000000000000000000000000000000000000'
+            '000000000000000000000000000000000000000000000000000000000000'),
+        true);
+  }
+
+  test_isValidAsDouble_hex_54BitsMax() {
+    expect(IntegerLiteralImpl.isValidAsDouble('0x3FFFFFFFFFFFFF'), false);
+  }
+
+  test_isValidAsDouble_hex_54BitsMin() {
+    expect(IntegerLiteralImpl.isValidAsDouble('0x20000000000001'), false);
+  }
+
+  test_isValidAsDouble_hex_fewDigits() {
+    expect(IntegerLiteralImpl.isValidAsDouble('0x45'), true);
+  }
+
+  test_isValidAsDouble_hex_largest15CharValue() {
+    // 16 characters is used as a cutoff point for optimization
+    expect(IntegerLiteralImpl.isValidAsDouble('0xFFFFFFFFFFFFF'), true);
+  }
+
+  test_isValidAsInteger_dec_negative_equalMax() {
+    expect(
+        IntegerLiteralImpl.isValidAsInteger('9223372036854775808', true), true);
+  }
+
+  test_isValidAsInteger_dec_negative_fewDigits() {
+    expect(IntegerLiteralImpl.isValidAsInteger('24', true), true);
+  }
+
+  test_isValidAsInteger_dec_negative_leadingZeros_overMax() {
+    expect(IntegerLiteralImpl.isValidAsInteger('009923372036854775807', true),
         false);
   }
 
-  test_isValidLiteral_hex_negative_leadingZeros_underMax() {
-    expect(
-        IntegerLiteralImpl.isValidLiteral('0x007FFFFFFFFFFFFFFF', true), true);
+  test_isValidAsInteger_dec_negative_leadingZeros_underMax() {
+    expect(IntegerLiteralImpl.isValidAsInteger('004223372036854775807', true),
+        true);
   }
 
-  test_isValidLiteral_heX_negative_leadingZeros_underMax() {
-    expect(
-        IntegerLiteralImpl.isValidLiteral('0X007FFFFFFFFFFFFFFF', true), true);
-  }
-
-  test_isValidLiteral_hex_negative_oneOverMax() {
-    expect(
-        IntegerLiteralImpl.isValidLiteral('0x8000000000000000', true), false);
-  }
-
-  test_isValidLiteral_heX_negative_oneOverMax() {
-    expect(
-        IntegerLiteralImpl.isValidLiteral('0X8000000000000000', true), false);
-  }
-
-  test_isValidLiteral_hex_negative_tooManyDigits() {
-    expect(
-        IntegerLiteralImpl.isValidLiteral('0x10000000000000000', true), false);
-  }
-
-  test_isValidLiteral_heX_negative_tooManyDigits() {
-    expect(
-        IntegerLiteralImpl.isValidLiteral('0X10000000000000000', true), false);
-  }
-
-  test_isValidLiteral_hex_positive_equalMax() {
-    expect(
-        IntegerLiteralImpl.isValidLiteral('0x7FFFFFFFFFFFFFFF', false), true);
-  }
-
-  test_isValidLiteral_heX_positive_equalMax() {
-    expect(
-        IntegerLiteralImpl.isValidLiteral('0X7FFFFFFFFFFFFFFF', false), true);
-  }
-
-  test_isValidLiteral_hex_positive_fewDigits() {
-    expect(IntegerLiteralImpl.isValidLiteral('0xFF', false), true);
-  }
-
-  test_isValidLiteral_heX_positive_fewDigits() {
-    expect(IntegerLiteralImpl.isValidLiteral('0XFF', false), true);
-  }
-
-  test_isValidLiteral_hex_positive_leadingZeros_overMax() {
-    expect(IntegerLiteralImpl.isValidLiteral('0x00FFFFFFFFFFFFFFFFF', false),
+  test_isValidAsInteger_dec_negative_oneOverMax() {
+    expect(IntegerLiteralImpl.isValidAsInteger('9223372036854775809', true),
         false);
   }
 
-  test_isValidLiteral_heX_positive_leadingZeros_overMax() {
-    expect(IntegerLiteralImpl.isValidLiteral('0X00FFFFFFFFFFFFFFFFF', false),
+  test_isValidAsInteger_dec_negative_tooManyDigits() {
+    expect(IntegerLiteralImpl.isValidAsInteger('10223372036854775808', true),
         false);
   }
 
-  test_isValidLiteral_hex_positive_leadingZeros_underMax() {
-    expect(
-        IntegerLiteralImpl.isValidLiteral('0x007FFFFFFFFFFFFFFF', false), true);
+  test_isValidAsInteger_dec_positive_equalMax() {
+    expect(IntegerLiteralImpl.isValidAsInteger('9223372036854775807', false),
+        true);
   }
 
-  test_isValidLiteral_heX_positive_leadingZeros_underMax() {
-    expect(
-        IntegerLiteralImpl.isValidLiteral('0X007FFFFFFFFFFFFFFF', false), true);
+  test_isValidAsInteger_dec_positive_fewDigits() {
+    expect(IntegerLiteralImpl.isValidAsInteger('42', false), true);
   }
 
-  test_isValidLiteral_hex_positive_oneOverMax() {
-    expect(
-        IntegerLiteralImpl.isValidLiteral('0x10000000000000000', false), false);
-  }
-
-  test_isValidLiteral_heX_positive_oneOverMax() {
-    expect(
-        IntegerLiteralImpl.isValidLiteral('0X10000000000000000', false), false);
-  }
-
-  test_isValidLiteral_hex_positive_tooManyDigits() {
-    expect(IntegerLiteralImpl.isValidLiteral('0xFF0000000000000000', false),
+  test_isValidAsInteger_dec_positive_leadingZeros_overMax() {
+    expect(IntegerLiteralImpl.isValidAsInteger('009923372036854775807', false),
         false);
   }
 
-  test_isValidLiteral_heX_positive_tooManyDigits() {
-    expect(IntegerLiteralImpl.isValidLiteral('0XFF0000000000000000', false),
+  test_isValidAsInteger_dec_positive_leadingZeros_underMax() {
+    expect(IntegerLiteralImpl.isValidAsInteger('004223372036854775807', false),
+        true);
+  }
+
+  test_isValidAsInteger_dec_positive_oneOverMax() {
+    expect(IntegerLiteralImpl.isValidAsInteger('9223372036854775808', false),
+        false);
+  }
+
+  test_isValidAsInteger_dec_positive_tooManyDigits() {
+    expect(IntegerLiteralImpl.isValidAsInteger('10223372036854775808', false),
+        false);
+  }
+
+  test_isValidAsInteger_hex_negative_equalMax() {
+    expect(
+        IntegerLiteralImpl.isValidAsInteger('0x8000000000000000', true), true);
+  }
+
+  test_isValidAsInteger_heX_negative_equalMax() {
+    expect(
+        IntegerLiteralImpl.isValidAsInteger('0X8000000000000000', true), true);
+  }
+
+  test_isValidAsInteger_hex_negative_fewDigits() {
+    expect(IntegerLiteralImpl.isValidAsInteger('0xFF', true), true);
+  }
+
+  test_isValidAsInteger_heX_negative_fewDigits() {
+    expect(IntegerLiteralImpl.isValidAsInteger('0XFF', true), true);
+  }
+
+  test_isValidAsInteger_heX_negative_leadingZeros_overMax() {
+    expect(IntegerLiteralImpl.isValidAsInteger('0X00FFFFFFFFFFFFFFFFF', true),
+        false);
+  }
+
+  test_isValidAsInteger_hex_negative_leadingZeros_overMax() {
+    expect(IntegerLiteralImpl.isValidAsInteger('0x00FFFFFFFFFFFFFFFFF', true),
+        false);
+  }
+
+  test_isValidAsInteger_hex_negative_leadingZeros_underMax() {
+    expect(IntegerLiteralImpl.isValidAsInteger('0x007FFFFFFFFFFFFFFF', true),
+        true);
+  }
+
+  test_isValidAsInteger_heX_negative_leadingZeros_underMax() {
+    expect(IntegerLiteralImpl.isValidAsInteger('0X007FFFFFFFFFFFFFFF', true),
+        true);
+  }
+
+  test_isValidAsInteger_hex_negative_oneBelowMax() {
+    expect(
+        IntegerLiteralImpl.isValidAsInteger('0x7FFFFFFFFFFFFFFF', true), true);
+  }
+
+  test_isValidAsInteger_heX_negative_oneBelowMax() {
+    expect(
+        IntegerLiteralImpl.isValidAsInteger('0X7FFFFFFFFFFFFFFF', true), true);
+  }
+
+  test_isValidAsInteger_hex_negative_oneOverMax() {
+    expect(
+        IntegerLiteralImpl.isValidAsInteger('0x8000000000000001', true), false);
+  }
+
+  test_isValidAsInteger_heX_negative_oneOverMax() {
+    expect(
+        IntegerLiteralImpl.isValidAsInteger('0X8000000000000001', true), false);
+  }
+
+  test_isValidAsInteger_hex_negative_tooManyDigits() {
+    expect(IntegerLiteralImpl.isValidAsInteger('0x10000000000000000', true),
+        false);
+  }
+
+  test_isValidAsInteger_heX_negative_tooManyDigits() {
+    expect(IntegerLiteralImpl.isValidAsInteger('0X10000000000000000', true),
+        false);
+  }
+
+  test_isValidAsInteger_heX_positive_equalMax() {
+    expect(
+        IntegerLiteralImpl.isValidAsInteger('0X7FFFFFFFFFFFFFFF', false), true);
+  }
+
+  test_isValidAsInteger_hex_positive_equalMax() {
+    expect(
+        IntegerLiteralImpl.isValidAsInteger('0x7FFFFFFFFFFFFFFF', false), true);
+  }
+
+  test_isValidAsInteger_heX_positive_fewDigits() {
+    expect(IntegerLiteralImpl.isValidAsInteger('0XFF', false), true);
+  }
+
+  test_isValidAsInteger_hex_positive_fewDigits() {
+    expect(IntegerLiteralImpl.isValidAsInteger('0xFF', false), true);
+  }
+
+  test_isValidAsInteger_heX_positive_leadingZeros_overMax() {
+    expect(IntegerLiteralImpl.isValidAsInteger('0X00FFFFFFFFFFFFFFFFF', false),
+        false);
+  }
+
+  test_isValidAsInteger_hex_positive_leadingZeros_overMax() {
+    expect(IntegerLiteralImpl.isValidAsInteger('0x00FFFFFFFFFFFFFFFFF', false),
+        false);
+  }
+
+  test_isValidAsInteger_heX_positive_leadingZeros_underMax() {
+    expect(IntegerLiteralImpl.isValidAsInteger('0X007FFFFFFFFFFFFFFF', false),
+        true);
+  }
+
+  test_isValidAsInteger_hex_positive_leadingZeros_underMax() {
+    expect(IntegerLiteralImpl.isValidAsInteger('0x007FFFFFFFFFFFFFFF', false),
+        true);
+  }
+
+  test_isValidAsInteger_heX_positive_oneOverMax() {
+    expect(IntegerLiteralImpl.isValidAsInteger('0X10000000000000000', false),
+        false);
+  }
+
+  test_isValidAsInteger_hex_positive_oneOverMax() {
+    expect(IntegerLiteralImpl.isValidAsInteger('0x10000000000000000', false),
+        false);
+  }
+
+  test_isValidAsInteger_hex_positive_tooManyDigits() {
+    expect(IntegerLiteralImpl.isValidAsInteger('0xFF0000000000000000', false),
+        false);
+  }
+
+  test_isValidAsInteger_heX_positive_tooManyDigits() {
+    expect(IntegerLiteralImpl.isValidAsInteger('0XFF0000000000000000', false),
         false);
   }
 }

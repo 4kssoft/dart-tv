@@ -9,13 +9,21 @@
 
 /** \mainpage Dart Embedding API Reference
  *
- * Dart is a class-based programming language for creating structured
- * web applications. This reference describes the Dart embedding api,
- * which is used to embed the Dart Virtual Machine within an
- * application.
+ * This reference describes the Dart Embedding API, which is used to embed the
+ * Dart Virtual Machine within C/C++ applications.
  *
  * This reference is generated from the header include/dart_api.h.
  */
+
+/* __STDC_FORMAT_MACROS has to be defined before including <inttypes.h> to
+ * enable platform independent printf format specifiers. */
+#ifndef __STDC_FORMAT_MACROS
+#define __STDC_FORMAT_MACROS
+#endif
+
+#include <assert.h>
+#include <inttypes.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 #define DART_EXTERN_C extern "C"
@@ -26,32 +34,12 @@
 #if defined(__CYGWIN__)
 #error Tool chain and platform not supported.
 #elif defined(_WIN32)
-// Define bool if necessary.
-#ifndef __cplusplus
-typedef unsigned __int8 bool;
-#endif
-// Define integer types.
-typedef signed __int8 int8_t;
-typedef signed __int16 int16_t;
-typedef signed __int32 int32_t;
-typedef signed __int64 int64_t;
-typedef unsigned __int8 uint8_t;
-typedef unsigned __int16 uint16_t;
-typedef unsigned __int32 uint32_t;
-typedef unsigned __int64 uint64_t;
 #if defined(DART_SHARED_LIB)
 #define DART_EXPORT DART_EXTERN_C __declspec(dllexport)
 #else
 #define DART_EXPORT DART_EXTERN_C
 #endif
 #else
-/* __STDC_FORMAT_MACROS has to be defined before including <inttypes.h> to
- * enable platform independent printf format specifiers. */
-#ifndef __STDC_FORMAT_MACROS
-#define __STDC_FORMAT_MACROS
-#endif
-#include <inttypes.h>
-#include <stdbool.h>
 #if __GNUC__ >= 4
 #if defined(DART_SHARED_LIB)
 #define DART_EXPORT                                                            \
@@ -72,8 +60,6 @@ typedef unsigned __int64 uint64_t;
 #define DART_WARN_UNUSED_RESULT
 #endif
 
-#include <assert.h>
-
 /*
  * =======
  * Handles
@@ -90,7 +76,7 @@ typedef unsigned __int64 uint64_t;
  * current isolate may be NULL, in which case no isolate is ready to
  * execute. Most of the Dart apis require there to be a current
  * isolate in order to function without error. The current isolate is
- * set by any call to Dart_CreateIsolate or Dart_EnterIsolate.
+ * set by any call to Dart_CreateIsolateGroup or Dart_EnterIsolate.
  */
 typedef struct _Dart_Isolate* Dart_Isolate;
 
@@ -388,34 +374,10 @@ DART_EXPORT Dart_Handle Dart_NewUnhandledExceptionError(Dart_Handle exception);
  *
  * \param An error handle (See Dart_IsError)
  *
- * \return On success, this function does not return.  On failure, an
- *   error handle is returned.
+ * \return On success, this function does not return.  On failure, the
+ * process is terminated.
  */
-DART_EXPORT Dart_Handle Dart_PropagateError(Dart_Handle handle);
-/* TODO(turnidge): Should this really return an error handle? */
-/* Consider just terminating. */
-
-/* Internal routine used for reporting error handles. */
-DART_EXPORT void _Dart_ReportErrorHandle(const char* file,
-                                         int line,
-                                         const char* handle_string,
-                                         const char* error);
-
-/* TODO(turnidge): Move DART_CHECK_VALID to some sort of dart_utils
- * header instead of this header. */
-/**
- * Aborts the process if 'handle' is an error handle.
- *
- * Provided for convenience.
- */
-#define DART_CHECK_VALID(handle)                                               \
-  {                                                                            \
-    Dart_Handle __handle = handle;                                             \
-    if (Dart_IsError((__handle))) {                                            \
-      _Dart_ReportErrorHandle(__FILE__, __LINE__, #handle,                     \
-                              Dart_GetError(__handle));                        \
-    }                                                                          \
-  }
+DART_EXPORT void Dart_PropagateError(Dart_Handle handle);
 
 /**
  * Converts an object to a string.
@@ -555,23 +517,18 @@ typedef struct {
  * for each part.
  */
 
-#define DART_FLAGS_CURRENT_VERSION (0x00000005)
+#define DART_FLAGS_CURRENT_VERSION (0x0000000b)
 
 typedef struct {
   int32_t version;
-  bool enable_type_checks;
   bool enable_asserts;
-  bool enable_error_on_bad_type;
-  bool enable_error_on_bad_override;
   bool use_field_guards;
   bool use_osr;
-  bool use_dart_frontend;
   bool obfuscate;
   Dart_QualifiedFunctionName* entry_points;
-  bool reify_generic_functions;
-  bool strong;
   bool load_vmservice_library;
-  bool sync_async;
+  bool unsafe_trust_strong_mode_types;
+  bool copy_parent_code;
 } Dart_IsolateFlags;
 
 /**
@@ -584,7 +541,7 @@ DART_EXPORT void Dart_IsolateFlagsInitialize(Dart_IsolateFlags* flags);
  *
  * This callback, provided by the embedder, is called when the VM
  * needs to create an isolate. The callback should create an isolate
- * by calling Dart_CreateIsolate and load any scripts required for
+ * by calling Dart_CreateIsolateGroup and load any scripts required for
  * execution.
  *
  * This callback may be called on a different thread than the one
@@ -593,7 +550,7 @@ DART_EXPORT void Dart_IsolateFlagsInitialize(Dart_IsolateFlags* flags);
  * When the function returns NULL, it is the responsibility of this
  * function to ensure that Dart_ShutdownIsolate has been called if
  * required (for example, if the isolate was created successfully by
- * Dart_CreateIsolate() but the root library fails to load
+ * Dart_CreateIsolateGroup() but the root library fails to load
  * successfully, then the function should call Dart_ShutdownIsolate
  * before returning).
  *
@@ -603,11 +560,11 @@ DART_EXPORT void Dart_IsolateFlagsInitialize(Dart_IsolateFlags* flags);
  * freed.
  *
  * \param script_uri The uri of the main source file or snapshot to load.
- *   Either the URI of the parent isolate set in Dart_CreateIsolate for
+ *   Either the URI of the parent isolate set in Dart_CreateIsolateGroup for
  *   Isolate.spawn, or the argument to Isolate.spawnUri canonicalized by the
  *   library tag handler of the parent isolate.
  *   The callback is responsible for loading the program by a call to
- *   Dart_LoadScript or Dart_LoadScriptFromSnapshot.
+ *   Dart_LoadScriptFromKernel.
  * \param main The name of the main entry point this isolate will
  *   eventually run.  This is provided for advisory purposes only to
  *   improve debugging messages.  The main function is not invoked by
@@ -625,20 +582,54 @@ DART_EXPORT void Dart_IsolateFlagsInitialize(Dart_IsolateFlags* flags);
  *   from the spawning isolate or passed as parameters when spawning the
  *   isolate from Dart code.
  * \param callback_data The callback data which was passed to the
- *   parent isolate when it was created by calling Dart_CreateIsolate().
+ *   parent isolate when it was created by calling Dart_CreateIsolateGroup().
  * \param error A structure into which the embedder can place a
  *   C string containing an error message in the case of failures.
  *
  * \return The embedder returns NULL if the creation and
  *   initialization was not successful and the isolate if successful.
  */
-typedef Dart_Isolate (*Dart_IsolateCreateCallback)(const char* script_uri,
-                                                   const char* main,
-                                                   const char* package_root,
-                                                   const char* package_config,
-                                                   Dart_IsolateFlags* flags,
-                                                   void* callback_data,
-                                                   char** error);
+typedef Dart_Isolate (*Dart_IsolateGroupCreateCallback)(
+    const char* script_uri,
+    const char* main,
+    const char* package_root,
+    const char* package_config,
+    Dart_IsolateFlags* flags,
+    void* callback_data,
+    char** error);
+
+/**
+ * An isolate initialization callback function.
+ *
+ * This callback, provided by the embedder, is called when the VM has created an
+ * isolate within an existing isolate group (i.e. from the same source as an
+ * existing isolate).
+ *
+ * The callback should setup native resolvers and might want to set a custom
+ * message handler via [Dart_SetMessageNotifyCallback] and mark the isolate as
+ * runnable.
+ *
+ * This callback may be called on a different thread than the one
+ * running the parent isolate.
+ *
+ * When the function returns `false`, it is the responsibility of this
+ * function to ensure that `Dart_ShutdownIsolate` has been called.
+ *
+ * When the function returns `false`, the function should set *error to
+ * a malloc-allocated buffer containing a useful error message.  The
+ * caller of this function (the VM) will make sure that the buffer is
+ * freed.
+ *
+ * \param child_isolate_data The callback data to associate with the new
+ *        child isolate.
+ * \param error A structure into which the embedder can place a
+ *   C string containing an error message in the case the initialization fails.
+ *
+ * \return The embedder returns true if the initialization was successful and
+ *         false otherwise (in which case the VM will terminate the isolate).
+ */
+typedef bool (*Dart_InitializeIsolateCallback)(void** child_isolate_data,
+                                               char** error);
 
 /**
  * An isolate unhandled exception callback function.
@@ -657,11 +648,13 @@ typedef void (*Dart_IsolateUnhandledExceptionCallback)(Dart_Handle error);
  * This function should be used to dispose of native resources that
  * are allocated to an isolate in order to avoid leaks.
  *
- * \param callback_data The same callback data which was passed to the
- *   isolate when it was created.
- *
+ * \param isolate_group_data The same callback data which was passed to the
+ *   isolate group when it was created.
+ * \param isolate_data The same callback data which was passed to the isolate
+ *   when it was created.
  */
-typedef void (*Dart_IsolateShutdownCallback)(void* callback_data);
+typedef void (*Dart_IsolateShutdownCallback)(void* isolate_group_data,
+                                             void* isolate_data);
 
 /**
  * An isolate cleanup callback function.
@@ -673,11 +666,28 @@ typedef void (*Dart_IsolateShutdownCallback)(void* callback_data);
  * This function should be used to dispose of native resources that
  * are allocated to an isolate in order to avoid leaks.
  *
- * \param callback_data The same callback data which was passed to the
- *   isolate when it was created.
+ * \param isolate_group_data The same callback data which was passed to the
+ *   isolate group when it was created.
+ * \param isolate_data The same callback data which was passed to the isolate
+ *   when it was created.
+ */
+typedef void (*Dart_IsolateCleanupCallback)(void* isolate_group_data,
+                                            void* isolate_data);
+
+/**
+ * An isolate group cleanup callback function.
+ *
+ * This callback, provided by the embedder, is called after the vm
+ * shuts down an isolate group.
+ *
+ * This function should be used to dispose of native resources that
+ * are allocated to an isolate in order to avoid leaks.
+ *
+ * \param isolate_group_data The same callback data which was passed to the
+ *   isolate group when it was created.
  *
  */
-typedef void (*Dart_IsolateCleanupCallback)(void* callback_data);
+typedef void (*Dart_IsolateGroupCleanupCallback)(void* isolate_group_data);
 
 /**
  * A thread death callback function.
@@ -745,7 +755,31 @@ typedef Dart_Handle (*Dart_GetVMServiceAssetsArchive)();
  * The current version of the Dart_InitializeFlags. Should be incremented every
  * time Dart_InitializeFlags changes in a binary incompatible way.
  */
-#define DART_INITIALIZE_PARAMS_CURRENT_VERSION (0x00000003)
+#define DART_INITIALIZE_PARAMS_CURRENT_VERSION (0x00000004)
+
+/** Forward declaration */
+struct Dart_CodeObserver;
+
+/**
+ * Callback provided by the embedder that is used by the VM to notify on code
+ * object creation, *before* it is invoked the first time.
+ * This is useful for embedders wanting to e.g. keep track of PCs beyond
+ * the lifetime of the garbage collected code objects.
+ * Note that an address range may be used by more than one code object over the
+ * lifecycle of a process. Clients of this function should record timestamps for
+ * these compilation events and when collecting PCs to disambiguate reused
+ * address ranges.
+ */
+typedef void (*Dart_OnNewCodeCallback)(struct Dart_CodeObserver* observer,
+                                       const char* name,
+                                       uintptr_t base,
+                                       uintptr_t size);
+
+typedef struct Dart_CodeObserver {
+  void* data;
+
+  Dart_OnNewCodeCallback on_new_code;
+} Dart_CodeObserver;
 
 /**
  * Describes how to initialize the VM. Used with Dart_Initialize.
@@ -753,26 +787,37 @@ typedef Dart_Handle (*Dart_GetVMServiceAssetsArchive)();
  * \param version Identifies the version of the struct used by the client.
  *   should be initialized to DART_INITIALIZE_PARAMS_CURRENT_VERSION.
  * \param vm_isolate_snapshot A buffer containing a snapshot of the VM isolate
- *   or NULL if no snapshot is provided.
+ *   or NULL if no snapshot is provided. If provided, the buffer must remain
+ *   valid until Dart_Cleanup returns.
  * \param instructions_snapshot A buffer containing a snapshot of precompiled
- *   instructions, or NULL if no snapshot is provided.
- * \param create A function to be called during isolate creation.
- *   See Dart_IsolateCreateCallback.
- * \param shutdown A function to be called when an isolate is shutdown.
+ *   instructions, or NULL if no snapshot is provided. If provided, the buffer
+ *   must remain valid until Dart_Cleanup returns.
+ * \param initialize_isolate A function to be called during isolate
+ *   initialization inside an existing isolate group.
+ *   See Dart_InitializeIsolateCallback.
+ * \param create_group A function to be called during isolate group creation.
+ *   See Dart_IsolateGroupCreateCallback.
+ * \param shutdown A function to be called right before an isolate is shutdown.
  *   See Dart_IsolateShutdownCallback.
- * \param cleanup A function to be called after an isolate is shutdown.
+ * \param cleanup A function to be called after an isolate was shutdown.
  *   See Dart_IsolateCleanupCallback.
+ * \param cleanup_group A function to be called after an isolate group is shutdown.
+ *   See Dart_IsolateGroupCleanupCallback.
  * \param get_service_assets A function to be called by the service isolate when
  *    it requires the vmservice assets archive.
  *    See Dart_GetVMServiceAssetsArchive.
+ * \param code_observer An external code observer callback function.
+ *    The observer can be invoked as early as during the Dart_Initialize() call.
  */
 typedef struct {
   int32_t version;
   const uint8_t* vm_snapshot_data;
   const uint8_t* vm_snapshot_instructions;
-  Dart_IsolateCreateCallback create;
-  Dart_IsolateShutdownCallback shutdown;
-  Dart_IsolateCleanupCallback cleanup;
+  Dart_IsolateGroupCreateCallback create_group;
+  Dart_InitializeIsolateCallback initialize_isolate;
+  Dart_IsolateShutdownCallback shutdown_isolate;
+  Dart_IsolateCleanupCallback cleanup_isolate;
+  Dart_IsolateGroupCleanupCallback cleanup_group;
   Dart_ThreadExitCallback thread_exit;
   Dart_FileOpenCallback file_open;
   Dart_FileReadCallback file_read;
@@ -781,6 +826,7 @@ typedef struct {
   Dart_EntropySource entropy_source;
   Dart_GetVMServiceAssetsArchive get_service_assets;
   bool start_kernel_isolate;
+  Dart_CodeObserver* code_observer;
 } Dart_InitializeParams;
 
 /**
@@ -838,18 +884,18 @@ DART_EXPORT bool Dart_IsVMFlagSet(const char* flag_name);
  * Requires there to be no current isolate.
  *
  * \param script_uri The main source file or snapshot this isolate will load.
- *   The VM will provide this URI to the Dart_IsolateCreateCallback when a child
+ *   The VM will provide this URI to the Dart_IsolateGroupCreateCallback when a child
  *   isolate is created by Isolate.spawn. The embedder should use a URI that
  *   allows it to load the same program into such a child isolate.
- * \param main The name of the main entry point this isolate will run. Provided
- *   only for advisory purposes to improve debugging messages. Typically either
- *   'main' or the name of the function passed to Isolate.spawn.
+ * \param name A short name for the isolate to improve debugging messages.
+ *   Typically of the format 'foo.dart:main()'.
  * \param isolate_snapshot_data
  * \param isolate_snapshot_instructions Buffers containing a snapshot of the
- *   isolate or NULL if no snapshot is provided.
+ *   isolate or NULL if no snapshot is provided. If provided, the buffers must
+ *   remain valid until the isolate shuts down.
  * \param flags Pointer to VM specific flags or NULL for default flags.
  * \param callback_data Embedder data.  This data will be passed to
- *   the Dart_IsolateCreateCallback when new isolates are spawned from
+ *   the Dart_IsolateGroupCreateCallback when new isolates are spawned from
  *   this parent isolate.
  * \param error Returns NULL if creation is successful, an error message
  *   otherwise. The caller is responsible for calling free() on the error
@@ -858,15 +904,16 @@ DART_EXPORT bool Dart_IsVMFlagSet(const char* flag_name);
  * \return The new isolate on success, or NULL if isolate creation failed.
  */
 DART_EXPORT Dart_Isolate
-Dart_CreateIsolate(const char* script_uri,
-                   const char* main,
-                   const uint8_t* isolate_snapshot_data,
-                   const uint8_t* isolate_snapshot_instructions,
-                   const uint8_t* shared_data,
-                   const uint8_t* shared_instructions,
-                   Dart_IsolateFlags* flags,
-                   void* callback_data,
-                   char** error);
+Dart_CreateIsolateGroup(const char* script_uri,
+                        const char* name,
+                        const uint8_t* isolate_snapshot_data,
+                        const uint8_t* isolate_snapshot_instructions,
+                        const uint8_t* shared_data,
+                        const uint8_t* shared_instructions,
+                        Dart_IsolateFlags* flags,
+                        void* isolate_group_data,
+                        void* isolate_data,
+                        char** error);
 /* TODO(turnidge): Document behavior when there is already a current
  * isolate. */
 
@@ -877,16 +924,17 @@ Dart_CreateIsolate(const char* script_uri,
  * Requires there to be no current isolate.
  *
  * \param script_uri The main source file or snapshot this isolate will load.
- *   The VM will provide this URI to the Dart_IsolateCreateCallback when a child
+ *   The VM will provide this URI to the Dart_IsolateGroupCreateCallback when a child
  *   isolate is created by Isolate.spawn. The embedder should use a URI that
  *   allows it to load the same program into such a child isolate.
- * \param main The name of the main entry point this isolate will run. Provided
- *   only for advisory purposes to improve debugging messages. Typically either
- *   'main' or the name of the function passed to Isolate.spawn.
- * \param kernel_program The `dart::kernel::Program` object.
+ * \param name A short name for the isolate to improve debugging messages.
+ *   Typically of the format 'foo.dart:main()'.
+ * \param kernel_buffer
+ * \param kernel_buffer_size A buffer which contains a kernel/DIL program. Must
+ *   remain valid until isolate shutdown.
  * \param flags Pointer to VM specific flags or NULL for default flags.
  * \param callback_data Embedder data.  This data will be passed to
- *   the Dart_IsolateCreateCallback when new isolates are spawned from
+ *   the Dart_IsolateGroupCreateCallback when new isolates are spawned from
  *   this parent isolate.
  * \param error Returns NULL if creation is successful, an error message
  *   otherwise. The caller is responsible for calling free() on the error
@@ -895,13 +943,14 @@ Dart_CreateIsolate(const char* script_uri,
  * \return The new isolate on success, or NULL if isolate creation failed.
  */
 DART_EXPORT Dart_Isolate
-Dart_CreateIsolateFromKernel(const char* script_uri,
-                             const char* main,
-                             const uint8_t* kernel_buffer,
-                             intptr_t kernel_buffer_size,
-                             Dart_IsolateFlags* flags,
-                             void* callback_data,
-                             char** error);
+Dart_CreateIsolateGroupFromKernel(const char* script_uri,
+                                  const char* name,
+                                  const uint8_t* kernel_buffer,
+                                  intptr_t kernel_buffer_size,
+                                  Dart_IsolateFlags* flags,
+                                  void* isolate_group_data,
+                                  void* isolate_data,
+                                  char** error);
 /**
  * Shuts down the current isolate. After this call, the current isolate is NULL.
  * Any current scopes created by Dart_EnterScope will be exited. Invokes the
@@ -919,18 +968,30 @@ DART_EXPORT void Dart_ShutdownIsolate();
 DART_EXPORT Dart_Isolate Dart_CurrentIsolate();
 
 /**
- * Returns the callback data associated with the current Isolate. This data was
- * passed to the isolate when it was created.
+ * Returns the callback data associated with the current isolate. This
+ * data was set when the isolate got created or initialized.
  */
 DART_EXPORT void* Dart_CurrentIsolateData();
 
 /**
- * Returns the callback data associated with the specified Isolate. This data
- * was passed to the isolate when it was created.
- * The embedder is responsible for ensuring the consistency of this data
- * with respect to the lifecycle of an Isolate.
+ * Returns the callback data associated with the given isolate. This
+ * data was set when the isolate got created or initialized.
  */
 DART_EXPORT void* Dart_IsolateData(Dart_Isolate isolate);
+
+/**
+ * Returns the callback data associated with the current isolate group. This
+ * data was passed to the isolate group when it was created.
+ */
+DART_EXPORT void* Dart_CurrentIsolateGroupData();
+
+/**
+ * Returns the callback data associated with the specified isolate group. This
+ * data was passed to the isolate when it was created.
+ * The embedder is responsible for ensuring the consistency of this data
+ * with respect to the lifecycle of an isolate group.
+ */
+DART_EXPORT void* Dart_IsolateGroupData(Dart_Isolate isolate);
 
 /**
  * Returns the debugging name for the current isolate.
@@ -941,6 +1002,13 @@ DART_EXPORT void* Dart_IsolateData(Dart_Isolate isolate);
 DART_EXPORT Dart_Handle Dart_DebugName();
 
 /**
+ * Returns the ID for an isolate which is used to query the service protocol.
+ *
+ * It is the responsibility of the caller to free the returned ID.
+ */
+DART_EXPORT const char* Dart_IsolateServiceId(Dart_Isolate isolate);
+
+/**
  * Enters an isolate. After calling this function,
  * the current isolate will be set to the provided isolate.
  *
@@ -948,6 +1016,20 @@ DART_EXPORT Dart_Handle Dart_DebugName();
  * the same isolate at once.
  */
 DART_EXPORT void Dart_EnterIsolate(Dart_Isolate isolate);
+
+/**
+ * Kills the given isolate.
+ *
+ * This function has the same effect as dart:isolate's
+ * Isolate.kill(priority:immediate).
+ * It can interrupt ordinary Dart code but not native code. If the isolate is
+ * in the middle of a long running native function, the isolate will not be
+ * killed until control returns to Dart.
+ *
+ * Does not require a current isolate. It is safe to kill the current isolate if
+ * there is one.
+ */
+DART_EXPORT void Dart_KillIsolate(Dart_Isolate isolate);
 
 /**
  * Notifies the VM that the embedder expects to be idle until |deadline|. The VM
@@ -967,6 +1049,20 @@ DART_EXPORT void Dart_NotifyIdle(int64_t deadline);
  * Does not require a current isolate. Only valid after calling Dart_Initialize.
  */
 DART_EXPORT void Dart_NotifyLowMemory();
+
+/**
+ * Starts the CPU sampling profiler.
+ */
+DART_EXPORT void Dart_StartProfiling();
+
+/**
+ * Stops the CPU sampling profiler.
+ *
+ * Note that some profile samples might still be taken after this fucntion
+ * returns due to the asynchronous nature of the implementation on some
+ * platforms.
+ */
+DART_EXPORT void Dart_StopProfiling();
 
 /**
  * Notifies the VM that the current thread should not be profiled until a
@@ -990,6 +1086,16 @@ DART_EXPORT void Dart_ThreadDisableProfiling();
 DART_EXPORT void Dart_ThreadEnableProfiling();
 
 /**
+ * Register symbol information for the Dart VM's profiler and crash dumps.
+ *
+ * This consumes the output of //topaz/runtime/dart/profiler_symbols, which
+ * should be treated as opaque.
+ */
+DART_EXPORT void Dart_AddSymbols(const char* dso_name,
+                                 void* buffer,
+                                 intptr_t buffer_size);
+
+/**
  * Exits an isolate. After this call, Dart_CurrentIsolate will
  * return NULL.
  *
@@ -1007,7 +1113,8 @@ DART_EXPORT void Dart_ExitIsolate();
  * the vm isolate on startup and fast initialization of an isolate.
  * A Snapshot of the heap is created before any dart code has executed.
  *
- * Requires there to be a current isolate.
+ * Requires there to be a current isolate. Not available in the precompiled
+ * runtime (check Dart_IsPrecompiledRuntime).
  *
  * \param buffer Returns a pointer to a buffer containing the
  *   snapshot. This buffer is scope allocated and is only valid
@@ -1023,37 +1130,6 @@ Dart_CreateSnapshot(uint8_t** vm_snapshot_data_buffer,
                     intptr_t* isolate_snapshot_data_size);
 
 /**
- * Creates a snapshot of the application script loaded in the isolate.
- *
- * A script snapshot can be used for implementing fast startup of applications
- * (skips the script tokenizing and parsing process). A Snapshot of the script
- * can only be created before any dart code has executed.
- *
- * Requires there to be a current isolate which already has loaded script.
- *
- * \param buffer Returns a pointer to a buffer containing
- *   the snapshot. This buffer is scope allocated and is only valid
- *   until the next call to Dart_ExitScope.
- * \param size Returns the size of the buffer.
- *
- * \return A valid handle if no error occurs during the operation.
- */
-DART_EXPORT DART_WARN_UNUSED_RESULT Dart_Handle
-Dart_CreateScriptSnapshot(uint8_t** script_snapshot_buffer,
-                          intptr_t* script_snapshot_size);
-
-/**
- * Returns whether the buffer contains a snapshot created by
- * Dart_Create*Snapshot.
- *
- * \param buffer Pointer to a buffer that might contain a snapshot.
- * \param buffer_size Size of the buffer.
- *
- * \return Whether the buffer contains a snapshot (core, app or script).
- */
-DART_EXPORT bool Dart_IsSnapshot(const uint8_t* buffer, intptr_t buffer_size);
-
-/**
  * Returns whether the buffer contains a kernel file.
  *
  * \param buffer Pointer to a buffer that might contain a kernel binary.
@@ -1062,17 +1138,6 @@ DART_EXPORT bool Dart_IsSnapshot(const uint8_t* buffer, intptr_t buffer_size);
  * \return Whether the buffer contains a kernel binary (full or partial).
  */
 DART_EXPORT bool Dart_IsKernel(const uint8_t* buffer, intptr_t buffer_size);
-
-/**
- * Returns true if snapshot_buffer contains a Dart2 snapshot.
- *
- * \param snapshot_buffer Pointer to a buffer that contains the snapshot
- *   that needs to be checked.
- * \param snapshot_size Size of the buffer.
- *
- * \returns true if the snapshot is a Dart2 snapshot, false otherwise.
- */
-DART_EXPORT bool Dart_IsDart2Snapshot(const uint8_t* snapshot_buffer);
 
 /**
  * Make isolate runnable.
@@ -1508,6 +1573,81 @@ DART_EXPORT bool Dart_IsFuture(Dart_Handle object);
  */
 DART_EXPORT Dart_Handle Dart_InstanceGetType(Dart_Handle instance);
 
+/**
+ * Returns the name for the provided class type.
+ *
+ * \return A valid string handle if no error occurs during the
+ *   operation.
+ */
+DART_EXPORT Dart_Handle Dart_ClassName(Dart_Handle cls_type);
+
+/**
+ * Returns the name for the provided function or method.
+ *
+ * \return A valid string handle if no error occurs during the
+ *   operation.
+ */
+DART_EXPORT Dart_Handle Dart_FunctionName(Dart_Handle function);
+
+/**
+ * Returns a handle to the owner of a function.
+ *
+ * The owner of an instance method or a static method is its defining
+ * class. The owner of a top-level function is its defining
+ * library. The owner of the function of a non-implicit closure is the
+ * function of the method or closure that defines the non-implicit
+ * closure.
+ *
+ * \return A valid handle to the owner of the function, or an error
+ *   handle if the argument is not a valid handle to a function.
+ */
+DART_EXPORT Dart_Handle Dart_FunctionOwner(Dart_Handle function);
+
+/**
+ * Determines whether a function handle referes to a static function
+ * of method.
+ *
+ * For the purposes of the embedding API, a top-level function is
+ * implicitly declared static.
+ *
+ * \param function A handle to a function or method declaration.
+ * \param is_static Returns whether the function or method is declared static.
+ *
+ * \return A valid handle if no error occurs during the operation.
+ */
+DART_EXPORT Dart_Handle Dart_FunctionIsStatic(Dart_Handle function,
+                                              bool* is_static);
+
+/**
+ * Is this object a closure resulting from a tear-off (closurized method)?
+ *
+ * Returns true for closures produced when an ordinary method is accessed
+ * through a getter call. Returns false otherwise, in particular for closures
+ * produced from local function declarations.
+ *
+ * \param object Some Object.
+ *
+ * \return true if Object is a tear-off.
+ */
+DART_EXPORT bool Dart_IsTearOff(Dart_Handle object);
+
+/**
+ * Retrieves the function of a closure.
+ *
+ * \return A handle to the function of the closure, or an error handle if the
+ *   argument is not a closure.
+ */
+DART_EXPORT Dart_Handle Dart_ClosureFunction(Dart_Handle closure);
+
+/**
+ * Returns a handle to the library which contains class.
+ *
+ * \return A valid handle to the library with owns class, null if the class
+ *   has no library or an error handle if the argument is not a valid handle
+ *   to a class type.
+ */
+DART_EXPORT Dart_Handle Dart_ClassLibrary(Dart_Handle cls_type);
+
 /*
  * =============================
  * Numbers, Integers and Doubles
@@ -1628,18 +1768,18 @@ DART_EXPORT Dart_Handle Dart_NewDouble(double value);
 DART_EXPORT Dart_Handle Dart_DoubleValue(Dart_Handle double_obj, double* value);
 
 /**
- * Returns a closure of top level function 'function_name' in the exported
- * namespace of specified 'library'. If a top level function 'function_name'
- * does not exist, looks for a top level getter 'function_name' and invokes
- * it and returns the object returned by the getter.
+ * Returns a closure of static function 'function_name' in the class 'class_name'
+ * in the exported namespace of specified 'library'.
  *
  * \param library Library object
- * \param function_name Name of the top level function
+ * \param cls_type Type object representing a Class
+ * \param function_name Name of the static function in the class
  *
  * \return A valid Dart instance if no error occurs during the operation.
  */
-DART_EXPORT Dart_Handle Dart_GetClosure(Dart_Handle library,
-                                        Dart_Handle function_name);
+DART_EXPORT Dart_Handle Dart_GetStaticMethodClosure(Dart_Handle library,
+                                                    Dart_Handle cls_type,
+                                                    Dart_Handle function_name);
 
 /*
  * ========
@@ -2429,15 +2569,6 @@ DART_EXPORT Dart_Handle Dart_ReThrowException(Dart_Handle exception,
  */
 
 /**
- * Creates a native wrapper class.
- *
- * TODO(turnidge): Document.
- */
-DART_EXPORT Dart_Handle Dart_CreateNativeWrapperClass(Dart_Handle library,
-                                                      Dart_Handle class_name,
-                                                      int field_count);
-
-/**
  * Gets the number of native instance fields in an object.
  */
 DART_EXPORT Dart_Handle Dart_GetNativeInstanceFieldCount(Dart_Handle obj,
@@ -2472,9 +2603,9 @@ DART_EXPORT Dart_Handle Dart_SetNativeInstanceField(Dart_Handle obj,
 typedef struct _Dart_NativeArguments* Dart_NativeArguments;
 
 /**
- * Extracts current isolate data from the native arguments structure.
+ * Extracts current isolate group data from the native arguments structure.
  */
-DART_EXPORT void* Dart_GetNativeIsolateData(Dart_NativeArguments args);
+DART_EXPORT void* Dart_GetNativeIsolateGroupData(Dart_NativeArguments args);
 
 typedef enum {
   Dart_NativeArgument_kBool = 0,
@@ -2781,7 +2912,7 @@ typedef enum {
   Dart_kSourceTag,
   Dart_kImportTag,
   Dart_kKernelTag,
-  Dart_kImportResolvedExtensionTag,
+  Dart_kImportExtensionTag,
 } Dart_LibraryTag;
 
 /**
@@ -2801,26 +2932,18 @@ typedef enum {
  *
  * Dart_kScriptTag
  *
- * This tag indicates that the root script should be loaded from
- * 'url'.  If the 'library' parameter is not null, it is the url of the
- * package map that should be used when loading.  Once the root
- * script is loaded, the embedder should call Dart_LoadScript to
- * install the root script in the VM.  The return value should be an
- * error or null.
+ * No longer used.
  *
  * Dart_kSourceTag
  *
- * This tag is used to load a file referenced by Dart language "part
- * of" directive.  Once the file's source is loaded, the embedder
- * should call Dart_LoadSource to provide the file contents to the VM.
- * The return value should be an error or null.
+ * No longer used.
  *
  * Dart_kImportTag
  *
- * This tag is used to load a script referenced by Dart language
- * "import" directive.  Once the script is loaded, the embedder should
- * call Dart_LoadLibrary to provide the script source to the VM.  The
- * return value should be an error or null.
+ * This tag is used to load a library from IsolateMirror.loadUri. The embedder
+ * should call Dart_LoadLibraryFromKernel to provide the library to the VM. The
+ * return value should be an error or library (the result from
+ * Dart_LoadLibraryFromKernel).
  *
  * Dart_kKernelTag
  *
@@ -2829,14 +2952,13 @@ typedef enum {
  * of an application is needed and the VM is 'use dart front end' mode.
  * The dart front end typically compiles all the scripts, imports and part
  * files into one intermediate file hence we don't use the source/import or
- * script tags.
+ * script tags. The return value should be an error or a TypedData containing
+ * the kernel bytes.
  *
- * Dart_kImportResolvedExtensionTag
+ * Dart_kImportExtensionTag
  *
- * This tag is used to load an external import (shared object file) without
- * performing path resolution first. The 'url' provided should be an absolute
- * path with the 'file://' schema. It doesn't require the service isolate to be
- * available and will not initialize a Loader for the isolate.
+ * This tag is used to load an external import (shared object file). The
+ * extension path must have the scheme 'dart-ext:'.
  */
 typedef Dart_Handle (*Dart_LibraryTagHandler)(
     Dart_LibraryTag tag,
@@ -2880,57 +3002,12 @@ DART_EXPORT Dart_Handle Dart_DefaultCanonicalizeUrl(Dart_Handle base_url,
                                                     Dart_Handle url);
 
 /**
- * Called by the embedder to provide the source for the root script to
- * the VM.  This function should be called in response to a
- * Dart_kScriptTag tag handler request (See Dart_LibraryTagHandler,
- * above).
- *
- * \param url The original url requested for the script.
- *
- * \param resolved_url The actual url which was loaded.  This parameter
- *   is optionally provided to support isolate reloading.  A value of
- *   Dart_Null() indicates that the resolved url was the same as the
- *   requested url.
- *
- * \param source The contents of the url.
- *
- * \param line_offset is the number of text lines before the
- *   first line of the Dart script in the containing file.
- *
- * \param col_offset is the number of characters before the first character
- *   in the first line of the Dart script.
- *
- * \return A valid handle if no error occurs during the operation.
- */
-DART_EXPORT DART_WARN_UNUSED_RESULT Dart_Handle
-Dart_LoadScript(Dart_Handle url,
-                Dart_Handle resolved_url,
-                Dart_Handle source,
-                intptr_t line_offset,
-                intptr_t col_offset);
-
-/**
- * Loads the root script for current isolate from a script snapshot. The
- * snapshot must have been created by Dart_CreateScriptSnapshot from a VM with
- * the same version.
- *
- * \param buffer A buffer which contains a snapshot of the script.
- * \param buffer_len Length of the passed in buffer.
- *
- * \return If no error occurs, the Library object corresponding to the root
- *   script is returned. Otherwise an error handle is returned.
- */
-DART_EXPORT Dart_Handle
-Dart_LoadScriptFromSnapshot(const uint8_t* script_snapshot_buffer,
-                            intptr_t script_snapshot_size);
-
-/**
  * Loads the root library for the current isolate.
  *
  * Requires there to be no current root library.
  *
  * \param buffer A buffer which contains a kernel binary (see
- *               pkg/kernel/binary.md).
+ *     pkg/kernel/binary.md). Must remain valid until isolate group shutdown.
  * \param buffer_size Length of the passed in buffer.
  *
  * \return A handle to the root library, or an error.
@@ -2989,9 +3066,15 @@ DART_EXPORT Dart_Handle Dart_GetClass(Dart_Handle library,
  * of it are removed from the embedder code. */
 
 /**
- * Returns the url from which a library was loaded.
+ * Returns an import path to a Library, such as "file:///test.dart" or
+ * "dart:core".
  */
 DART_EXPORT Dart_Handle Dart_LibraryUrl(Dart_Handle library);
+
+/**
+ * Returns a URL from which a Library was loaded.
+ */
+DART_EXPORT Dart_Handle Dart_LibraryResolvedUrl(Dart_Handle library);
 
 /**
  * \return An array of libraries.
@@ -3016,43 +3099,11 @@ DART_EXPORT Dart_Handle Dart_LibraryHandleError(Dart_Handle library,
                                                 Dart_Handle error);
 
 /**
- * Called by the embedder to provide the source for an "import"
- * directive.  This function should be called in response to a
- * Dart_kImportTag tag handler request (See Dart_LibraryTagHandler,
- * above).
- *
- * \param library The library where the "import" directive occurs.
- *
- * \param url The original url requested for the import.
- *
- * \param resolved_url The actual url which was loaded.  This parameter
- *   is optionally provided to support isolate reloading.  A value of
- *   Dart_Null() indicates that the resolved url was the same as the
- *   requested url.
- *
- * \param source The contents of the url.
- *
- * \param line_offset is the number of text lines before the
- *   first line of the Dart script in the containing file.
- *
- * \param col_offset is the number of characters before the first character
- *   in the first line of the Dart script.
- *
- * \return A valid handle if no error occurs during the operation.
- */
-DART_EXPORT DART_WARN_UNUSED_RESULT Dart_Handle
-Dart_LoadLibrary(Dart_Handle url,
-                 Dart_Handle resolved_url,
-                 Dart_Handle source,
-                 intptr_t line_offset,
-                 intptr_t column_offset);
-
-/**
  * Called by the embedder to load a partial program. Does not set the root
  * library.
  *
  * \param buffer A buffer which contains a kernel binary (see
- *               pkg/kernel/binary.md).
+ *     pkg/kernel/binary.md). Must remain valid until isolate shutdown.
  * \param buffer_size Length of the passed in buffer.
  *
  * \return A handle to the main library of the compilation unit, or an error.
@@ -3060,22 +3111,6 @@ Dart_LoadLibrary(Dart_Handle url,
 DART_EXPORT DART_WARN_UNUSED_RESULT Dart_Handle
 Dart_LoadLibraryFromKernel(const uint8_t* kernel_buffer,
                            intptr_t kernel_buffer_size);
-
-/**
- * Imports a library into another library, optionally with a prefix.
- * If no prefix is required, an empty string or Dart_Null() can be
- * supplied.
- *
- * \param library The library into which to import another library.
- * \param import The library to import.
- * \param prefix The prefix under which to import.
- *
- * \return A valid handle if no error occurs during the operation.
- */
-DART_EXPORT DART_WARN_UNUSED_RESULT Dart_Handle
-Dart_LibraryImportLibrary(Dart_Handle library,
-                          Dart_Handle import,
-                          Dart_Handle prefix);
 
 /**
  * Returns a flattened list of pairs. The first element in each pair is the
@@ -3087,51 +3122,6 @@ Dart_LibraryImportLibrary(Dart_Handle library,
  * \return A handle to a list of flattened pairs of importer-importee.
  */
 DART_EXPORT Dart_Handle Dart_GetImportsOfScheme(Dart_Handle scheme);
-
-/**
- * Called by the embedder to provide the source for a "part of"
- * directive.  This function should be called in response to a
- * Dart_kSourceTag tag handler request (See Dart_LibraryTagHandler,
- * above).
- *
- * \param library The library where the "part of" directive occurs.
- *
- * \param url The original url requested for the part.
- *
- * \param resolved_url The actual url which was loaded.  This parameter
- *   is optionally provided to support isolate reloading.  A value of
- *   Dart_Null() indicates that the resolved url was the same as the
- *   requested url.
- *
- * \param source The contents of the url.
- *
- * \param line_offset is the number of text lines before the
- *   first line of the Dart script in the containing file.
- *
- * \param col_offset is the number of characters before the first character
- *   in the first line of the Dart script.
- *
- * \return A valid handle if no error occurs during the operation.
- */
-DART_EXPORT DART_WARN_UNUSED_RESULT Dart_Handle
-Dart_LoadSource(Dart_Handle library,
-                Dart_Handle url,
-                Dart_Handle resolved_url,
-                Dart_Handle source,
-                intptr_t line_offset,
-                intptr_t column_offset);
-
-/**
- * Loads a patch source string into a library.
- *
- * \param library A library
- * \param url A url identifying the origin of the patch source
- * \param source A string of Dart patch source
- */
-DART_EXPORT DART_WARN_UNUSED_RESULT Dart_Handle
-Dart_LibraryLoadPatch(Dart_Handle library,
-                      Dart_Handle url,
-                      Dart_Handle patch_source);
 
 /**
  * Indicates that all outstanding load requests have been satisfied.
@@ -3199,6 +3189,8 @@ DART_EXPORT Dart_Handle Dart_SetPeer(Dart_Handle object, void* peer);
  *
  */
 
+// TODO(33433): Remove kernel service from the embedding API.
+
 typedef enum {
   Dart_KernelCompilationStatus_Unknown = -1,
   Dart_KernelCompilationStatus_Ok = 0,
@@ -3235,7 +3227,24 @@ Dart_CompileSourcesToKernel(const char* script_uri,
                             int source_files_count,
                             Dart_SourceFile source_files[],
                             bool incremental_compile,
-                            const char* package_config);
+                            const char* package_config,
+                            const char* multiroot_filepaths,
+                            const char* multiroot_scheme);
+
+DART_EXPORT Dart_KernelCompilationResult Dart_KernelListDependencies();
+
+/**
+ * Sets the kernel buffer which will be used to load Dart SDK sources
+ * dynamically at runtime.
+ *
+ * \param platform_kernel A buffer containing kernel which has sources for the
+ * Dart SDK populated. Note: The VM does not take ownership of this memory.
+ *
+ * \param platform_kernel_size The length of the platform_kernel buffer.
+ */
+DART_EXPORT void Dart_SetDartLibrarySourcesKernel(
+    const uint8_t* platform_kernel,
+    const intptr_t platform_kernel_size);
 
 #define DART_KERNEL_ISOLATE_NAME "kernel-service"
 
@@ -3265,6 +3274,25 @@ DART_EXPORT bool Dart_IsServiceIsolate(Dart_Isolate isolate);
 DART_EXPORT Dart_Port Dart_ServiceWaitForLoadPort();
 
 /**
+ * Writes the CPU profile to the timeline as a series of 'instant' events.
+ *
+ * Note that this is an expensive operation.
+ *
+ * \param main_port The main port of the Isolate whose profile samples to write.
+ * \param error An optional error, must be free()ed by caller.
+ *
+ * \return Returns true if the profile is successfully written and false
+ *         otherwise.
+ */
+DART_EXPORT bool Dart_WriteProfileToTimeline(Dart_Port main_port, char** error);
+
+/*
+ * ====================
+ * Compilation Feedback
+ * ====================
+ */
+
+/**
  * Record all functions which have been compiled in the current isolate.
  *
  * \param buffer Returns a pointer to a buffer containing the trace.
@@ -3287,6 +3315,29 @@ Dart_SaveCompilationTrace(uint8_t** buffer, intptr_t* buffer_length);
 DART_EXPORT DART_WARN_UNUSED_RESULT Dart_Handle
 Dart_LoadCompilationTrace(uint8_t* buffer, intptr_t buffer_length);
 
+/**
+ * Record runtime feedback for the current isolate, including type feedback
+ * and usage counters.
+ *
+ * \param buffer Returns a pointer to a buffer containing the trace.
+ *   This buffer is scope allocated and is only valid  until the next call to
+ *   Dart_ExitScope.
+ * \param size Returns the size of the buffer.
+ * \return Returns an valid handle upon success.
+ */
+DART_EXPORT DART_WARN_UNUSED_RESULT Dart_Handle
+Dart_SaveTypeFeedback(uint8_t** buffer, intptr_t* buffer_length);
+
+/**
+ * Compile functions using data from Dart_SaveTypeFeedback. The data must from a
+ * VM with the same version and compiler flags.
+ *
+ * \return Returns an error handle if a compilation error was encountered or a
+ *   version mismatch is detected.
+ */
+DART_EXPORT DART_WARN_UNUSED_RESULT Dart_Handle
+Dart_LoadTypeFeedback(uint8_t* buffer, intptr_t buffer_length);
+
 /*
  * ==============
  * Precompilation
@@ -3294,21 +3345,34 @@ Dart_LoadCompilationTrace(uint8_t* buffer, intptr_t buffer_length);
  */
 
 /**
- * Compiles all functions reachable from the provided entry points and marks
+ * Compiles all functions reachable from entry points and marks
  * the isolate to disallow future compilation.
  *
- * \param entry_points A list of functions that may be invoked through the
- * embedding API, e.g. Dart_Invoke/GetField/SetField/New/InvokeClosure.
+ * Entry points should be specified using `@pragma("vm:entry-point")`
+ * annotation.
  *
  * \return An error handle if a compilation error or runtime error running const
  * constructors was encountered.
  */
-DART_EXPORT Dart_Handle
-Dart_Precompile(Dart_QualifiedFunctionName entry_points[]);
+DART_EXPORT Dart_Handle Dart_Precompile();
 
 typedef void (*Dart_StreamingWriteCallback)(void* callback_data,
                                             const uint8_t* buffer,
                                             intptr_t size);
+
+#if defined(__APPLE__)
+#define kVmSnapshotDataSymbolName "kDartVmSnapshotData"
+#define kVmSnapshotInstructionsSymbolName "kDartVmSnapshotInstructions"
+#define kIsolateSnapshotDataSymbolName "kDartIsolateSnapshotData"
+#define kIsolateSnapshotInstructionsSymbolName                                 \
+  "kDartIsolateSnapshotInstructions"
+#else
+#define kVmSnapshotDataSymbolName "_kDartVmSnapshotData"
+#define kVmSnapshotInstructionsSymbolName "_kDartVmSnapshotInstructions"
+#define kIsolateSnapshotDataSymbolName "_kDartIsolateSnapshotData"
+#define kIsolateSnapshotInstructionsSymbolName                                 \
+  "_kDartIsolateSnapshotInstructions"
+#endif
 
 /**
  *  Creates a precompiled snapshot.
@@ -3316,17 +3380,17 @@ typedef void (*Dart_StreamingWriteCallback)(void* callback_data,
  *   - Dart_Precompile must have been called.
  *
  *  Outputs an assembly file defining the symbols
- *   - kDartVmSnapshotData
- *   - kDartVmSnapshotInstructions
- *   - kDartIsolateSnapshotData
- *   - kDartIsolateSnapshotInstructions
+ *   - _kDartVmSnapshotData
+ *   - _kDartVmSnapshotInstructions
+ *   - _kDartIsolateSnapshotData
+ *   - _kDartIsolateSnapshotInstructions
  *
  *  The assembly should be compiled as a static or shared library and linked or
  *  loaded by the embedder.
  *  Running this snapshot requires a VM compiled with DART_PRECOMPILED_SNAPSHOT.
  *  The kDartVmSnapshotData and kDartVmSnapshotInstructions should be passed to
  *  Dart_Initialize. The kDartIsolateSnapshotData and
- *  kDartIsoalteSnapshotInstructions should be passed to Dart_CreateIsolate.
+ *  kDartIsolateSnapshotInstructions should be passed to Dart_CreateIsolateGroup.
  *
  *  The callback will be invoked one or more times to provide the assembly code.
  *
@@ -3335,6 +3399,32 @@ typedef void (*Dart_StreamingWriteCallback)(void* callback_data,
 DART_EXPORT DART_WARN_UNUSED_RESULT Dart_Handle
 Dart_CreateAppAOTSnapshotAsAssembly(Dart_StreamingWriteCallback callback,
                                     void* callback_data);
+
+/**
+ *  Creates a precompiled snapshot.
+ *   - A root library must have been loaded.
+ *   - Dart_Precompile must have been called.
+ *
+ *  Outputs an ELF shared library defining the symbols
+ *   - _kDartVmSnapshotData
+ *   - _kDartVmSnapshotInstructions
+ *   - _kDartIsolateSnapshotData
+ *   - _kDartIsolateSnapshotInstructions
+ *
+ *  The shared library should be dynamically loaded by the embedder.
+ *  Running this snapshot requires a VM compiled with DART_PRECOMPILED_SNAPSHOT.
+ *  The kDartVmSnapshotData and kDartVmSnapshotInstructions should be passed to
+ *  Dart_Initialize. The kDartIsolateSnapshotData and
+ *  kDartIsolateSnapshotInstructions should be passed to Dart_CreateIsolate.
+ *
+ *  The callback will be invoked one or more times to provide the binary output.
+ *
+ * \return A valid handle if no error occurs during the operation.
+ */
+DART_EXPORT DART_WARN_UNUSED_RESULT Dart_Handle
+Dart_CreateAppAOTSnapshotAsElf(Dart_StreamingWriteCallback callback,
+                               void* callback_data,
+                               bool stripped);
 
 /**
  *  Like Dart_CreateAppAOTSnapshotAsAssembly, but only includes
@@ -3376,11 +3466,10 @@ DART_EXPORT DART_WARN_UNUSED_RESULT Dart_Handle Dart_SortClasses();
  *  startup and quicker warmup in a subsequent process.
  *
  *  Outputs a snapshot in two pieces. The pieces should be passed to
- *  Dart_CreateIsolate in a VM using the same VM snapshot pieces used in the
+ *  Dart_CreateIsolateGroup in a VM using the same VM snapshot pieces used in the
  *  current VM. The instructions piece must be loaded with read and execute
  *  permissions; the data piece may be loaded as read-only.
  *
- *   - Requires the VM to have been started with --load-deferred-eagerly.
  *   - Requires the VM to have not been started with --precompilation.
  *   - Not supported when targeting IA32 or DBC.
  *   - The VM writing the snapshot and the VM reading the snapshot must be the
@@ -3397,7 +3486,8 @@ DART_EXPORT DART_WARN_UNUSED_RESULT Dart_Handle
 Dart_CreateAppJITSnapshotAsBlobs(uint8_t** isolate_snapshot_data_buffer,
                                  intptr_t* isolate_snapshot_data_size,
                                  uint8_t** isolate_snapshot_instructions_buffer,
-                                 intptr_t* isolate_snapshot_instructions_size);
+                                 intptr_t* isolate_snapshot_instructions_size,
+                                 const uint8_t* reused_instructions);
 
 /**
  * Like Dart_CreateAppJITSnapshotAsBlobs, but also creates a new VM snapshot.
@@ -3440,5 +3530,11 @@ DART_EXPORT bool Dart_IsPrecompiledRuntime();
  *  running on the current thread.
  */
 DART_EXPORT void Dart_DumpNativeStackTrace(void* context);
+
+/**
+ *  Indicate that the process is about to abort, and the Dart VM should not
+ *  attempt to cleanup resources.
+ */
+DART_EXPORT void Dart_PrepareToAbort();
 
 #endif /* INCLUDE_DART_API_H_ */ /* NOLINT */

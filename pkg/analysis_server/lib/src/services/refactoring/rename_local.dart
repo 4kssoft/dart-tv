@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -11,25 +11,25 @@ import 'package:analysis_server/src/services/correction/util.dart';
 import 'package:analysis_server/src/services/refactoring/naming_conventions.dart';
 import 'package:analysis_server/src/services/refactoring/refactoring.dart';
 import 'package:analysis_server/src/services/refactoring/rename.dart';
+import 'package:analysis_server/src/services/refactoring/visible_ranges_computer.dart';
 import 'package:analysis_server/src/services/search/hierarchy.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/element/element.dart';
-import 'package:analyzer/src/dart/element/ast_provider.dart';
+import 'package:analyzer/src/dart/analysis/session_helper.dart';
 import 'package:analyzer/src/generated/source.dart';
 
 /**
  * A [Refactoring] for renaming [LocalElement]s.
  */
 class RenameLocalRefactoringImpl extends RenameRefactoringImpl {
-  final AstProvider astProvider;
-  final ResolvedUnitCache unitCache;
+  final AnalysisSessionHelper sessionHelper;
 
   List<LocalElement> elements = [];
 
   RenameLocalRefactoringImpl(
-      RefactoringWorkspace workspace, this.astProvider, LocalElement element)
-      : unitCache = new ResolvedUnitCache(astProvider),
+      RefactoringWorkspace workspace, LocalElement element)
+      : sessionHelper = AnalysisSessionHelper(element.session),
         super(workspace, element);
 
   @override
@@ -48,15 +48,19 @@ class RenameLocalRefactoringImpl extends RenameRefactoringImpl {
 
   @override
   Future<RefactoringStatus> checkFinalConditions() async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
     RefactoringStatus result = new RefactoringStatus();
     await _prepareElements();
     for (LocalElement element in elements) {
-      CompilationUnit unit = await unitCache.getUnit(element);
-      if (unit != null) {
-        unit.accept(new _ConflictValidatorVisitor(result, newName, element));
-      }
+      var resolvedUnit = await sessionHelper.getResolvedUnitByElement(element);
+      var unit = resolvedUnit.unit;
+      unit.accept(
+        _ConflictValidatorVisitor(
+          result,
+          newName,
+          element,
+          VisibleRangesComputer.forNode(unit),
+        ),
+      );
     }
     return result;
   }
@@ -75,11 +79,10 @@ class RenameLocalRefactoringImpl extends RenameRefactoringImpl {
   }
 
   @override
-  Future fillChange() async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
+  Future<void> fillChange() async {
+    var processor = new RenameProcessor(workspace, change, newName);
     for (Element element in elements) {
-      addDeclarationEdit(element);
+      processor.addDeclarationEdit(element);
       var references = await searchEngine.searchReferences(element);
 
       // Exclude "implicit" references to optional positional parameters.
@@ -87,7 +90,7 @@ class RenameLocalRefactoringImpl extends RenameRefactoringImpl {
         references.removeWhere((match) => match.sourceRange.length == 0);
       }
 
-      addReferenceEdits(references);
+      processor.addReferenceEdits(references);
     }
   }
 
@@ -95,8 +98,6 @@ class RenameLocalRefactoringImpl extends RenameRefactoringImpl {
    * Fills [elements] with [Element]s to rename.
    */
   Future _prepareElements() async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
     Element element = this.element;
     if (element is ParameterElement && element.isNamed) {
       elements = await getHierarchyNamedParameters(searchEngine, element);
@@ -110,13 +111,19 @@ class _ConflictValidatorVisitor extends RecursiveAstVisitor {
   final RefactoringStatus result;
   final String newName;
   final LocalElement target;
+  final Map<Element, SourceRange> visibleRangeMap;
   final Set<Element> conflictingLocals = new Set<Element>();
 
-  _ConflictValidatorVisitor(this.result, this.newName, this.target);
+  _ConflictValidatorVisitor(
+    this.result,
+    this.newName,
+    this.target,
+    this.visibleRangeMap,
+  );
 
   @override
   visitSimpleIdentifier(SimpleIdentifier node) {
-    Element nodeElement = node.bestElement;
+    Element nodeElement = node.staticElement;
     if (nodeElement != null && nodeElement.name == newName) {
       // Duplicate declaration.
       if (node.inDeclarationContext() && _isVisibleWithTarget(nodeElement)) {
@@ -130,7 +137,7 @@ class _ConflictValidatorVisitor extends RecursiveAstVisitor {
         return;
       }
       // Shadowing by the target element.
-      SourceRange targetRange = target.visibleRange;
+      SourceRange targetRange = _getVisibleRange(target);
       if (targetRange != null &&
           targetRange.contains(node.offset) &&
           !node.isQualified &&
@@ -147,13 +154,17 @@ class _ConflictValidatorVisitor extends RecursiveAstVisitor {
     }
   }
 
+  SourceRange _getVisibleRange(LocalElement element) {
+    return visibleRangeMap[element];
+  }
+
   /**
    * Returns whether [element] and [target] are visible together.
    */
   bool _isVisibleWithTarget(Element element) {
     if (element is LocalElement) {
-      SourceRange targetRange = target.visibleRange;
-      SourceRange elementRange = element.visibleRange;
+      SourceRange targetRange = _getVisibleRange(target);
+      SourceRange elementRange = _getVisibleRange(element);
       return targetRange != null &&
           elementRange != null &&
           elementRange.intersects(targetRange);

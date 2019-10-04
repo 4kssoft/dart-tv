@@ -2,24 +2,58 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// TODO(johnniwinther): Add a test that ensure that this library doesn't depend
+// on the dart2js internals.
 library compiler.src.kernel.dart2js_target;
 
-import 'package:kernel/kernel.dart';
+import 'package:kernel/ast.dart' as ir;
 import 'package:kernel/core_types.dart';
 import 'package:kernel/class_hierarchy.dart';
 import 'package:kernel/target/targets.dart';
+import 'invocation_mirror_constants.dart';
 
-import '../native/native.dart' show maybeEnableNative;
+const Iterable<String> _allowedDartSchemePaths = const <String>[
+  'async',
+  'html',
+  'html_common',
+  'indexed_db',
+  'js',
+  'js_util',
+  'svg',
+  '_native_typed_data',
+  'web_audio',
+  'web_gl',
+  'web_sql'
+];
+
+bool maybeEnableNative(Uri uri) {
+  bool allowedTestLibrary() {
+    String scriptName = uri.path;
+    return scriptName.contains('tests/compiler/dart2js_native') ||
+        scriptName.contains('tests/compiler/dart2js_extra') ||
+        scriptName.contains('generated_tests/dart2js_native/native_test');
+  }
+
+  bool allowedDartLibrary() {
+    if (uri.scheme != 'dart') return false;
+    return _allowedDartSchemePaths.contains(uri.path);
+  }
+
+  return allowedTestLibrary() || allowedDartLibrary();
+}
 
 /// A kernel [Target] to configure the Dart Front End for dart2js.
 class Dart2jsTarget extends Target {
   final TargetFlags flags;
+  @override
   final String name;
 
   Dart2jsTarget(this.name, this.flags);
 
-  bool get strongMode => flags.strongMode;
+  @override
+  bool get enableNoSuchMethodForwarders => true;
 
+  @override
   List<String> get extraRequiredLibraries => _requiredLibraries[name];
 
   @override
@@ -39,24 +73,61 @@ class Dart2jsTarget extends Target {
   bool get nativeExtensionExpectsString => false;
 
   @override
+  bool get errorOnUnexactWebIntLiterals => true;
+
+  @override
   void performModularTransformationsOnLibraries(
-      CoreTypes coreTypes, ClassHierarchy hierarchy, List<Library> libraries,
+      ir.Component component,
+      CoreTypes coreTypes,
+      ClassHierarchy hierarchy,
+      List<ir.Library> libraries,
+      Map<String, String> environmentDefines,
+      DiagnosticReporter diagnosticReporter,
       {void logger(String msg)}) {}
 
   @override
-  void performGlobalTransformations(CoreTypes coreTypes, Component component,
-      {void logger(String msg)}) {}
-
-  @override
-  Expression instantiateInvocation(CoreTypes coreTypes, Expression receiver,
-      String name, Arguments arguments, int offset, bool isSuper) {
-    // TODO(sigmund): implement;
-    return new InvalidExpression(null);
+  ir.Expression instantiateInvocation(
+      CoreTypes coreTypes,
+      ir.Expression receiver,
+      String name,
+      ir.Arguments arguments,
+      int offset,
+      bool isSuper) {
+    int kind;
+    if (name.startsWith('get:')) {
+      kind = invocationMirrorGetterKind;
+      name = name.substring(4);
+    } else if (name.startsWith('set:')) {
+      kind = invocationMirrorSetterKind;
+      name = name.substring(4);
+    } else {
+      kind = invocationMirrorMethodKind;
+    }
+    return new ir.StaticInvocation(
+        coreTypes.index
+            .getTopLevelMember('dart:core', '_createInvocationMirror'),
+        new ir.Arguments(<ir.Expression>[
+          new ir.StringLiteral(name)..fileOffset = offset,
+          new ir.ListLiteral(
+              arguments.types.map((t) => new ir.TypeLiteral(t)).toList()),
+          new ir.ListLiteral(arguments.positional)..fileOffset = offset,
+          new ir.MapLiteral(new List<ir.MapEntry>.from(
+              arguments.named.map((ir.NamedExpression arg) {
+            return new ir.MapEntry(
+                new ir.StringLiteral(arg.name)..fileOffset = arg.fileOffset,
+                arg.value)
+              ..fileOffset = arg.fileOffset;
+          })), keyType: coreTypes.stringLegacyRawType)
+            ..isConst = (arguments.named.length == 0)
+            ..fileOffset = arguments.fileOffset,
+          new ir.IntLiteral(kind)..fileOffset = offset,
+        ]))
+      ..fileOffset = offset;
   }
 
   @override
-  Expression instantiateNoSuchMethodError(CoreTypes coreTypes,
-      Expression receiver, String name, Arguments arguments, int offset,
+  ir.Expression instantiateNoSuchMethodError(CoreTypes coreTypes,
+      ir.Expression receiver, String name, ir.Arguments arguments, int offset,
       {bool isMethod: false,
       bool isGetter: false,
       bool isSetter: false,
@@ -68,8 +139,12 @@ class Dart2jsTarget extends Target {
       bool isConstructor: false,
       bool isTopLevel: false}) {
     // TODO(sigmund): implement;
-    return new InvalidExpression(null);
+    return new ir.InvalidExpression(null);
   }
+
+  @override
+  ConstantsBackend constantsBackend(CoreTypes coreTypes) =>
+      const Dart2jsConstantsBackend(supportsUnevaluatedConstants: true);
 }
 
 // TODO(sigmund): this "extraRequiredLibraries" needs to be removed...
@@ -114,3 +189,13 @@ const _requiredLibraries = const <String, List<String>>{
     'dart:mirrors',
   ]
 };
+
+class Dart2jsConstantsBackend extends ConstantsBackend {
+  @override
+  final bool supportsUnevaluatedConstants;
+
+  const Dart2jsConstantsBackend({this.supportsUnevaluatedConstants});
+
+  @override
+  NumberSemantics get numberSemantics => NumberSemantics.js;
+}

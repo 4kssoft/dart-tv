@@ -13,8 +13,6 @@
 
 namespace dart {
 
-DECLARE_FLAG(bool, trace_natives);
-
 // Forward declarations.
 class BootstrapNatives;
 class Object;
@@ -41,7 +39,7 @@ class Thread;
 #define CHECK_STACK_ALIGNMENT                                                  \
   {                                                                            \
     uword (*func)() = reinterpret_cast<uword (*)()>(                           \
-        StubCode::GetCStackPointer_entry()->EntryPoint());                     \
+        StubCode::GetCStackPointer().EntryPoint());                            \
     uword current_sp = func();                                                 \
     ASSERT(Utils::IsAligned(current_sp, OS::ActivationFrameAlignment()));      \
   }
@@ -103,6 +101,14 @@ class NativeArguments {
     return *arg_ptr;
   }
 
+  void SetArgAt(int index, const Object& value) const {
+    ASSERT(thread_->execution_state() == Thread::kThreadInVM);
+    ASSERT((index >= 0) && (index < ArgCount()));
+    RawObject** arg_ptr =
+        &(argv_[ReverseArgOrderBit::decode(argc_tag_) ? index : -index]);
+    *arg_ptr = value.raw();
+  }
+
   // Does not include hidden type arguments vector.
   int NativeArgCount() const {
     int function_bits = FunctionBits::decode(argc_tag_);
@@ -114,7 +120,8 @@ class NativeArguments {
     if ((function_bits & (kClosureFunctionBit | kInstanceFunctionBit)) ==
         (kClosureFunctionBit | kInstanceFunctionBit)) {
       // Retrieve the receiver from the context.
-      const int closure_index = (function_bits & kGenericFunctionBit) ? 1 : 0;
+      const int closure_index =
+          (function_bits & kGenericFunctionBit) != 0 ? 1 : 0;
       const Object& closure = Object::Handle(ArgAt(closure_index));
       const Context& context =
           Context::Handle(Closure::Cast(closure).context());
@@ -133,12 +140,37 @@ class NativeArguments {
     return ArgAt(actual_index);
   }
 
-  RawTypeArguments* NativeTypeArgs() {
+  RawTypeArguments* NativeTypeArgs() const {
     ASSERT(ToGenericFunction());
     return TypeArguments::RawCast(ArgAt(0));
   }
 
-  void SetReturn(const Object& value) const { *retval_ = value.raw(); }
+  int NativeTypeArgCount() const {
+    if (ToGenericFunction()) {
+      TypeArguments& type_args = TypeArguments::Handle(NativeTypeArgs());
+      if (type_args.IsNull()) {
+        // null vector represents infinite list of dynamics
+        return INT_MAX;
+      }
+      return type_args.Length();
+    }
+    return 0;
+  }
+
+  RawAbstractType* NativeTypeArgAt(int index) const {
+    ASSERT((index >= 0) && (index < NativeTypeArgCount()));
+    TypeArguments& type_args = TypeArguments::Handle(NativeTypeArgs());
+    if (type_args.IsNull()) {
+      // null vector represents infinite list of dynamics
+      return Type::dynamic_type().raw();
+    }
+    return type_args.TypeAt(index);
+  }
+
+  void SetReturn(const Object& value) const {
+    ASSERT(thread_->execution_state() == Thread::kThreadInVM);
+    *retval_ = value.raw();
+  }
 
   RawObject* ReturnValue() const {
     // Tell MemorySanitizer the retval_ was initialized (by generated code).
@@ -182,7 +214,7 @@ class NativeArguments {
     if (function.IsClosureFunction()) {
       function_bits |= kClosureFunctionBit;
     }
-    if (function.IsGeneric() && Isolate::Current()->reify_generic_functions()) {
+    if (function.IsGeneric()) {
       function_bits |= kGenericFunctionBit;
       argc++;
     }
@@ -215,7 +247,6 @@ class NativeArguments {
   friend class Interpreter;
   friend class Simulator;
 
-#if defined(TARGET_ARCH_DBC) || defined(DART_USE_INTERPRETER)
   // Allow simulator and interpreter to create NativeArguments in reverse order
   // on the stack.
   NativeArguments(Thread* thread,
@@ -226,27 +257,29 @@ class NativeArguments {
         argc_tag_(ReverseArgOrderBit::update(true, argc_tag)),
         argv_(argv),
         retval_(retval) {}
-#endif
 
   // Since this function is passed a RawObject directly, we need to be
   // exceedingly careful when we use it.  If there are any other side
   // effects in the statement that may cause GC, it could lead to
   // bugs.
-  void SetReturnUnsafe(RawObject* value) const { *retval_ = value; }
+  void SetReturnUnsafe(RawObject* value) const {
+    ASSERT(thread_->execution_state() == Thread::kThreadInVM);
+    *retval_ = value;
+  }
 
   // Returns true if the arguments are those of an instance function call.
   bool ToInstanceFunction() const {
-    return (FunctionBits::decode(argc_tag_) & kInstanceFunctionBit);
+    return (FunctionBits::decode(argc_tag_) & kInstanceFunctionBit) != 0;
   }
 
   // Returns true if the arguments are those of a closure function call.
   bool ToClosureFunction() const {
-    return (FunctionBits::decode(argc_tag_) & kClosureFunctionBit);
+    return (FunctionBits::decode(argc_tag_) & kClosureFunctionBit) != 0;
   }
 
   // Returns true if the arguments are those of a generic function call.
   bool ToGenericFunction() const {
-    return (FunctionBits::decode(argc_tag_) & kGenericFunctionBit);
+    return (FunctionBits::decode(argc_tag_) & kGenericFunctionBit) != 0;
   }
 
   int NumHiddenArgs(int function_bits) const {

@@ -33,7 +33,7 @@ bool isJsRestAnnotation(DartObjectImpl value) =>
 /// Whether [i] is a `spread` invocation (to be used on function arguments
 /// to have them compiled as `...` spread args in ES6 outputs).
 bool isJsSpreadInvocation(MethodInvocation i) =>
-    _isJsLibType('spread', i.methodName?.bestElement);
+    _isJsLibType('spread', i.methodName?.staticElement);
 
 // TODO(jmesserly): Move JsPeerInterface to package:js (see issue #135).
 // TODO(jacobr): The 'JS' annotation is the new, publically accessible one.
@@ -54,6 +54,8 @@ bool isJSAnonymousAnnotation(DartObjectImpl value) =>
 bool isJSExportNameAnnotation(DartObjectImpl value) =>
     isBuiltinAnnotation(value, '_foreign_helper', 'JSExportName');
 
+/// Whether [value] is a `@JSName` (internal annotation used in dart:html for
+/// renaming members).
 bool isJSName(DartObjectImpl value) =>
     isBuiltinAnnotation(value, '_js_helper', 'JSName');
 
@@ -62,6 +64,9 @@ bool isNotNullAnnotation(DartObjectImpl value) =>
 
 bool isNullCheckAnnotation(DartObjectImpl value) =>
     isBuiltinAnnotation(value, '_js_helper', '_NullCheck');
+
+bool isUndefinedAnnotation(DartObjectImpl value) =>
+    isBuiltinAnnotation(value, '_js_helper', '_Undefined');
 
 /// Returns the name value of the `JSExportName` annotation (when compiling
 /// the SDK), or `null` if there's none. This is used to control the name

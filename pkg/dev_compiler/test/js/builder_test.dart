@@ -1,10 +1,10 @@
 import 'package:dev_compiler/src/js_ast/js_ast.dart';
 import 'package:test/test.dart';
 
-final _prenumberedPlaceholders = new RegExp(r'#\d+');
+final _prenumberedPlaceholders = RegExp(r'#\d+');
 
 MiniJsParser _parser(String src) =>
-    new MiniJsParser(src.replaceAll(_prenumberedPlaceholders, '#'));
+    MiniJsParser(src.replaceAll(_prenumberedPlaceholders, '#'));
 
 _check(Node node, String expected) =>
     expect(node.toString(), 'js_ast `$expected`');
@@ -13,7 +13,7 @@ _checkStatement(String src) => _check(_parser(src).parseStatement(), src);
 
 _checkExpression(String src) => _check(_parser(src).parseExpression(), src);
 
-main() {
+void main() {
   group('MiniJsParser', () {
     // TODO(ochafik): Add more coverage.
     test('parses classes with complex members', () {

@@ -16,9 +16,9 @@
 
 #include "bin/directory.h"
 #include "bin/file.h"
-#include "bin/log.h"
 #include "bin/secure_socket_filter.h"
 #include "bin/secure_socket_utils.h"
+#include "platform/syslog.h"
 
 // Return the error from the containing function if handle is an error handle.
 #define RETURN_IF_ERROR(handle)                                                \
@@ -76,7 +76,7 @@ int SSLCertContext::CertificateCallback(int preverify_ok,
     filter->callback_error = result;
     return 0;
   }
-  return DartUtils::GetBooleanValue(result);
+  return static_cast<int>(DartUtils::GetBooleanValue(result));
 }
 
 SSLCertContext* SSLCertContext::GetSecurityContext(Dart_NativeArguments args) {
@@ -86,6 +86,10 @@ SSLCertContext* SSLCertContext::GetSecurityContext(Dart_NativeArguments args) {
   ThrowIfError(Dart_GetNativeInstanceField(
       dart_this, SSLCertContext::kSecurityContextNativeFieldIndex,
       reinterpret_cast<intptr_t*>(&context)));
+  if (context == NULL) {
+    Dart_PropagateError(Dart_NewUnhandledExceptionError(
+        DartUtils::NewInternalError("No native peer")));
+  }
   return context;
 }
 
@@ -324,7 +328,7 @@ void SSLCertContext::SetClientAuthoritiesBytes(
 
 void SSLCertContext::LoadRootCertFile(const char* file) {
   if (SSL_LOG_STATUS) {
-    Log::Print("Looking for trusted roots in %s\n", file);
+    Syslog::Print("Looking for trusted roots in %s\n", file);
   }
   if (!File::Exists(NULL, file)) {
     SecureSocketUtils::ThrowIOException(-1, "TlsException",
@@ -334,14 +338,14 @@ void SSLCertContext::LoadRootCertFile(const char* file) {
   SecureSocketUtils::CheckStatus(status, "TlsException",
                                  "Failure trusting builtin roots");
   if (SSL_LOG_STATUS) {
-    Log::Print("Trusting roots from: %s\n", file);
+    Syslog::Print("Trusting roots from: %s\n", file);
   }
 }
 
 void SSLCertContext::AddCompiledInCerts() {
   if (root_certificates_pem == NULL) {
     if (SSL_LOG_STATUS) {
-      Log::Print("Missing compiled-in roots\n");
+      Syslog::Print("Missing compiled-in roots\n");
     }
     return;
   }
@@ -370,7 +374,7 @@ void SSLCertContext::AddCompiledInCerts() {
 
 void SSLCertContext::LoadRootCertCache(const char* cache) {
   if (SSL_LOG_STATUS) {
-    Log::Print("Looking for trusted roots in %s\n", cache);
+    Syslog::Print("Looking for trusted roots in %s\n", cache);
   }
   if (Directory::Exists(NULL, cache) != Directory::EXISTS) {
     SecureSocketUtils::ThrowIOException(-1, "TlsException",
@@ -380,7 +384,7 @@ void SSLCertContext::LoadRootCertCache(const char* cache) {
   SecureSocketUtils::CheckStatus(status, "TlsException",
                                  "Failure trusting builtin roots");
   if (SSL_LOG_STATUS) {
-    Log::Print("Trusting roots from: %s\n", cache);
+    Syslog::Print("Trusting roots from: %s\n", cache);
   }
 }
 
@@ -644,6 +648,10 @@ static X509* GetX509Certificate(Dart_NativeArguments args) {
   ThrowIfError(Dart_GetNativeInstanceField(
       dart_this, SSLCertContext::kX509NativeFieldIndex,
       reinterpret_cast<intptr_t*>(&certificate)));
+  if (certificate == NULL) {
+    Dart_PropagateError(Dart_NewUnhandledExceptionError(
+        DartUtils::NewInternalError("No native peer")));
+  }
   return certificate;
 }
 
@@ -778,7 +786,7 @@ static Dart_Handle ASN1TimeToMilliseconds(ASN1_TIME* aTime) {
   M_ASN1_UTCTIME_free(epoch_start);
   if (result != 1) {
     // TODO(whesse): Propagate an error to Dart.
-    Log::PrintErr("ASN1Time error %d\n", result);
+    Syslog::PrintErr("ASN1Time error %d\n", result);
   }
   return Dart_NewInteger((86400LL * days + seconds) * 1000LL);
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2016, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -102,7 +102,9 @@ class WebServer {
    */
   void serveHttp(int port) {
     _server = HttpServer.bind(InternetAddress.loopbackIPv4, port);
-    _server.then(_handleServer).catchError((_) {/* Ignore errors. */});
+    _server.then(_handleServer).catchError((_) {
+      /* Ignore errors. */
+    });
   }
 
   /**
@@ -127,7 +129,7 @@ class WebServer {
       return;
     } catch (exception, stackTrace) {
       HttpResponse response = request.response;
-      response.statusCode = HttpStatus.OK;
+      response.statusCode = HttpStatus.ok;
       response.headers.contentType = _htmlContent;
       StringBuffer buffer = new StringBuffer();
       buffer.write('<p><b>Exception while composing page:</b></p>');
@@ -141,7 +143,7 @@ class WebServer {
     }
 
     HttpResponse response = request.response;
-    response.statusCode = HttpStatus.OK;
+    response.statusCode = HttpStatus.ok;
     response.headers.contentType = _htmlContent;
     response.write(buffer.toString());
     response.close();
@@ -150,7 +152,7 @@ class WebServer {
   /**
    * Handle a POST [request] received by the HTTP server.
    */
-  Future<Null> _handlePostRequest(HttpRequest request) async {
+  Future<void> _handlePostRequest(HttpRequest request) async {
     _returnUnknownRequest(request);
   }
 
@@ -176,7 +178,7 @@ class WebServer {
    */
   void _returnUnknownRequest(HttpRequest request) {
     HttpResponse response = request.response;
-    response.statusCode = HttpStatus.NOT_FOUND;
+    response.statusCode = HttpStatus.notFound;
     response.headers.contentType =
         new ContentType("text", "html", charset: "utf-8");
     response.write(

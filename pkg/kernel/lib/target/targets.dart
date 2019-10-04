@@ -6,41 +6,74 @@ library kernel.target.targets;
 import '../ast.dart';
 import '../class_hierarchy.dart';
 import '../core_types.dart';
-import '../transformations/treeshaker.dart' show ProgramRoot;
-import 'flutter.dart' show FlutterTarget;
-import 'vm.dart' show VmTarget;
 
 final List<String> targetNames = targets.keys.toList();
 
 class TargetFlags {
-  final bool strongMode;
-  final bool treeShake;
+  final bool trackWidgetCreation;
 
-  /// Whether `async` functions start synchronously.
-  final bool syncAsync;
-  final List<ProgramRoot> programRoots;
-  final Uri kernelRuntime;
-
-  TargetFlags(
-      {this.strongMode: false,
-      this.treeShake: false,
-      this.syncAsync: false,
-      this.programRoots: const <ProgramRoot>[],
-      this.kernelRuntime});
+  TargetFlags({this.trackWidgetCreation = false});
 }
 
 typedef Target _TargetBuilder(TargetFlags flags);
 
 final Map<String, _TargetBuilder> targets = <String, _TargetBuilder>{
   'none': (TargetFlags flags) => new NoneTarget(flags),
-  'vm': (TargetFlags flags) => new VmTarget(flags),
-  'flutter': (TargetFlags flags) => new FlutterTarget(flags),
 };
 
 Target getTarget(String name, TargetFlags flags) {
   var builder = targets[name];
   if (builder == null) return null;
   return builder(flags);
+}
+
+abstract class DiagnosticReporter<M, C> {
+  void report(M message, int charOffset, int length, Uri fileUri,
+      {List<C> context});
+}
+
+/// The different kinds of number semantics supported by the constant evaluator.
+enum NumberSemantics {
+  /// Dart VM number semantics.
+  vm,
+
+  /// JavaScript (Dart2js and DDC) number semantics.
+  js,
+}
+
+// Backend specific constant evaluation behavior
+class ConstantsBackend {
+  const ConstantsBackend();
+
+  /// Lowering of a list constant to a backend-specific representation.
+  Constant lowerListConstant(ListConstant constant) => constant;
+
+  /// Lowering of a set constant to a backend-specific representation.
+  Constant lowerSetConstant(SetConstant constant) => constant;
+
+  /// Lowering of a map constant to a backend-specific representation.
+  Constant lowerMapConstant(MapConstant constant) => constant;
+
+  /// Number semantics to use for this backend.
+  NumberSemantics get numberSemantics => NumberSemantics.vm;
+
+  /// Inline control of constant variables. The given constant expression
+  /// is the initializer of a [Field] or [VariableDeclaration] node.
+  /// If this method returns `true`, the variable will be inlined at all
+  /// points of reference and the variable itself removed (unless overridden
+  /// by the `keepFields` or `keepVariables` flag to the constant transformer).
+  /// This method must be deterministic, i.e. it must always return the same
+  /// value for the same constant value and place in the AST.
+  bool shouldInlineConstant(ConstantExpression initializer) => true;
+
+  /// Whether this target supports unevaluated constants.
+  ///
+  /// If not, then trying to perform constant evaluation without an environment
+  /// raises an exception.
+  ///
+  /// This defaults to `false` since it requires additional work for a backend
+  /// to support unevaluated constants.
+  bool get supportsUnevaluatedConstants => false;
 }
 
 /// A target provides backend-specific options for generating kernel IR.
@@ -50,7 +83,22 @@ abstract class Target {
   /// A list of URIs of required libraries, not including dart:core.
   ///
   /// Libraries will be loaded in order.
-  List<String> get extraRequiredLibraries => <String>[];
+  List<String> get extraRequiredLibraries => const <String>[];
+
+  /// A list of URIs of extra required libraries when compiling the platform.
+  ///
+  /// Libraries will be loaded in order after the [extraRequiredLibraries]
+  /// above.
+  ///
+  /// Normally not needed, but can be useful if removing libraries from the
+  /// [extraRequiredLibraries] list so libraries will still be available in the
+  /// platform if having a weird mix of current and not-quite-current as can
+  /// sometimes be the case.
+  List<String> get extraRequiredLibrariesPlatform => const <String>[];
+
+  /// A list of URIs of libraries to be indexed in the CoreTypes index, not
+  /// including dart:_internal, dart:async, dart:core and dart:mirrors.
+  List<String> get extraIndexedLibraries => const <String>[];
 
   /// Additional declared variables implied by this target.
   ///
@@ -62,15 +110,6 @@ abstract class Target {
   /// Classes from the SDK whose interface is required for the modular
   /// transformations.
   Map<String, List<String>> get requiredSdkClasses => CoreTypes.requiredClasses;
-
-  bool get strongMode;
-
-  /// A derived class may change this to `true` to disable type inference and
-  /// type promotion phases of analysis.
-  ///
-  /// This is intended for profiling, to ensure that type inference and type
-  /// promotion do not slow down compilation too much.
-  bool get disableTypeInference => false;
 
   /// A derived class may change this to `true` to enable forwarders to
   /// user-defined `noSuchMethod` that are generated for each abstract member
@@ -107,46 +146,25 @@ abstract class Target {
   /// slowing down compilation.
   void performOutlineTransformations(Component component) {}
 
-  /// Perform target-specific modular transformations on the given component.
-  ///
-  /// These transformations should not be whole-component transformations.  They
-  /// should expect that the component will contain external libraries.
-  void performModularTransformationsOnComponent(
-      CoreTypes coreTypes, ClassHierarchy hierarchy, Component component,
-      {void logger(String msg)}) {
-    performModularTransformationsOnLibraries(
-        coreTypes, hierarchy, component.libraries,
-        logger: logger);
-  }
+  /// Perform target-specific transformations on the given libraries that must
+  /// run before constant evaluation.
+  void performPreConstantEvaluationTransformations(
+      Component component,
+      CoreTypes coreTypes,
+      List<Library> libraries,
+      DiagnosticReporter diagnosticReporter,
+      {void logger(String msg)}) {}
 
   /// Perform target-specific modular transformations on the given libraries.
-  ///
-  /// The intent of this method is to perform the transformations only on some
-  /// subset of the component libraries and avoid packing them into a temporary
-  /// [Component] instance to pass into [performModularTransformationsOnComponent].
-  ///
-  /// Note that the following should be equivalent:
-  ///
-  ///     target.performModularTransformationsOnComponent(coreTypes, component);
-  ///
-  /// and
-  ///
-  ///     target.performModularTransformationsOnLibraries(
-  ///         coreTypes, component.libraries);
   void performModularTransformationsOnLibraries(
-      CoreTypes coreTypes, ClassHierarchy hierarchy, List<Library> libraries,
-      {void logger(String msg)});
-
-  /// Perform target-specific whole-program transformations.
-  ///
-  /// These transformations should be optimizations and not required for
-  /// correctness.  Everything should work if a simple and fast linker chooses
-  /// not to apply these transformations.
-  ///
-  /// Note that [performGlobalTransformations] doesn't have -OnComponent and
-  /// -OnLibraries alternatives, because the global knowledge required by the
-  /// transformations is assumed to be retrieved from a [Component] instance.
-  void performGlobalTransformations(CoreTypes coreTypes, Component component,
+      Component component,
+      CoreTypes coreTypes,
+      ClassHierarchy hierarchy,
+      List<Library> libraries,
+      // TODO(askesc): Consider how to generally pass compiler options to
+      // transformations.
+      Map<String, String> environmentDefines,
+      DiagnosticReporter diagnosticReporter,
       {void logger(String msg)});
 
   /// Perform target-specific modular transformations on the given program.
@@ -168,7 +186,7 @@ abstract class Target {
 
   /// Whether a library is allowed to import a platform private library.
   ///
-  /// By default only `dart:*` libraries are allowed. May be overriden for
+  /// By default only `dart:*` libraries are allowed. May be overridden for
   /// testing purposes.
   bool allowPlatformPrivateLibraryAccess(Uri importer, Uri imported) =>
       imported.scheme != "dart" ||
@@ -192,6 +210,19 @@ abstract class Target {
   // we should at least unify the VM and non-VM variants.
   bool get nativeExtensionExpectsString => false;
 
+  /// Whether integer literals that cannot be represented exactly on the web
+  /// (i.e. in Javascript) should cause an error to be issued.
+  /// An example of such a number is `2^53 + 1` where in Javascript - because
+  /// integers are represented as doubles
+  /// `Math.pow(2, 53) = Math.pow(2, 53) + 1`.
+  bool get errorOnUnexactWebIntLiterals => false;
+
+  /// Whether set literals are natively supported by this target. If set
+  /// literals are not supported by the target, they will be desugared into
+  /// explicit `Set` creation (for non-const set literals) or wrapped map
+  /// literals (for const set literals).
+  bool get supportsSetLiterals => true;
+
   /// Builds an expression that instantiates an [Invocation] that can be passed
   /// to [noSuchMethod].
   Expression instantiateInvocation(CoreTypes coreTypes, Expression receiver,
@@ -210,20 +241,29 @@ abstract class Target {
       bool isConstructor: false,
       bool isTopLevel: false});
 
-  /// Builds an expression that throws [error] as compile-time error. The
-  /// target must be able to handle this expression in a constant expression.
-  Expression throwCompileConstantError(CoreTypes coreTypes, Expression error) {
-    return error;
-  }
-
-  /// Builds an expression that represents a compile-time error which is
-  /// suitable for being passed to [throwCompileConstantError].
-  Expression buildCompileTimeError(
-      CoreTypes coreTypes, String message, int offset) {
-    return new InvalidExpression(message)..fileOffset = offset;
-  }
+  /// Configure the given [Component] in a target specific way.
+  /// Returns the configured component.
+  Component configureComponent(Component component) => component;
 
   String toString() => 'Target($name)';
+
+  Class concreteListLiteralClass(CoreTypes coreTypes) => null;
+  Class concreteConstListLiteralClass(CoreTypes coreTypes) => null;
+
+  Class concreteMapLiteralClass(CoreTypes coreTypes) => null;
+  Class concreteConstMapLiteralClass(CoreTypes coreTypes) => null;
+
+  Class concreteIntLiteralClass(CoreTypes coreTypes, int value) => null;
+  Class concreteStringLiteralClass(CoreTypes coreTypes, String value) => null;
+
+  ConstantsBackend constantsBackend(CoreTypes coreTypes);
+}
+
+class NoneConstantsBackend extends ConstantsBackend {
+  @override
+  final bool supportsUnevaluatedConstants;
+
+  const NoneConstantsBackend({this.supportsUnevaluatedConstants});
 }
 
 class NoneTarget extends Target {
@@ -231,13 +271,15 @@ class NoneTarget extends Target {
 
   NoneTarget(this.flags);
 
-  bool get strongMode => flags.strongMode;
   String get name => 'none';
   List<String> get extraRequiredLibraries => <String>[];
   void performModularTransformationsOnLibraries(
-      CoreTypes coreTypes, ClassHierarchy hierarchy, List<Library> libraries,
-      {void logger(String msg)}) {}
-  void performGlobalTransformations(CoreTypes coreTypes, Component component,
+      Component component,
+      CoreTypes coreTypes,
+      ClassHierarchy hierarchy,
+      List<Library> libraries,
+      Map<String, String> environmentDefines,
+      DiagnosticReporter diagnosticReporter,
       {void logger(String msg)}) {}
 
   @override
@@ -261,4 +303,9 @@ class NoneTarget extends Target {
       bool isTopLevel: false}) {
     return new InvalidExpression(null);
   }
+
+  @override
+  ConstantsBackend constantsBackend(CoreTypes coreTypes) =>
+      // TODO(johnniwinther): Should this vary with the use case?
+      const NoneConstantsBackend(supportsUnevaluatedConstants: true);
 }

@@ -46,7 +46,11 @@ const bool kDontAssertNoSafepointScope = false;
 class MutexLocker : public ValueObject {
  public:
   explicit MutexLocker(Mutex* mutex, bool no_safepoint_scope = true)
-      : mutex_(mutex), no_safepoint_scope_(no_safepoint_scope) {
+      :
+#if defined(DEBUG)
+        no_safepoint_scope_(no_safepoint_scope),
+#endif
+        mutex_(mutex) {
     ASSERT(mutex != NULL);
 #if defined(DEBUG)
     if (no_safepoint_scope_) {
@@ -88,15 +92,15 @@ class MutexLocker : public ValueObject {
   }
 
  private:
+  DEBUG_ONLY(bool no_safepoint_scope_;)
   Mutex* const mutex_;
-  bool no_safepoint_scope_;
 
   DISALLOW_COPY_AND_ASSIGN(MutexLocker);
 };
 
 /*
  * Normal monitor locker :
- * This locker abstraction should only be used when the enclosing code can
+ * This locker abstraction should only be used when the enclosed code can
  * not trigger a safepoint. In debug mode this class increments the
  * no_safepoint_scope_depth variable for the current thread when the lock is
  * taken and decrements it when the lock is released. NOTE: please do not use
@@ -246,6 +250,91 @@ class SafepointMonitorLocker : public ValueObject {
   Monitor* const monitor_;
 
   DISALLOW_COPY_AND_ASSIGN(SafepointMonitorLocker);
+};
+
+class RwLock {
+ public:
+  RwLock() {}
+  ~RwLock() {}
+
+ private:
+  friend class ReadRwLocker;
+  friend class WriteRwLocker;
+
+  void EnterRead() {
+    MonitorLocker ml(&monitor_);
+    while (state_ == -1) {
+      ml.Wait();
+    }
+    ++state_;
+  }
+  void LeaveRead() {
+    MonitorLocker ml(&monitor_);
+    ASSERT(state_ > 0);
+    if (--state_ == 0) {
+      ml.NotifyAll();
+    }
+  }
+
+  void EnterWrite() {
+    MonitorLocker ml(&monitor_);
+    while (state_ != 0) {
+      ml.Wait();
+    }
+    state_ = -1;
+  }
+  void LeaveWrite() {
+    MonitorLocker ml(&monitor_);
+    ASSERT(state_ == -1);
+    state_ = 0;
+    ml.NotifyAll();
+  }
+
+  Monitor monitor_;
+  // [state_] > 0  : The lock is held by multiple readers.
+  // [state_] == 0 : The lock is free (no readers/writers).
+  // [state_] == -1: The lock is held by a single writer.
+  intptr_t state_ = 0;
+};
+
+/*
+ * Locks a given [RwLock] for reading purposes.
+ *
+ * It will block while the lock is held by a writer.
+ *
+ * If this locker is long'jmped over (e.g. on a background compiler thread) the
+ * lock will be freed.
+ *
+ * NOTE: If the locking operation blocks (due to a writer) it will not check
+ * for a pending safepoint operation.
+ */
+class ReadRwLocker : public StackResource {
+ public:
+  ReadRwLocker(ThreadState* thread_state, RwLock* rw_lock);
+  ~ReadRwLocker();
+
+ private:
+  RwLock* rw_lock_;
+};
+
+/*
+ * Locks a given [RwLock] for writing purposes.
+ *
+ * It will block while the lock is held by one or more readers.
+ *
+ * If this locker is long'jmped over (e.g. on a background compiler thread) the
+ * lock will be freed.
+ *
+ * NOTE: If the locking operation blocks (due to a writer) it will not check
+ * for a pending safepoint operation.
+ */
+class WriteRwLocker : public StackResource {
+ public:
+  WriteRwLocker(ThreadState* thread_state, RwLock* rw_lock);
+  ~WriteRwLocker();
+
+ private:
+  RwLock* rw_lock_;
 };
 
 }  // namespace dart

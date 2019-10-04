@@ -22,13 +22,14 @@ class ObjectPointerVisitor;
   M(Collection, collection)                                                    \
   M(Convert, convert)                                                          \
   M(Developer, developer)                                                      \
+  M(Ffi, ffi)                                                                  \
   M(Internal, _internal)                                                       \
   M(Isolate, isolate)                                                          \
   M(Math, math)                                                                \
   M(Mirrors, mirrors)                                                          \
-  M(Profiler, profiler)                                                        \
   M(TypedData, typed_data)                                                     \
-  M(VMService, _vmservice)
+  M(VMService, _vmservice)                                                     \
+  M(Wasm, wasm)
 
 #define OBJECT_STORE_FIELD_LIST(R_, RW)                                        \
   RW(Class, object_class)                                                      \
@@ -52,13 +53,17 @@ class ObjectPointerVisitor;
   RW(Type, int32x4_type)                                                       \
   RW(Type, float64x2_type)                                                     \
   RW(Type, string_type)                                                        \
-  RW(TypeArguments, type_argument_string)                                      \
   RW(TypeArguments, type_argument_int)                                         \
+  RW(TypeArguments, type_argument_double)                                      \
+  RW(TypeArguments, type_argument_string)                                      \
+  RW(TypeArguments, type_argument_string_dynamic)                              \
+  RW(TypeArguments, type_argument_string_string)                               \
   RW(Class, compiletime_error_class)                                           \
   RW(Class, pragma_class)                                                      \
+  RW(Field, pragma_name)                                                       \
+  RW(Field, pragma_options)                                                    \
   RW(Class, future_class)                                                      \
   RW(Class, completer_class)                                                   \
-  RW(Class, stream_iterator_class)                                             \
   RW(Class, symbol_class)                                                      \
   RW(Class, one_byte_string_class)                                             \
   RW(Class, two_byte_string_class)                                             \
@@ -71,6 +76,7 @@ class ObjectPointerVisitor;
   RW(Class, immutable_array_class)                                             \
   RW(Class, growable_object_array_class)                                       \
   RW(Class, linked_hash_map_class)                                             \
+  RW(Class, linked_hash_set_class)                                             \
   RW(Class, float32x4_class)                                                   \
   RW(Class, int32x4_class)                                                     \
   RW(Class, float64x2_class)                                                   \
@@ -85,6 +91,7 @@ class ObjectPointerVisitor;
   RW(Library, collection_library)                                              \
   RW(Library, convert_library)                                                 \
   RW(Library, developer_library)                                               \
+  RW(Library, ffi_library)                                                     \
   RW(Library, _internal_library)                                               \
   RW(Library, isolate_library)                                                 \
   RW(Library, math_library)                                                    \
@@ -94,11 +101,11 @@ class ObjectPointerVisitor;
   RW(Library, root_library)                                                    \
   RW(Library, typed_data_library)                                              \
   RW(Library, _vmservice_library)                                              \
+  RW(Library, wasm_library)                                                    \
   RW(GrowableObjectArray, libraries)                                           \
   RW(Array, libraries_map)                                                     \
   RW(GrowableObjectArray, closure_functions)                                   \
   RW(GrowableObjectArray, pending_classes)                                     \
-  R_(GrowableObjectArray, pending_deferred_loads)                              \
   R_(GrowableObjectArray, resume_capabilities)                                 \
   R_(GrowableObjectArray, exit_listeners)                                      \
   R_(GrowableObjectArray, error_listeners)                                     \
@@ -107,8 +114,8 @@ class ObjectPointerVisitor;
   RW(UnhandledException, preallocated_unhandled_exception)                     \
   RW(StackTrace, preallocated_stack_trace)                                     \
   RW(Function, lookup_port_handler)                                            \
-  RW(TypedData, empty_uint32_array)                                            \
   RW(Function, handle_message_function)                                        \
+  RW(Function, growable_list_factory)                                          \
   RW(Function, simple_instance_of_function)                                    \
   RW(Function, simple_instance_of_true_function)                               \
   RW(Function, simple_instance_of_false_function)                              \
@@ -117,16 +124,26 @@ class ObjectPointerVisitor;
   RW(Function, async_star_move_next_helper)                                    \
   RW(Function, complete_on_async_return)                                       \
   RW(Class, async_star_stream_controller)                                      \
-  RW(Array, library_load_error_table)                                          \
+  RW(GrowableObjectArray, llvm_constant_pool)                                  \
+  RW(Array, llvm_constant_hash_table)                                          \
+  RW(ObjectPool, global_object_pool)                                           \
   RW(Array, unique_dynamic_targets)                                            \
-  RW(GrowableObjectArray, token_objects)                                       \
-  RW(Array, token_objects_map)                                                 \
   RW(GrowableObjectArray, megamorphic_cache_table)                             \
+  RW(Code, build_method_extractor_code)                                        \
+  RW(Code, null_error_stub_with_fpu_regs_stub)                                 \
+  RW(Code, null_error_stub_without_fpu_regs_stub)                              \
+  RW(Code, stack_overflow_stub_with_fpu_regs_stub)                             \
+  RW(Code, stack_overflow_stub_without_fpu_regs_stub)                          \
+  RW(Code, write_barrier_wrappers_stub)                                        \
+  RW(Code, array_write_barrier_stub)                                           \
   R_(Code, megamorphic_miss_code)                                              \
   R_(Function, megamorphic_miss_function)                                      \
+  RW(Array, code_order_table)                                                  \
   RW(Array, obfuscation_map)                                                   \
-  RW(GrowableObjectArray, type_testing_stubs)                                  \
-  RW(GrowableObjectArray, changed_in_last_reload)                              \
+  RW(Class, ffi_pointer_class)                                                 \
+  RW(Class, ffi_native_type_class)                                             \
+  RW(Class, ffi_struct_class)                                                  \
+  RW(Object, ffi_as_function_internal)                                         \
 // Please remember the last entry must be referred in the 'to' function below.
 
 // The object store is a per isolate instance which stores references to
@@ -181,10 +198,6 @@ class ObjectStore {
     }
   }
 
-  void clear_pending_deferred_loads() {
-    pending_deferred_loads_ = GrowableObjectArray::New();
-  }
-
   void SetMegamorphicMissHandler(const Code& code, const Function& func) {
     // Hold onto the code so it is traced and not detached from the function.
     megamorphic_miss_code_ = code.raw();
@@ -219,16 +232,15 @@ class ObjectStore {
                           DECLARE_OBJECT_STORE_FIELD)
 #undef DECLARE_OBJECT_STORE_FIELD
   RawObject** to() {
-    return reinterpret_cast<RawObject**>(&changed_in_last_reload_);
+    return reinterpret_cast<RawObject**>(&ffi_as_function_internal_);
   }
   RawObject** to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
       case Snapshot::kFull:
-        return reinterpret_cast<RawObject**>(&library_load_error_table_);
+        return reinterpret_cast<RawObject**>(&global_object_pool_);
       case Snapshot::kFullJIT:
       case Snapshot::kFullAOT:
         return reinterpret_cast<RawObject**>(&megamorphic_miss_function_);
-      case Snapshot::kScript:
       case Snapshot::kMessage:
       case Snapshot::kNone:
       case Snapshot::kInvalid:

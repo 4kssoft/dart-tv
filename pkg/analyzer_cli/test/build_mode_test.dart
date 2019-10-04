@@ -1,8 +1,6 @@
-// Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2016, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
-library analyzer_cli.test.built_mode;
 
 import 'dart:async';
 
@@ -32,7 +30,7 @@ class TestAnalyzerWorkerLoop extends AnalyzerWorkerLoop {
       : super(new MemoryResourceProvider(), connection);
 
   @override
-  Future<Null> analyze(CommandLineOptions options, inputs) async {
+  Future<void> analyze(CommandLineOptions options, inputs) async {
     if (_analyze != null) {
       _analyze(options);
     }
@@ -134,11 +132,12 @@ class WorkerLoopTest {
 
   List<int> _serializeProto(GeneratedMessage message) {
     var buffer = message.writeToBuffer();
-
     var writer = new CodedBufferWriter();
     writer.writeInt32NoTag(buffer.length);
-    writer.writeRawBytes(buffer);
 
-    return writer.toBuffer();
+    List<int> result = [];
+    result.addAll(writer.toBuffer());
+    result.addAll(buffer);
+    return result;
   }
 }

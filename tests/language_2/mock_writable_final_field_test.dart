@@ -9,17 +9,29 @@ final values = <int>[];
 class Mock {
   noSuchMethod(Invocation i) {
     var expected = i.isGetter ? #x : const Symbol("x=");
-    Expect.equals(expected, i.memberName);
+    Expect.equals(expected.toString(), i.memberName.toString());
     values.add(i.positionalArguments[0]);
   }
 }
 
 class Foo {
+  // Prevent obfuscation of 'x'.
+  @pragma("vm:entry-point")
   int x;
 }
 
 class Bar extends Mock implements Foo {
   final int x = 42;
+}
+
+class _Baz implements Foo {
+  final int x = 42;
+
+  noSuchMethod(Invocation i) {
+    var expected = i.isGetter ? #x : const Symbol("x=");
+    Expect.equals(expected.toString(), i.memberName.toString());
+    values.add(i.positionalArguments[0]);
+  }
 }
 
 void main() {
@@ -33,6 +45,14 @@ void main() {
   {
     // It works the same if called statically through the Foo interface.
     Foo b = new Bar();
+    Expect.equals(b.x, 42);
+    b.x = 123;
+    Expect.listEquals([123], values);
+    values.clear();
+  }
+  {
+    // It works the same if the noSuchMethod is defined directly in the class.
+    Foo b = new _Baz();
     Expect.equals(b.x, 42);
     b.x = 123;
     Expect.listEquals([123], values);

@@ -4,10 +4,11 @@
 
 part of dart.developer;
 
-const bool _isProduct = const bool.fromEnvironment("dart.vm.product");
+const bool _hasTimeline =
+    const bool.fromEnvironment("dart.developer.timeline", defaultValue: true);
 
 /// A typedef for the function argument to [Timeline.timeSync].
-typedef dynamic TimelineSyncFunction();
+typedef TimelineSyncFunction<T> = T Function();
 
 // TODO: This typedef is not used.
 typedef Future TimelineAsyncFunction();
@@ -79,7 +80,7 @@ class Flow {
 /// [Timeline]'s methods add synchronous events to the timeline. When
 /// generating a timeline in Chrome's tracing format, using [Timeline] generates
 /// "Complete" events. [Timeline]'s [startSync] and [finishSync] can be used
-/// explicitly, or implicitly by wrapping a closure in [timeSync]. For exmaple:
+/// explicitly, or implicitly by wrapping a closure in [timeSync]. For example:
 ///
 /// ```dart
 /// Timeline.startSync("Doing Something");
@@ -100,22 +101,18 @@ class Timeline {
   /// a [Flow] event. This operation must be finished before
   /// returning to the event queue.
   static void startSync(String name, {Map arguments, Flow flow}) {
-    if (_isProduct) {
-      return;
-    }
-    if (name is! String) {
-      throw new ArgumentError.value(name, 'name', 'Must be a String');
-    }
+    if (!_hasTimeline) return;
+    ArgumentError.checkNotNull(name, 'name');
     if (!_isDartStreamEnabled()) {
       // Push a null onto the stack and return.
       _stack.add(null);
       return;
     }
     var block = new _SyncBlock._(name, _getTraceClock(), _getThreadCpuClock());
-    if (arguments is Map) {
+    if (arguments != null) {
       block._arguments = arguments;
     }
-    if (flow is Flow) {
+    if (flow != null) {
       block.flow = flow;
     }
     _stack.add(block);
@@ -123,7 +120,7 @@ class Timeline {
 
   /// Finish the last synchronous operation that was started.
   static void finishSync() {
-    if (_isProduct) {
+    if (!_hasTimeline) {
       return;
     }
     if (_stack.length == 0) {
@@ -141,18 +138,14 @@ class Timeline {
 
   /// Emit an instant event.
   static void instantSync(String name, {Map arguments}) {
-    if (_isProduct) {
-      return;
-    }
-    if (name is! String) {
-      throw new ArgumentError.value(name, 'name', 'Must be a String');
-    }
+    if (!_hasTimeline) return;
+    ArgumentError.checkNotNull(name, 'name');
     if (!_isDartStreamEnabled()) {
       // Stream is disabled.
       return;
     }
     Map instantArguments;
-    if (arguments is Map) {
+    if (arguments != null) {
       instantArguments = new Map.from(arguments);
     }
     _reportInstantEvent(
@@ -161,7 +154,7 @@ class Timeline {
 
   /// A utility method to time a synchronous [function]. Internally calls
   /// [function] bracketed by calls to [startSync] and [finishSync].
-  static dynamic timeSync(String name, TimelineSyncFunction function,
+  static T timeSync<T>(String name, TimelineSyncFunction<T> function,
       {Map arguments, Flow flow}) {
     startSync(name, arguments: arguments, flow: flow);
     try {
@@ -173,6 +166,9 @@ class Timeline {
 
   /// The current time stamp from the clock used by the timeline. Units are
   /// microseconds.
+  ///
+  /// When run on the Dart VM, uses the same monotonic clock as the embedding
+  /// API's `Dart_TimelineGetMicros`.
   static int get now => _getTraceClock();
   static final List<_SyncBlock> _stack = new List<_SyncBlock>();
 }
@@ -189,38 +185,26 @@ class TimelineTask {
   /// Create a task with an explicit [taskId]. This is useful if you are
   /// passing a task from one isolate to another.
   TimelineTask.withTaskId(int taskId) : _taskId = taskId {
-    if (taskId is! int) {
-      throw new ArgumentError.value(taskId, 'taskId', 'Must be an int');
-    }
+    ArgumentError.checkNotNull(taskId, 'taskId');
   }
 
   /// Start a synchronous operation within this task named [name].
   /// Optionally takes a [Map] of [arguments].
   void start(String name, {Map arguments}) {
-    if (_isProduct) {
-      return;
-    }
-    if (name is! String) {
-      throw new ArgumentError.value(name, 'name', 'Must be a String');
-    }
+    if (!_hasTimeline) return;
+    ArgumentError.checkNotNull(name, 'name');
     var block = new _AsyncBlock._(name, _taskId);
-    if (arguments is Map) {
-      block._arguments = arguments;
-    }
     _stack.add(block);
-    block._start();
+    block._start(arguments);
   }
 
   /// Emit an instant event for this task.
+  /// Optionally takes a [Map] of [arguments].
   void instant(String name, {Map arguments}) {
-    if (_isProduct) {
-      return;
-    }
-    if (name is! String) {
-      throw new ArgumentError.value(name, 'name', 'Must be a String');
-    }
+    if (!_hasTimeline) return;
+    ArgumentError.checkNotNull(name, 'name');
     Map instantArguments;
-    if (arguments is Map) {
+    if (arguments != null) {
       instantArguments = new Map.from(arguments);
     }
     _reportTaskEvent(_getTraceClock(), _taskId, 'n', 'Dart', name,
@@ -228,8 +212,9 @@ class TimelineTask {
   }
 
   /// Finish the last synchronous operation that was started.
-  void finish() {
-    if (_isProduct) {
+  /// Optionally takes a [Map] of [arguments].
+  void finish({Map arguments}) {
+    if (!_hasTimeline) {
       return;
     }
     if (_stack.length == 0) {
@@ -237,7 +222,7 @@ class TimelineTask {
     }
     // Pop top item off of stack.
     var block = _stack.removeLast();
-    block._finish();
+    block._finish(arguments);
   }
 
   /// Retrieve the [TimelineTask]'s task id. Will throw an exception if the
@@ -268,22 +253,18 @@ class _AsyncBlock {
   /// The asynchronous task id.
   final int _taskId;
 
-  /// An (optional) set of arguments which will be serialized to JSON and
-  /// associated with this block.
-  Map _arguments;
-
   _AsyncBlock._(this.name, this._taskId);
 
   // Emit the start event.
-  void _start() {
+  void _start(Map arguments) {
     _reportTaskEvent(_getTraceClock(), _taskId, 'b', category, name,
-        _argumentsAsJson(_arguments));
+        _argumentsAsJson(arguments));
   }
 
   // Emit the finish event.
-  void _finish() {
-    _reportTaskEvent(
-        _getTraceClock(), _taskId, 'e', category, name, _argumentsAsJson(null));
+  void _finish(Map arguments) {
+    _reportTaskEvent(_getTraceClock(), _taskId, 'e', category, name,
+        _argumentsAsJson(arguments));
   }
 }
 
@@ -316,8 +297,8 @@ class _SyncBlock {
     _reportCompleteEvent(
         _start, _startCpu, category, name, _argumentsAsJson(_arguments));
     if (_flow != null) {
-      _reportFlowEvent(_start, _startCpu, category, name, _flow._type, _flow.id,
-          _argumentsAsJson(null));
+      _reportFlowEvent(_start, _startCpu, category, "${_flow.id}", _flow._type,
+          _flow.id, _argumentsAsJson(null));
     }
   }
 

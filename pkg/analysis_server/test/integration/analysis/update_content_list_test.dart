@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -11,7 +11,6 @@ import '../support/integration_tests.dart';
 main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(UpdateContentTest);
-    defineReflectiveTests(UpdateContentTest_UseCFE);
   });
 }
 
@@ -49,18 +48,5 @@ main() {
       // inserted in all the correct places.
       expect(currentAnalysisErrors[pathname], isEmpty);
     });
-  }
-}
-
-@reflectiveTest
-class UpdateContentTest_UseCFE extends UpdateContentTest {
-  @override
-  bool get useCFE => true;
-
-  @override
-  @failingTest
-  test_updateContent_list() {
-    // TODO(devoncarew): Class '_CompileTimeError' not found in library 'dart:core'.
-    return super.test_updateContent_list();
   }
 }

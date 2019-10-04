@@ -4,7 +4,7 @@
 
 // A constructor can't be static.
 class A {
-  static //# 00: compile-time error
+  static //# 00: syntax error
   A();
 }
 
@@ -12,24 +12,6 @@ class A {
 class B {
   static //# 01: syntax error
   factory B() { return null; }
-}
-
-// A named constructor can't have the same name as a field.
-class C {
-  var field;
-  C
-      .field //# 04: compile-time error
-      ();
-  C.good();
-}
-
-// A named constructor can't have the same name as a method.
-class D {
-  method() {}
-  D
-      .method //# 06: compile-time error
-      ();
-  D.good();
 }
 
 // A named constructor can have the same name as a setter.
@@ -47,8 +29,6 @@ class F {
 main() {
   new A();
   new B();
-  new C.good();
-  new D.good();
   new E.setter();
   new F();
 }

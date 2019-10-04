@@ -4,13 +4,20 @@
 
 library fasta.codes;
 
-import 'package:kernel/ast.dart' show Constant, DartType;
+import 'dart:convert' show JsonEncoder, json;
 
-import 'package:kernel/text/ast_to_text.dart' show NameSystem, Printer;
+import 'package:kernel/ast.dart'
+    show Constant, DartType, demangleMixinApplicationName;
+
+import '../api_prototype/diagnostic_message.dart' show DiagnosticMessage;
 
 import '../scanner/token.dart' show Token;
 
+import 'kernel/type_labeler.dart';
+
 import 'severity.dart' show Severity;
+
+import 'resolve_input_uri.dart' show isWindows;
 
 import 'util/relativize.dart' as util show relativizeUri;
 
@@ -21,22 +28,26 @@ const int noLength = 1;
 class Code<T> {
   final String name;
 
+  /// The unique positive integer associated with this code,
+  /// or `-1` if none. This index is used when translating
+  /// this error to its corresponding Analyzer error.
+  final int index;
+
   final Template<T> template;
 
-  final String analyzerCode;
-
-  final String dart2jsCode;
+  final List<String> analyzerCodes;
 
   final Severity severity;
 
   const Code(this.name, this.template,
-      {this.analyzerCode, this.dart2jsCode, this.severity});
+      {int index, this.analyzerCodes, this.severity: Severity.error})
+      : this.index = index ?? -1;
 
   String toString() => name;
 }
 
 class Message {
-  final Code code;
+  final Code<dynamic> code;
 
   final String message;
 
@@ -61,19 +72,17 @@ class MessageCode extends Code<Null> implements Message {
   final String tip;
 
   const MessageCode(String name,
-      {String analyzerCode,
-      String dart2jsCode,
-      Severity severity,
+      {int index,
+      List<String> analyzerCodes,
+      Severity severity: Severity.error,
       this.message,
       this.tip})
       : super(name, null,
-            analyzerCode: analyzerCode,
-            dart2jsCode: dart2jsCode,
-            severity: severity);
+            index: index, analyzerCodes: analyzerCodes, severity: severity);
 
   Map<String, dynamic> get arguments => const <String, dynamic>{};
 
-  Code get code => this;
+  Code<dynamic> get code => this;
 
   @override
   LocatedMessage withLocation(Uri uri, int charOffset, int length) {
@@ -107,7 +116,7 @@ class LocatedMessage implements Comparable<LocatedMessage> {
   const LocatedMessage(
       this.uri, this.charOffset, this.length, this.messageObject);
 
-  Code get code => messageObject.code;
+  Code<dynamic> get code => messageObject.code;
 
   String get message => messageObject.message;
 
@@ -123,12 +132,14 @@ class LocatedMessage implements Comparable<LocatedMessage> {
     return message.compareTo(message);
   }
 
-  FormattedMessage withFormatting(String formatted, int line, int column) {
-    return new FormattedMessage(this, formatted, line, column);
+  FormattedMessage withFormatting(String formatted, int line, int column,
+      Severity severity, List<FormattedMessage> relatedInformation) {
+    return new FormattedMessage(
+        this, formatted, line, column, severity, relatedInformation);
   }
 }
 
-class FormattedMessage {
+class FormattedMessage implements DiagnosticMessage {
   final LocatedMessage locatedMessage;
 
   final String formatted;
@@ -137,16 +148,102 @@ class FormattedMessage {
 
   final int column;
 
-  const FormattedMessage(
-      this.locatedMessage, this.formatted, this.line, this.column);
+  @override
+  final Severity severity;
 
-  Code get code => locatedMessage.code;
+  final List<FormattedMessage> relatedInformation;
+
+  const FormattedMessage(this.locatedMessage, this.formatted, this.line,
+      this.column, this.severity, this.relatedInformation);
+
+  Code<dynamic> get code => locatedMessage.code;
 
   String get message => locatedMessage.message;
 
   String get tip => locatedMessage.tip;
 
   Map<String, dynamic> get arguments => locatedMessage.arguments;
+
+  Uri get uri => locatedMessage.uri;
+
+  int get charOffset => locatedMessage.charOffset;
+
+  int get length => locatedMessage.length;
+
+  @override
+  Iterable<String> get ansiFormatted sync* {
+    yield formatted;
+    if (relatedInformation != null) {
+      for (FormattedMessage m in relatedInformation) {
+        yield m.formatted;
+      }
+    }
+  }
+
+  @override
+  Iterable<String> get plainTextFormatted {
+    // TODO(ahe): Implement this correctly.
+    return ansiFormatted;
+  }
+
+  Map<String, Object> toJson() {
+    // This should be kept in sync with package:kernel/problems.md
+    return <String, Object>{
+      "ansiFormatted": ansiFormatted.toList(),
+      "plainTextFormatted": plainTextFormatted.toList(),
+      "severity": severity.index,
+      "uri": uri.toString(),
+    };
+  }
+
+  String toJsonString() {
+    JsonEncoder encoder = new JsonEncoder.withIndent("  ");
+    return encoder.convert(this);
+  }
+}
+
+class DiagnosticMessageFromJson implements DiagnosticMessage {
+  @override
+  final Iterable<String> ansiFormatted;
+
+  @override
+  final Iterable<String> plainTextFormatted;
+
+  @override
+  final Severity severity;
+
+  final Uri uri;
+
+  DiagnosticMessageFromJson(
+      this.ansiFormatted, this.plainTextFormatted, this.severity, this.uri);
+
+  factory DiagnosticMessageFromJson.fromJson(String jsonString) {
+    Map<String, Object> decoded = json.decode(jsonString);
+    List<String> ansiFormatted =
+        new List<String>.from(decoded["ansiFormatted"]);
+    List<String> plainTextFormatted =
+        new List<String>.from(decoded["plainTextFormatted"]);
+    Severity severity = Severity.values[decoded["severity"]];
+    Uri uri = Uri.parse(decoded["uri"]);
+
+    return new DiagnosticMessageFromJson(
+        ansiFormatted, plainTextFormatted, severity, uri);
+  }
+
+  Map<String, Object> toJson() {
+    // This should be kept in sync with package:kernel/problems.md
+    return <String, Object>{
+      "ansiFormatted": ansiFormatted.toList(),
+      "plainTextFormatted": plainTextFormatted.toList(),
+      "severity": severity.index,
+      "uri": uri.toString(),
+    };
+  }
+
+  String toJsonString() {
+    JsonEncoder encoder = new JsonEncoder.withIndent("  ");
+    return encoder.convert(this);
+  }
 }
 
 String relativizeUri(Uri uri) {
@@ -156,8 +253,18 @@ String relativizeUri(Uri uri) {
   // (otherwise, we might get an `UNUSED_IMPORT` warning).
   //
   // 2. We can change `base` argument here if needed.
-  return util.relativizeUri(uri, base: Uri.base);
+  return uri == null ? null : util.relativizeUri(Uri.base, uri, isWindows);
 }
 
-typedef Message SummaryTemplate(
-    int count, int count2, String string, String string2, String string3);
+typedef SummaryTemplate = Message Function(int, int, num, num, num);
+
+String itemizeNames(List<String> names) {
+  StringBuffer buffer = new StringBuffer();
+  for (int i = 0; i < names.length - 1; i++) {
+    buffer.write(" - ");
+    buffer.writeln(names[i]);
+  }
+  buffer.write(" - ");
+  buffer.write(names.last);
+  return "$buffer";
+}

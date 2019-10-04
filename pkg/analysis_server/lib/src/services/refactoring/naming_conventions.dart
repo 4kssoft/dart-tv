@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -152,7 +152,7 @@ RefactoringStatus validateVariableName(String name) {
 
 RefactoringStatus _validateIdentifier(
     String identifier, String desc, String beginDesc,
-    {bool allowBuiltIn: false}) {
+    {bool allowBuiltIn = false}) {
   // has leading/trailing spaces
   String trimmed = identifier.trim();
   if (identifier != trimmed) {
@@ -205,7 +205,7 @@ RefactoringStatus _validateIdentifier(
  * Validates [identifier], should be lower camel case.
  */
 RefactoringStatus _validateLowerCamelCase(String identifier, String desc,
-    {bool allowBuiltIn: false}) {
+    {bool allowBuiltIn = false}) {
   desc += ' name';
   // null
   if (identifier == null) {

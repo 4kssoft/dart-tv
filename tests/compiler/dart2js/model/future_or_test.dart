@@ -3,15 +3,16 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:async_helper/async_helper.dart';
-import 'package:compiler/src/commandline_options.dart';
 import 'package:compiler/src/elements/entities.dart';
 import 'package:compiler/src/elements/types.dart';
 import 'package:expect/expect.dart';
-import '../type_test_helper.dart';
+import '../helpers/type_test_helper.dart';
 
 main() {
   asyncTest(() async {
-    var env = await TypeEnvironment.create('''
+    var env = await TypeEnvironment.create("""
+import 'dart:async';
+
 Future<num> futureNum() async => null;
 FutureOr<num> futureOrNum() async => null;
 
@@ -33,7 +34,22 @@ class C<T> {
   Future<T> futureT() async => null;
   FutureOr<T> futureOrT() async => null;
 }
-''', options: [Flags.strongMode]);
+
+main() {
+  futureNum();
+  futureOrNum();
+  futureInt();
+  futureOrInt();
+  futureListNum();
+  futureOrListNum();
+  futureFutureNum();
+  futureOrFutureOrNum();
+  futureNull();
+  futureOrNull();
+  new C().futureT();
+  new C().futureOrT();
+}
+""");
     FunctionType getFunctionType(String name, String expectedType,
         [ClassEntity cls]) {
       FunctionType type = env.getMemberType(name, cls);
@@ -43,7 +59,7 @@ class C<T> {
           expectedType,
           '${type}',
           "Unexpected type for $name"
-          "${cls != null ? ' in class $cls' : ''}.");
+              "${cls != null ? ' in class $cls' : ''}.");
       return type;
     }
 
@@ -57,7 +73,7 @@ class C<T> {
           expectedType,
           '${returnType}',
           "Unexpected return type for $name"
-          "${cls != null ? ' in class $cls' : ''}.");
+              "${cls != null ? ' in class $cls' : ''}.");
       return returnType;
     }
 

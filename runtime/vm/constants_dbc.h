@@ -12,7 +12,7 @@
 namespace dart {
 
 // clang-format off
-// List of Dart Bytecode instructions.
+// List of Simulator Bytecode instructions.
 //
 // INTERPRETER STATE
 //
@@ -170,6 +170,11 @@ namespace dart {
 //    Invoke native function at pool[ArgB] with argc_tag at pool[ArgC] using
 //    wrapper at pool[ArgA].
 //
+//  - FfiCall ArgD
+//
+//    Invoke foreign function with unboxed arguments using the signature
+//    descriptor PP[D].
+//
 //  - PushPolymorphicInstanceCall ArgC, D
 //
 //    Skips 2*D + 1 instructions and pushes a function object onto the stack
@@ -300,6 +305,27 @@ namespace dart {
 //
 //    Boxes the unboxed unsigned 32-bit integer in FP[rD] into FP[rA].
 //
+//  - UnboxInt64 rA, rD
+//
+//    Unboxes the integer in FP[rD] into FP[rA].
+//
+//  - BoxInt64 rA, rD
+//
+//    Boxes the unboxed signed 64-bit integer in FP[rD] into FP[rA]. If the
+//    value does not fit into a Smi the following instruction is skipped. (The
+//    following instruction should be a jump to a label after the slow path
+//    allocating a Mint box and writing into the Mint box.)
+//
+//  - UnboxedWidthExtender rA rB C
+//
+//    Sign- or zero-extends an unboxed integer in FP[rB] into an unboxed
+//    integer in FP[rA]. C contains SmallRepresentation which determines how
+//    the integer is extended.
+//
+//  - WriteIntoMint rA, rD
+//
+//    Box the integer in FP[rD] using the Mint box in FP[rA].
+//
 //  - SmiToDouble rA, rD
 //
 //    Convert the Smi in FP[rD] to an unboxed double in FP[rA].
@@ -337,6 +363,7 @@ namespace dart {
 //        Jump T         ;; jump if not equal
 //
 //  - If<Cond>Null rA
+//    If<Cond>NullTOS
 //
 //    Cond is Eq or Ne. Skips the next instruction unless the given condition
 //    holds.
@@ -490,6 +517,10 @@ namespace dart {
 //    stored in the following Nop instruction. Used to access fields with
 //    large offsets.
 //
+//  - StoreUntagged rA, B, rC
+//
+//    Like StoreField, but assumes that FP[rC] is untagged.
+//
 //  - StoreFieldTOS D
 //
 //    Store value SP[0] into object SP[-1] at offset (in words) D.
@@ -596,9 +627,11 @@ namespace dart {
 //    arguments SP[-2] using SubtypeTestCache PP[D].
 //    If A is 1, then the instance may be a Smi.
 //
+//    Instance remains on stack. Other arguments are consumed.
+//
 //  - AssertSubtype
 //
-//    Assers that one type is a subtype of another.  Throws a TypeError
+//    Assert that one type is a subtype of another.  Throws a TypeError
 //    otherwise.  The stack has the following arguments on it:
 //
 //        SP[-4]  instantiator type args
@@ -717,6 +750,10 @@ namespace dart {
 //    InstanceCall ... <- lazy deopt inside first call
 //    InstanceCall ... <- patches second call with Deopt
 //
+//  - NullError
+//
+//    Throws a NullError.
+//
 // BYTECODE LIST FORMAT
 //
 // Bytecode list below is specified using the following format:
@@ -769,6 +806,7 @@ namespace dart {
   V(PushPolymorphicInstanceCall,         A_D, num, num, ___) \
   V(PushPolymorphicInstanceCallByRange,  A_D, num, num, ___) \
   V(NativeCall,                        A_B_C, num, num, num) \
+  V(FfiCall,                               D, lit, ___, ___) \
   V(OneByteStringFromCharCode,           A_X, reg, xeg, ___) \
   V(StringToCharCode,                    A_X, reg, xeg, ___) \
   V(AddTOS,                                0, ___, ___, ___) \
@@ -799,11 +837,15 @@ namespace dart {
   V(Min,                               A_B_C, reg, reg, reg) \
   V(Max,                               A_B_C, reg, reg, reg) \
   V(WriteIntoDouble,                     A_D, reg, reg, ___) \
+  V(WriteIntoMint,                       A_D, reg, reg, ___) \
   V(UnboxDouble,                         A_D, reg, reg, ___) \
   V(CheckedUnboxDouble,                  A_D, reg, reg, ___) \
   V(UnboxInt32,                        A_B_C, reg, reg, num) \
   V(BoxInt32,                            A_D, reg, reg, ___) \
   V(BoxUint32,                           A_D, reg, reg, ___) \
+  V(UnboxInt64,                          A_D, reg, reg, ___) \
+  V(BoxInt64,                            A_D, reg, reg, ___) \
+  V(UnboxedWidthExtender,              A_B_C, reg, reg, num) \
   V(SmiToDouble,                         A_D, reg, reg, ___) \
   V(DoubleToSmi,                         A_D, reg, reg, ___) \
   V(DAdd,                              A_B_C, reg, reg, reg) \
@@ -856,6 +898,8 @@ namespace dart {
   V(IfEqStrictNum,                       A_D, reg, reg, ___) \
   V(IfEqNull,                              A, reg, ___, ___) \
   V(IfNeNull,                              A, reg, ___, ___) \
+  V(IfEqNullTOS,                           0, ___, ___, ___) \
+  V(IfNeNullTOS,                           0, ___, ___, ___) \
   V(CreateArrayTOS,                        0, ___, ___, ___) \
   V(CreateArrayOpt,                    A_B_C, reg, reg, reg) \
   V(Allocate,                              D, lit, ___, ___) \
@@ -864,14 +908,17 @@ namespace dart {
   V(AllocateTOpt,                        A_D, reg, lit, ___) \
   V(StoreIndexedTOS,                       0, ___, ___, ___) \
   V(StoreIndexed,                      A_B_C, reg, reg, reg) \
-  V(StoreIndexedUint8,                 A_B_C, reg, reg, reg) \
-  V(StoreIndexedExternalUint8,         A_B_C, reg, reg, reg) \
   V(StoreIndexedOneByteString,         A_B_C, reg, reg, reg) \
+  V(StoreIndexedUint8,                 A_B_C, reg, reg, reg) \
   V(StoreIndexedUint32,                A_B_C, reg, reg, reg) \
   V(StoreIndexedFloat32,               A_B_C, reg, reg, reg) \
   V(StoreIndexed4Float32,              A_B_C, reg, reg, reg) \
   V(StoreIndexedFloat64,               A_B_C, reg, reg, reg) \
   V(StoreIndexed8Float64,              A_B_C, reg, reg, reg) \
+  V(StoreIndexedUntaggedUint8,         A_B_C, reg, reg, reg) \
+  V(StoreIndexedUntaggedUint32,        A_B_C, reg, reg, reg) \
+  V(StoreIndexedUntaggedFloat32,       A_B_C, reg, reg, reg) \
+  V(StoreIndexedUntaggedFloat64,       A_B_C, reg, reg, reg) \
   V(NoSuchMethod,                          0, ___, ___, ___) \
   V(TailCall,                              0, ___, ___, ___) \
   V(TailCallOpt,                         A_D, reg, reg, ___) \
@@ -879,24 +926,29 @@ namespace dart {
   V(LoadArgDescriptorOpt,                  A, reg, ___, ___) \
   V(LoadFpRelativeSlot,                    X, reg, ___, ___) \
   V(LoadFpRelativeSlotOpt,             A_B_Y, reg, reg, reg) \
-  V(StoreFpRelativeSlot,                    X, reg, ___, ___) \
-  V(StoreFpRelativeSlotOpt,             A_B_Y, reg, reg, reg) \
+  V(StoreFpRelativeSlot,                   X, reg, ___, ___) \
+  V(StoreFpRelativeSlotOpt,            A_B_Y, reg, reg, reg) \
   V(LoadIndexedTOS,                        0, ___, ___, ___) \
   V(LoadIndexed,                       A_B_C, reg, reg, reg) \
+  V(LoadIndexedOneByteString,          A_B_C, reg, reg, reg) \
+  V(LoadIndexedTwoByteString,          A_B_C, reg, reg, reg) \
   V(LoadIndexedUint8,                  A_B_C, reg, reg, reg) \
   V(LoadIndexedInt8,                   A_B_C, reg, reg, reg) \
   V(LoadIndexedInt32,                  A_B_C, reg, reg, reg) \
   V(LoadIndexedUint32,                 A_B_C, reg, reg, reg) \
-  V(LoadIndexedExternalUint8,          A_B_C, reg, reg, reg) \
-  V(LoadIndexedExternalInt8,           A_B_C, reg, reg, reg) \
   V(LoadIndexedFloat32,                A_B_C, reg, reg, reg) \
   V(LoadIndexed4Float32,               A_B_C, reg, reg, reg) \
   V(LoadIndexedFloat64,                A_B_C, reg, reg, reg) \
   V(LoadIndexed8Float64,               A_B_C, reg, reg, reg) \
-  V(LoadIndexedOneByteString,          A_B_C, reg, reg, reg) \
-  V(LoadIndexedTwoByteString,          A_B_C, reg, reg, reg) \
+  V(LoadIndexedUntaggedInt8,           A_B_C, reg, reg, reg) \
+  V(LoadIndexedUntaggedUint8,          A_B_C, reg, reg, reg) \
+  V(LoadIndexedUntaggedInt32,          A_B_C, reg, reg, reg) \
+  V(LoadIndexedUntaggedUint32,         A_B_C, reg, reg, reg) \
+  V(LoadIndexedUntaggedFloat32,        A_B_C, reg, reg, reg) \
+  V(LoadIndexedUntaggedFloat64,        A_B_C, reg, reg, reg) \
   V(StoreField,                        A_B_C, reg, num, reg) \
   V(StoreFieldExt,                       A_D, reg, reg, ___) \
+  V(StoreUntagged,                     A_B_C, reg, num, reg) \
   V(StoreFieldTOS,                         D, num, ___, ___) \
   V(LoadField,                         A_B_C, reg, reg, num) \
   V(LoadFieldExt,                        A_D, reg, reg, ___) \
@@ -935,13 +987,14 @@ namespace dart {
   V(DebugStep,                             0, ___, ___, ___) \
   V(DebugBreak,                            A, num, ___, ___) \
   V(Deopt,                               A_D, num, num, ___) \
-  V(DeoptRewind,                           0, ___, ___, ___)
+  V(DeoptRewind,                           0, ___, ___, ___) \
+  V(NullError,                             0, ___, ___, ___)
 
 // clang-format on
 
 typedef uint32_t Instr;
 
-class Bytecode {
+class SimulatorBytecode {
  public:
   enum Opcode {
 #define DECLARE_BYTECODE(name, encoding, op1, op2, op3) k##name,
@@ -1013,18 +1066,18 @@ class Bytecode {
   }
 
   DART_FORCE_INLINE static bool IsTrap(Instr instr) {
-    return DecodeOpcode(instr) == Bytecode::kTrap;
+    return DecodeOpcode(instr) == SimulatorBytecode::kTrap;
   }
 
   DART_FORCE_INLINE static bool IsCallOpcode(Instr instr) {
     switch (DecodeOpcode(instr)) {
-      case Bytecode::kStaticCall:
-      case Bytecode::kIndirectStaticCall:
-      case Bytecode::kInstanceCall1:
-      case Bytecode::kInstanceCall2:
-      case Bytecode::kInstanceCall1Opt:
-      case Bytecode::kInstanceCall2Opt:
-      case Bytecode::kDebugBreak:
+      case SimulatorBytecode::kStaticCall:
+      case SimulatorBytecode::kIndirectStaticCall:
+      case SimulatorBytecode::kInstanceCall1:
+      case SimulatorBytecode::kInstanceCall2:
+      case SimulatorBytecode::kInstanceCall1Opt:
+      case SimulatorBytecode::kInstanceCall2Opt:
+      case SimulatorBytecode::kDebugBreak:
         return true;
 
       default:
@@ -1034,14 +1087,14 @@ class Bytecode {
 
   DART_FORCE_INLINE static bool IsFastSmiOpcode(Instr instr) {
     switch (DecodeOpcode(instr)) {
-      case Bytecode::kAddTOS:
-      case Bytecode::kSubTOS:
-      case Bytecode::kMulTOS:
-      case Bytecode::kBitOrTOS:
-      case Bytecode::kBitAndTOS:
-      case Bytecode::kEqualTOS:
-      case Bytecode::kLessThanTOS:
-      case Bytecode::kGreaterThanTOS:
+      case SimulatorBytecode::kAddTOS:
+      case SimulatorBytecode::kSubTOS:
+      case SimulatorBytecode::kMulTOS:
+      case SimulatorBytecode::kBitOrTOS:
+      case SimulatorBytecode::kBitAndTOS:
+      case SimulatorBytecode::kEqualTOS:
+      case SimulatorBytecode::kLessThanTOS:
+      case SimulatorBytecode::kGreaterThanTOS:
         return true;
 
       default:
@@ -1058,7 +1111,7 @@ class Bytecode {
 
  private:
   DISALLOW_ALLOCATION();
-  DISALLOW_IMPLICIT_CONSTRUCTORS(Bytecode);
+  DISALLOW_IMPLICIT_CONSTRUCTORS(SimulatorBytecode);
 };
 
 // Various dummy declarations to make shared code compile.
@@ -1081,6 +1134,11 @@ const intptr_t CODE_REG = 0;
 const intptr_t kExceptionObjectReg = 0;
 const intptr_t kStackTraceObjectReg = 0;
 
+// The maximum number of fixed registers that are used by some
+// DBC instructions. The register allocator must avoid clashing
+// with these when assigning registers to catch parameters.
+const intptr_t kMaxNumberOfFixedInputRegistersUsedByIL = 3;
+
 enum FpuRegister {
   kNoFpuRegister = -1,
   kFakeFpuRegister,
@@ -1088,6 +1146,9 @@ enum FpuRegister {
 };
 const FpuRegister FpuTMP = kFakeFpuRegister;
 const intptr_t kNumberOfFpuRegisters = 1;
+
+extern const char* cpu_reg_names[kNumberOfCpuRegisters];
+extern const char* fpu_reg_names[kNumberOfFpuRegisters];
 
 // After a comparison, the condition NEXT_IS_TRUE means the following
 // instruction is executed if the comparison is true and skipped over overwise.

@@ -9,8 +9,9 @@
 #include "vm/dart_api_state.h"
 #include "vm/flags.h"
 #include "vm/handles_impl.h"
-#include "vm/heap.h"
+#include "vm/heap/heap.h"
 #include "vm/os.h"
+#include "vm/virtual_memory.h"
 
 namespace dart {
 
@@ -21,24 +22,27 @@ class Zone::Segment {
  public:
   Segment* next() const { return next_; }
   intptr_t size() const { return size_; }
+  VirtualMemory* memory() const { return memory_; }
 
   uword start() { return address(sizeof(Segment)); }
   uword end() { return address(size_); }
 
   // Allocate or delete individual segments.
   static Segment* New(intptr_t size, Segment* next);
+  static Segment* NewLarge(intptr_t size, Segment* next);
   static void DeleteSegmentList(Segment* segment);
+  static void DeleteLargeSegmentList(Segment* segment);
   static void IncrementMemoryCapacity(uintptr_t size);
   static void DecrementMemoryCapacity(uintptr_t size);
 
  private:
   Segment* next_;
   intptr_t size_;
+  VirtualMemory* memory_;
+  void* alignment_;
 
   // Computes the address of the nth byte in this segment.
   uword address(int n) { return reinterpret_cast<uword>(this) + n; }
-
-  static void Delete(Segment* segment) { free(segment); }
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(Segment);
 };
@@ -49,13 +53,36 @@ Zone::Segment* Zone::Segment::New(intptr_t size, Zone::Segment* next) {
   if (result == NULL) {
     OUT_OF_MEMORY();
   }
-  ASSERT(Utils::IsAligned(result->start(), Zone::kAlignment));
 #ifdef DEBUG
   // Zap the entire allocated segment (including the header).
   memset(result, kZapUninitializedByte, size);
 #endif
   result->next_ = next;
   result->size_ = size;
+  result->memory_ = nullptr;
+  result->alignment_ = nullptr;  // Avoid unused variable warnings.
+  IncrementMemoryCapacity(size);
+  return result;
+}
+
+Zone::Segment* Zone::Segment::NewLarge(intptr_t size, Zone::Segment* next) {
+  size = Utils::RoundUp(size, VirtualMemory::PageSize());
+  VirtualMemory* memory = VirtualMemory::Allocate(size, false, "dart-zone");
+  if (memory == NULL) {
+    OUT_OF_MEMORY();
+  }
+  Segment* result = reinterpret_cast<Segment*>(memory->start());
+#ifdef DEBUG
+  // Zap the entire allocated segment (including the header).
+  memset(result, kZapUninitializedByte, size);
+#endif
+  result->next_ = next;
+  result->size_ = size;
+  result->memory_ = memory;
+  result->alignment_ = nullptr;  // Avoid unused variable warnings.
+
+  LSAN_REGISTER_ROOT_REGION(result, sizeof(*result));
+
   IncrementMemoryCapacity(size);
   return result;
 }
@@ -69,13 +96,29 @@ void Zone::Segment::DeleteSegmentList(Segment* head) {
     // Zap the entire current segment (including the header).
     memset(current, kZapDeletedByte, current->size());
 #endif
-    Segment::Delete(current);
+    free(current);
+    current = next;
+  }
+}
+
+void Zone::Segment::DeleteLargeSegmentList(Segment* head) {
+  Segment* current = head;
+  while (current != NULL) {
+    DecrementMemoryCapacity(current->size());
+    Segment* next = current->next();
+    VirtualMemory* memory = current->memory();
+#ifdef DEBUG
+    // Zap the entire current segment (including the header).
+    memset(current, kZapDeletedByte, current->size());
+#endif
+    LSAN_UNREGISTER_ROOT_REGION(current, sizeof(*current));
+    delete memory;
     current = next;
   }
 }
 
 void Zone::Segment::IncrementMemoryCapacity(uintptr_t size) {
-  Thread* current_thread = Thread::Current();
+  ThreadState* current_thread = ThreadState::Current();
   if (current_thread != NULL) {
     current_thread->IncrementMemoryCapacity(size);
   } else if (ApiNativeScope::Current() != NULL) {
@@ -85,7 +128,7 @@ void Zone::Segment::IncrementMemoryCapacity(uintptr_t size) {
 }
 
 void Zone::Segment::DecrementMemoryCapacity(uintptr_t size) {
-  Thread* current_thread = Thread::Current();
+  ThreadState* current_thread = ThreadState::Current();
   if (current_thread != NULL) {
     current_thread->DecrementMemoryCapacity(size);
   } else if (ApiNativeScope::Current() != NULL) {
@@ -129,7 +172,7 @@ void Zone::DeleteAll() {
     Segment::DeleteSegmentList(head_);
   }
   if (large_segments_ != NULL) {
-    Segment::DeleteSegmentList(large_segments_);
+    Segment::DeleteLargeSegmentList(large_segments_);
   }
 // Reset zone state.
 #ifdef DEBUG
@@ -214,9 +257,9 @@ uword Zone::AllocateLargeSegment(intptr_t size) {
   ASSERT(free_size < size);
 
   // Create a new large segment and chain it up.
-  ASSERT(Utils::IsAligned(sizeof(Segment), kAlignment));
-  size += sizeof(Segment);  // Account for book keeping fields in size.
-  large_segments_ = Segment::New(size, large_segments_);
+  // Account for book keeping fields in size.
+  size += Utils::RoundUp(sizeof(Segment), kAlignment);
+  large_segments_ = Segment::NewLarge(size, large_segments_);
 
   uword result = Utils::RoundUp(large_segments_->start(), kAlignment);
   return result;
@@ -288,24 +331,36 @@ char* Zone::VPrint(const char* format, va_list args) {
   return OS::VSCreate(this, format, args);
 }
 
-StackZone::StackZone(Thread* thread) : StackResource(thread), zone_() {
+StackZone::StackZone(ThreadState* thread)
+    : StackResource(thread), zone_(new Zone()) {
   if (FLAG_trace_zones) {
     OS::PrintErr("*** Starting a new Stack zone 0x%" Px "(0x%" Px ")\n",
                  reinterpret_cast<intptr_t>(this),
-                 reinterpret_cast<intptr_t>(&zone_));
+                 reinterpret_cast<intptr_t>(zone_));
   }
-  zone_.Link(thread->zone());
-  thread->set_zone(&zone_);
+
+  // This thread must be preventing safepoints or the GC could be visiting the
+  // chain of handle blocks we're about the mutate.
+  ASSERT(Thread::Current()->MayAllocateHandles());
+
+  zone_->Link(thread->zone());
+  thread->set_zone(zone_);
 }
 
 StackZone::~StackZone() {
-  ASSERT(thread()->zone() == &zone_);
-  thread()->set_zone(zone_.previous_);
+  // This thread must be preventing safepoints or the GC could be visiting the
+  // chain of handle blocks we're about the mutate.
+  ASSERT(Thread::Current()->MayAllocateHandles());
+
+  ASSERT(thread()->zone() == zone_);
+  thread()->set_zone(zone_->previous_);
   if (FLAG_trace_zones) {
     OS::PrintErr("*** Deleting Stack zone 0x%" Px "(0x%" Px ")\n",
                  reinterpret_cast<intptr_t>(this),
-                 reinterpret_cast<intptr_t>(&zone_));
+                 reinterpret_cast<intptr_t>(zone_));
   }
+
+  delete zone_;
 }
 
 }  // namespace dart

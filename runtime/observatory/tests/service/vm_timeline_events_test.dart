@@ -1,7 +1,6 @@
 // Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-// VMOptions=--error_on_bad_type --error_on_bad_override
 
 import 'dart:async';
 import 'dart:developer';
@@ -46,7 +45,7 @@ var tests = <IsolateTest>[
   },
   (Isolate isolate) async {
     // Get the flags.
-    Map flags = await isolate.vm.invokeRpcNoUpgrade('_getVMTimelineFlags', {});
+    Map flags = await isolate.vm.invokeRpcNoUpgrade('getVMTimelineFlags', {});
     expect(flags['type'], 'TimelineFlags');
     // Confirm that 'Dart' is available.
     expect(flags['availableStreams'].contains('Dart'), isTrue);
@@ -55,7 +54,7 @@ var tests = <IsolateTest>[
   },
   (Isolate isolate) async {
     // Enable the Dart category.
-    await isolate.vm.invokeRpcNoUpgrade('_setVMTimelineFlags', {
+    await isolate.vm.invokeRpcNoUpgrade('setVMTimelineFlags', {
       "recordedStreams": ["Dart"]
     });
   },

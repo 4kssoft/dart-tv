@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -466,7 +466,7 @@ class TypeObjectField extends ApiNode {
   final Object value;
 
   TypeObjectField(this.name, this.type, dom.Element html,
-      {this.optional: false, this.value, bool experimental, bool deprecated})
+      {this.optional = false, this.value, bool experimental, bool deprecated})
       : super(html, experimental, deprecated);
 }
 

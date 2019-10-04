@@ -2,36 +2,48 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'common/tasks.dart' show CompilerTask, Measurer;
+import 'package:kernel/ast.dart' as ir;
 import 'common.dart';
 import 'elements/entities.dart';
 import 'elements/types.dart';
-
-// TODO(johnniwinther,efortuna): Split [ClosureConversionTask] from
-// [ClosureDataLookup].
-abstract class ClosureConversionTask<T> extends CompilerTask
-    implements ClosureDataLookup<T> {
-  ClosureConversionTask(Measurer measurer) : super(measurer);
-}
+import 'js_model/closure.dart';
+import 'js_model/element_map.dart';
+import 'serialization/serialization.dart';
 
 /// Class that provides information for how closures are rewritten/represented
 /// to preserve Dart semantics when compiled to JavaScript. Given a particular
 /// node to look up, it returns a information about the internal representation
 /// of how closure conversion is implemented. T is an ir.Node or Node.
-abstract class ClosureDataLookup<T> {
+abstract class ClosureData {
+  /// Deserializes a [ClosureData] object from [source].
+  factory ClosureData.readFromDataSource(
+          JsToElementMap elementMap, DataSource source) =
+      ClosureDataImpl.readFromDataSource;
+
+  /// Serializes this [ClosureData] to [sink].
+  void writeToDataSink(DataSink sink);
+
   /// Look up information about the variables that have been mutated and are
   /// used inside the scope of [node].
   ScopeInfo getScopeInfo(MemberEntity member);
 
-  ClosureRepresentationInfo getClosureInfo(T localFunction);
+  ClosureRepresentationInfo getClosureInfo(ir.LocalFunction localFunction);
 
   /// Look up information about a loop, in case any variables it declares need
   /// to be boxed/snapshotted.
-  CapturedLoopScope getCapturedLoopScope(T loopNode);
+  CapturedLoopScope getCapturedLoopScope(ir.Node loopNode);
 
   /// Accessor to the information about scopes that closures capture. Used by
   /// the SSA builder.
   CapturedScope getCapturedScope(MemberEntity entity);
+}
+
+/// Enum used for identifying [ScopeInfo] subclasses in serialization.
+enum ScopeInfoKind {
+  scopeInfo,
+  capturedScope,
+  capturedLoopScope,
+  closureRepresentationInfo,
 }
 
 /// Class that represents one level of scoping information, whether this scope
@@ -45,6 +57,27 @@ abstract class ClosureDataLookup<T> {
 /// in [ClosureClassMap.useLocal].
 class ScopeInfo {
   const ScopeInfo();
+
+  /// Deserializes a [ScopeInfo] object from [source].
+  factory ScopeInfo.readFromDataSource(DataSource source) {
+    ScopeInfoKind kind = source.readEnum(ScopeInfoKind.values);
+    switch (kind) {
+      case ScopeInfoKind.scopeInfo:
+        return new JsScopeInfo.readFromDataSource(source);
+      case ScopeInfoKind.capturedScope:
+        return new JsCapturedScope.readFromDataSource(source);
+      case ScopeInfoKind.capturedLoopScope:
+        return new JsCapturedLoopScope.readFromDataSource(source);
+      case ScopeInfoKind.closureRepresentationInfo:
+        return new KernelClosureClassInfo.readFromDataSource(source);
+    }
+    throw new UnsupportedError('Unexpected ScopeInfoKind $kind');
+  }
+
+  /// Serializes this [ScopeInfo] to [sink].
+  void writeToDataSink(DataSink sink) {
+    throw new UnsupportedError('${runtimeType}.writeToDataSink');
+  }
 
   /// Convenience reference pointer to the element representing `this`.
   /// If this scope is not in an instance member, it will be null.
@@ -75,13 +108,28 @@ class ScopeInfo {
   void forEachBoxedVariable(f(Local local, FieldEntity field)) {}
 
   /// True if [variable] has been mutated and is also used in another scope.
-  bool isBoxed(Local variable) => false;
+  bool isBoxedVariable(Local variable) => false;
 }
 
 /// Class representing the usage of a scope that has been captured in the
 /// context of a closure.
 class CapturedScope extends ScopeInfo {
   const CapturedScope();
+
+  /// Deserializes a [CapturedScope] object from [source].
+  factory CapturedScope.readFromDataSource(DataSource source) {
+    ScopeInfoKind kind = source.readEnum(ScopeInfoKind.values);
+    switch (kind) {
+      case ScopeInfoKind.scopeInfo:
+      case ScopeInfoKind.closureRepresentationInfo:
+        throw new UnsupportedError('Unexpected CapturedScope kind $kind');
+      case ScopeInfoKind.capturedScope:
+        return new JsCapturedScope.readFromDataSource(source);
+      case ScopeInfoKind.capturedLoopScope:
+        return new JsCapturedLoopScope.readFromDataSource(source);
+    }
+    throw new UnsupportedError('Unexpected ScopeInfoKind $kind');
+  }
 
   /// If true, this closure accesses a variable that was defined in an outside
   /// scope and this variable gets modified at some point (sometimes we say that
@@ -114,6 +162,20 @@ class CapturedScope extends ScopeInfo {
 /// each iteration, by boxing the iteration variable[s].
 class CapturedLoopScope extends CapturedScope {
   const CapturedLoopScope();
+
+  /// Deserializes a [CapturedLoopScope] object from [source].
+  factory CapturedLoopScope.readFromDataSource(DataSource source) {
+    ScopeInfoKind kind = source.readEnum(ScopeInfoKind.values);
+    switch (kind) {
+      case ScopeInfoKind.scopeInfo:
+      case ScopeInfoKind.closureRepresentationInfo:
+      case ScopeInfoKind.capturedScope:
+        throw new UnsupportedError('Unexpected CapturedLoopScope kind $kind');
+      case ScopeInfoKind.capturedLoopScope:
+        return new JsCapturedLoopScope.readFromDataSource(source);
+    }
+    throw new UnsupportedError('Unexpected ScopeInfoKind $kind');
+  }
 
   /// True if this loop scope declares in the first part of the loop
   /// `for (<here>;...;...)` any variables that need to be boxed.
@@ -168,6 +230,21 @@ class CapturedLoopScope extends CapturedScope {
 class ClosureRepresentationInfo extends ScopeInfo {
   const ClosureRepresentationInfo();
 
+  /// Deserializes a [ClosureRepresentationInfo] object from [source].
+  factory ClosureRepresentationInfo.readFromDataSource(DataSource source) {
+    ScopeInfoKind kind = source.readEnum(ScopeInfoKind.values);
+    switch (kind) {
+      case ScopeInfoKind.scopeInfo:
+      case ScopeInfoKind.capturedScope:
+      case ScopeInfoKind.capturedLoopScope:
+        throw new UnsupportedError(
+            'Unexpected ClosureRepresentationInfo kind $kind');
+      case ScopeInfoKind.closureRepresentationInfo:
+        return new KernelClosureClassInfo.readFromDataSource(source);
+    }
+    throw new UnsupportedError('Unexpected ScopeInfoKind $kind');
+  }
+
   /// The original local function before any translation.
   ///
   /// Will be null for methods.
@@ -183,6 +260,9 @@ class ClosureRepresentationInfo extends ScopeInfo {
   /// The function that implements the [local] function as a `call` method on
   /// the closure class.
   FunctionEntity get callMethod => null;
+
+  /// The signature method for [callMethod] if needed.
+  FunctionEntity get signatureMethod => null;
 
   /// List of locals that this closure class has created corresponding field
   /// entities for.
@@ -217,10 +297,6 @@ class ClosureRepresentationInfo extends ScopeInfo {
   /// scopes.
   void forEachFreeVariable(f(Local variable, FieldEntity field)) {}
 
-  /// Return true if [variable] has been captured and mutated (all other
-  /// variables do not require boxing).
-  bool isVariableBoxed(Local variable) => false;
-
   // TODO(efortuna): Remove this method. The old system was using
   // ClosureClassMaps for situations other than closure class maps, and that's
   // just confusing.
@@ -230,13 +306,22 @@ class ClosureRepresentationInfo extends ScopeInfo {
 /// A local variable that contains the box object holding the [BoxFieldElement]
 /// fields.
 class BoxLocal extends Local {
-  final String name;
+  final ClassEntity container;
 
-  final int hashCode = _nextHashCode = (_nextHashCode + 10007).toUnsigned(30);
-  static int _nextHashCode = 0;
+  BoxLocal(this.container);
 
-  BoxLocal(this.name);
+  @override
+  String get name => container.name;
 
+  @override
+  bool operator ==(other) {
+    return other is BoxLocal && other.container == container;
+  }
+
+  @override
+  int get hashCode => container.hashCode;
+
+  @override
   String toString() => 'BoxLocal($name)';
 }
 
@@ -244,14 +329,17 @@ class BoxLocal extends Local {
 class ThisLocal extends Local {
   final ClassEntity enclosingClass;
 
-  ThisLocal(MemberEntity member) : enclosingClass = member.enclosingClass;
+  ThisLocal(this.enclosingClass);
 
+  @override
   String get name => 'this';
 
+  @override
   bool operator ==(other) {
     return other is ThisLocal && other.enclosingClass == enclosingClass;
   }
 
+  @override
   int get hashCode => enclosingClass.hashCode;
 }
 
@@ -261,15 +349,19 @@ class TypeVariableLocal implements Local {
 
   TypeVariableLocal(this.typeVariable);
 
+  @override
   String get name => typeVariable.element.name;
 
+  @override
   int get hashCode => typeVariable.hashCode;
 
+  @override
   bool operator ==(other) {
     if (other is! TypeVariableLocal) return false;
     return typeVariable == other.typeVariable;
   }
 
+  @override
   String toString() {
     StringBuffer sb = new StringBuffer();
     sb.write('type_variable_local(');
@@ -283,7 +375,7 @@ class TypeVariableLocal implements Local {
 /// Move the below classes to a JS model eventually.
 ///
 abstract class JSEntity implements MemberEntity {
-  Local get declaredEntity;
+  String get declaredName;
 }
 
 abstract class PrivatelyNamedJSEntity implements JSEntity {

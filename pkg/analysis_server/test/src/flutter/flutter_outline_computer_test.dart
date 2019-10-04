@@ -1,4 +1,4 @@
-// Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2018, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -6,13 +6,11 @@ import 'dart:async';
 
 import 'package:analysis_server/src/flutter/flutter_outline_computer.dart';
 import 'package:analysis_server/src/protocol_server.dart';
-import 'package:analyzer/file_system/file_system.dart';
-import 'package:analyzer/src/dart/analysis/driver.dart';
+import 'package:analyzer/dart/analysis/results.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import '../../abstract_context.dart';
-import '../utilities/flutter_util.dart';
 
 main() {
   defineReflectiveSuite(() {
@@ -24,15 +22,14 @@ main() {
 class FlutterOutlineComputerTest extends AbstractContextTest {
   String testPath;
   String testCode;
-  AnalysisResult analysisResult;
+  ResolvedUnitResult resolveResult;
   FlutterOutlineComputer computer;
 
   @override
   void setUp() {
     super.setUp();
-    testPath = resourceProvider.convertPath('/test.dart');
-    Folder libFolder = configureFlutterPackage(resourceProvider);
-    packageMap['flutter'] = [libFolder];
+    testPath = convertPath('/home/test/lib/test.dart');
+    addFlutterPackage();
   }
 
   test_attribute_namedExpression() async {
@@ -56,6 +53,8 @@ class WidgetA extends StatelessWidget {
     var attribute = widget.attributes[0];
     expect(attribute.name, 'value');
     expect(attribute.label, '42');
+    _assertLocation(attribute.nameLocation, 75, 5);
+    _assertLocation(attribute.valueLocation, 82, 2);
   }
 
   test_attributes_bool() async {
@@ -103,6 +102,11 @@ class WidgetA extends StatelessWidget {
   test_attributes_multiLine() async {
     var attribute = await _getAttribute('test', '1 +\n 2');
     expect(attribute.label, '…');
+  }
+
+  test_attributes_setLiteral() async {
+    var attribute = await _getAttribute('test', '{1, 2}');
+    expect(attribute.label, '{…}');
   }
 
   test_attributes_string_interpolation() async {
@@ -203,6 +207,100 @@ class MyWidget extends StatelessWidget {
     }
   }
 
+  test_children_closure_blockBody() async {
+    newFile('/home/test/lib/a.dart', content: r'''
+import 'package:flutter/widgets.dart';
+
+class WidgetA extends StatelessWidget {
+  final Widget Function(bool) factory;
+
+  WidgetA(this.factory);
+}
+''');
+    FlutterOutline unitOutline = await _computeOutline('''
+import 'package:flutter/widgets.dart';
+import 'a.dart';
+
+class MyWidget extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return new WidgetA((b) {
+      if (b) {
+        return const Text('aaa'),
+      } else {
+        return const Container(),
+      }
+    }); // WidgetA
+  }
+}
+''');
+    expect(_toText(unitOutline), r'''
+(D) MyWidget
+  (D) build
+    WidgetA
+      Text
+      Container
+''');
+  }
+
+  test_children_closure_expressionBody() async {
+    newFile('/home/test/lib/a.dart', content: r'''
+import 'package:flutter/widgets.dart';
+
+class WidgetA extends StatelessWidget {
+  final Widget Function() factory;
+
+  WidgetA(this.factory);
+}
+''');
+    FlutterOutline unitOutline = await _computeOutline('''
+import 'package:flutter/widgets.dart';
+import 'a.dart';
+
+class MyWidget extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return new WidgetA(
+      () => const Text('aaa'),
+    ); // WidgetA
+  }
+}
+''');
+    expect(_toText(unitOutline), r'''
+(D) MyWidget
+  (D) build
+    WidgetA
+      Text
+''');
+  }
+
+  test_children_withCollectionElements() async {
+    FlutterOutline unitOutline = await _computeOutline('''
+import 'package:flutter/widgets.dart';
+
+class MyWidget extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    bool includeB = true;
+    return new Column(children: [
+      const Text('aaa'),
+      if (includeB) const Text('bbb'),
+      for (int s in ['ccc', 'ddd'] const Text(s),
+    ]);
+  }
+}
+''');
+
+    expect(_toText(unitOutline), r'''
+(D) MyWidget
+  (D) build
+    Column
+      Text
+      Text
+      Text
+''');
+  }
+
   test_codeOffsetLength() async {
     FlutterOutline unitOutline = await _computeOutline('''
 import 'package:flutter/widgets.dart';
@@ -291,7 +389,7 @@ class WidgetFactory {
   }
 
   test_parentAssociationLabel() async {
-    newFile('/a.dart', content: r'''
+    newFile('/home/test/lib/a.dart', content: r'''
 import 'package:flutter/widgets.dart';
 
 class WidgetA extends StatelessWidget {
@@ -322,280 +420,6 @@ class MyWidget extends StatelessWidget {
       top: Text
       bottom: Text
 ''');
-  }
-
-  test_render_BAD_noDesignTimeConstructor() async {
-    FlutterOutline unitOutline = await _computeOutline('''
-import 'package:flutter/widgets.dart';
-
-class MyWidget extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return new Row();
-  }
-}
-''');
-    var myWidget = unitOutline.children[0];
-    expect(myWidget.isWidgetClass, isTrue);
-    expect(myWidget.renderConstructor, isNull);
-    expect(myWidget.stateClassName, isNull);
-    expect(myWidget.stateOffset, isNull);
-    expect(myWidget.stateLength, isNull);
-
-    expect(computer.instrumentedCode, isNull);
-  }
-
-  test_render_BAD_notWidget() async {
-    FlutterOutline unitOutline = await _computeOutline('''
-class C {}
-''');
-    var myWidget = unitOutline.children[0];
-    expect(myWidget.isWidgetClass, isNull);
-    expect(myWidget.renderConstructor, isNull);
-    expect(myWidget.stateClassName, isNull);
-    expect(myWidget.stateOffset, isNull);
-    expect(myWidget.stateLength, isNull);
-
-    expect(computer.instrumentedCode, isNull);
-  }
-
-  test_render_BAD_part() async {
-    // Use test.dart as a part of a library.
-    // Add the library to the driver so that it is analyzed before the part.
-    var libPath = newFile('/test_lib.dart', content: r'''
-part 'test.dart';
-import 'package:flutter/widgets.dart';
-''').path;
-    driver.addFile(libPath);
-
-    FlutterOutline unitOutline = await _computeOutline('''
-part of 'test_lib.dart';
-
-class MyWidget extends StatelessWidget {
-  MyWidget.forDesignTime();
-
-  @override
-  Widget build(BuildContext context) {
-    return new Row();
-  }
-}
-''');
-
-    // Analysis is successful, no errors.
-    expect(analysisResult.errors, isEmpty);
-
-    // No instrumentation, because not a library.
-    expect(computer.instrumentedCode, isNull);
-
-    // There is forDesignTime() constructor, but we don't handle parts.
-    var myWidget = unitOutline.children[0];
-    expect(myWidget.isWidgetClass, isNull);
-    expect(myWidget.renderConstructor, isNull);
-  }
-
-  test_render_instrumentedCode_registerWidgets() async {
-    await _computeOutline('''
-import 'package:flutter/widgets.dart';
-
-class MyWidget extends StatelessWidget {
-  MyWidget.forDesignTime();
-
-  @override
-  Widget build(BuildContext context) {
-    return new Row(
-      children: <Widget>[
-        new Text('aaa'),
-        new Text('bbb'),
-      ],
-    );
-  }
-}
-''');
-    expect(
-        computer.instrumentedCode,
-        r'''
-import 'package:flutter/widgets.dart';
-
-class MyWidget extends StatelessWidget {
-  MyWidget.forDesignTime();
-
-  @override
-  Widget build(BuildContext context) {
-    return _registerWidgetInstance(0, new Row(
-      children: <Widget>[
-        _registerWidgetInstance(1, new Text('aaa')),
-        _registerWidgetInstance(2, new Text('bbb')),
-      ],
-    ));
-  }
-}
-''' +
-            FlutterOutlineComputer.RENDER_APPEND);
-  }
-
-  test_render_instrumentedCode_rewriteUri_file() async {
-    testPath = resourceProvider.convertPath('/home/user/test/test.dart');
-    var libFile = newFile('/home/user/test/my_lib.dart', content: '');
-
-    await _computeOutline('''
-import 'package:flutter/widgets.dart';
-import 'my_lib.dart';
-
-class MyWidget extends StatelessWidget {
-  MyWidget.forDesignTime();
-
-  @override
-  Widget build(BuildContext context) {
-    return new Container();
-  }
-}
-''');
-    expect(
-        computer.instrumentedCode,
-        '''
-import 'package:flutter/widgets.dart';
-import '${libFile.toUri()}';
-
-class MyWidget extends StatelessWidget {
-  MyWidget.forDesignTime();
-
-  @override
-  Widget build(BuildContext context) {
-    return _registerWidgetInstance(0, new Container());
-  }
-}
-''' +
-            FlutterOutlineComputer.RENDER_APPEND);
-  }
-
-  test_render_instrumentedCode_rewriteUri_package() async {
-    packageMap['test'] = [newFolder('/home/user/test/lib')];
-
-    testPath = resourceProvider.convertPath('/home/user/test/lib/test.dart');
-    newFile('/home/user/test/lib/my_lib.dart', content: '');
-
-    await _computeOutline('''
-import 'package:flutter/widgets.dart';
-import 'my_lib.dart';
-
-class MyWidget extends StatelessWidget {
-  MyWidget.forDesignTime();
-
-  @override
-  Widget build(BuildContext context) {
-    return new Container();
-  }
-}
-''');
-    expect(
-        computer.instrumentedCode,
-        '''
-import 'package:flutter/widgets.dart';
-import 'package:test/my_lib.dart';
-
-class MyWidget extends StatelessWidget {
-  MyWidget.forDesignTime();
-
-  @override
-  Widget build(BuildContext context) {
-    return _registerWidgetInstance(0, new Container());
-  }
-}
-''' +
-            FlutterOutlineComputer.RENDER_APPEND);
-  }
-
-  test_render_stateful_createState_blockBody() async {
-    FlutterOutline unitOutline = await _computeOutline('''
-import 'package:flutter/widgets.dart';
-
-class MyWidget extends StatefulWidget {
-  MyWidget.forDesignTime();
-
-  @override
-  MyWidgetState createState() {
-    return new MyWidgetState();
-  }
-}
-
-class MyWidgetState extends State<MyWidget> {
-  @override
-  Widget build(BuildContext context) {
-    return new Container(),
-  }
-}
-''');
-    var myWidget = unitOutline.children[0];
-    expect(myWidget.renderConstructor, 'forDesignTime');
-    expect(myWidget.stateClassName, 'MyWidgetState');
-    expect(myWidget.stateOffset, 192);
-    expect(myWidget.stateLength, 130);
-  }
-
-  test_render_stateful_createState_expressionBody() async {
-    FlutterOutline unitOutline = await _computeOutline('''
-import 'package:flutter/widgets.dart';
-
-class MyWidget extends StatefulWidget {
-  MyWidget.forDesignTime();
-
-  @override
-  MyWidgetState createState() => new MyWidgetState();
-}
-
-class MyWidgetState extends State<MyWidget> {
-  @override
-  Widget build(BuildContext context) {
-    return new Container(),
-  }
-}
-''');
-    var myWidget = unitOutline.children[0];
-    expect(myWidget.isWidgetClass, isTrue);
-    expect(myWidget.renderConstructor, 'forDesignTime');
-    expect(myWidget.stateClassName, 'MyWidgetState');
-    expect(myWidget.stateOffset, 178);
-    expect(myWidget.stateLength, 130);
-  }
-
-  test_render_stateless() async {
-    FlutterOutline unitOutline = await _computeOutline('''
-import 'package:flutter/widgets.dart';
-
-class MyWidget extends StatelessWidget {
-  MyWidget.forDesignTime();
-
-  @override
-  Widget build(BuildContext context) {
-    return new Row(
-      children: <Widget>[
-        new Text('aaa'),
-        new Text('bbb'),
-      ],
-    );
-  }
-}
-''');
-    var myWidget = unitOutline.children[0];
-    expect(myWidget.isWidgetClass, isTrue);
-    expect(myWidget.renderConstructor, 'forDesignTime');
-    expect(myWidget.stateClassName, isNull);
-    expect(myWidget.stateOffset, isNull);
-    expect(myWidget.stateLength, isNull);
-
-    var build = myWidget.children[1];
-
-    var row = build.children[0];
-    expect(row.className, 'Row');
-    expect(row.id, 0);
-
-    var textA = row.children[0];
-    expect(textA.className, 'Text');
-    expect(textA.id, 1);
-
-    var textB = row.children[1];
-    expect(textB.className, 'Text');
-    expect(textB.id, 2);
   }
 
   test_variableName() async {
@@ -629,12 +453,17 @@ class MyWidget extends StatelessWidget {
     expect(textRef.variableName, 'text');
   }
 
+  void _assertLocation(
+      Location actual, int expectedOffset, int expectedLength) {
+    expect(actual.offset, expectedOffset);
+    expect(actual.length, expectedLength);
+  }
+
   Future<FlutterOutline> _computeOutline(String code) async {
     testCode = code;
     newFile(testPath, content: code);
-    analysisResult = await driver.getResult(testPath);
-    computer = new FlutterOutlineComputer(
-        testPath, testCode, analysisResult.lineInfo, analysisResult.unit);
+    resolveResult = await session.getResolvedUnit(testPath);
+    computer = new FlutterOutlineComputer(resolveResult);
     return computer.compute();
   }
 
@@ -663,6 +492,9 @@ class MyWidget extends StatelessWidget {
 
     var attribute = newMyWidget.attributes[0];
     expect(attribute.name, name);
+    expect(attribute.nameLocation, isNull);
+    _assertLocation(attribute.valueLocation, 64, value.length);
+
     return attribute;
   }
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -18,15 +18,14 @@ import 'package:analyzer/src/context/context_root.dart' as analyzer;
 import 'package:analyzer/src/dart/analysis/driver.dart';
 import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/generated/sdk.dart';
+import 'package:analyzer/src/test_utilities/mock_sdk.dart';
 import 'package:analyzer/src/test_utilities/resource_provider_mixin.dart';
 import 'package:analyzer_plugin/protocol/protocol.dart' as plugin;
 import 'package:analyzer_plugin/protocol/protocol_generated.dart' as plugin;
 import 'package:analyzer_plugin/src/protocol/protocol_internal.dart' as plugin;
-import 'package:plugin/manager.dart';
 import 'package:test/test.dart';
 import 'package:watcher/watcher.dart';
 
-import 'mock_sdk.dart';
 import 'mocks.dart';
 
 int findIdentifierLength(String search) {
@@ -47,15 +46,13 @@ int findIdentifierLength(String search) {
 /**
  * An abstract base for all 'analysis' domain tests.
  */
-class AbstractAnalysisTest extends Object with ResourceProviderMixin {
+class AbstractAnalysisTest with ResourceProviderMixin {
   bool generateSummaryFiles = false;
   MockServerChannel serverChannel;
-  MockPackageMapProvider packageMapProvider;
   TestPluginManager pluginManager;
   AnalysisServer server;
   RequestHandler handler;
 
-  final List<ServerErrorParams> serverErrors = <ServerErrorParams>[];
   final List<GeneralAnalysisService> generalServices =
       <GeneralAnalysisService>[];
   final Map<AnalysisService, List<String>> analysisSubscriptions = {};
@@ -73,6 +70,12 @@ class AbstractAnalysisTest extends Object with ResourceProviderMixin {
   AnalysisOptions get analysisOptions => testDiver.analysisOptions;
 
   AnalysisDriver get testDiver => server.getAnalysisDriver(testFile);
+
+  void addAnalysisOptionsFile(String content) {
+    newFile(
+        resourceProvider.pathContext.join(projectPath, 'analysis_options.yaml'),
+        content: content);
+  }
 
   void addAnalysisSubscription(AnalysisService service, String file) {
     // add file to subscription
@@ -101,12 +104,20 @@ class AbstractAnalysisTest extends Object with ResourceProviderMixin {
     return testFile;
   }
 
+  /// Create an analysis options file based on the given arguments.
+  void createAnalysisOptionsFile({List<String> experiments}) {
+    StringBuffer buffer = new StringBuffer();
+    if (experiments != null) {
+      buffer.writeln('analyzer:');
+      buffer.writeln('  enable-experiment:');
+      for (String experiment in experiments) {
+        buffer.writeln('    - $experiment');
+      }
+    }
+    addAnalysisOptionsFile(buffer.toString());
+  }
+
   AnalysisServer createAnalysisServer() {
-    //
-    // Process plugins
-    //
-    ExtensionManager manager = new ExtensionManager();
-    manager.processPlugins(AnalysisEngine.instance.requiredPlugins);
     //
     // Create an SDK in the mock file system.
     //
@@ -116,14 +127,12 @@ class AbstractAnalysisTest extends Object with ResourceProviderMixin {
     //
     // Create server
     //
-    AnalysisServerOptions options = new AnalysisServerOptions()
-      ..previewDart2 = true;
+    AnalysisServerOptions options = new AnalysisServerOptions();
     return new AnalysisServer(
         serverChannel,
         resourceProvider,
-        packageMapProvider,
         options,
-        new DartSdkManager(resourceProvider.convertPath('/'), true),
+        new DartSdkManager(resourceProvider.convertPath('/sdk'), true),
         InstrumentationService.NULL_SERVICE);
   }
 
@@ -136,6 +145,12 @@ class AbstractAnalysisTest extends Object with ResourceProviderMixin {
             packageRoots: packageRoots)
         .toRequest('0');
     handleSuccessfulRequest(request, handler: analysisHandler);
+  }
+
+  void doAllDeclarationsTrackerWork() {
+    while (server.declarationsTracker.hasWork) {
+      server.declarationsTracker.doWork();
+    }
   }
 
   /**
@@ -178,8 +193,7 @@ class AbstractAnalysisTest extends Object with ResourceProviderMixin {
 
   void processNotification(Notification notification) {
     if (notification.event == SERVER_NOTIFICATION_ERROR) {
-      var params = new ServerErrorParams.fromNotification(notification);
-      serverErrors.add(params);
+      fail('${notification.toJson()}');
     }
   }
 
@@ -197,10 +211,9 @@ class AbstractAnalysisTest extends Object with ResourceProviderMixin {
 
   void setUp() {
     serverChannel = new MockServerChannel();
-    projectPath = resourceProvider.convertPath('/project');
-    testFolder = resourceProvider.convertPath('/project/bin');
-    testFile = resourceProvider.convertPath('/project/bin/test.dart');
-    packageMapProvider = new MockPackageMapProvider();
+    projectPath = convertPath('/project');
+    testFolder = convertPath('/project/bin');
+    testFile = convertPath('/project/bin/test.dart');
     pluginManager = new TestPluginManager();
     server = createAnalysisServer();
     server.pluginManager = pluginManager;
@@ -231,8 +244,9 @@ class AbstractAnalysisTest extends Object with ResourceProviderMixin {
    * Completes with a successful [Response] for the given [request].
    * Otherwise fails.
    */
-  Future<Response> waitResponse(Request request) async {
-    return serverChannel.sendRequest(request);
+  Future<Response> waitResponse(Request request,
+      {bool throwOnError = true}) async {
+    return serverChannel.sendRequest(request, throwOnError: throwOnError);
   }
 }
 
@@ -278,7 +292,7 @@ class TestPluginManager implements PluginManager {
   }
 
   @override
-  Future<Null> addPluginToContextRoot(
+  Future<void> addPluginToContextRoot(
       analyzer.ContextRoot contextRoot, String path) async {
     fail('Unexpected invocation of addPluginToContextRoot');
   }
@@ -318,7 +332,7 @@ class TestPluginManager implements PluginManager {
   }
 
   @override
-  Future<Null> restartPlugins() async {
+  Future<void> restartPlugins() async {
     // Nothing to restart.
     return null;
   }
@@ -342,7 +356,7 @@ class TestPluginManager implements PluginManager {
   }
 
   @override
-  Future<List<Null>> stopAll() async {
+  Future<List<void>> stopAll() async {
     fail('Unexpected invocation of stopAll');
   }
 }

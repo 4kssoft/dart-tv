@@ -2,14 +2,15 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-#include "platform/globals.h"
-#if defined(HOST_OS_LINUX) && !defined(PRODUCT)
+#include "vm/globals.h"
+#if defined(HOST_OS_LINUX) && defined(SUPPORT_TIMELINE)
 
 #include <errno.h>
 #include <fcntl.h>
 #include <cstdlib>
 
 #include "platform/atomic.h"
+#include "platform/signal_blocker.h"
 #include "vm/isolate.h"
 #include "vm/json_stream.h"
 #include "vm/lockers.h"
@@ -23,15 +24,24 @@ namespace dart {
 
 DECLARE_FLAG(bool, trace_timeline);
 
-TimelineEventSystraceRecorder::TimelineEventSystraceRecorder()
-    : TimelineEventPlatformRecorder(), systrace_fd_(-1) {
-  const char* kSystracePath = "/sys/kernel/debug/tracing/trace_marker";
-  systrace_fd_ = open(kSystracePath, O_WRONLY);
-  if ((systrace_fd_ < 0) && FLAG_trace_timeline) {
-    OS::PrintErr("TimelineEventSystraceRecorder: Could not open `%s`\n",
-                 kSystracePath);
+static int OpenTraceFD() {
+  const char* kSystraceDebugPath = "/sys/kernel/debug/tracing/trace_marker";
+  const char* kSystracePath = "/sys/kernel/tracing/trace_marker";
+
+  int fd = TEMP_FAILURE_RETRY(::open(kSystracePath, O_WRONLY));
+  if (fd < 0) {
+    fd = TEMP_FAILURE_RETRY(::open(kSystraceDebugPath, O_WRONLY));
   }
+
+  if (fd < 0 && FLAG_trace_timeline) {
+    OS::PrintErr("TimelineEventSystraceRecorder: Could not open `%s` or `%s`\n",
+                 kSystraceDebugPath, kSystracePath);
+  }
+  return fd;
 }
+
+TimelineEventSystraceRecorder::TimelineEventSystraceRecorder()
+    : TimelineEventPlatformRecorder(), systrace_fd_(OpenTraceFD()) {}
 
 TimelineEventSystraceRecorder::~TimelineEventSystraceRecorder() {
   if (systrace_fd_ >= 0) {
@@ -51,16 +61,19 @@ intptr_t TimelineEventSystraceRecorder::PrintSystrace(TimelineEvent* event,
     case TimelineEvent::kBegin: {
       length = Utils::SNPrint(buffer, buffer_size, "B|%" Pd64 "|%s", pid,
                               event->label());
-    } break;
+      break;
+    }
     case TimelineEvent::kEnd: {
       length = Utils::SNPrint(buffer, buffer_size, "E");
-    } break;
+      break;
+    }
     case TimelineEvent::kCounter: {
       if (event->arguments_length() > 0) {
         // We only report the first counter value.
         length = Utils::SNPrint(buffer, buffer_size, "C|%" Pd64 "|%s|%s", pid,
                                 event->label(), event->arguments()[0].value);
       }
+      break;
     }
     default:
       // Ignore event types that we cannot serialize to the Systrace format.

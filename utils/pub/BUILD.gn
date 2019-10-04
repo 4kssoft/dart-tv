@@ -8,9 +8,3 @@ application_snapshot("pub") {
   main_dart = "../../third_party/pkg/pub/bin/pub.dart"
   training_args = [ "--help" ]
 }
-
-application_snapshot("pub2") {
-  dart_version = 2
-  main_dart = "../../third_party/pkg/pub/bin/pub.dart"
-  training_args = [ "--help" ]
-}

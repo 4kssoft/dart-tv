@@ -23,8 +23,11 @@ class LimitedBinaryPrinter extends BinaryPrinter {
   final bool excludeUriToSource;
 
   LimitedBinaryPrinter(
-      Sink<List<int>> sink, this.predicate, this.excludeUriToSource)
-      : super(sink);
+      Sink<List<int>> sink, this.predicate, this.excludeUriToSource,
+      {bool includeOffsets = true})
+      : super(sink,
+            includeSources: !excludeUriToSource,
+            includeOffsets: includeOffsets);
 
   @override
   void computeCanonicalNames(Component component) {
@@ -43,10 +46,11 @@ class LimitedBinaryPrinter extends BinaryPrinter {
     return predicate(library);
   }
 
-  @override
   void writeLibraries(Component component) {
-    var librariesToWrite = component.libraries.where(predicate).toList();
-    writeList(librariesToWrite, writeNode);
+    for (int i = 0; i < component.libraries.length; ++i) {
+      Library library = component.libraries[i];
+      if (predicate(library)) writeLibraryNode(library);
+    }
   }
 
   @override
@@ -59,14 +63,5 @@ class LimitedBinaryPrinter extends BinaryPrinter {
   void writeComponentIndex(Component component, List<Library> libraries) {
     var librariesToWrite = libraries.where(predicate).toList();
     super.writeComponentIndex(component, librariesToWrite);
-  }
-
-  @override
-  void indexUris(Component component) {
-    if (!excludeUriToSource) {
-      super.indexUris(component);
-    } else {
-      // We pretend not to know any uris, thereby excluding all sources.
-    }
   }
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -12,11 +12,11 @@ import 'package:analyzer/exception/exception.dart';
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/instrumentation/instrumentation.dart';
 import 'package:analyzer/src/context/context_root.dart' as analyzer;
-import 'package:analyzer/src/generated/bazel.dart';
-import 'package:analyzer/src/generated/gn.dart';
 import 'package:analyzer/src/generated/source.dart';
-import 'package:analyzer/src/generated/workspace.dart';
 import 'package:analyzer/src/util/glob.dart';
+import 'package:analyzer/src/workspace/bazel.dart';
+import 'package:analyzer/src/workspace/gn.dart';
+import 'package:analyzer/src/workspace/workspace.dart';
 import 'package:analyzer_plugin/channel/channel.dart';
 import 'package:analyzer_plugin/protocol/protocol.dart';
 import 'package:analyzer_plugin/protocol/protocol_common.dart';
@@ -262,11 +262,11 @@ abstract class PluginInfo {
   /**
    * Request that the plugin shutdown.
    */
-  Future<Null> stop() {
+  Future<void> stop() {
     if (currentSession == null) {
       throw new StateError('Cannot stop a plugin that is not running.');
     }
-    Future<Null> doneFuture = currentSession.stop();
+    Future<void> doneFuture = currentSession.stop();
     currentSession = null;
     return doneFuture;
   }
@@ -378,7 +378,7 @@ class PluginManager {
    * used when analyzing code for the given [contextRoot]. If the plugin had not
    * yet been started, then it will be started by this method.
    */
-  Future<Null> addPluginToContextRoot(
+  Future<void> addPluginToContextRoot(
       analyzer.ContextRoot contextRoot, String path) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
@@ -517,10 +517,10 @@ class PluginManager {
     if (parentFolder.exists) {
       Folder executionFolder =
           parentFolder.getChildAssumingFolder(pluginFolder.shortName);
-      return _computePaths(executionFolder);
+      return _computePaths(executionFolder, pubCommand: 'upgrade');
     }
     Folder executionFolder = pluginFolder.copyTo(parentFolder);
-    return _computePaths(executionFolder, runPub: true);
+    return _computePaths(executionFolder, pubCommand: 'get');
   }
 
   /**
@@ -577,7 +577,7 @@ class PluginManager {
   /**
    * Restart all currently running plugins.
    */
-  Future<Null> restartPlugins() async {
+  Future<void> restartPlugins() async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     for (PluginInfo plugin in _pluginMap.values.toList()) {
@@ -674,16 +674,18 @@ class PluginManager {
   /**
    * Stop all of the plugins that are currently running.
    */
-  Future<List<Null>> stopAll() {
+  Future<List<void>> stopAll() {
     return Future.wait(_pluginMap.values.map((PluginInfo info) => info.stop()));
   }
 
   /**
    * Compute the paths to be returned by the enclosing method given that the
    * plugin should exist in the given [pluginFolder].
+   *
+   * Runs pub if [pubCommand] is provided and not null.
    */
   List<String> _computePaths(Folder pluginFolder,
-      {bool runPub: false, Workspace workspace}) {
+      {String pubCommand, Workspace workspace}) {
     File pluginFile = pluginFolder
         .getChildAssumingFolder('bin')
         .getChildAssumingFile('plugin.dart');
@@ -692,23 +694,21 @@ class PluginManager {
     }
     String reason;
     File packagesFile = pluginFolder.getChildAssumingFile('.packages');
-    bool packagesFilePreExists = packagesFile.exists;
-    if (runPub) {
+    if (pubCommand != null) {
       String vmPath = Platform.executable;
       String pubPath = path.join(path.dirname(vmPath), 'pub');
       if (Platform.isWindows) {
         // Process.run requires the `.bat` suffix on Windows
         pubPath = '$pubPath.bat';
       }
-      String pubSubcommand = packagesFilePreExists ? 'upgrade' : 'get';
-      ProcessResult result = Process.runSync(pubPath, <String>[pubSubcommand],
+      ProcessResult result = Process.runSync(pubPath, <String>[pubCommand],
           stderrEncoding: utf8,
           stdoutEncoding: utf8,
           workingDirectory: pluginFolder.path,
           environment: {_pubEnvironmentKey: _getPubEnvironmentValue()});
       if (result.exitCode != 0) {
         StringBuffer buffer = new StringBuffer();
-        buffer.writeln('Failed to run pub get');
+        buffer.writeln('Failed to run pub $pubCommand');
         buffer.writeln('  pluginFolder = ${pluginFolder.path}');
         buffer.writeln('  exitCode = ${result.exitCode}');
         buffer.writeln('  stdout = ${result.stdout}');
@@ -720,7 +720,7 @@ class PluginManager {
         reason ??= 'File "${packagesFile.path}" does not exist.';
         packagesFile = null;
       }
-    } else if (!packagesFilePreExists) {
+    } else if (!packagesFile.exists) {
       if (workspace != null) {
         packagesFile =
             _createPackagesFile(pluginFolder, workspace.packageUriResolver);
@@ -895,7 +895,7 @@ class PluginSession {
   /**
    * The completer used to signal when the plugin has stopped.
    */
-  Completer<Null> pluginStoppedCompleter = new Completer<Null>();
+  Completer<void> pluginStoppedCompleter = new Completer<void>();
 
   /**
    * The channel used to communicate with the plugin.
@@ -955,7 +955,7 @@ class PluginSession {
   /**
    * Return a future that will complete when the plugin has stopped.
    */
-  Future<Null> get onDone => pluginStoppedCompleter.future;
+  Future<void> get onDone => pluginStoppedCompleter.future;
 
   /**
    * Handle the given [notification].
@@ -987,7 +987,8 @@ class PluginSession {
   /**
    * Handle the fact that an unhandled error has occurred in the plugin.
    */
-  void handleOnError(List<String> errorPair) {
+  void handleOnError(dynamic error) {
+    List<String> errorPair = (error as List).cast<String>();
     StackTrace stackTrace = new StackTrace.fromString(errorPair[1]);
     info.exception =
         new CaughtException(new PluginException(errorPair[0]), stackTrace);
@@ -1071,8 +1072,10 @@ class PluginSession {
       return false;
     }
     channel = info._createChannel();
-    await channel.listen(handleResponse, handleNotification,
-        onDone: handleOnDone, onError: handleOnError);
+    // TODO(brianwilkerson) Determine if await is necessary, if so, change the
+    // return type of `channel.listen` to `Future<void>`.
+    await (channel.listen(handleResponse, handleNotification,
+        onDone: handleOnDone, onError: handleOnError) as dynamic);
     if (channel == null) {
       // If there is an error when starting the isolate, the channel will invoke
       // handleOnDone, which will cause `channel` to be set to `null`.
@@ -1102,7 +1105,7 @@ class PluginSession {
   /**
    * Request that the plugin shutdown.
    */
-  Future<Null> stop() {
+  Future<void> stop() {
     if (channel == null) {
       throw new StateError('Cannot stop a plugin that is not running.');
     }

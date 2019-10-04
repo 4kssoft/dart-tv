@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -19,6 +19,7 @@ List<Element> getChildren(Element parent, [String name]) {
     if (name == null || element.displayName == name) {
       children.add(element);
     }
+    return false;
   });
   return children;
 }
@@ -63,6 +64,28 @@ Future<Set<ClassElement>> getDirectSubClasses(
   return matches.map((match) => match.element).cast<ClassElement>().toSet();
 }
 
+/// Return the non-synthetic children of the given [extension]. This includes
+/// fields, accessors and methods, but excludes synthetic elements.
+List<Element> getExtensionMembers(ExtensionElement extension, [String name]) {
+  List<Element> members = <Element>[];
+  visitChildren(extension, (Element element) {
+    if (element.isSynthetic) {
+      return false;
+    }
+    if (name != null && element.displayName != name) {
+      return false;
+    }
+    if (element is ExecutableElement) {
+      members.add(element);
+    }
+    if (element is FieldElement) {
+      members.add(element);
+    }
+    return false;
+  });
+  return members;
+}
+
 /**
  * @return all implementations of the given {@link ClassMemberElement} is its superclasses and
  *         their subclasses.
@@ -72,6 +95,11 @@ Future<Set<ClassMemberElement>> getHierarchyMembers(
   // TODO(brianwilkerson) Determine whether this await is necessary.
   await null;
   Set<ClassMemberElement> result = new HashSet<ClassMemberElement>();
+  // extension member
+  if (member.enclosingElement is ExtensionElement) {
+    result.add(member);
+    return new Future.value(result);
+  }
   // static elements
   if (member.isStatic || member is ConstructorElement) {
     result.add(member);
@@ -159,7 +187,7 @@ Set<ClassElement> getSuperClasses(ClassElement seed) {
   List<ClassElement> queue = new List<ClassElement>();
   queue.add(seed);
   // process queue
-  while (!queue.isEmpty) {
+  while (queue.isNotEmpty) {
     ClassElement current = queue.removeLast();
     // add if not checked already
     if (!result.add(current)) {
@@ -171,6 +199,10 @@ Set<ClassElement> getSuperClasses(ClassElement seed) {
       if (superType != null) {
         queue.add(superType.element);
       }
+    }
+    // append superclass constraints
+    for (InterfaceType interface in current.superclassConstraints) {
+      queue.add(interface.element);
     }
     // append interfaces
     for (InterfaceType interface in current.interfaces) {

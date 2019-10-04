@@ -2,8 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-#include "platform/globals.h"
-#ifndef PRODUCT
+#include "vm/globals.h"
+#if defined(SUPPORT_TIMELINE)
 
 #include "vm/timeline.h"
 
@@ -17,6 +17,7 @@
 #include "vm/lockers.h"
 #include "vm/log.h"
 #include "vm/object.h"
+#include "vm/service.h"
 #include "vm/service_event.h"
 #include "vm/thread.h"
 
@@ -47,8 +48,8 @@ DEFINE_FLAG(charp,
             timeline_streams,
             NULL,
             "Comma separated list of timeline streams to record. "
-            "Valid values: all, API, Compiler, Dart, Debugger, Embedder, "
-            "GC, Isolate, and VM.");
+            "Valid values: all, API, Compiler, CompilerVerbose, Dart, "
+            "Debugger, Embedder, GC, Isolate, and VM.");
 DEFINE_FLAG(charp,
             timeline_recorder,
             "ring",
@@ -115,7 +116,7 @@ static TimelineEventRecorder* CreateTimelineRecorder() {
 
 #if defined(HOST_OS_LINUX) || defined(HOST_OS_ANDROID)
       return new TimelineEventSystraceRecorder();
-#elif defined(HOST_OS_FUCHSIA)
+#elif defined(HOST_OS_FUCHSIA) && !defined(FUCHSIA_SDK)
       return new TimelineEventFuchsiaRecorder();
 #else
       OS::PrintErr(
@@ -199,52 +200,29 @@ static bool HasStream(MallocGrowableArray<char*>* streams, const char* stream) {
   return false;
 }
 
-void Timeline::InitOnce() {
+void Timeline::Init() {
   ASSERT(recorder_ == NULL);
   recorder_ = CreateTimelineRecorder();
   ASSERT(recorder_ != NULL);
   enabled_streams_ = GetEnabledByDefaultTimelineStreams();
 // Global overrides.
-#define TIMELINE_STREAM_FLAG_DEFAULT(name, not_used)                           \
-  stream_##name##_.Init(#name, HasStream(enabled_streams_, #name));
+#define TIMELINE_STREAM_FLAG_DEFAULT(name, fuchsia_name)                       \
+  stream_##name##_.set_enabled(HasStream(enabled_streams_, #name));
   TIMELINE_STREAM_LIST(TIMELINE_STREAM_FLAG_DEFAULT)
 #undef TIMELINE_STREAM_FLAG_DEFAULT
-
-  if (Timeline::stream_Embedder_.enabled() &&
-      (Timeline::get_start_recording_cb() != NULL)) {
-    Timeline::get_start_recording_cb()();
-  }
 }
 
-void Timeline::StreamStateChange(const char* stream_name,
-                                 bool prev,
-                                 bool curr) {
-  if (prev == curr) {
-    return;
-  }
-  if (strcmp(stream_name, "Embedder") == 0) {
-    if (curr && (Timeline::get_start_recording_cb() != NULL)) {
-      Timeline::get_start_recording_cb()();
-    } else if (!curr && (Timeline::get_stop_recording_cb() != NULL)) {
-      Timeline::get_stop_recording_cb()();
-    }
-  }
-}
-
-void Timeline::Shutdown() {
+void Timeline::Cleanup() {
   ASSERT(recorder_ != NULL);
 
-  if (Timeline::stream_Embedder_.enabled() &&
-      (Timeline::get_stop_recording_cb() != NULL)) {
-    Timeline::get_stop_recording_cb()();
-  }
-
+#ifndef PRODUCT
   if (FLAG_timeline_dir != NULL) {
     recorder_->WriteTo(FLAG_timeline_dir);
   }
+#endif
 
 // Disable global streams.
-#define TIMELINE_STREAM_DISABLE(name, not_used)                                \
+#define TIMELINE_STREAM_DISABLE(name, fuchsia_name)                            \
   Timeline::stream_##name##_.set_enabled(false);
   TIMELINE_STREAM_LIST(TIMELINE_STREAM_DISABLE)
 #undef TIMELINE_STREAM_DISABLE
@@ -281,6 +259,7 @@ void Timeline::ReclaimCachedBlocksFromThreads() {
   }
 }
 
+#ifndef PRODUCT
 void Timeline::PrintFlagsToJSON(JSONStream* js) {
   JSONObject obj(js);
   obj.AddProperty("type", "TimelineFlags");
@@ -292,13 +271,13 @@ void Timeline::PrintFlagsToJSON(JSONStream* js) {
   }
   {
     JSONArray availableStreams(&obj, "availableStreams");
-#define ADD_STREAM_NAME(name, not_used) availableStreams.AddValue(#name);
+#define ADD_STREAM_NAME(name, fuchsia_name) availableStreams.AddValue(#name);
     TIMELINE_STREAM_LIST(ADD_STREAM_NAME);
 #undef ADD_STREAM_NAME
   }
   {
     JSONArray recordedStreams(&obj, "recordedStreams");
-#define ADD_RECORDED_STREAM_NAME(name, not_used)                               \
+#define ADD_RECORDED_STREAM_NAME(name, fuchsia_name)                           \
   if (stream_##name##_.enabled()) {                                            \
     recordedStreams.AddValue(#name);                                           \
   }
@@ -306,6 +285,7 @@ void Timeline::PrintFlagsToJSON(JSONStream* js) {
 #undef ADD_RECORDED_STREAM_NAME
   }
 }
+#endif
 
 void Timeline::Clear() {
   TimelineEventRecorder* recorder = Timeline::recorder();
@@ -397,11 +377,9 @@ void TimelineEventArguments::Free() {
 
 TimelineEventRecorder* Timeline::recorder_ = NULL;
 MallocGrowableArray<char*>* Timeline::enabled_streams_ = NULL;
-Dart_EmbedderTimelineStartRecording Timeline::start_recording_cb_ = NULL;
-Dart_EmbedderTimelineStopRecording Timeline::stop_recording_cb_ = NULL;
 
-#define TIMELINE_STREAM_DEFINE(name, enabled_by_default)                       \
-  TimelineStream Timeline::stream_##name##_;
+#define TIMELINE_STREAM_DEFINE(name, fuchsia_name)                             \
+  TimelineStream Timeline::stream_##name##_(#name, fuchsia_name, false);
 TIMELINE_STREAM_LIST(TIMELINE_STREAM_DEFINE)
 #undef TIMELINE_STREAM_DEFINE
 
@@ -412,7 +390,7 @@ TimelineEvent::TimelineEvent()
       thread_timestamp1_(-1),
       state_(0),
       label_(NULL),
-      category_(""),
+      stream_(NULL),
       thread_(OSThread::kInvalidThreadId),
       isolate_id_(ILLEGAL_PORT) {}
 
@@ -427,7 +405,7 @@ void TimelineEvent::Reset() {
   state_ = 0;
   thread_ = OSThread::kInvalidThreadId;
   isolate_id_ = ILLEGAL_PORT;
-  category_ = "";
+  stream_ = NULL;
   label_ = NULL;
   arguments_.Free();
   set_event_type(kNone);
@@ -569,14 +547,6 @@ void TimelineEvent::Complete() {
   }
 }
 
-void TimelineEvent::StreamInit(TimelineStream* stream) {
-  if (stream != NULL) {
-    category_ = stream->name();
-  } else {
-    category_ = "";
-  }
-}
-
 void TimelineEvent::Init(EventType event_type, const char* label) {
   ASSERT(label != NULL);
   state_ = 0;
@@ -621,6 +591,7 @@ bool TimelineEvent::Within(int64_t time_origin_micros,
   return (delta >= 0) && (delta <= time_extent_micros);
 }
 
+#ifndef PRODUCT
 void TimelineEvent::PrintJSON(JSONStream* stream) const {
   if (!FLAG_support_service) {
     return;
@@ -629,7 +600,7 @@ void TimelineEvent::PrintJSON(JSONStream* stream) const {
   int64_t pid = OS::ProcessId();
   int64_t tid = OSThread::ThreadIdToIntPtr(thread_);
   obj.AddProperty("name", label_);
-  obj.AddProperty("cat", category_);
+  obj.AddProperty("cat", stream_ != NULL ? stream_->name() : NULL);
   obj.AddProperty64("tid", tid);
   obj.AddProperty64("pid", pid);
   obj.AddPropertyTimeMicros("ts", TimeOrigin());
@@ -695,7 +666,7 @@ void TimelineEvent::PrintJSON(JSONStream* stream) const {
     if (isolate_id_ != ILLEGAL_PORT) {
       // If we have one, append the isolate id.
       stream->UncloseObject();
-      stream->PrintfProperty("isolateNumber", "%" Pd64 "",
+      stream->PrintfProperty("isolateId", ISOLATE_SERVICE_ID_FORMAT_STRING,
                              static_cast<int64_t>(isolate_id_));
       stream->CloseObject();
     }
@@ -707,11 +678,12 @@ void TimelineEvent::PrintJSON(JSONStream* stream) const {
     }
     if (isolate_id_ != ILLEGAL_PORT) {
       // If we have one, append the isolate id.
-      args.AddPropertyF("isolateNumber", "%" Pd64 "",
+      args.AddPropertyF("isolateId", ISOLATE_SERVICE_ID_FORMAT_STRING,
                         static_cast<int64_t>(isolate_id_));
     }
   }
 }
+#endif
 
 int64_t TimelineEvent::TimeOrigin() const {
   return timestamp0_;
@@ -759,11 +731,17 @@ int64_t TimelineEvent::ThreadCPUTimeDuration() const {
   return thread_timestamp1_ - thread_timestamp0_;
 }
 
-TimelineStream::TimelineStream() : name_(NULL), enabled_(false) {}
-
-void TimelineStream::Init(const char* name, bool enabled) {
-  name_ = name;
-  enabled_ = enabled;
+TimelineStream::TimelineStream(const char* name,
+                               const char* fuchsia_name,
+                               bool enabled)
+    : name_(name),
+      fuchsia_name_(fuchsia_name),
+#if defined(HOST_OS_FUCHSIA)
+      enabled_(static_cast<uintptr_t>(true))  // For generated code.
+#else
+      enabled_(static_cast<uintptr_t>(enabled))
+#endif
+{
 }
 
 TimelineEvent* TimelineStream::StartEvent() {
@@ -860,7 +838,7 @@ void TimelineEventScope::StealArguments(TimelineEvent* event) {
 TimelineDurationScope::TimelineDurationScope(TimelineStream* stream,
                                              const char* label)
     : TimelineEventScope(stream, label) {
-  if (!FLAG_support_timeline || !enabled()) {
+  if (!enabled()) {
     return;
   }
   timestamp_ = OS::GetCurrentMonotonicMicros();
@@ -871,7 +849,7 @@ TimelineDurationScope::TimelineDurationScope(Thread* thread,
                                              TimelineStream* stream,
                                              const char* label)
     : TimelineEventScope(thread, stream, label) {
-  if (!FLAG_support_timeline || !enabled()) {
+  if (!enabled()) {
     return;
   }
   timestamp_ = OS::GetCurrentMonotonicMicros();
@@ -879,9 +857,6 @@ TimelineDurationScope::TimelineDurationScope(Thread* thread,
 }
 
 TimelineDurationScope::~TimelineDurationScope() {
-  if (!FLAG_support_timeline) {
-    return;
-  }
   if (!ShouldEmitEvent()) {
     return;
   }
@@ -901,9 +876,6 @@ TimelineDurationScope::~TimelineDurationScope() {
 TimelineBeginEndScope::TimelineBeginEndScope(TimelineStream* stream,
                                              const char* label)
     : TimelineEventScope(stream, label) {
-  if (!FLAG_support_timeline) {
-    return;
-  }
   EmitBegin();
 }
 
@@ -911,23 +883,14 @@ TimelineBeginEndScope::TimelineBeginEndScope(Thread* thread,
                                              TimelineStream* stream,
                                              const char* label)
     : TimelineEventScope(thread, stream, label) {
-  if (!FLAG_support_timeline) {
-    return;
-  }
   EmitBegin();
 }
 
 TimelineBeginEndScope::~TimelineBeginEndScope() {
-  if (!FLAG_support_timeline) {
-    return;
-  }
   EmitEnd();
 }
 
 void TimelineBeginEndScope::EmitBegin() {
-  if (!FLAG_support_timeline) {
-    return;
-  }
   if (!ShouldEmitEvent()) {
     return;
   }
@@ -944,9 +907,6 @@ void TimelineBeginEndScope::EmitBegin() {
 }
 
 void TimelineBeginEndScope::EmitEnd() {
-  if (!FLAG_support_timeline) {
-    return;
-  }
   if (!ShouldEmitEvent()) {
     return;
   }
@@ -983,6 +943,7 @@ IsolateTimelineEventFilter::IsolateTimelineEventFilter(
 TimelineEventRecorder::TimelineEventRecorder()
     : async_id_(0), time_low_micros_(0), time_high_micros_(0) {}
 
+#ifndef PRODUCT
 void TimelineEventRecorder::PrintJSONMeta(JSONArray* events) const {
   if (!FLAG_support_service) {
     return;
@@ -1009,6 +970,7 @@ void TimelineEventRecorder::PrintJSONMeta(JSONArray* events) const {
     }
   }
 }
+#endif
 
 TimelineEvent* TimelineEventRecorder::ThreadBlockStartEvent() {
   // Grab the current thread.
@@ -1105,6 +1067,7 @@ void TimelineEventRecorder::ThreadBlockCompleteEvent(TimelineEvent* event) {
   thread_block_lock->Unlock();
 }
 
+#ifndef PRODUCT
 void TimelineEventRecorder::WriteTo(const char* directory) {
   if (!FLAG_support_service) {
     return;
@@ -1123,7 +1086,7 @@ void TimelineEventRecorder::WriteTo(const char* directory) {
       OS::SCreate(NULL, "%s/dart-timeline-%" Pd ".json", directory, pid);
   void* file = (*file_open)(filename, true);
   if (file == NULL) {
-    OS::Print("Failed to write timeline file: %s\n", filename);
+    OS::PrintErr("Failed to write timeline file: %s\n", filename);
     free(filename);
     return;
   }
@@ -1143,13 +1106,17 @@ void TimelineEventRecorder::WriteTo(const char* directory) {
 
   return;
 }
+#endif
 
 int64_t TimelineEventRecorder::GetNextAsyncId() {
   // TODO(johnmccutchan): Gracefully handle wrap around.
-  // TODO(rmacnak): Use TRACE_NONCE() on Fuchsia?
+#if defined(HOST_OS_FUCHSIA) && !defined(FUCHSIA_SDK)
+  return trace_generate_nonce();
+#else
   uint32_t next =
       static_cast<uint32_t>(AtomicOperations::FetchAndIncrement(&async_id_));
   return static_cast<int64_t>(next);
+#endif
 }
 
 void TimelineEventRecorder::FinishBlock(TimelineEventBlock* block) {
@@ -1195,6 +1162,7 @@ TimelineEventFixedBufferRecorder::~TimelineEventFixedBufferRecorder() {
   delete memory_;
 }
 
+#ifndef PRODUCT
 void TimelineEventFixedBufferRecorder::PrintJSONEvents(
     JSONArray* events,
     TimelineEventFilter* filter) {
@@ -1233,7 +1201,7 @@ void TimelineEventFixedBufferRecorder::PrintJSON(JSONStream* js,
     return;
   }
   JSONObject topLevel(js);
-  topLevel.AddProperty("type", "_Timeline");
+  topLevel.AddProperty("type", "Timeline");
   {
     JSONArray events(&topLevel, "traceEvents");
     PrintJSONMeta(&events);
@@ -1253,6 +1221,7 @@ void TimelineEventFixedBufferRecorder::PrintTraceEvent(
   PrintJSONMeta(&events);
   PrintJSONEvents(&events, filter);
 }
+#endif
 
 TimelineEventBlock* TimelineEventFixedBufferRecorder::GetHeadBlockLocked() {
   return &blocks_[0];
@@ -1320,17 +1289,20 @@ TimelineEventCallbackRecorder::TimelineEventCallbackRecorder() {}
 
 TimelineEventCallbackRecorder::~TimelineEventCallbackRecorder() {}
 
+#ifndef PRODUCT
 void TimelineEventCallbackRecorder::PrintJSON(JSONStream* js,
                                               TimelineEventFilter* filter) {
   if (!FLAG_support_service) {
     return;
   }
   JSONObject topLevel(js);
-  topLevel.AddProperty("type", "_Timeline");
+  topLevel.AddProperty("type", "Timeline");
   {
     JSONArray events(&topLevel, "traceEvents");
     PrintJSONMeta(&events);
   }
+  topLevel.AddPropertyTimeMicros("timeOriginMicros", TimeOriginMicros());
+  topLevel.AddPropertyTimeMicros("timeExtentMicros", TimeExtentMicros());
 }
 
 void TimelineEventCallbackRecorder::PrintTraceEvent(
@@ -1341,6 +1313,7 @@ void TimelineEventCallbackRecorder::PrintTraceEvent(
   }
   JSONArray events(js);
 }
+#endif
 
 TimelineEvent* TimelineEventCallbackRecorder::StartEvent() {
   TimelineEvent* event = new TimelineEvent();
@@ -1356,17 +1329,20 @@ TimelineEventPlatformRecorder::TimelineEventPlatformRecorder() {}
 
 TimelineEventPlatformRecorder::~TimelineEventPlatformRecorder() {}
 
+#ifndef PRODUCT
 void TimelineEventPlatformRecorder::PrintJSON(JSONStream* js,
                                               TimelineEventFilter* filter) {
   if (!FLAG_support_service) {
     return;
   }
   JSONObject topLevel(js);
-  topLevel.AddProperty("type", "_Timeline");
+  topLevel.AddProperty("type", "Timeline");
   {
     JSONArray events(&topLevel, "traceEvents");
     PrintJSONMeta(&events);
   }
+  topLevel.AddPropertyTimeMicros("timeOriginMicros", TimeOriginMicros());
+  topLevel.AddPropertyTimeMicros("timeExtentMicros", TimeExtentMicros());
 }
 
 void TimelineEventPlatformRecorder::PrintTraceEvent(
@@ -1377,6 +1353,7 @@ void TimelineEventPlatformRecorder::PrintTraceEvent(
   }
   JSONArray events(js);
 }
+#endif
 
 TimelineEvent* TimelineEventPlatformRecorder::StartEvent() {
   TimelineEvent* event = new TimelineEvent();
@@ -1402,13 +1379,14 @@ TimelineEventEndlessRecorder::~TimelineEventEndlessRecorder() {
   }
 }
 
+#ifndef PRODUCT
 void TimelineEventEndlessRecorder::PrintJSON(JSONStream* js,
                                              TimelineEventFilter* filter) {
   if (!FLAG_support_service) {
     return;
   }
   JSONObject topLevel(js);
-  topLevel.AddProperty("type", "_Timeline");
+  topLevel.AddProperty("type", "Timeline");
   {
     JSONArray events(&topLevel, "traceEvents");
     PrintJSONMeta(&events);
@@ -1428,6 +1406,7 @@ void TimelineEventEndlessRecorder::PrintTraceEvent(
   PrintJSONMeta(&events);
   PrintJSONEvents(&events, filter);
 }
+#endif
 
 TimelineEventBlock* TimelineEventEndlessRecorder::GetHeadBlockLocked() {
   return head_;
@@ -1450,11 +1429,12 @@ TimelineEventBlock* TimelineEventEndlessRecorder::GetNewBlockLocked() {
   block->Open();
   head_ = block;
   if (FLAG_trace_timeline) {
-    OS::Print("Created new block %p\n", block);
+    OS::PrintErr("Created new block %p\n", block);
   }
   return head_;
 }
 
+#ifndef PRODUCT
 static int TimelineEventBlockCompare(TimelineEventBlock* const* a,
                                      TimelineEventBlock* const* b) {
   return (*a)->LowerTimeBound() - (*b)->LowerTimeBound();
@@ -1500,6 +1480,7 @@ void TimelineEventEndlessRecorder::PrintJSONEvents(
     }
   }
 }
+#endif
 
 void TimelineEventEndlessRecorder::Clear() {
   TimelineEventBlock* current = head_;
@@ -1525,6 +1506,7 @@ TimelineEventBlock::~TimelineEventBlock() {
   Reset();
 }
 
+#ifndef PRODUCT
 void TimelineEventBlock::PrintJSON(JSONStream* js) const {
   ASSERT(!in_use());
   JSONArray events(js);
@@ -1533,6 +1515,7 @@ void TimelineEventBlock::PrintJSON(JSONStream* js) const {
     events.AddValue(event);
   }
 }
+#endif
 
 TimelineEvent* TimelineEventBlock::StartEvent() {
   ASSERT(!IsFull());
@@ -1540,7 +1523,7 @@ TimelineEvent* TimelineEventBlock::StartEvent() {
     OSThread* os_thread = OSThread::Current();
     ASSERT(os_thread != NULL);
     intptr_t tid = OSThread::ThreadIdToIntPtr(os_thread->id());
-    OS::Print("StartEvent in block %p for thread %" Px "\n", this, tid);
+    OS::PrintErr("StartEvent in block %p for thread %" Pd "\n", this, tid);
   }
   return &events_[length_++];
 }
@@ -1595,14 +1578,16 @@ void TimelineEventBlock::Open() {
 
 void TimelineEventBlock::Finish() {
   if (FLAG_trace_timeline) {
-    OS::Print("Finish block %p\n", this);
+    OS::PrintErr("Finish block %p\n", this);
   }
   in_use_ = false;
+#ifndef PRODUCT
   if (Service::timeline_stream.enabled()) {
     ServiceEvent service_event(NULL, ServiceEvent::kTimelineEvents);
     service_event.set_timeline_event_block(this);
     Service::HandleEvent(&service_event);
   }
+#endif
 }
 
 TimelineEventBlockIterator::TimelineEventBlockIterator(
@@ -1727,4 +1712,4 @@ void DartTimelineEventHelpers::ReportInstantEvent(Thread* thread,
 
 }  // namespace dart
 
-#endif  // !PRODUCT
+#endif  // defined(SUPPORT_TIMELINE)

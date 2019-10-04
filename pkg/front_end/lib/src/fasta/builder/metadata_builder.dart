@@ -4,52 +4,45 @@
 
 library fasta.metadata_builder;
 
-import 'builder.dart' show Declaration, TypeBuilder;
+import 'package:kernel/ast.dart' show Annotatable, Class, Library;
 
-import 'constructor_reference_builder.dart' show ConstructorReferenceBuilder;
+import '../kernel/body_builder.dart' show BodyBuilder;
 
-abstract class MetadataBuilder<T extends TypeBuilder> {
-  MetadataBuilder(Declaration parent, int charOffset);
+import '../kernel/kernel_builder.dart' show ClassBuilder, MemberBuilder;
 
-  factory MetadataBuilder.fromConstructor(
-      ConstructorReferenceBuilder constructorReference,
-      List arguments,
-      Declaration parent,
-      int charOffset) {
-    return new ConstructorMetadataBuilder(
-        constructorReference, arguments, parent, charOffset);
+import '../scanner.dart' show Token;
+
+import '../source/source_library_builder.dart' show SourceLibraryBuilder;
+
+import '../scope.dart' show Scope;
+
+class MetadataBuilder {
+  final Token beginToken;
+
+  int get charOffset => beginToken.charOffset;
+
+  MetadataBuilder(this.beginToken);
+
+  static void buildAnnotations(
+      Annotatable parent,
+      List<MetadataBuilder> metadata,
+      SourceLibraryBuilder library,
+      ClassBuilder classBuilder,
+      MemberBuilder member) {
+    if (metadata == null) return;
+    Uri fileUri = member?.fileUri ?? classBuilder?.fileUri ?? library.fileUri;
+    Scope scope = parent is Library || parent is Class || classBuilder == null
+        ? library.scope
+        : classBuilder.scope;
+    BodyBuilder bodyBuilder = library.loader
+        .createBodyBuilderForOutlineExpression(
+            library, classBuilder, member, scope, fileUri);
+    for (int i = 0; i < metadata.length; ++i) {
+      MetadataBuilder annotationBuilder = metadata[i];
+      parent.addAnnotation(
+          bodyBuilder.parseAnnotation(annotationBuilder.beginToken));
+    }
+    bodyBuilder.inferAnnotations(parent.annotations);
+    bodyBuilder.resolveRedirectingFactoryTargets();
   }
-
-  factory MetadataBuilder.fromExpression(
-      Object expression, String postfix, Declaration parent, int charOffset) {
-    return new ExpressionMetadataBuilder(
-        expression, postfix, parent, charOffset);
-  }
-}
-
-class ConstructorMetadataBuilder<T extends TypeBuilder>
-    extends MetadataBuilder<T> {
-  final ConstructorReferenceBuilder constructorReference;
-
-  final List arguments;
-
-  ConstructorMetadataBuilder(this.constructorReference, this.arguments,
-      Declaration parent, int charOffset)
-      : super(parent, charOffset);
-}
-
-/// Expression metadata (without arguments).
-///
-/// Matches this grammar rule:
-///
-///    '@' qualified (‘.’ identifier)?
-class ExpressionMetadataBuilder<T extends TypeBuilder>
-    extends MetadataBuilder<T> {
-  final Object qualified;
-
-  final String identifier;
-
-  ExpressionMetadataBuilder(
-      this.qualified, this.identifier, Declaration parent, int charOffset)
-      : super(parent, charOffset);
 }

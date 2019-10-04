@@ -7,6 +7,7 @@ library dart2js.js_emitter.metadata_collector;
 import 'package:js_ast/src/precedence.dart' as js_precedence;
 
 import '../common.dart';
+import '../common_elements.dart' show JElementEnvironment;
 import '../constants/values.dart';
 import '../deferred_load.dart' show OutputUnit;
 import '../elements/entities.dart' show FunctionEntity;
@@ -16,8 +17,9 @@ import '../elements/types.dart';
 import '../js/js.dart' as jsAst;
 import '../js/js.dart' show js;
 import '../js_backend/runtime_types.dart' show RuntimeTypesEncoder;
+import '../js_backend/runtime_types_new.dart' show RecipeEncoder;
+import '../js_model/type_recipe.dart' show TypeExpressionRecipe;
 import '../options.dart';
-import '../universe/world_builder.dart' show CodegenWorldBuilder;
 
 import 'code_emitter_task.dart' show Emitter;
 
@@ -29,18 +31,22 @@ import 'code_emitter_task.dart' show Emitter;
 abstract class _MetadataEntry extends jsAst.DeferredNumber
     implements Comparable, jsAst.ReferenceCountedAstNode {
   jsAst.Expression get entry;
+  @override
   int get value;
   int get _rc;
 
   // Mark this entry as seen. On the first time this is seen, the visitor
   // will be applied to the [entry] to also mark potential [_MetadataEntry]
   // instances in the [entry] as seen.
-  markSeen(jsAst.TokenCounter visitor);
+  @override
+  void markSeen(jsAst.TokenCounter visitor);
 }
 
 class _BoundMetadataEntry extends _MetadataEntry {
   int _value = -1;
+  @override
   int _rc = 0;
+  @override
   final jsAst.Expression entry;
 
   _BoundMetadataEntry(this.entry);
@@ -52,6 +58,7 @@ class _BoundMetadataEntry extends _MetadataEntry {
     _value = value;
   }
 
+  @override
   int get value {
     assert(isFinalized);
     return _value;
@@ -59,13 +66,16 @@ class _BoundMetadataEntry extends _MetadataEntry {
 
   bool get isUsed => _rc > 0;
 
-  markSeen(jsAst.BaseVisitor visitor) {
+  @override
+  void markSeen(jsAst.BaseVisitor visitor) {
     _rc++;
     if (_rc == 1) entry.accept(visitor);
   }
 
+  @override
   int compareTo(covariant _MetadataEntry other) => other._rc - this._rc;
 
+  @override
   String toString() => '_BoundMetadataEntry($hashCode,rc=$_rc,_value=$_value)';
 }
 
@@ -78,11 +88,13 @@ class _MetadataList extends jsAst.DeferredExpression {
     _value = value;
   }
 
+  @override
   jsAst.Expression get value {
     assert(_value != null);
     return _value;
   }
 
+  @override
   int get precedenceLevel => js_precedence.PRIMARY;
 }
 
@@ -91,7 +103,8 @@ class MetadataCollector implements jsAst.TokenFinalizer {
   final DiagnosticReporter reporter;
   final Emitter _emitter;
   final RuntimeTypesEncoder _rtiEncoder;
-  final CodegenWorldBuilder _codegenWorldBuilder;
+  final RecipeEncoder _rtiRecipeEncoder;
+  final JElementEnvironment _elementEnvironment;
 
   /// A map with a token per output unit for a list of expressions that
   /// represent metadata, parameter names and type variable types.
@@ -121,13 +134,13 @@ class MetadataCollector implements jsAst.TokenFinalizer {
       <OutputUnit, Map<DartType, _BoundMetadataEntry>>{};
 
   MetadataCollector(this._options, this.reporter, this._emitter,
-      this._rtiEncoder, this._codegenWorldBuilder);
+      this._rtiEncoder, this._rtiRecipeEncoder, this._elementEnvironment);
 
   List<jsAst.DeferredNumber> reifyDefaultArguments(
       FunctionEntity function, OutputUnit outputUnit) {
     // TODO(sra): These are stored on the InstanceMethod or StaticDartMethod.
     List<jsAst.DeferredNumber> defaultValues = <jsAst.DeferredNumber>[];
-    _codegenWorldBuilder.forEachParameter(function,
+    _elementEnvironment.forEachParameter(function,
         (_, String name, ConstantValue constant) {
       if (constant == null) return;
       jsAst.Expression expression = _emitter.constantReference(constant);
@@ -182,10 +195,19 @@ class MetadataCollector implements jsAst.TokenFinalizer {
     return representation;
   }
 
+  jsAst.Expression _computeTypeRepresentationNewRti(DartType type) {
+    return _rtiRecipeEncoder.encodeGroundRecipe(
+        _emitter, TypeExpressionRecipe(type));
+  }
+
   jsAst.Expression addTypeInOutputUnit(DartType type, OutputUnit outputUnit) {
     _typesMap[outputUnit] ??= new Map<DartType, _BoundMetadataEntry>();
     return _typesMap[outputUnit].putIfAbsent(type, () {
-      return new _BoundMetadataEntry(_computeTypeRepresentation(type));
+      if (_options.experimentNewRti) {
+        return new _BoundMetadataEntry(_computeTypeRepresentationNewRti(type));
+      } else {
+        return new _BoundMetadataEntry(_computeTypeRepresentation(type));
+      }
     });
   }
 

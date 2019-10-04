@@ -6,23 +6,28 @@ library deferred_load;
 
 import 'dart:collection' show Queue;
 
+import 'package:front_end/src/api_unstable/dart2js.dart' as fe;
+
 import 'common/tasks.dart' show CompilerTask;
 import 'common.dart';
-import 'common_elements.dart' show ElementEnvironment;
+import 'common_elements.dart'
+    show CommonElements, ElementEnvironment, KElementEnvironment;
 import 'compiler.dart' show Compiler;
 import 'constants/values.dart'
     show
         ConstantValue,
         ConstructedConstantValue,
-        DeferredConstantValue,
+        TypeConstantValue,
         DeferredGlobalConstantValue,
         InstantiationConstantValue;
 import 'elements/types.dart';
 import 'elements/entities.dart';
+import 'kernel/kelements.dart' show KLocalFunction;
+import 'serialization/serialization.dart';
+import 'options.dart';
 import 'universe/use.dart';
 import 'universe/world_impact.dart'
     show ImpactUseCase, WorldImpact, WorldImpactVisitorImpl;
-import 'util/uri_extras.dart' as uri_extras;
 import 'util/util.dart' show makeUnique;
 import 'world.dart' show KClosedWorld;
 
@@ -48,6 +53,7 @@ class OutputUnit implements Comparable<OutputUnit> {
 
   OutputUnit(this.isMainOutput, this.name, this._imports);
 
+  @override
   int compareTo(OutputUnit other) {
     if (identical(this, other)) return 0;
     if (isMainOutput && !other.isMainOutput) return -1;
@@ -73,6 +79,7 @@ class OutputUnit implements Comparable<OutputUnit> {
 
   Set<ImportEntity> get importsForTesting => _imports;
 
+  @override
   String toString() => "OutputUnit($name, $_imports)";
 }
 
@@ -80,30 +87,20 @@ class OutputUnit implements Comparable<OutputUnit> {
 /// import is loaded. Elements that are used by several deferred imports are in
 /// shared OutputUnits.
 abstract class DeferredLoadTask extends CompilerTask {
-  /// The name of this task.
+  @override
   String get name => 'Deferred Loading';
 
   /// The OutputUnit that will be loaded when the program starts.
-  OutputUnit mainOutputUnit;
+  OutputUnit _mainOutputUnit;
 
   /// A set containing (eventually) all output units that will result from the
   /// program.
-  final List<OutputUnit> allOutputUnits = new List<OutputUnit>();
+  final List<OutputUnit> _allOutputUnits = new List<OutputUnit>();
 
   /// Will be `true` if the program contains deferred libraries.
   bool isProgramSplit = false;
 
   static const ImpactUseCase IMPACT_USE = const ImpactUseCase('Deferred load');
-
-  /// A mapping from the name of a defer import to all the output units it
-  /// depends on in a list of lists to be loaded in the order they appear.
-  ///
-  /// For example {"lib1": [[lib1_lib2_lib3], [lib1_lib2, lib1_lib3],
-  /// [lib1]]} would mean that in order to load "lib1" first the hunk
-  /// lib1_lib2_lib2 should be loaded, then the hunks lib1_lib2 and lib1_lib3
-  /// can be loaded in parallel. And finally lib1 can be loaded.
-  final Map<String, List<OutputUnit>> hunksToLoad =
-      new Map<String, List<OutputUnit>>();
 
   /// A cache of the result of calling `computeImportDeferName` on the keys of
   /// this map.
@@ -123,7 +120,7 @@ abstract class DeferredLoadTask extends CompilerTask {
   Map<ConstantValue, ImportSet> _constantToSet =
       new Map<ConstantValue, ImportSet>();
 
-  Iterable<ImportEntity> get allDeferredImports =>
+  Iterable<ImportEntity> get _allDeferredImports =>
       _deferredImportDescriptions.keys;
 
   /// Because the token-stream is forgotten later in the program, we cache a
@@ -137,39 +134,22 @@ abstract class DeferredLoadTask extends CompilerTask {
   final Compiler compiler;
 
   bool get disableProgramSplit => compiler.options.disableProgramSplit;
+  bool get newDeferredSplit => compiler.options.newDeferredSplit;
+  bool get reportInvalidInferredDeferredTypes =>
+      compiler.options.reportInvalidInferredDeferredTypes;
 
   DeferredLoadTask(this.compiler) : super(compiler.measurer) {
-    mainOutputUnit = new OutputUnit(true, 'main', new Set<ImportEntity>());
-    importSets.mainSet.unit = mainOutputUnit;
-    allOutputUnits.add(mainOutputUnit);
+    _mainOutputUnit = new OutputUnit(true, 'main', new Set<ImportEntity>());
+    importSets.mainSet.unit = _mainOutputUnit;
+    _allOutputUnits.add(_mainOutputUnit);
   }
 
-  ElementEnvironment get elementEnvironment =>
+  KElementEnvironment get elementEnvironment =>
       compiler.frontendStrategy.elementEnvironment;
+
+  CommonElements get commonElements => compiler.frontendStrategy.commonElements;
+
   DiagnosticReporter get reporter => compiler.reporter;
-
-  /// Returns the unique name for the given deferred [import].
-  String getImportDeferName(Spannable node, ImportEntity import) {
-    String name = _importDeferName[import];
-    if (name == null) {
-      reporter.internalError(node, "No deferred name for $import.");
-    }
-    return name;
-  }
-
-  /// Returns the names associated with each deferred import in [unit].
-  Iterable<String> getImportNames(OutputUnit unit) {
-    return unit._imports.map((i) => _importDeferName[i]);
-  }
-
-  void registerConstantDeferredUse(
-      DeferredConstantValue constant, ImportEntity import) {
-    if (!isProgramSplit || disableProgramSplit) return;
-    var newSet = importSets.singleton(import);
-    assert(
-        _constantToSet[constant] == null || _constantToSet[constant] == newSet);
-    _constantToSet[constant] = newSet;
-  }
 
   /// Given [imports] that refer to an element from a library, determine whether
   /// the element is explicitly deferred.
@@ -192,18 +172,22 @@ abstract class DeferredLoadTask extends CompilerTask {
   Iterable<ImportEntity> memberImportsTo(
       MemberEntity element, LibraryEntity library);
 
+  /// Returns every [ImportEntity] that imports [element] into [library].
+  Iterable<ImportEntity> typedefImportsTo(
+      TypedefEntity element, LibraryEntity library);
+
   /// Collects all direct dependencies of [element].
   ///
   /// The collected dependent elements and constants are are added to
   /// [elements] and [constants] respectively.
-  void _collectDirectMemberDependencies(
+  void _collectDirectMemberDependencies(KClosedWorld closedWorld,
       MemberEntity element, Dependencies dependencies) {
     // TODO(sigurdm): We want to be more specific about this - need a better
     // way to query "liveness".
     if (!compiler.resolutionWorldBuilder.isMemberUsed(element)) {
       return;
     }
-    _collectDependenciesFromImpact(element, dependencies);
+    _collectDependenciesFromImpact(closedWorld, element, dependencies);
     collectConstantsInBody(element, dependencies);
   }
 
@@ -212,15 +196,17 @@ abstract class DeferredLoadTask extends CompilerTask {
   ///
   /// Adds the results to [elements] and [constants].
   void _collectAllElementsAndConstantsResolvedFromClass(
-      ClassEntity element, Dependencies dependencies) {
+      KClosedWorld closedWorld,
+      ClassEntity element,
+      Dependencies dependencies) {
     // If we see a class, add everything its live instance members refer
     // to.  Static members are not relevant, unless we are processing
     // extra dependencies due to mirrors.
     void addLiveInstanceMember(MemberEntity member) {
       if (!compiler.resolutionWorldBuilder.isMemberUsed(member)) return;
       if (!member.isInstanceMember) return;
-      dependencies.members.add(member);
-      _collectDirectMemberDependencies(member, dependencies);
+      dependencies.addMember(member);
+      _collectDirectMemberDependencies(closedWorld, member, dependencies);
     }
 
     ClassEntity cls = element;
@@ -228,7 +214,7 @@ abstract class DeferredLoadTask extends CompilerTask {
     elementEnvironment.forEachSupertype(cls, (InterfaceType type) {
       _collectTypeDependencies(type, dependencies);
     });
-    dependencies.classes.add(cls);
+    dependencies.addClass(cls);
   }
 
   /// Finds all elements and constants that [element] depends directly on.
@@ -236,21 +222,24 @@ abstract class DeferredLoadTask extends CompilerTask {
   ///
   /// Adds the results to [elements] and [constants].
   void _collectAllElementsAndConstantsResolvedFromMember(
-      MemberEntity element, Dependencies dependencies) {
+      KClosedWorld closedWorld,
+      MemberEntity element,
+      Dependencies dependencies) {
     if (element is FunctionEntity) {
       _collectTypeDependencies(
           elementEnvironment.getFunctionType(element), dependencies);
     }
     if (element.isStatic || element.isTopLevel || element.isConstructor) {
-      dependencies.members.add(element);
-      _collectDirectMemberDependencies(element, dependencies);
+      dependencies.addMember(element);
+      _collectDirectMemberDependencies(closedWorld, element, dependencies);
     }
     if (element is ConstructorEntity && element.isGenerativeConstructor) {
       // When instantiating a class, we record a reference to the
       // constructor, not the class itself.  We must add all the
       // instance members of the constructor's class.
       ClassEntity cls = element.enclosingClass;
-      _collectAllElementsAndConstantsResolvedFromClass(cls, dependencies);
+      _collectAllElementsAndConstantsResolvedFromClass(
+          closedWorld, cls, dependencies);
     }
 
     // Other elements, in particular instance members, are ignored as
@@ -268,109 +257,114 @@ abstract class DeferredLoadTask extends CompilerTask {
   void collectConstantsInBody(MemberEntity element, Dependencies dependencies);
 
   /// Recursively collects all the dependencies of [type].
-  void _collectTypeDependencies(DartType type, Dependencies dependencies) {
-    // TODO(het): we would like to separate out types that are only needed for
-    // rti from types that are needed for their members.
-    if (type is FunctionType) {
-      for (DartType argumentType in type.parameterTypes) {
-        _collectTypeDependencies(argumentType, dependencies);
-      }
-      for (DartType argumentType in type.optionalParameterTypes) {
-        _collectTypeDependencies(argumentType, dependencies);
-      }
-      for (DartType argumentType in type.namedParameterTypes) {
-        _collectTypeDependencies(argumentType, dependencies);
-      }
-      _collectTypeDependencies(type.returnType, dependencies);
-    } else if (type is TypedefType) {
-      type.typeArguments
-          .forEach((t) => _collectTypeDependencies(t, dependencies));
-      _collectTypeDependencies(type.unaliased, dependencies);
-    } else if (type is InterfaceType) {
-      type.typeArguments
-          .forEach((t) => _collectTypeDependencies(t, dependencies));
-      dependencies.classes.add(type.element);
-    }
+  void _collectTypeDependencies(DartType type, Dependencies dependencies,
+      [ImportEntity import]) {
+    new TypeDependencyVisitor(dependencies, import, commonElements).visit(type);
+  }
+
+  void _collectTypeArgumentDependencies(
+      Iterable<DartType> typeArguments, Dependencies dependencies,
+      [ImportEntity import]) {
+    if (typeArguments == null) return;
+    new TypeDependencyVisitor(dependencies, import, commonElements)
+        .visitList(typeArguments);
   }
 
   /// Extract any dependencies that are known from the impact of [element].
-  void _collectDependenciesFromImpact(
+  void _collectDependenciesFromImpact(KClosedWorld closedWorld,
       MemberEntity element, Dependencies dependencies) {
     WorldImpact worldImpact = compiler.impactCache[element];
     compiler.impactStrategy.visitImpact(
         element,
         worldImpact,
-        new WorldImpactVisitorImpl(visitStaticUse: (StaticUse staticUse) {
-          if (staticUse.element is MemberEntity) {
-            dependencies.members.add(staticUse.element);
+        new WorldImpactVisitorImpl(
+            visitStaticUse: (MemberEntity member, StaticUse staticUse) {
+          Entity usedEntity = staticUse.element;
+          if (usedEntity is MemberEntity) {
+            dependencies.addMember(usedEntity, staticUse.deferredImport);
           } else {
-            assert(
-                staticUse.element is Local,
-                failedAt(
-                    staticUse.element, "Unexpected static use $staticUse."));
-            dependencies.localFunctions.add(staticUse.element);
+            assert(usedEntity is KLocalFunction,
+                failedAt(usedEntity, "Unexpected static use $staticUse."));
+            KLocalFunction localFunction = usedEntity;
+            // TODO(sra): Consult KClosedWorld to see if signature is needed.
+            _collectTypeDependencies(localFunction.functionType, dependencies);
+            dependencies.localFunctions.add(localFunction);
           }
           switch (staticUse.kind) {
             case StaticUseKind.CONSTRUCTOR_INVOKE:
             case StaticUseKind.CONST_CONSTRUCTOR_INVOKE:
-              _collectTypeDependencies(staticUse.type, dependencies);
+              // The receiver type of generative constructors is a dependency of
+              // the constructor (handled by `addMember` above) and not a
+              // dependency at the call site.
+              // Factory methods, on the other hand, are like static methods so
+              // the target type is not relevant.
+              // TODO(johnniwinther): Use rti need data to skip unneeded type
+              // arguments.
+              _collectTypeArgumentDependencies(
+                  staticUse.type.typeArguments, dependencies);
               break;
-            case StaticUseKind.INVOKE:
+            case StaticUseKind.STATIC_INVOKE:
             case StaticUseKind.CLOSURE_CALL:
             case StaticUseKind.DIRECT_INVOKE:
               // TODO(johnniwinther): Use rti need data to skip unneeded type
               // arguments.
-              List<DartType> typeArguments = staticUse.typeArguments;
-              if (typeArguments != null) {
-                for (DartType typeArgument in typeArguments) {
-                  _collectTypeDependencies(typeArgument, dependencies);
-                }
-              }
+              _collectTypeArgumentDependencies(
+                  staticUse.typeArguments, dependencies);
               break;
             default:
           }
-        }, visitTypeUse: (TypeUse typeUse) {
+        }, visitTypeUse: (MemberEntity member, TypeUse typeUse) {
           DartType type = typeUse.type;
           switch (typeUse.kind) {
             case TypeUseKind.TYPE_LITERAL:
               if (type.isInterfaceType) {
                 InterfaceType interface = type;
-                dependencies.classes.add(interface.element);
+                dependencies.addClass(
+                    interface.element, typeUse.deferredImport);
               }
               break;
+            case TypeUseKind.CONST_INSTANTIATION:
+              _collectTypeDependencies(
+                  type, dependencies, typeUse.deferredImport);
+              break;
             case TypeUseKind.INSTANTIATION:
-            case TypeUseKind.MIRROR_INSTANTIATION:
             case TypeUseKind.NATIVE_INSTANTIATION:
             case TypeUseKind.IS_CHECK:
-            case TypeUseKind.AS_CAST:
             case TypeUseKind.CATCH_TYPE:
               _collectTypeDependencies(type, dependencies);
               break;
+            case TypeUseKind.AS_CAST:
+              if (closedWorld.annotationsData
+                  .getExplicitCastCheckPolicy(element)
+                  .isEmitted) {
+                _collectTypeDependencies(type, dependencies);
+              }
+              break;
             case TypeUseKind.IMPLICIT_CAST:
-              if (compiler.options.implicitDowncastCheckPolicy.isEmitted) {
+              if (closedWorld.annotationsData
+                  .getImplicitDowncastCheckPolicy(element)
+                  .isEmitted) {
                 _collectTypeDependencies(type, dependencies);
               }
               break;
             case TypeUseKind.PARAMETER_CHECK:
-              if (compiler.options.parameterCheckPolicy.isEmitted) {
+              if (closedWorld.annotationsData
+                  .getParameterCheckPolicy(element)
+                  .isEmitted) {
                 _collectTypeDependencies(type, dependencies);
               }
               break;
-            case TypeUseKind.CHECKED_MODE_CHECK:
-              if (compiler.options.assignmentCheckPolicy.isEmitted) {
-                _collectTypeDependencies(type, dependencies);
-              }
+            case TypeUseKind.RTI_VALUE:
+            case TypeUseKind.TYPE_ARGUMENT:
+            case TypeUseKind.NAMED_TYPE_VARIABLE_NEW_RTI:
+              failedAt(element, "Unexpected type use: $typeUse.");
               break;
           }
-        }, visitDynamicUse: (DynamicUse dynamicUse) {
+        }, visitDynamicUse: (MemberEntity member, DynamicUse dynamicUse) {
           // TODO(johnniwinther): Use rti need data to skip unneeded type
           // arguments.
-          List<DartType> typeArguments = dynamicUse.typeArguments;
-          if (typeArguments != null) {
-            for (DartType typeArgument in typeArguments) {
-              _collectTypeDependencies(typeArgument, dependencies);
-            }
-          }
+          _collectTypeArgumentDependencies(
+              dynamicUse.typeArguments, dependencies);
         }),
         DeferredLoadTask.IMPACT_USE);
   }
@@ -380,8 +374,12 @@ abstract class DeferredLoadTask extends CompilerTask {
   /// import set, we stop and enqueue a new recursive update in [queue].
   ///
   /// Invariants: oldSet is either null or a subset of newSet.
-  void _updateConstantRecursive(ConstantValue constant, ImportSet oldSet,
-      ImportSet newSet, WorkQueue queue) {
+  void _updateConstantRecursive(
+      KClosedWorld closedWorld,
+      ConstantValue constant,
+      ImportSet oldSet,
+      ImportSet newSet,
+      WorkQueue queue) {
     if (constant == null) return;
     var currentSet = _constantToSet[constant];
 
@@ -395,28 +393,21 @@ abstract class DeferredLoadTask extends CompilerTask {
       _constantToSet[constant] = newSet;
       if (constant is ConstructedConstantValue) {
         ClassEntity cls = constant.type.element;
-        _updateClassRecursive(cls, oldSet, newSet, queue);
+        _updateClassRecursive(closedWorld, cls, oldSet, newSet, queue);
       }
       if (constant is InstantiationConstantValue) {
         for (DartType type in constant.typeArguments) {
           if (type is InterfaceType) {
-            _updateClassRecursive(type.element, oldSet, newSet, queue);
+            _updateClassRecursive(
+                closedWorld, type.element, oldSet, newSet, queue);
           }
         }
       }
       constant.getDependencies().forEach((ConstantValue dependency) {
-        if (dependency is DeferredConstantValue) {
-          /// New deferred-imports are only discovered when we are visiting the
-          /// main output unit (size == 0) or code reachable from a deferred
-          /// import (size == 1). After that, we are rediscovering the
-          /// same nodes we have already seen.
-          if (newSet.length <= 1) {
-            queue.addConstant(
-                dependency, importSets.singleton(dependency.import));
-          }
-        } else {
-          _updateConstantRecursive(dependency, oldSet, newSet, queue);
-        }
+        // Constants are not allowed to refer to deferred constants, so
+        // no need to check for a deferred type literal here.
+        _updateConstantRecursive(
+            closedWorld, dependency, oldSet, newSet, queue);
       });
     } else {
       assert(
@@ -430,8 +421,8 @@ abstract class DeferredLoadTask extends CompilerTask {
     }
   }
 
-  void _updateClassRecursive(ClassEntity element, ImportSet oldSet,
-      ImportSet newSet, WorkQueue queue) {
+  void _updateClassRecursive(KClosedWorld closedWorld, ClassEntity element,
+      ImportSet oldSet, ImportSet newSet, WorkQueue queue) {
     if (element == null) return;
 
     ImportSet currentSet = _classToSet[element];
@@ -448,16 +439,18 @@ abstract class DeferredLoadTask extends CompilerTask {
       _classToSet[element] = newSet;
 
       Dependencies dependencies = new Dependencies();
-      _collectAllElementsAndConstantsResolvedFromClass(element, dependencies);
+      _collectAllElementsAndConstantsResolvedFromClass(
+          closedWorld, element, dependencies);
       LibraryEntity library = element.library;
-      _processDependencies(library, dependencies, oldSet, newSet, queue);
+      _processDependencies(
+          closedWorld, library, dependencies, oldSet, newSet, queue, element);
     } else {
       queue.addClass(element, newSet);
     }
   }
 
-  void _updateMemberRecursive(MemberEntity element, ImportSet oldSet,
-      ImportSet newSet, WorkQueue queue) {
+  void _updateMemberRecursive(KClosedWorld closedWorld, MemberEntity element,
+      ImportSet oldSet, ImportSet newSet, WorkQueue queue) {
     if (element == null) return;
 
     ImportSet currentSet = _memberToSet[element];
@@ -474,10 +467,12 @@ abstract class DeferredLoadTask extends CompilerTask {
       _memberToSet[element] = newSet;
 
       Dependencies dependencies = new Dependencies();
-      _collectAllElementsAndConstantsResolvedFromMember(element, dependencies);
+      _collectAllElementsAndConstantsResolvedFromMember(
+          closedWorld, element, dependencies);
 
       LibraryEntity library = element.library;
-      _processDependencies(library, dependencies, oldSet, newSet, queue);
+      _processDependencies(
+          closedWorld, library, dependencies, oldSet, newSet, queue, element);
     } else {
       queue.addMember(element, newSet);
     }
@@ -500,65 +495,127 @@ abstract class DeferredLoadTask extends CompilerTask {
     // dependencies are already visited as dependencies of the enclosing member.
   }
 
-  void _processDependencies(LibraryEntity library, Dependencies dependencies,
-      ImportSet oldSet, ImportSet newSet, WorkQueue queue) {
-    for (ClassEntity cls in dependencies.classes) {
-      Iterable<ImportEntity> imports = classImportsTo(cls, library);
-      if (_isExplicitlyDeferred(imports)) {
-        /// New deferred-imports are only discovered when we are visiting the
-        /// main output unit (size == 0) or code reachable from a deferred
-        /// import (size == 1). After that, we are rediscovering the
-        /// same nodes we have already seen.
-        if (newSet.length <= 1) {
-          for (ImportEntity deferredImport in imports) {
+  /// Whether to enqueue a deferred dependency.
+  ///
+  /// Due to the nature of the algorithm, some dependencies may be visited more
+  /// than once. However, we know that new deferred-imports are only discovered
+  /// when we are visiting the main output unit (size == 0) or code reachable
+  /// from a deferred import (size == 1). After that, we are rediscovering the
+  /// same nodes we have already seen.
+  _shouldAddDeferredDependency(ImportSet newSet) => newSet.length <= 1;
+
+  void _fixDependencyInfo(DependencyInfo info, List<ImportEntity> imports,
+      String prefix, String name, Spannable context) {
+    var isDeferred = _isExplicitlyDeferred(imports);
+    if (isDeferred) {
+      if (!newDeferredSplit) {
+        info.isDeferred = true;
+        info.imports = imports;
+      }
+      if (reportInvalidInferredDeferredTypes) {
+        reporter.reportErrorMessage(context, MessageKind.GENERIC, {
+          'text': "$prefix '$name' is deferred but appears to be inferred as"
+              " a return type or a type parameter (dartbug.com/35311)."
+        });
+      }
+    }
+  }
+
+  // The following 3 methods are used to check whether the new deferred split
+  // algorithm and the old one match. Because of a soundness bug in the old
+  // algorithm the new algorithm can pull in a lot of code to the main output
+  // unit. This logic detects it and will make it easier for us to migrate code
+  // off it incrementally.
+  // Note: we only expect discrepancies on class-dependency-info due to how
+  // inferred types expose deferred types in type-variables and return types
+  // (Issue #35311). We added the other two methods to test our transition, but
+  // we don't expect to detect any mismatches there.
+  //
+  // TODO(sigmund): delete once the new implementation is on by default.
+  void _fixClassDependencyInfo(DependencyInfo info, ClassEntity cls,
+      LibraryEntity library, Spannable context) {
+    if (info.isDeferred) return;
+    if (newDeferredSplit && !reportInvalidInferredDeferredTypes) return;
+    var imports = classImportsTo(cls, library);
+    _fixDependencyInfo(info, imports, "Class", cls.name, context);
+  }
+
+  void _fixMemberDependencyInfo(DependencyInfo info, MemberEntity member,
+      LibraryEntity library, Spannable context) {
+    if (info.isDeferred || compiler.options.newDeferredSplit) return;
+    var imports = memberImportsTo(member, library);
+    _fixDependencyInfo(info, imports, "Member", member.name, context);
+  }
+
+  void _fixConstantDependencyInfo(DependencyInfo info, ConstantValue constant,
+      LibraryEntity library, Spannable context) {
+    if (info.isDeferred || compiler.options.newDeferredSplit) return;
+    if (constant is TypeConstantValue) {
+      var type = constant.representedType;
+      if (type is InterfaceType) {
+        var imports = classImportsTo(type.element, library);
+        _fixDependencyInfo(
+            info, imports, "Class (in constant) ", type.element.name, context);
+      } else if (type is TypedefType) {
+        var imports = typedefImportsTo(type.element, library);
+        _fixDependencyInfo(
+            info, imports, "Typedef ", type.element.name, context);
+      }
+    }
+  }
+
+  void _processDependencies(
+      KClosedWorld closedWorld,
+      LibraryEntity library,
+      Dependencies dependencies,
+      ImportSet oldSet,
+      ImportSet newSet,
+      WorkQueue queue,
+      Spannable context) {
+    dependencies.classes.forEach((ClassEntity cls, DependencyInfo info) {
+      _fixClassDependencyInfo(info, cls, library, context);
+      if (info.isDeferred) {
+        if (_shouldAddDeferredDependency(newSet)) {
+          for (ImportEntity deferredImport in info.imports) {
             queue.addClass(cls, importSets.singleton(deferredImport));
           }
         }
       } else {
-        _updateClassRecursive(cls, oldSet, newSet, queue);
+        _updateClassRecursive(closedWorld, cls, oldSet, newSet, queue);
       }
-    }
+    });
 
-    for (MemberEntity member in dependencies.members) {
-      Iterable<ImportEntity> imports = memberImportsTo(member, library);
-      if (_isExplicitlyDeferred(imports)) {
-        /// New deferred-imports are only discovered when we are visiting the
-        /// main output unit (size == 0) or code reachable from a deferred
-        /// import (size == 1). After that, we are rediscovering the
-        /// same nodes we have already seen.
-        if (newSet.length <= 1) {
-          for (ImportEntity deferredImport in imports) {
+    dependencies.members.forEach((MemberEntity member, DependencyInfo info) {
+      _fixMemberDependencyInfo(info, member, library, context);
+      if (info.isDeferred) {
+        if (_shouldAddDeferredDependency(newSet)) {
+          for (ImportEntity deferredImport in info.imports) {
             queue.addMember(member, importSets.singleton(deferredImport));
           }
         }
       } else {
-        _updateMemberRecursive(member, oldSet, newSet, queue);
+        _updateMemberRecursive(closedWorld, member, oldSet, newSet, queue);
       }
-    }
+    });
 
     for (Local localFunction in dependencies.localFunctions) {
       _updateLocalFunction(localFunction, oldSet, newSet);
     }
 
-    for (ConstantValue dependency in dependencies.constants) {
-      if (dependency is DeferredConstantValue) {
-        if (newSet.length <= 1) {
-          queue.addConstant(
-              dependency, importSets.singleton(dependency.import));
+    dependencies.constants
+        .forEach((ConstantValue constant, DependencyInfo info) {
+      _fixConstantDependencyInfo(info, constant, library, context);
+      if (info.isDeferred) {
+        if (_shouldAddDeferredDependency(newSet)) {
+          for (ImportEntity deferredImport in info.imports) {
+            queue.addConstant(constant, importSets.singleton(deferredImport));
+          }
         }
       } else {
-        _updateConstantRecursive(dependency, oldSet, newSet, queue);
+        _updateConstantRecursive(closedWorld, constant, oldSet, newSet, queue);
       }
-    }
+    });
   }
-
-  /// Adds extra dependencies coming from mirror usage.
-  void addDeferredMirrorElements(WorkQueue queue);
-
-  /// Add extra dependencies coming from mirror usage in [root] marking it with
-  /// [newSet].
-  void addMirrorElementsForLibrary(
-      WorkQueue queue, LibraryEntity root, ImportSet newSet);
 
   /// Computes a unique string for the name field for each outputUnit.
   void _createOutputUnits() {
@@ -569,7 +626,7 @@ abstract class DeferredLoadTask extends CompilerTask {
           importSet._imports.map((i) => i.declaration).toSet());
       counter++;
       importSet.unit = unit;
-      allOutputUnits.add(unit);
+      _allOutputUnits.add(unit);
     }
 
     // Generate an output unit for all import sets that are associated with an
@@ -580,13 +637,14 @@ abstract class DeferredLoadTask extends CompilerTask {
     _constantToSet.values.forEach(addUnit);
 
     // Sort output units to make the output of the compiler more stable.
-    allOutputUnits.sort();
+    _allOutputUnits.sort();
   }
 
-  void _setupHunksToLoad() {
+  Map<String, List<OutputUnit>> _setupHunksToLoad() {
+    Map<String, List<OutputUnit>> hunksToLoad = {};
     Set<String> usedImportNames = new Set<String>();
 
-    for (ImportEntity import in allDeferredImports) {
+    for (ImportEntity import in _allDeferredImports) {
       String result = computeImportDeferName(import, compiler);
       assert(result != null);
       // Note: tools that process the json file to build multi-part initial load
@@ -607,21 +665,22 @@ abstract class DeferredLoadTask extends CompilerTask {
     // shared by S2 such that S2 not a superset of S1. Let lib_s be a library in
     // S1 not in S2. lib_s must depend on C, and then in turn on D. Therefore D
     // is not in the right output unit.
-    List sortedOutputUnits = allOutputUnits.reversed.toList();
+    List<OutputUnit> sortedOutputUnits = _allOutputUnits.reversed.toList();
 
     // For each deferred import we find out which outputUnits to load.
-    for (ImportEntity import in allDeferredImports) {
+    for (ImportEntity import in _allDeferredImports) {
       // We expect to find an entry for any call to `loadLibrary`, even if
       // there is no code to load. In that case, the entry will be an empty
       // list.
       hunksToLoad[_importDeferName[import]] = new List<OutputUnit>();
       for (OutputUnit outputUnit in sortedOutputUnits) {
-        if (outputUnit == mainOutputUnit) continue;
+        if (outputUnit == _mainOutputUnit) continue;
         if (outputUnit._imports.contains(import)) {
           hunksToLoad[_importDeferName[import]].add(outputUnit);
         }
       }
     }
+    return hunksToLoad;
   }
 
   /// Returns a name for a deferred import.
@@ -742,7 +801,7 @@ abstract class DeferredLoadTask extends CompilerTask {
       void emptyQueue() {
         while (queue.isNotEmpty) {
           WorkItem item = queue.nextItem();
-          item.update(this, queue);
+          item.update(this, closedWorld, queue);
         }
       }
 
@@ -759,7 +818,7 @@ abstract class DeferredLoadTask extends CompilerTask {
 
   OutputUnitData _buildResult() {
     _createOutputUnits();
-    _setupHunksToLoad();
+    Map<String, List<OutputUnit>> hunksToLoad = _setupHunksToLoad();
     Map<ClassEntity, OutputUnit> classMap = <ClassEntity, OutputUnit>{};
     Map<MemberEntity, OutputUnit> memberMap = <MemberEntity, OutputUnit>{};
     Map<Local, OutputUnit> localFunctionMap = <Local, OutputUnit>{};
@@ -777,32 +836,36 @@ abstract class DeferredLoadTask extends CompilerTask {
     cleanup();
     return new OutputUnitData(
         this.isProgramSplit && !disableProgramSplit,
-        this.mainOutputUnit,
+        this._mainOutputUnit,
         classMap,
         memberMap,
         localFunctionMap,
         constantMap,
-        importSets);
+        _allOutputUnits,
+        _importDeferName,
+        hunksToLoad,
+        _deferredImportDescriptions);
   }
 
   /// Frees up strategy-specific temporary data.
   void cleanup() {}
 
-  void beforeResolution(LibraryEntity mainLibrary) {
-    if (mainLibrary == null) return;
-    for (LibraryEntity library in compiler.libraryLoader.libraries) {
-      reporter.withCurrentElement(library, () {
-        checkForDeferredErrorCases(library);
-        for (ImportEntity import in elementEnvironment.getImports(library)) {
-          if (import.isDeferred) {
-            Uri mainLibraryUri = compiler.mainLibraryUri;
-            _deferredImportDescriptions[import] =
-                new ImportDescription(import, library, mainLibraryUri);
-            isProgramSplit = true;
+  void beforeResolution(Uri rootLibraryUri, Iterable<Uri> libraries) {
+    measureSubtask('prepare', () {
+      for (Uri uri in libraries) {
+        LibraryEntity library = elementEnvironment.lookupLibrary(uri);
+        reporter.withCurrentElement(library, () {
+          checkForDeferredErrorCases(library);
+          for (ImportEntity import in elementEnvironment.getImports(library)) {
+            if (import.isDeferred) {
+              _deferredImportDescriptions[import] =
+                  new ImportDescription(import, library, rootLibraryUri);
+              isProgramSplit = true;
+            }
           }
-        }
-      });
-    }
+        });
+      }
+    });
   }
 
   /// Detects errors like duplicate uses of a prefix or using the old deferred
@@ -811,59 +874,6 @@ abstract class DeferredLoadTask extends CompilerTask {
   /// These checks are already done by the shared front-end, so they can be
   /// skipped by the new compiler pipeline.
   void checkForDeferredErrorCases(LibraryEntity library);
-
-  /// Returns a json-style map for describing what files that are loaded by a
-  /// given deferred import.
-  /// The mapping is structured as:
-  /// library uri -> {"name": library name, "files": (prefix -> list of files)}
-  /// Where
-  ///
-  /// - <library uri> is the relative uri of the library making a deferred
-  ///   import.
-  /// - <library name> is the name of the library, or "<unnamed>" if it is
-  ///   unnamed.
-  /// - <prefix> is the `as` prefix used for a given deferred import.
-  /// - <list of files> is a list of the filenames the must be loaded when that
-  ///   import is loaded.
-  Map<String, Map<String, dynamic>> computeDeferredMap() {
-    Map<String, Map<String, dynamic>> mapping =
-        new Map<String, Map<String, dynamic>>();
-    _deferredImportDescriptions.keys.forEach((ImportEntity import) {
-      List<OutputUnit> outputUnits = hunksToLoad[_importDeferName[import]];
-      ImportDescription description = _deferredImportDescriptions[import];
-      String getName(LibraryEntity library) {
-        var name = elementEnvironment.getLibraryName(library);
-        return name == '' ? '<unnamed>' : name;
-      }
-
-      Map<String, dynamic> libraryMap = mapping.putIfAbsent(
-          description.importingUri,
-          () => <String, dynamic>{
-                "name": getName(description._importingLibrary),
-                "imports": <String, List<String>>{}
-              });
-
-      libraryMap["imports"][_importDeferName[import]] =
-          outputUnits.map((OutputUnit outputUnit) {
-        return deferredPartFileName(outputUnit.name);
-      }).toList();
-    });
-    return mapping;
-  }
-
-  /// Returns the filename for the output-unit named [name].
-  ///
-  /// The filename is of the form "<main output file>_<name>.part.js".
-  /// If [addExtension] is false, the ".part.js" suffix is left out.
-  String deferredPartFileName(String name, {bool addExtension: true}) {
-    assert(name != "");
-    String outPath = compiler.options.outputUri != null
-        ? compiler.options.outputUri.path
-        : "out";
-    String outName = outPath.substring(outPath.lastIndexOf('/') + 1);
-    String extension = addExtension ? ".part.js" : "";
-    return "${outName}_$name$extension";
-  }
 
   bool ignoreEntityInDump(Entity element) => false;
 
@@ -908,14 +918,14 @@ abstract class DeferredLoadTask extends CompilerTask {
     });
 
     Map<OutputUnit, String> text = {};
-    for (OutputUnit outputUnit in allOutputUnits) {
+    for (OutputUnit outputUnit in _allOutputUnits) {
       StringBuffer unitText = new StringBuffer();
       if (outputUnit.isMainOutput) {
         unitText.write(' <MAIN UNIT>');
       } else {
         unitText.write(' imports:');
         var imports = outputUnit._imports
-            .map((i) => '${i.enclosingLibrary.canonicalUri.resolveUri(i.uri)}')
+            .map((i) => '${i.enclosingLibraryUri.resolveUri(i.uri)}')
             .toList();
         for (var i in imports..sort()) {
           unitText.write('\n   $i:');
@@ -939,7 +949,7 @@ abstract class DeferredLoadTask extends CompilerTask {
     }
 
     StringBuffer sb = new StringBuffer();
-    for (OutputUnit outputUnit in allOutputUnits.toList()
+    for (OutputUnit outputUnit in _allOutputUnits.toList()
       ..sort((a, b) => text[a].compareTo(text[b]))) {
       sb.write('\n\n-------------------------------\n');
       sb.write('Output unit: ${outputUnit.name}');
@@ -958,12 +968,16 @@ class ImportDescription {
 
   final LibraryEntity _importingLibrary;
 
+  ImportDescription.internal(
+      this.importingUri, this.prefix, this._importingLibrary);
+
   ImportDescription(
       ImportEntity import, LibraryEntity importingLibrary, Uri mainLibraryUri)
-      : importingUri = uri_extras.relativize(
-            mainLibraryUri, importingLibrary.canonicalUri, false),
-        prefix = import.name,
-        _importingLibrary = importingLibrary;
+      : this.internal(
+            fe.relativizeUri(
+                mainLibraryUri, importingLibrary.canonicalUri, false),
+            import.name,
+            importingLibrary);
 }
 
 /// Indirectly represents a deferred import in an [ImportSet].
@@ -1073,13 +1087,16 @@ class ImportSet {
   /// this current set. This should only be called from [ImportSetLattice],
   /// since it is where we preserve this invariant.
   ImportSet _add(_DeferredImport import) {
-    return _transitions.putIfAbsent(import, () {
-      var result = new ImportSet(new List.from(_imports)..add(import));
+    ImportSet result = _transitions[import];
+    if (result == null) {
+      result = new ImportSet(new List.from(_imports)..add(import));
       result._transitions[import] = result;
-      return result;
-    });
+      _transitions[import] = result;
+    }
+    return result;
   }
 
+  @override
   String toString() {
     StringBuffer sb = new StringBuffer();
     sb.write('ImportSet(size: $length, ');
@@ -1178,7 +1195,7 @@ abstract class WorkItem {
 
   WorkItem(this.importsToAdd);
 
-  void update(DeferredLoadTask task, WorkQueue queue);
+  void update(DeferredLoadTask task, KClosedWorld closedWorld, WorkQueue queue);
 }
 
 /// Summary of the work that needs to be done on a class.
@@ -1188,11 +1205,13 @@ class ClassWorkItem extends WorkItem {
 
   ClassWorkItem(this.cls, ImportSet newSet) : super(newSet);
 
-  void update(DeferredLoadTask task, WorkQueue queue) {
+  @override
+  void update(
+      DeferredLoadTask task, KClosedWorld closedWorld, WorkQueue queue) {
     queue.pendingClasses.remove(cls);
     ImportSet oldSet = task._classToSet[cls];
     ImportSet newSet = task.importSets.union(oldSet, importsToAdd);
-    task._updateClassRecursive(cls, oldSet, newSet, queue);
+    task._updateClassRecursive(closedWorld, cls, oldSet, newSet, queue);
   }
 }
 
@@ -1203,11 +1222,13 @@ class MemberWorkItem extends WorkItem {
 
   MemberWorkItem(this.member, ImportSet newSet) : super(newSet);
 
-  void update(DeferredLoadTask task, WorkQueue queue) {
+  @override
+  void update(
+      DeferredLoadTask task, KClosedWorld closedWorld, WorkQueue queue) {
     queue.pendingMembers.remove(member);
     ImportSet oldSet = task._memberToSet[member];
     ImportSet newSet = task.importSets.union(oldSet, importsToAdd);
-    task._updateMemberRecursive(member, oldSet, newSet, queue);
+    task._updateMemberRecursive(closedWorld, member, oldSet, newSet, queue);
   }
 }
 
@@ -1218,11 +1239,30 @@ class ConstantWorkItem extends WorkItem {
 
   ConstantWorkItem(this.constant, ImportSet newSet) : super(newSet);
 
-  void update(DeferredLoadTask task, WorkQueue queue) {
+  @override
+  void update(
+      DeferredLoadTask task, KClosedWorld closedWorld, WorkQueue queue) {
     queue.pendingConstants.remove(constant);
     ImportSet oldSet = task._constantToSet[constant];
     ImportSet newSet = task.importSets.union(oldSet, importsToAdd);
-    task._updateConstantRecursive(constant, oldSet, newSet, queue);
+    task._updateConstantRecursive(closedWorld, constant, oldSet, newSet, queue);
+  }
+}
+
+/// Interface for updating an [OutputUnitData] object with data for late
+/// members, that is, members created on demand during code generation.
+class LateOutputUnitDataBuilder {
+  final OutputUnitData _outputUnitData;
+
+  LateOutputUnitDataBuilder(this._outputUnitData);
+
+  /// Registers [newEntity] to be emitted in the same output unit as
+  /// [existingEntity];
+  void registerColocatedMembers(
+      MemberEntity existingEntity, MemberEntity newEntity) {
+    assert(_outputUnitData._memberToUnit[newEntity] == null);
+    _outputUnitData._memberToUnit[newEntity] =
+        _outputUnitData.outputUnitForMember(existingEntity);
   }
 }
 
@@ -1233,13 +1273,31 @@ class ConstantWorkItem extends WorkItem {
 // TODO(sigmund): consider moving here every piece of data used as a result of
 // deferred loading (including hunksToLoad, etc).
 class OutputUnitData {
+  /// Tag used for identifying serialized [OutputUnitData] objects in a
+  /// debugging data stream.
+  static const String tag = 'output-unit-data';
+
   final bool isProgramSplit;
   final OutputUnit mainOutputUnit;
   final Map<ClassEntity, OutputUnit> _classToUnit;
   final Map<MemberEntity, OutputUnit> _memberToUnit;
   final Map<Local, OutputUnit> _localFunctionToUnit;
   final Map<ConstantValue, OutputUnit> _constantToUnit;
-  final ImportSetLattice _importSets;
+  final List<OutputUnit> outputUnits;
+  final Map<ImportEntity, String> _importDeferName;
+
+  /// A mapping from the name of a defer import to all the output units it
+  /// depends on in a list of lists to be loaded in the order they appear.
+  ///
+  /// For example {"lib1": [[lib1_lib2_lib3], [lib1_lib2, lib1_lib3],
+  /// [lib1]]} would mean that in order to load "lib1" first the hunk
+  /// lib1_lib2_lib2 should be loaded, then the hunks lib1_lib2 and lib1_lib3
+  /// can be loaded in parallel. And finally lib1 can be loaded.
+  final Map<String, List<OutputUnit>> hunksToLoad;
+
+  /// Because the token-stream is forgotten later in the program, we cache a
+  /// description of each deferred import.
+  final Map<ImportEntity, ImportDescription> _deferredImportDescriptions;
 
   OutputUnitData(
       this.isProgramSplit,
@@ -1248,10 +1306,15 @@ class OutputUnitData {
       this._memberToUnit,
       this._localFunctionToUnit,
       this._constantToUnit,
-      this._importSets);
+      this.outputUnits,
+      this._importDeferName,
+      this.hunksToLoad,
+      this._deferredImportDescriptions);
 
-  OutputUnitData.from(
+  // Creates J-world data from the K-world data.
+  factory OutputUnitData.from(
       OutputUnitData other,
+      LibraryEntity convertLibrary(LibraryEntity library),
       Map<ClassEntity, OutputUnit> Function(
               Map<ClassEntity, OutputUnit>, Map<Local, OutputUnit>)
           convertClassMap,
@@ -1259,35 +1322,148 @@ class OutputUnitData {
               Map<MemberEntity, OutputUnit>, Map<Local, OutputUnit>)
           convertMemberMap,
       Map<ConstantValue, OutputUnit> Function(Map<ConstantValue, OutputUnit>)
-          convertConstantMap)
-      : isProgramSplit = other.isProgramSplit,
-        mainOutputUnit = other.mainOutputUnit,
-        _memberToUnit =
-            convertMemberMap(other._memberToUnit, other._localFunctionToUnit),
-        _classToUnit =
-            convertClassMap(other._classToUnit, other._localFunctionToUnit),
-        _localFunctionToUnit = const <Local, OutputUnit>{},
-        _constantToUnit = convertConstantMap(other._constantToUnit),
-        _importSets = other._importSets;
+          convertConstantMap) {
+    Map<ClassEntity, OutputUnit> classToUnit =
+        convertClassMap(other._classToUnit, other._localFunctionToUnit);
+    Map<MemberEntity, OutputUnit> memberToUnit =
+        convertMemberMap(other._memberToUnit, other._localFunctionToUnit);
+    Map<ConstantValue, OutputUnit> constantToUnit =
+        convertConstantMap(other._constantToUnit);
+    Map<ImportEntity, ImportDescription> deferredImportDescriptions = {};
+    other._deferredImportDescriptions
+        .forEach((ImportEntity import, ImportDescription description) {
+      deferredImportDescriptions[import] = new ImportDescription.internal(
+          description.importingUri,
+          description.prefix,
+          convertLibrary(description._importingLibrary));
+    });
+
+    return new OutputUnitData(
+        other.isProgramSplit,
+        other.mainOutputUnit,
+        classToUnit,
+        memberToUnit,
+        // Local functions only make sense in the K-world model.
+        const <Local, OutputUnit>{},
+        constantToUnit,
+        other.outputUnits,
+        other._importDeferName,
+        other.hunksToLoad,
+        deferredImportDescriptions);
+  }
+
+  /// Deserializes an [OutputUnitData] object from [source].
+  factory OutputUnitData.readFromDataSource(DataSource source) {
+    source.begin(tag);
+    bool isProgramSplit = source.readBool();
+    List<OutputUnit> outputUnits = source.readList(() {
+      bool isMainOutput = source.readBool();
+      String name = source.readString();
+      Set<ImportEntity> importSet = source.readImports().toSet();
+      return new OutputUnit(isMainOutput, name, importSet);
+    });
+    OutputUnit mainOutputUnit = outputUnits[source.readInt()];
+
+    Map<ClassEntity, OutputUnit> classToUnit = source.readClassMap(() {
+      return outputUnits[source.readInt()];
+    });
+    Map<MemberEntity, OutputUnit> memberToUnit =
+        source.readMemberMap((MemberEntity member) {
+      return outputUnits[source.readInt()];
+    });
+    Map<ConstantValue, OutputUnit> constantToUnit = source.readConstantMap(() {
+      return outputUnits[source.readInt()];
+    });
+    Map<ImportEntity, String> importDeferName =
+        source.readImportMap(source.readString);
+    Map<String, List<OutputUnit>> hunksToLoad = source.readStringMap(() {
+      return source.readList(() {
+        return outputUnits[source.readInt()];
+      });
+    });
+    Map<ImportEntity, ImportDescription> deferredImportDescriptions =
+        source.readImportMap(() {
+      String importingUri = source.readString();
+      String prefix = source.readString();
+      LibraryEntity importingLibrary = source.readLibrary();
+      return new ImportDescription.internal(
+          importingUri, prefix, importingLibrary);
+    });
+    source.end(tag);
+    return new OutputUnitData(
+        isProgramSplit,
+        mainOutputUnit,
+        classToUnit,
+        memberToUnit,
+        // Local functions only make sense in the K-world model.
+        const <Local, OutputUnit>{},
+        constantToUnit,
+        outputUnits,
+        importDeferName,
+        hunksToLoad,
+        deferredImportDescriptions);
+  }
+
+  /// Serializes this [OutputUnitData] to [sink].
+  void writeToDataSink(DataSink sink) {
+    sink.begin(tag);
+    sink.writeBool(isProgramSplit);
+    Map<OutputUnit, int> outputUnitIndices = {};
+    sink.writeList(outputUnits, (OutputUnit outputUnit) {
+      outputUnitIndices[outputUnit] = outputUnitIndices.length;
+      sink.writeBool(outputUnit.isMainOutput);
+      sink.writeString(outputUnit.name);
+      sink.writeImports(outputUnit._imports);
+    });
+    sink.writeInt(outputUnitIndices[mainOutputUnit]);
+    sink.writeClassMap(_classToUnit, (OutputUnit outputUnit) {
+      sink.writeInt(outputUnitIndices[outputUnit]);
+    });
+    sink.writeMemberMap(_memberToUnit,
+        (MemberEntity member, OutputUnit outputUnit) {
+      sink.writeInt(outputUnitIndices[outputUnit]);
+    });
+    sink.writeConstantMap(_constantToUnit, (OutputUnit outputUnit) {
+      sink.writeInt(outputUnitIndices[outputUnit]);
+    });
+    sink.writeImportMap(_importDeferName, sink.writeString);
+    sink.writeStringMap(hunksToLoad, (List<OutputUnit> outputUnits) {
+      sink.writeList(
+          outputUnits,
+          (OutputUnit outputUnit) =>
+              sink.writeInt(outputUnitIndices[outputUnit]));
+    });
+    sink.writeImportMap(_deferredImportDescriptions,
+        (ImportDescription importDescription) {
+      sink.writeString(importDescription.importingUri);
+      sink.writeString(importDescription.prefix);
+      sink.writeLibrary(importDescription._importingLibrary);
+    });
+    sink.end(tag);
+  }
 
   /// Returns the [OutputUnit] where [cls] belongs.
-  OutputUnit outputUnitForClass(ClassEntity cls) {
+  // TODO(johnniwinther): Remove the need for [allowNull]. Dump-info currently
+  // needs it.
+  OutputUnit outputUnitForClass(ClassEntity cls, {bool allowNull: false}) {
     if (!isProgramSplit) return mainOutputUnit;
     OutputUnit unit = _classToUnit[cls];
+    assert(allowNull || unit != null, 'No output unit for class $cls');
     return unit ?? mainOutputUnit;
   }
+
+  OutputUnit outputUnitForClassForTesting(ClassEntity cls) => _classToUnit[cls];
 
   /// Returns the [OutputUnit] where [member] belongs.
   OutputUnit outputUnitForMember(MemberEntity member) {
     if (!isProgramSplit) return mainOutputUnit;
     OutputUnit unit = _memberToUnit[member];
-    if (unit != null) return unit;
-    if (member.isInstanceMember) {
-      return outputUnitForClass(member.enclosingClass);
-    }
-
-    return mainOutputUnit;
+    assert(unit != null, 'No output unit for member $member');
+    return unit ?? mainOutputUnit;
   }
+
+  OutputUnit outputUnitForMemberForTesting(MemberEntity member) =>
+      _memberToUnit[member];
 
   /// Direct access to the output-unit to constants map used for testing.
   Iterable<ConstantValue> get constantsForTesting => _constantToUnit.keys;
@@ -1297,6 +1473,9 @@ class OutputUnitData {
     if (!isProgramSplit) return mainOutputUnit;
     return _constantToUnit[constant];
   }
+
+  OutputUnit outputUnitForConstantForTesting(ConstantValue constant) =>
+      _constantToUnit[constant];
 
   /// Indicates whether [element] is deferred.
   bool isDeferredClass(ClassEntity element) {
@@ -1317,28 +1496,208 @@ class OutputUnitData {
     return outputUnitTo._imports.containsAll(outputUnitFrom._imports);
   }
 
+  /// Returns `true` if constant [to] is reachable from element [from] without
+  /// crossing a deferred import.
+  ///
+  /// For example, if we have two deferred libraries `A` and `B` that both
+  /// import a library `C`, then even though elements from `A` and `C` end up in
+  /// different output units, there is a non-deferred path between `A` and `C`.
+  bool hasOnlyNonDeferredImportPathsToConstant(
+      MemberEntity from, ConstantValue to) {
+    OutputUnit outputUnitFrom = outputUnitForMember(from);
+    OutputUnit outputUnitTo = outputUnitForConstant(to);
+    if (outputUnitTo == mainOutputUnit) return true;
+    if (outputUnitFrom == mainOutputUnit) return false;
+    return outputUnitTo._imports.containsAll(outputUnitFrom._imports);
+  }
+
   /// Registers that a constant is used in the same deferred output unit as
   /// [field].
-  void registerConstantDeferredUse(
-      DeferredGlobalConstantValue constant, OutputUnit unit) {
+  void registerConstantDeferredUse(DeferredGlobalConstantValue constant) {
     if (!isProgramSplit) return;
+    OutputUnit unit = constant.unit;
     assert(
         _constantToUnit[constant] == null || _constantToUnit[constant] == unit);
     _constantToUnit[constant] = unit;
   }
 
-  /// Registers [newEntity] to be emitted in the same output unit as
-  /// [existingEntity];
-  void registerColocatedMembers(
-      MemberEntity existingEntity, MemberEntity newEntity) {
-    assert(_memberToUnit[newEntity] == null);
-    _memberToUnit[newEntity] = outputUnitForMember(existingEntity);
+  /// Returns the unique name for the given deferred [import].
+  String getImportDeferName(Spannable node, ImportEntity import) {
+    String name = _importDeferName[import];
+    if (name == null) {
+      throw new SpannableAssertionFailure(
+          node, "No deferred name for $import.");
+    }
+    return name;
+  }
+
+  /// Returns the names associated with each deferred import in [unit].
+  Iterable<String> getImportNames(OutputUnit unit) {
+    return unit._imports.map((i) => _importDeferName[i]);
+  }
+
+  /// Returns a json-style map for describing what files that are loaded by a
+  /// given deferred import.
+  /// The mapping is structured as:
+  /// library uri -> {"name": library name, "files": (prefix -> list of files)}
+  /// Where
+  ///
+  /// - <library uri> is the relative uri of the library making a deferred
+  ///   import.
+  /// - <library name> is the name of the library, or "<unnamed>" if it is
+  ///   unnamed.
+  /// - <prefix> is the `as` prefix used for a given deferred import.
+  /// - <list of files> is a list of the filenames the must be loaded when that
+  ///   import is loaded.
+  Map<String, Map<String, dynamic>> computeDeferredMap(
+      CompilerOptions options, ElementEnvironment elementEnvironment,
+      {Set<OutputUnit> omittedUnits}) {
+    omittedUnits ??= Set();
+    Map<String, Map<String, dynamic>> mapping = {};
+
+    _deferredImportDescriptions.keys.forEach((ImportEntity import) {
+      List<OutputUnit> outputUnits = hunksToLoad[_importDeferName[import]];
+      ImportDescription description = _deferredImportDescriptions[import];
+      String getName(LibraryEntity library) {
+        var name = elementEnvironment.getLibraryName(library);
+        return name == '' ? '<unnamed>' : name;
+      }
+
+      Map<String, dynamic> libraryMap = mapping.putIfAbsent(
+          description.importingUri,
+          () => <String, dynamic>{
+                "name": getName(description._importingLibrary),
+                "imports": <String, List<String>>{}
+              });
+
+      List<String> partFileNames = outputUnits
+          .where((outputUnit) => !omittedUnits.contains(outputUnit))
+          .map((outputUnit) => deferredPartFileName(options, outputUnit.name))
+          .toList();
+      libraryMap["imports"][_importDeferName[import]] = partFileNames;
+    });
+    return mapping;
   }
 }
 
+/// Returns the filename for the output-unit named [name].
+///
+/// The filename is of the form "<main output file>_<name>.part.js".
+/// If [addExtension] is false, the ".part.js" suffix is left out.
+String deferredPartFileName(CompilerOptions options, String name,
+    {bool addExtension: true}) {
+  assert(name != "");
+  String outPath = options.outputUri != null ? options.outputUri.path : "out";
+  String outName = outPath.substring(outPath.lastIndexOf('/') + 1);
+  String extension = addExtension ? ".part.js" : "";
+  return "${outName}_$name$extension";
+}
+
 class Dependencies {
-  final Set<ClassEntity> classes = new Set<ClassEntity>();
-  final Set<MemberEntity> members = new Set<MemberEntity>();
+  final Map<ClassEntity, DependencyInfo> classes = {};
+  final Map<MemberEntity, DependencyInfo> members = {};
   final Set<Local> localFunctions = new Set<Local>();
-  final Set<ConstantValue> constants = new Set<ConstantValue>();
+  final Map<ConstantValue, DependencyInfo> constants = {};
+
+  void addClass(ClassEntity cls, [ImportEntity import]) {
+    (classes[cls] ??= new DependencyInfo()).registerImport(import);
+  }
+
+  void addMember(MemberEntity m, [ImportEntity import]) {
+    (members[m] ??= new DependencyInfo()).registerImport(import);
+  }
+
+  void addConstant(ConstantValue c, [ImportEntity import]) {
+    (constants[c] ??= new DependencyInfo()).registerImport(import);
+  }
+}
+
+class DependencyInfo {
+  bool isDeferred = true;
+  List<ImportEntity> imports;
+
+  registerImport(ImportEntity import) {
+    if (!isDeferred) return;
+    // A null import represents a direct non-deferred dependency.
+    if (import != null) {
+      (imports ??= []).add(import);
+    } else {
+      imports = null;
+      isDeferred = false;
+    }
+  }
+}
+
+class TypeDependencyVisitor implements DartTypeVisitor<void, Null> {
+  final Dependencies _dependencies;
+  final ImportEntity _import;
+  final CommonElements _commonElements;
+
+  TypeDependencyVisitor(this._dependencies, this._import, this._commonElements);
+
+  @override
+  void visit(DartType type, [_]) {
+    type.accept(this, null);
+  }
+
+  void visitList(List<DartType> types) {
+    types.forEach(visit);
+  }
+
+  @override
+  void visitFutureOrType(FutureOrType type, Null argument) {
+    _dependencies.addClass(_commonElements.futureClass);
+    visit(type.typeArgument);
+  }
+
+  @override
+  void visitDynamicType(DynamicType type, Null argument) {
+    // Nothing to add.
+  }
+
+  @override
+  void visitAnyType(AnyType type, Null argument) {
+    // Nothing to add.
+  }
+
+  @override
+  void visitTypedefType(TypedefType type, Null argument) {
+    visitList(type.typeArguments);
+    visit(type.unaliased);
+  }
+
+  @override
+  void visitInterfaceType(InterfaceType type, Null argument) {
+    visitList(type.typeArguments);
+    // TODO(sigmund): when we are able to split classes from types in our
+    // runtime-type representation, this should track type.element as a type
+    // dependency instead.
+    _dependencies.addClass(type.element, _import);
+  }
+
+  @override
+  void visitFunctionType(FunctionType type, Null argument) {
+    for (FunctionTypeVariable typeVariable in type.typeVariables) {
+      visit(typeVariable.bound);
+    }
+    visitList(type.parameterTypes);
+    visitList(type.optionalParameterTypes);
+    visitList(type.namedParameterTypes);
+    visit(type.returnType);
+  }
+
+  @override
+  void visitFunctionTypeVariable(FunctionTypeVariable type, Null argument) {
+    // Nothing to add. Handled in [visitFunctionType].
+  }
+
+  @override
+  void visitTypeVariableType(TypeVariableType type, Null argument) {
+    // TODO(johnniwinther): Do we need to collect the bound?
+  }
+
+  @override
+  void visitVoidType(VoidType type, Null argument) {
+    // Nothing to add.
+  }
 }

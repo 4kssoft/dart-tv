@@ -4,17 +4,20 @@
 
 library fasta.stack_listener;
 
-import 'package:kernel/ast.dart' show AsyncMarker, Expression, FunctionNode;
-
-import '../deprecated_problems.dart' show deprecated_inputError;
+import 'package:kernel/ast.dart'
+    show AsyncMarker, Expression, FunctionNode, TreeNode;
 
 import '../fasta_codes.dart'
     show
+        Code,
+        LocatedMessage,
         Message,
-        messageNativeClauseShouldBeAnnotation,
+        codeCatchSyntaxExtraParameters,
+        codeNativeClauseShouldBeAnnotation,
         templateInternalProblemStackNotEmpty;
 
-import '../parser.dart' show Listener, MemberKind, Parser;
+import '../parser.dart'
+    show Listener, MemberKind, Parser, lengthOfSpan, offsetForToken;
 
 import '../parser/identifier_context.dart' show IdentifierContext;
 
@@ -25,9 +28,12 @@ import '../quote.dart' show unescapeString;
 
 import '../scanner.dart' show Token;
 
+import 'value_kinds.dart';
+
 enum NullValue {
   Arguments,
   As,
+  AwaitToken,
   Block,
   BreakTarget,
   CascadeReceiver,
@@ -51,12 +57,15 @@ enum NullValue {
   Identifier,
   IdentifierList,
   Initializers,
+  Labels,
   Metadata,
   Modifiers,
+  Name,
   ParameterDefaultValue,
   Prefix,
   StringLiteral,
   SwitchScope,
+  Token,
   Type,
   TypeArguments,
   TypeBuilderList,
@@ -70,13 +79,144 @@ enum NullValue {
 abstract class StackListener extends Listener {
   final Stack stack = new Stack();
 
+  /// Checks that [value] matches the expected [kind].
+  ///
+  /// Use this in assert statements like
+  ///
+  ///     assert(checkValue(token, ValueKind.Token, value));
+  ///
+  /// to document and validate the expected value kind.
+  bool checkValue(Token token, ValueKind kind, Object value) {
+    if (!kind.check(value)) {
+      String message = 'Unexpected value `${value}` (${value.runtimeType}). '
+          'Expected ${kind}.';
+      if (token != null) {
+        // If offset is available report and internal problem to show the
+        // parsed code in the output.
+        throw internalProblem(
+            new Message(null, message: message), token.charOffset, uri);
+      } else {
+        throw message;
+      }
+    }
+    return true;
+  }
+
+  /// Checks the top of the current stack against [kinds]. If a mismatch is
+  /// found, a top of the current stack is print along with the expected [kinds]
+  /// marking the frames that don't match, and throws an exception.
+  ///
+  /// Use this in assert statements like
+  ///
+  ///     assert(checkState(token, [ValueKind.Integer, ValueKind.StringOrNull]))
+  ///
+  /// to document the expected stack and get earlier errors on unexpected stack
+  /// content.
+  bool checkState(Token token, List<ValueKind> kinds) {
+    bool success = true;
+    for (int kindIndex = 0; kindIndex < kinds.length; kindIndex++) {
+      int stackIndex = stack.arrayLength - kindIndex - 1;
+      ValueKind kind = kinds[kindIndex];
+      if (stackIndex >= 0) {
+        Object value = stack.array[stackIndex];
+        if (!kind.check(value)) {
+          success = false;
+        }
+      } else {
+        success = false;
+      }
+    }
+    if (!success) {
+      StringBuffer sb = new StringBuffer();
+
+      String safeToString(Object object) {
+        try {
+          return '$object';
+        } catch (e) {
+          // Judgments fail on toString.
+          return object.runtimeType.toString();
+        }
+      }
+
+      String padLeft(Object object, int length) {
+        String text = safeToString(object);
+        if (text.length < length) {
+          return ' ' * (length - text.length) + text;
+        }
+        return text;
+      }
+
+      String padRight(Object object, int length) {
+        String text = safeToString(object);
+        if (text.length < length) {
+          return text + ' ' * (length - text.length);
+        }
+        return text;
+      }
+
+      // Compute kind/stack frame information for all expected values plus 3 more
+      // stack elements if available.
+      for (int kindIndex = 0; kindIndex < kinds.length + 3; kindIndex++) {
+        int stackIndex = stack.arrayLength - kindIndex - 1;
+        if (stackIndex < 0 && kindIndex >= kinds.length) {
+          // No more stack elements nor kinds to display.
+          break;
+        }
+        sb.write(padLeft(kindIndex, 4));
+        sb.write(': ');
+        ValueKind kind;
+        if (kindIndex < kinds.length) {
+          kind = kinds[kindIndex];
+          sb.write(padRight(kind, 60));
+        } else {
+          sb.write(padRight('---', 60));
+        }
+        if (stackIndex >= 0) {
+          Object value = stack.array[stackIndex];
+          if (kind == null || kind.check(value)) {
+            sb.write(' ');
+          } else {
+            sb.write('*');
+          }
+          sb.write(safeToString(value));
+          sb.write(' (${value.runtimeType})');
+        } else {
+          if (kind == null) {
+            sb.write(' ');
+          } else {
+            sb.write('*');
+          }
+          sb.write('---');
+        }
+        sb.writeln();
+      }
+
+      String message = '$runtimeType failure\n$sb';
+      if (token != null) {
+        // If offset is available report and internal problem to show the
+        // parsed code in the output.
+        throw internalProblem(
+            new Message(null, message: message), token.charOffset, uri);
+      } else {
+        throw message;
+      }
+    }
+    return success;
+  }
+
   @override
   Uri get uri;
 
+  void discard(int n) {
+    for (int i = 0; i < n; i++) {
+      pop();
+    }
+  }
+
   // TODO(ahe): This doesn't belong here. Only implemented by body_builder.dart
   // and ast_builder.dart.
-  void finishFunction(List annotations, covariant formals,
-      AsyncMarker asyncModifier, covariant body) {
+  void finishFunction(
+      covariant formals, AsyncMarker asyncModifier, covariant body) {
     return unsupported("finishFunction", -1, uri);
   }
 
@@ -88,7 +228,7 @@ abstract class StackListener extends Listener {
 
   // TODO(ahe): This doesn't belong here. Only implemented by body_builder.dart
   // and ast_builder.dart.
-  List<Expression> finishMetadata() {
+  List<Expression> finishMetadata(TreeNode parent) {
     return unsupported("finishMetadata", -1, uri);
   }
 
@@ -121,16 +261,12 @@ abstract class StackListener extends Listener {
     return value == null ? null : pop();
   }
 
-  List popList(int n, List list) {
-    if (n == 0) return null;
-    return stack.popList(n, list);
-  }
-
   void debugEvent(String name) {
     // printEvent(name);
   }
 
   void printEvent(String name) {
+    print('\n------------------');
     for (Object o in stack.values) {
       String s = "  $o";
       int index = s.indexOf("\n");
@@ -139,8 +275,7 @@ abstract class StackListener extends Listener {
       }
       print(s);
     }
-    print(name);
-    print('------------------\n');
+    print("  >> $name");
   }
 
   @override
@@ -152,7 +287,14 @@ abstract class StackListener extends Listener {
   @override
   void handleIdentifier(Token token, IdentifierContext context) {
     debugEvent("handleIdentifier");
-    push(token.lexeme);
+    if (!token.isSynthetic) {
+      push(token.lexeme);
+    } else {
+      // This comes from a synthetic token which is inserted by the parser in
+      // an attempt to recover.  This almost always means that the parser has
+      // gotten very confused and we need to ignore the results.
+      push(new ParserRecovery(token.charOffset));
+    }
   }
 
   @override
@@ -174,11 +316,6 @@ abstract class StackListener extends Listener {
           charOffset,
           uri);
     }
-    if (recoverableErrors.isNotEmpty) {
-      // TODO(ahe): Handle recoverable errors better.
-      deprecated_inputError(
-          uri, recoverableErrors.first.beginOffset, recoverableErrors);
-    }
   }
 
   @override
@@ -199,8 +336,18 @@ abstract class StackListener extends Listener {
   }
 
   @override
+  void handleMixinOn(Token onKeyword, int typeCount) {
+    debugEvent("MixinOn");
+  }
+
+  @override
   void handleClassHeader(Token begin, Token classKeyword, Token nativeToken) {
     debugEvent("ClassHeader");
+  }
+
+  @override
+  void handleMixinHeader(Token mixinKeyword) {
+    debugEvent("MixinHeader");
   }
 
   @override
@@ -209,7 +356,13 @@ abstract class StackListener extends Listener {
   }
 
   @override
-  void handleClassImplements(Token implementsKeyword, int interfacesCount) {
+  void handleRecoverMixinHeader() {
+    debugEvent("RecoverMixinHeader");
+  }
+
+  @override
+  void handleClassOrMixinImplements(
+      Token implementsKeyword, int interfacesCount) {
     debugEvent("ClassImplements");
   }
 
@@ -297,7 +450,7 @@ abstract class StackListener extends Listener {
     debugEvent("endLiteralString");
     if (interpolationCount == 0) {
       Token token = pop();
-      push(unescapeString(token.lexeme));
+      push(unescapeString(token.lexeme, token, this));
     } else {
       unimplemented("string interpolation", endToken.charOffset, uri);
     }
@@ -309,14 +462,6 @@ abstract class StackListener extends Listener {
     if (hasName) {
       pop(); // Pop the native name which is a String.
     }
-  }
-
-  @override
-  void handleStringJuxtaposition(int literalCount) {
-    debugEvent("StringJuxtaposition");
-    push(popList(literalCount,
-            new List<Expression>.filled(literalCount, null, growable: true))
-        .join(""));
   }
 
   @override
@@ -342,25 +487,37 @@ abstract class StackListener extends Listener {
   @override
   void handleRecoverableError(
       Message message, Token startToken, Token endToken) {
-    /// TODO(danrubel): Ignore this error until we deprecate `native` support.
-    if (message == messageNativeClauseShouldBeAnnotation) {
-      return;
-    }
     debugEvent("Error: ${message.message}");
-    int offset = startToken.offset;
-    addCompileTimeError(message, offset, endToken.end - offset);
+    if (isIgnoredError(message.code, startToken)) return;
+    addProblem(message, offsetForToken(startToken),
+        lengthOfSpan(startToken, endToken));
+  }
+
+  bool isIgnoredError(Code<dynamic> code, Token token) {
+    if (code == codeNativeClauseShouldBeAnnotation) {
+      // TODO(danrubel): Ignore this error until we deprecate `native`
+      // support.
+      return true;
+    } else if (code == codeCatchSyntaxExtraParameters) {
+      // Ignored. This error is handled by the BodyBuilder.
+      return true;
+    } else {
+      return false;
+    }
   }
 
   @override
-  Token handleUnrecoverableError(Token token, Message message) {
-    throw deprecated_inputError(uri, token.charOffset, message.message);
+  void handleUnescapeError(
+      Message message, Token token, int stringOffset, int length) {
+    addProblem(message, token.charOffset + stringOffset, length);
   }
 
-  void addCompileTimeError(Message message, int charOffset, int length);
+  void addProblem(Message message, int charOffset, int length,
+      {bool wasHandled: false, List<LocatedMessage> context});
 }
 
 class Stack {
-  List array = new List(8);
+  List<Object> array = new List<Object>(8);
   int arrayLength = 0;
 
   bool get isNotEmpty => arrayLength > 0;
@@ -368,7 +525,7 @@ class Stack {
   int get length => arrayLength;
 
   Object get last {
-    final value = array[arrayLength - 1];
+    final Object value = array[arrayLength - 1];
     return value is NullValue ? null : value;
   }
 
@@ -379,7 +536,7 @@ class Stack {
     }
   }
 
-  Object pop([NullValue nullValue]) {
+  Object pop(NullValue nullValue) {
     assert(arrayLength > 0);
     final Object value = array[--arrayLength];
     array[arrayLength] = null;
@@ -392,32 +549,80 @@ class Stack {
     }
   }
 
-  List popList(int count, List list) {
+  List<Object> popList(int count, List<Object> list, NullValue nullValue) {
     assert(arrayLength >= count);
-
-    final table = array;
-    final length = arrayLength;
-
-    final startIndex = length - count;
+    final List<Object> array = this.array;
+    final int length = arrayLength;
+    final int startIndex = length - count;
+    bool isParserRecovery = false;
     for (int i = 0; i < count; i++) {
-      final value = table[startIndex + i];
-      list[i] = value is NullValue ? null : value;
-      table[startIndex + i] = null;
+      int arrayIndex = startIndex + i;
+      final Object value = array[arrayIndex];
+      array[arrayIndex] = null;
+      if (value is NullValue && nullValue == null ||
+          identical(value, nullValue)) {
+        list[i] = null;
+      } else if (value is ParserRecovery) {
+        isParserRecovery = true;
+      } else {
+        if (value is NullValue) {
+          print(value);
+        }
+        list[i] = value;
+      }
     }
     arrayLength -= count;
 
-    return list;
+    return isParserRecovery ? null : list;
   }
 
-  List get values {
-    final List list = new List(arrayLength);
-    list.setRange(0, arrayLength, array);
+  List<Object> get values {
+    final int length = arrayLength;
+    final List<Object> list = new List<Object>(length);
+    list.setRange(0, length, array);
     return list;
   }
 
   void _grow() {
-    final List newTable = new List(array.length * 2);
-    newTable.setRange(0, array.length, array, 0);
-    array = newTable;
+    final int length = array.length;
+    final List<Object> newArray = new List<Object>(length * 2);
+    newArray.setRange(0, length, array, 0);
+    array = newArray;
   }
+}
+
+/// Helper constant for popping a list of the top of a [Stack].  This helper
+/// returns null instead of empty lists, and the lists returned are of fixed
+/// length.
+class FixedNullableList<T> {
+  const FixedNullableList();
+
+  List<T> pop(Stack stack, int count, [NullValue nullValue]) {
+    if (count == 0) return null;
+    return stack.popList(count, new List<T>(count), nullValue);
+  }
+
+  List<T> popPadded(Stack stack, int count, int padding,
+      [NullValue nullValue]) {
+    if (count + padding == 0) return null;
+    return stack.popList(count, new List<T>(count + padding), nullValue);
+  }
+}
+
+/// Helper constant for popping a list of the top of a [Stack].  This helper
+/// returns growable lists (also when empty).
+class GrowableList<T> {
+  const GrowableList();
+
+  List<T> pop(Stack stack, int count, [NullValue nullValue]) {
+    return stack.popList(
+        count, new List<T>.filled(count, null, growable: true), nullValue);
+  }
+}
+
+class ParserRecovery {
+  final int charOffset;
+  ParserRecovery(this.charOffset);
+
+  String toString() => "ParserRecovery(@$charOffset)";
 }

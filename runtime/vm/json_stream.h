@@ -61,6 +61,7 @@ enum JSONRpcErrorCode {
   kServiceAlreadyRegistered = 111,
   kServiceDisappeared = 112,
   kExpressionCompilationError = 113,
+  kInvalidTimelineRequest = 114,
 
   // Experimental (used in private rpcs).
   kFileSystemAlreadyExists = 1001,
@@ -83,7 +84,8 @@ class JSONStream : ValueObject {
              bool parameters_are_dart_objects = false);
   void SetupError();
 
-  void PrintError(intptr_t code, const char* details_format, ...);
+  void PrintError(intptr_t code, const char* details_format, ...)
+      PRINTF_ATTRIBUTE(3, 4);
 
   void PostReply();
 
@@ -306,6 +308,7 @@ class JSONObject : public ValueObject {
   void AddServiceId(const Object& o) const { stream_->PrintServiceId(o); }
 
   void AddFixedServiceId(const char* format, ...) const PRINTF_ATTRIBUTE(2, 3);
+  void AddServiceId(const char* format, ...) const PRINTF_ATTRIBUTE(2, 3);
 
   void AddLocation(
       const Script& script,

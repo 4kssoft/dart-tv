@@ -6,6 +6,7 @@
 #define RUNTIME_VM_COMPILER_JIT_COMPILER_H_
 
 #include "vm/allocation.h"
+#include "vm/compiler/compiler_state.h"
 #include "vm/growable_array.h"
 #include "vm/runtime_entry.h"
 #include "vm/thread_pool.h"
@@ -27,8 +28,6 @@ class RawInstance;
 class Script;
 class SequenceNode;
 
-bool UseKernelFrontEndFor(ParsedFunction* parsed_function);
-
 class CompilationPipeline : public ZoneAllocated {
  public:
   static CompilationPipeline* New(Zone* zone, const Function& function);
@@ -37,7 +36,7 @@ class CompilationPipeline : public ZoneAllocated {
   virtual FlowGraph* BuildFlowGraph(
       Zone* zone,
       ParsedFunction* parsed_function,
-      const ZoneGrowableArray<const ICData*>& ic_data_array,
+      ZoneGrowableArray<const ICData*>* ic_data_array,
       intptr_t osr_id,
       bool optimized) = 0;
   virtual void FinalizeCompilation(FlowGraph* flow_graph) = 0;
@@ -46,32 +45,30 @@ class CompilationPipeline : public ZoneAllocated {
 
 class DartCompilationPipeline : public CompilationPipeline {
  public:
-  virtual void ParseFunction(ParsedFunction* parsed_function);
+  void ParseFunction(ParsedFunction* parsed_function) override;
 
-  virtual FlowGraph* BuildFlowGraph(
-      Zone* zone,
-      ParsedFunction* parsed_function,
-      const ZoneGrowableArray<const ICData*>& ic_data_array,
-      intptr_t osr_id,
-      bool optimized);
+  FlowGraph* BuildFlowGraph(Zone* zone,
+                            ParsedFunction* parsed_function,
+                            ZoneGrowableArray<const ICData*>* ic_data_array,
+                            intptr_t osr_id,
+                            bool optimized) override;
 
-  virtual void FinalizeCompilation(FlowGraph* flow_graph);
+  void FinalizeCompilation(FlowGraph* flow_graph) override;
 };
 
 class IrregexpCompilationPipeline : public CompilationPipeline {
  public:
   IrregexpCompilationPipeline() : backtrack_goto_(NULL) {}
 
-  virtual void ParseFunction(ParsedFunction* parsed_function);
+  void ParseFunction(ParsedFunction* parsed_function) override;
 
-  virtual FlowGraph* BuildFlowGraph(
-      Zone* zone,
-      ParsedFunction* parsed_function,
-      const ZoneGrowableArray<const ICData*>& ic_data_array,
-      intptr_t osr_id,
-      bool optimized);
+  FlowGraph* BuildFlowGraph(Zone* zone,
+                            ParsedFunction* parsed_function,
+                            ZoneGrowableArray<const ICData*>* ic_data_array,
+                            intptr_t osr_id,
+                            bool optimized) override;
 
-  virtual void FinalizeCompilation(FlowGraph* flow_graph);
+  void FinalizeCompilation(FlowGraph* flow_graph) override;
 
  private:
   IndirectGotoInstr* backtrack_goto_;
@@ -79,23 +76,11 @@ class IrregexpCompilationPipeline : public CompilationPipeline {
 
 class Compiler : public AllStatic {
  public:
-  static const intptr_t kNoOSRDeoptId = Thread::kNoDeoptId;
+  static const intptr_t kNoOSRDeoptId = DeoptId::kNone;
 
   static bool IsBackgroundCompilation();
   // The result for a function may change if debugging gets turned on/off.
   static bool CanOptimizeFunction(Thread* thread, const Function& function);
-
-  // Extracts top level entities from the script and populates
-  // the class dictionary of the library.
-  //
-  // Returns Error::null() if there is no compilation error.
-  static RawError* Compile(const Library& library, const Script& script);
-
-  // Extracts function and field symbols from the class and populates
-  // the class.
-  //
-  // Returns Error::null() if there is no compilation error.
-  static RawError* CompileClass(const Class& cls);
 
   // Generates code for given function without optimization and sets its code
   // field.
@@ -103,10 +88,10 @@ class Compiler : public AllStatic {
   // Returns the raw code object if compilation succeeds.  Otherwise returns a
   // RawError.  Also installs the generated code on the function.
   static RawObject* CompileFunction(Thread* thread, const Function& function);
-  // Returns Error::null() if there is no compilation error.
-  static RawError* ParseFunction(Thread* thread, const Function& function);
 
   // Generates unoptimized code if not present, current code is unchanged.
+  // Bytecode is considered unoptimized code.
+  // TODO(regis): Revisit when deoptimizing mixed bytecode and jitted code.
   static RawError* EnsureUnoptimizedCode(Thread* thread,
                                          const Function& function);
 
@@ -120,35 +105,19 @@ class Compiler : public AllStatic {
                                              const Function& function,
                                              intptr_t osr_id = kNoOSRDeoptId);
 
-  // Generates code for given parsed function (without parsing it again) and
-  // sets its code field.
-  //
-  // Returns Error::null() if there is no compilation error.
-  static RawError* CompileParsedFunction(ParsedFunction* parsed_function);
-
-  // Generates and executes code for a given code fragment, e.g. a
-  // compile time constant expression. Returns the result returned
-  // by the fragment.
-  //
-  // The return value is either a RawInstance on success or a RawError
-  // on compilation failure.
-  static RawObject* ExecuteOnce(SequenceNode* fragment);
-
-  // Evaluates the initializer expression of the given static field.
-  //
-  // The return value is either a RawInstance on success or a RawError
-  // on compilation failure.
-  static RawObject* EvaluateStaticInitializer(const Field& field);
-
   // Generates local var descriptors and sets it in 'code'. Do not call if the
   // local var descriptor already exists.
   static void ComputeLocalVarDescriptors(const Code& code);
+  // Collect yield positions for function and store into its script object
+  static void ComputeYieldPositions(const Function& function);
 
   // Eagerly compiles all functions in a class.
   //
   // Returns Error::null() if there is no compilation error.
   static RawError* CompileAllFunctions(const Class& cls);
-  static RawError* ParseAllFunctions(const Class& cls);
+
+  // Eagerly read all bytecode.
+  static RawError* ReadAllBytecode(const Class& cls);
 
   // Notify the compiler that background (optimized) compilation has failed
   // because the mutator thread changed the state (e.g., deoptimization,
@@ -163,56 +132,68 @@ class Compiler : public AllStatic {
 // No OSR compilation in the background compiler.
 class BackgroundCompiler {
  public:
-  explicit BackgroundCompiler(Isolate* isolate);
+  explicit BackgroundCompiler(Isolate* isolate, bool optimizing);
   virtual ~BackgroundCompiler();
 
   static void Start(Isolate* isolate) {
     ASSERT(Thread::Current()->IsMutatorThread());
-    if (isolate->background_compiler() != NULL) {
+    if (FLAG_enable_interpreter && isolate->background_compiler() != NULL) {
       isolate->background_compiler()->Start();
+    }
+    if (isolate->optimizing_background_compiler() != NULL) {
+      isolate->optimizing_background_compiler()->Start();
     }
   }
   static void Stop(Isolate* isolate) {
     ASSERT(Thread::Current()->IsMutatorThread());
-    if (isolate->background_compiler() != NULL) {
+    if (FLAG_enable_interpreter && isolate->background_compiler() != NULL) {
       isolate->background_compiler()->Stop();
+    }
+    if (isolate->optimizing_background_compiler() != NULL) {
+      isolate->optimizing_background_compiler()->Stop();
     }
   }
   static void Enable(Isolate* isolate) {
     ASSERT(Thread::Current()->IsMutatorThread());
-    if (isolate->background_compiler() != NULL) {
+    if (FLAG_enable_interpreter && isolate->background_compiler() != NULL) {
       isolate->background_compiler()->Enable();
+    }
+    if (isolate->optimizing_background_compiler() != NULL) {
+      isolate->optimizing_background_compiler()->Enable();
     }
   }
   static void Disable(Isolate* isolate) {
     ASSERT(Thread::Current()->IsMutatorThread());
-    if (isolate->background_compiler() != NULL) {
+    if (FLAG_enable_interpreter && isolate->background_compiler() != NULL) {
       isolate->background_compiler()->Disable();
     }
-  }
-  static bool IsDisabled(Isolate* isolate) {
-    ASSERT(Thread::Current()->IsMutatorThread());
-    if (isolate->background_compiler() != NULL) {
-      return isolate->background_compiler()->IsDisabled();
+    if (isolate->optimizing_background_compiler() != NULL) {
+      isolate->optimizing_background_compiler()->Disable();
     }
-    return false;
   }
-  static bool IsRunning(Isolate* isolate) {
+  static bool IsDisabled(Isolate* isolate, bool optimizing_compiler) {
     ASSERT(Thread::Current()->IsMutatorThread());
-    if (isolate->background_compiler() != NULL) {
-      return isolate->background_compiler()->IsRunning();
+    if (optimizing_compiler) {
+      if (isolate->optimizing_background_compiler() != NULL) {
+        return isolate->optimizing_background_compiler()->IsDisabled();
+      }
+    } else {
+      if (FLAG_enable_interpreter && isolate->background_compiler() != NULL) {
+        return isolate->background_compiler()->IsDisabled();
+      }
     }
     return false;
   }
 
-  // Call to optimize a function in the background, enters the function in the
-  // compilation queue.
-  void CompileOptimized(const Function& function);
+  // Call to compile (unoptimized or optimized) a function in the background,
+  // enters the function in the compilation queue.
+  void Compile(const Function& function);
 
   void VisitPointers(ObjectPointerVisitor* visitor);
 
   BackgroundCompilationQueue* function_queue() const { return function_queue_; }
   bool is_running() const { return running_; }
+  bool is_optimizing() const { return optimizing_; }
 
   void Run();
 
@@ -226,12 +207,13 @@ class BackgroundCompiler {
 
   Isolate* isolate_;
 
-  Monitor* queue_monitor_;  // Controls access to the queue.
+  Monitor queue_monitor_;  // Controls access to the queue.
   BackgroundCompilationQueue* function_queue_;
 
-  Monitor* done_monitor_;   // Notify/wait that the thread is done.
+  Monitor done_monitor_;    // Notify/wait that the thread is done.
   bool running_;            // While true, will try to read queue and compile.
   bool done_;               // True if the thread is done.
+  bool optimizing_;
 
   int16_t disabled_depth_;
 

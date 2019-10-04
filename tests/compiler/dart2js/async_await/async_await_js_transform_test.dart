@@ -52,21 +52,20 @@ void testSyncStarTransform(String source, String expected) {
 }
 
 main() {
-  testAsyncTransform(
-
-          /// 01: ok
-          r"""function() async {
+  testAsyncTransform( //# 01: ok
+      r"""function() async {
   var closures = [new A.main_closure()], v0 = await closures, v1 = 0, v2, v3;
   if (v1 < 0 || v1 >= v0.length)
     H.ioore(v0, v1);
   v2 = 4;
   v3 = 2;
   P.print(v0[v1].call$2(v2, v3));
-}""",
-
-          /// 01: ok
-          r"""function() {
-  var __goto = 0, __completer = NewCompleter(CompleterType), closures, v0, v1, v2, v3;
+}"""
+, //# 01: ok
+      r"""function() {
+  var __goto = 0,
+    __completer = NewCompleter(CompleterType),
+    closures, v0, v1, v2, v3;
   var body = _wrapJsFunctionForAsync(function(__errorCode, __result) {
     if (__errorCode === 1)
       return rethrowHelper(__result, __completer);
@@ -91,10 +90,9 @@ main() {
       }
   });
   return startHelper(body, __completer);
-}""")
-
-      /// 01: ok
-      ;
+}"""
+    ) //# 01: ok
+  ;
 
   testAsyncTransform("""
 function(a) async {
@@ -102,7 +100,9 @@ function(a) async {
   await foo();
 }""", """
 function(a) {
-  var __goto = 0, __completer = NewCompleter(CompleterType), __self = this;
+  var __goto = 0,
+    __completer = NewCompleter(CompleterType),
+    __self = this;
   var body = _wrapJsFunctionForAsync(function(__errorCode, __result) {
     if (__errorCode === 1)
       return rethrowHelper(__result, __completer);
@@ -147,7 +147,9 @@ function(a) {
     return 4;
   }""", """
 function(b) {
-  var __goto = 0, __completer = NewCompleter(CompleterType), __returnValue, __handler = 2, __currentError, __next = [], __helper;
+  var __goto = 0,
+    __completer = NewCompleter(CompleterType),
+    __returnValue, __handler = 2, __currentError, __next = [], __helper;
   var body = _wrapJsFunctionForAsync(function(__errorCode, __result) {
     if (__errorCode === 1) {
       __currentError = __result;
@@ -257,7 +259,9 @@ function(c) async {
   f = --foo1()[await foo2()];
 }""", """
 function(c) {
-  var __goto = 0, __completer = NewCompleter(CompleterType), a, b, c, d, e, f, __temp1;
+  var __goto = 0,
+    __completer = NewCompleter(CompleterType),
+    a, b, c, d, e, f, __temp1;
   var body = _wrapJsFunctionForAsync(function(__errorCode, __result) {
     if (__errorCode === 1)
       return rethrowHelper(__result, __completer);
@@ -309,7 +313,9 @@ function(c) {
     h = foo1() && foo2();
   }""", """
 function(d2) {
-  var __goto = 0, __completer = NewCompleter(CompleterType), a, b, c, d, e, f, g, h, __temp1;
+  var __goto = 0,
+    __completer = NewCompleter(CompleterType),
+    a, b, c, d, e, f, g, h, __temp1;
   var body = _wrapJsFunctionForAsync(function(__errorCode, __result) {
     if (__errorCode === 1)
       return rethrowHelper(__result, __completer);
@@ -429,7 +435,7 @@ function(x, y) async {
   while (true) {
     switch(y) { // Switch with no awaits in case key expressions
       case 0:
-      case 1: 
+      case 1:
         await foo();
         continue; // Continue the loop, not the switch
       case 1: // Duplicate case
@@ -441,7 +447,8 @@ function(x, y) async {
   }
 }""", """
 function(x, y) {
-  var __goto = 0, __completer = NewCompleter(CompleterType);
+  var __goto = 0,
+    __completer = NewCompleter(CompleterType);
   var body = _wrapJsFunctionForAsync(function(__errorCode, __result) {
     if (__errorCode === 1)
       return rethrowHelper(__result, __completer);
@@ -525,7 +532,9 @@ function(x, y) {
   }
   """, """
 function(f) {
-  var __goto = 0, __completer = NewCompleter(CompleterType), a;
+  var __goto = 0,
+    __completer = NewCompleter(CompleterType),
+    a;
   var body = _wrapJsFunctionForAsync(function(__errorCode, __result) {
     if (__errorCode === 1)
       return rethrowHelper(__result, __completer);
@@ -581,11 +590,13 @@ function(g) async {
       return;
     }
     print(await(foo(i)));
-  } 
+  }
 }
 """, """
 function(g) {
-  var __goto = 0, __completer = NewCompleter(CompleterType), __returnValue, i, __temp1;
+  var __goto = 0,
+    __completer = NewCompleter(CompleterType),
+    __returnValue, i, __temp1;
   var body = _wrapJsFunctionForAsync(function(__errorCode, __result) {
     if (__errorCode === 1)
       return rethrowHelper(__result, __completer);
@@ -665,7 +676,9 @@ function(g) {
   }
   """, """
 function(a, h) {
-  var __goto = 0, __completer = NewCompleter(CompleterType), x, __temp1, __temp2;
+  var __goto = 0,
+    __completer = NewCompleter(CompleterType),
+    x, __temp1, __temp2;
   var body = _wrapJsFunctionForAsync(function(__errorCode, __result) {
     if (__errorCode === 1)
       return rethrowHelper(__result, __completer);
@@ -741,7 +754,9 @@ function(c, i) async {
 }
 """, """
 function(c, i) {
-  var __goto = 0, __completer = NewCompleter(CompleterType), __handler = 1, __currentError, __next = [], x, y, __error, __error1;
+  var __goto = 0,
+    __completer = NewCompleter(CompleterType),
+    __handler = 1, __currentError, __next = [], x, y, __error, __error1;
   var body = _wrapJsFunctionForAsync(function(__errorCode, __result) {
     if (__errorCode === 1) {
       __currentError = __result;
@@ -851,7 +866,9 @@ function(c, i) {
   }
   """, """
 function(x, y, j) {
-  var __goto = 0, __completer = NewCompleter(CompleterType), __temp1, __temp2, __temp3;
+  var __goto = 0,
+    __completer = NewCompleter(CompleterType),
+    __temp1, __temp2, __temp3;
   var body = _wrapJsFunctionForAsync(function(__errorCode, __result) {
     if (__errorCode === 1)
       return rethrowHelper(__result, __completer);
@@ -929,7 +946,9 @@ function(x, y, k) async {
   }
 }""", """
 function(x, y, k) {
-  var __goto = 0, __completer = NewCompleter(CompleterType), __returnValue, __temp1;
+  var __goto = 0,
+    __completer = NewCompleter(CompleterType),
+    __returnValue, __temp1;
   var body = _wrapJsFunctionForAsync(function(__errorCode, __result) {
     if (__errorCode === 1)
       return rethrowHelper(__result, __completer);
@@ -1052,7 +1071,8 @@ function(x, y, k) {
     }
   }""", """
 function(l) {
-  var __goto = 0, __completer = NewCompleter(CompleterType);
+  var __goto = 0,
+    __completer = NewCompleter(CompleterType);
   var body = _wrapJsFunctionForAsync(function(__errorCode, __result) {
     if (__errorCode === 1)
       return rethrowHelper(__result, __completer);
@@ -1099,7 +1119,9 @@ function(l) {
     print(exception);
   }""", """
 function(m) {
-  var __goto = 0, __completer = NewCompleter(CompleterType), __handler = 1, __currentError, __next = [], exception, __exception;
+  var __goto = 0,
+    __completer = NewCompleter(CompleterType),
+    __handler = 1, __currentError, __next = [], exception, __exception;
   var body = _wrapJsFunctionForAsync(function(__errorCode, __result) {
     if (__errorCode === 1) {
       __currentError = __result;

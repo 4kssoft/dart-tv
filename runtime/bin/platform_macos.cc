@@ -16,6 +16,7 @@
 #include <mach-o/dyld.h>
 #include <signal.h>       // NOLINT
 #include <string.h>       // NOLINT
+#include <sys/resource.h>  // NOLINT
 #include <sys/sysctl.h>   // NOLINT
 #include <sys/types.h>    // NOLINT
 #include <sys/utsname.h>  // NOLINT
@@ -33,13 +34,13 @@ int Platform::script_index_ = 1;
 char** Platform::argv_ = NULL;
 
 static void segv_handler(int signal, siginfo_t* siginfo, void* context) {
-  Log::PrintErr(
+  Syslog::PrintErr(
       "\n===== CRASH =====\n"
-      "version=%s\n"
       "si_signo=%s(%d), si_code=%d, si_addr=%p\n",
-      Dart_VersionString(), strsignal(siginfo->si_signo), siginfo->si_signo,
-      siginfo->si_code, siginfo->si_addr);
+      strsignal(siginfo->si_signo), siginfo->si_signo, siginfo->si_code,
+      siginfo->si_addr);
   Dart_DumpNativeStackTrace(context);
+  Dart_PrepareToAbort();
   abort();
 }
 
@@ -47,8 +48,7 @@ bool Platform::Initialize() {
   // Turn off the signal handler for SIGPIPE as it causes the process
   // to terminate on writing to a closed pipe. Without the signal
   // handler error EPIPE is set instead.
-  struct sigaction act;
-  bzero(&act, sizeof(act));
+  struct sigaction act = {};
   act.sa_handler = SIG_IGN;
   if (sigaction(SIGPIPE, &act, 0) != 0) {
     perror("Setting signal handler failed");
@@ -251,9 +251,19 @@ const char* Platform::ResolveExecutablePath() {
   return canon_path;
 }
 
+intptr_t Platform::ResolveExecutablePathInto(char* result, size_t result_size) {
+  return -1;
+}
+
 void Platform::Exit(int exit_code) {
   Console::RestoreConfig();
+  Dart_PrepareToAbort();
   exit(exit_code);
+}
+
+void Platform::SetCoreDumpResourceLimit(int value) {
+  rlimit limit = {static_cast<rlim_t>(value), static_cast<rlim_t>(value)};
+  setrlimit(RLIMIT_CORE, &limit);
 }
 
 }  // namespace bin

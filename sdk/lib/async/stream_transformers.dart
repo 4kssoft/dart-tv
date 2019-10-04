@@ -123,7 +123,7 @@ class _SinkTransformerStreamSubscription<S, T>
     }
   }
 
-  void _handleError(error, [stackTrace]) {
+  void _handleError(error, [StackTrace stackTrace]) {
     try {
       _transformerSink.addError(error, stackTrace);
     } catch (e, s) {
@@ -220,17 +220,9 @@ class _HandlerEventSink<S, T> implements EventSink<S> {
 
   bool get _isClosed => _sink == null;
 
-  _reportClosedSink() {
-    // TODO(29554): throw a StateError, and don't just report the problem.
-    Zone.root
-      ..print("Sink is closed and adding to it is an error.")
-      ..print("  See http://dartbug.com/29554.")
-      ..print(StackTrace.current.toString());
-  }
-
   void add(S data) {
     if (_isClosed) {
-      _reportClosedSink();
+      throw StateError("Sink is closed");
     }
     if (_handleData != null) {
       _handleData(data, _sink);
@@ -241,7 +233,7 @@ class _HandlerEventSink<S, T> implements EventSink<S> {
 
   void addError(Object error, [StackTrace stackTrace]) {
     if (_isClosed) {
-      _reportClosedSink();
+      throw StateError("Sink is closed");
     }
     if (_handleError != null) {
       _handleError(error, stackTrace, _sink);
@@ -282,6 +274,16 @@ class _StreamHandlerTransformer<S, T> extends _StreamSinkTransformer<S, T> {
   }
 }
 
+/**
+ * A StreamTransformer that overrides [StreamTransformer.bind] with a callback.
+ */
+class _StreamBindTransformer<S, T> extends StreamTransformerBase<S, T> {
+  final Stream<T> Function(Stream<S>) _bind;
+  _StreamBindTransformer(this._bind);
+
+  Stream<T> bind(Stream<S> stream) => _bind(stream);
+}
+
 /// A closure mapping a stream and cancelOnError to a StreamSubscription.
 typedef StreamSubscription<T> _SubscriptionTransformer<S, T>(
     Stream<S> stream, bool cancelOnError);
@@ -317,6 +319,8 @@ class _StreamSubscriptionTransformer<S, T> extends StreamTransformerBase<S, T> {
 class _BoundSubscriptionStream<S, T> extends Stream<T> {
   final _SubscriptionTransformer<S, T> _onListen;
   final Stream<S> _stream;
+
+  bool get isBroadcast => _stream.isBroadcast;
 
   _BoundSubscriptionStream(this._stream, this._onListen);
 

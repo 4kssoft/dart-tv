@@ -68,14 +68,14 @@ if [ "$KERNEL" = true ]; then
   if [ ! -e $GEN_DIR/kernel/ddc_sdk.dill ]; then
     echo "DDC SDK must be built first, please run:"
     echo "    pushd $SDKDIR"
-    echo "    ./tools/build.py -m release dartdevk_sdk"
+    echo "    ./tools/build.py -m release dartdevc_kernel_sdk"
     exit 1
   fi
 
   NODE_PATH=$GEN_DIR/kernel/common:$LIBROOT:$NODE_PATH
 
-  $SDK_DIR/sdk/bin/dartdevk --modules=node \
-      --dart-sdk-summary=$GEN_DIR/kernel/ddc_sdk.dill \
+  $SDK_DIR/sdk/bin/dartdevc --kernel --modules=node \
+      --dart-sdk-summary=$GEN_DIR/ddc_sdk.sum \
       -o $LIBROOT/$BASENAME.js $*
 else
 
@@ -93,6 +93,7 @@ else
       -o $LIBROOT/$BASENAME.js $*
 fi
 
+export NODE_PATH
 pushd $LIBROOT > /dev/null
 # TODO(jmesserly): we could have this output the same content as the devtool
 # script, so you could debug the output without recompiling?
@@ -105,14 +106,13 @@ echo "
     }
     let sdk = require(\"dart_sdk\");
     let main = require(\"./$BASENAME\").$BASENAME.main;
-    sdk.dart.ignoreWhitelistedErrors(false);
     try {
       sdk._isolate_helper.startRootIsolate(main, []);
     } catch(e) {
       if (!source_maps) {
         console.log('For Dart source maps: npm install source-map-support');
       }
-      console.error(e.toString(), sdk.dart.stackTrace(e).toString());
+      console.error(e);
       process.exit(1);
     }" \
     > $LIBROOT/$BASENAME.run.js

@@ -17,9 +17,6 @@ cc/Fail0: Fail # These tests are expected to crash on all platforms.
 cc/Fail1: Fail # These tests are expected to crash on all platforms.
 cc/Fail2: Fail # These tests are expected to crash on all platforms.
 
-cc/Dart2JSCompileAll: Fail, Crash # Issue 27369
-cc/Dart2JSCompilerStats: Fail, Crash # Issue 27369
-
 cc/Profiler_InliningIntervalBoundry: Skip # Differences in ia32, debug, release
 
 cc/Sleep: Skip # Flaky # Flaky on buildbot. Issue 5133 and 10409.
@@ -105,9 +102,6 @@ cc/Profiler_SourcePositionOptimized: Skip
 cc/Profiler_BinaryOperatorSourcePosition: Skip
 cc/Profiler_BinaryOperatorSourcePositionOptimized: Skip
 
-[ $compiler == none && $runtime == drt ]
-dart/truncating_ints_test: Skip # Issue 14651
-
 [ $compiler == dart2js ]
 dart/redirection_type_shuffling_test: Skip # Depends on lazy enforcement of type bounds
 dart/byte_array_test: Skip # compilers not aware of byte arrays
@@ -132,17 +126,11 @@ dart/optimized_stacktrace_line_and_column_test: StaticWarning
 [ $compiler == dart2analyzer && $strong ]
 *: Skip # Issue 28649
 
-[ $compiler == app_jit ]
-dart/snapshot_version_test: Fail,OK # Expects to find script snapshot relative to Dart source.
-
 [ $runtime != vm ]
 dart/snapshot_version_test: SkipByDesign  # Spawns processes
 dart/spawn_infinite_loop_test: Skip  # VM shutdown test
 dart/spawn_shutdown_test: Skip  # VM Shutdown test
 dart/hello_fuchsia_test: SkipByDesign # This is a test for fuchsia OS
-
-[ ($runtime == vm || $runtime == dart_precompiled) && $mode == debug && $builder_tag == asan ]
-cc/Dart2JSCompileAll: SkipSlow  # Timeout.
 
 [ $builder_tag == asan ]
 cc/CodeImmutability: Fail,OK # Address Sanitizer turns a crash into a failure.
@@ -165,17 +153,11 @@ cc/IsolateReload_TypeIdentity: Fail # Issue 28349
 cc/IsolateReload_TypeIdentityGeneric: Fail # Issue 28349
 cc/IsolateReload_TypeIdentityParameter: Fail # Issue 28349
 
-[ $compiler == precompiler ]
-dart/byte_array_test: Skip # Incompatible flag --disable_alloc_stubs_after_gc
-
-[ $compiler == precompiler || $mode == product ]
+[ $mode == product ]
 dart/redirection_type_shuffling_test: SkipByDesign # Imports dart:mirrors
 cc/CreateMirrorSystem: SkipByDesign # Imports dart:mirrors
 cc/CoreSnapshotSize: SkipByDesign # Imports dart:mirrors
 cc/StandaloneSnapshotSize: SkipByDesign # Imports dart:mirrors
-
-[ $compiler == app_jit ]
-dart/optimized_stacktrace_line_and_column_test: RuntimeError,OK # app-jit lacks column information
 
 [ $runtime == dart_precompiled ]
 dart/optimized_stacktrace_line_and_column_test: RuntimeError,OK # AOT lacks column information

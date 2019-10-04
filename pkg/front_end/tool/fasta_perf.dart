@@ -8,6 +8,7 @@ library front_end.tool.fasta_perf;
 import 'dart:async';
 import 'dart:io';
 
+import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/src/fasta/ast_builder.dart';
 import 'package:args/args.dart';
 
@@ -35,7 +36,6 @@ main(List<String> args) async {
     print(argParser.usage);
     exit(1);
   }
-  bool strongMode = !options['legacy'];
   var bench = options.rest[0];
   var entryUri = Uri.base.resolve(options.rest[1]);
 
@@ -47,10 +47,10 @@ main(List<String> args) async {
     // TODO(sigmund): enable when we can run the ast-builder standalone.
     // 'parse': () async => parseFiles(files),
     'kernel_gen_e2e': () async {
-      await generateKernel(entryUri, strongMode: strongMode);
+      await generateKernel(entryUri);
     },
     'kernel_gen_e2e_sum': () async {
-      await generateKernel(entryUri, compileSdk: false, strongMode: strongMode);
+      await generateKernel(entryUri, compileSdk: false);
     },
   };
 
@@ -94,10 +94,11 @@ Future setup(Uri entryUri) async {
     ..sdkRoot = sdkRoot
     // Because this is only used to create a uriResolver, we don't allow any
     // whitelisting of error messages in the error handler.
-    ..onError = onErrorHandler(false)
+    ..onDiagnostic = onDiagnosticMessageHandler()
     ..compileSdk = true
-    ..packagesFileUri = Uri.base.resolve('.packages');
-  uriResolver = await new ProcessedOptions(options).getUriTranslator();
+    ..packagesFileUri = Uri.base.resolve('.packages')
+    ..target = createTarget(isFlutter: false);
+  uriResolver = await new ProcessedOptions(options: options).getUriTranslator();
 }
 
 /// Scan [contents] and return the first token produced by the scanner.
@@ -146,7 +147,9 @@ Future<Map<Uri, List<int>>> scanReachableFiles(Uri entryUri) async {
 
   inputSize = 0;
   // adjust size because there is a null-terminator on the contents.
-  for (var source in files.values) inputSize += (source.length - 1);
+  for (var source in files.values) {
+    inputSize += (source.length - 1);
+  }
   print('input size: $inputSize chars');
   var loadTime = loadTimer.elapsedMicroseconds - scanTimer.elapsedMicroseconds;
   report('load', loadTime);
@@ -212,29 +215,28 @@ parseFull(Uri uri, List<int> source) {
 // Note: AstBuilder doesn't build compilation-units or classes, only method
 // bodies. So this listener is not feature complete.
 class _PartialAstBuilder extends AstBuilder {
-  _PartialAstBuilder(Uri uri) : super(null, null, true, uri);
+  _PartialAstBuilder(Uri uri)
+      : super(null, null, true, FeatureSet.fromEnableFlags([]), uri);
 
   // Note: this method converts the body to kernel, so we skip that here.
   @override
-  finishFunction(annotations, formals, asyncModifier, body) {}
+  finishFunction(formals, asyncModifier, body) {}
 }
 
 // Invoke the fasta kernel generator for the program starting in [entryUri]
-generateKernel(Uri entryUri,
-    {bool compileSdk: true, bool strongMode: false}) async {
+generateKernel(Uri entryUri, {bool compileSdk: true}) async {
   // TODO(sigmund): this is here only to compute the input size,
   // we should extract the input size from the frontend instead.
-  scanReachableFiles(entryUri);
+  await scanReachableFiles(entryUri);
 
   var timer = new Stopwatch()..start();
   var options = new CompilerOptions()
     ..sdkRoot = sdkRoot
-    ..reportMessages = true
-    ..onError = onErrorHandler(strongMode)
-    ..strongMode = strongMode
-    ..target = createTarget(isFlutter: false, strongMode: strongMode)
+    ..onDiagnostic = onDiagnosticMessageHandler()
+    ..target = createTarget(isFlutter: false)
     ..packagesFileUri = Uri.base.resolve('.packages')
-    ..compileSdk = compileSdk;
+    ..compileSdk = compileSdk
+    ..environmentDefines = const {};
   if (!compileSdk) {
     // TODO(sigmund): fix this: this is broken since the change to move .dill
     // files out of the patched_sdk folder. It is not failing anywhere because
@@ -242,23 +244,7 @@ generateKernel(Uri entryUri,
     options.sdkSummary = sdkRoot.resolve('outline.dill');
   }
 
-  var entrypoints = [
-    entryUri,
-    // These extra libraries are added to match the same set of libraries
-    // scanned by default by the VM and the other benchmarks.
-    Uri.parse('dart:async'),
-    Uri.parse('dart:collection'),
-    Uri.parse('dart:convert'),
-    Uri.parse('dart:core'),
-    Uri.parse('dart:developer'),
-    Uri.parse('dart:_internal'),
-    Uri.parse('dart:io'),
-    Uri.parse('dart:isolate'),
-    Uri.parse('dart:math'),
-    Uri.parse('dart:mirrors'),
-    Uri.parse('dart:typed_data'),
-  ];
-  var program = await kernelForComponent(entrypoints, options);
+  var program = await kernelForModule([entryUri], options);
 
   timer.stop();
   var name = 'kernel_gen_e2e${compileSdk ? "" : "_sum"}';
@@ -269,15 +255,17 @@ generateKernel(Uri entryUri,
 /// Report that metric [name] took [time] micro-seconds to process
 /// [inputSize] characters.
 void report(String name, int time) {
-  var sb = new StringBuffer();
-  var padding = ' ' * (20 - name.length);
+  StringBuffer sb = new StringBuffer();
+  String padding = ' ' * (20 - name.length);
   sb.write('$name:$padding $time us, ${time ~/ 1000} ms');
-  var invSpeed = (time * 1000 / inputSize).toStringAsFixed(2);
+  String invSpeed = (time * 1000 / inputSize).toStringAsFixed(2);
   sb.write(', $invSpeed ns/char');
   print('$sb');
 }
 
 ArgParser argParser = new ArgParser()
+  // TODO(johnniwinther): Remove legacy option. Legacy mode is no longer
+  //  supported.
   ..addFlag('legacy',
       help: 'run the compiler in legacy-mode',
       defaultsTo: false,

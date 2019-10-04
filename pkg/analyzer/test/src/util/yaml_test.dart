@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -104,7 +104,7 @@ bool containsKey(Map<dynamic, YamlNode> map, dynamic key) =>
 
 void expectEquals(YamlNode actual, YamlNode expected) {
   if (expected is YamlScalar) {
-    expect(actual, new isInstanceOf<YamlScalar>());
+    expect(actual, new TypeMatcher<YamlScalar>());
     expect(expected.value, actual.value);
   } else if (expected is YamlList) {
     if (actual is YamlList) {

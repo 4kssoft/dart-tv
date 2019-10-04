@@ -20,7 +20,8 @@ class Loader {
   explicit Loader(IsolateData* isolate_data);
   ~Loader();
 
-  static void InitForSnapshot(const char* snapshot_uri);
+  static void InitForSnapshot(const char* snapshot_uri,
+                              IsolateData* isolate_data);
 
   static Dart_Handle ReloadNativeExtensions();
 
@@ -36,6 +37,8 @@ class Loader {
                                        Dart_Handle library,
                                        Dart_Handle url);
 
+  IsolateGroupData* isolate_group_data();
+
   Dart_Handle error() const { return error_; }
 
   static void InitOnce();
@@ -49,7 +52,7 @@ class Loader {
   Dart_Handle error_;
   // This monitor is used to protect the pending operations count and the
   // I/O result queue.
-  Monitor* monitor_;
+  Monitor monitor_;
 
   // The number of operations dispatched to the service isolate for loading.
   // Must be accessed with monitor_ held.

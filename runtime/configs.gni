@@ -16,25 +16,19 @@ _base_fuchsia_config = [
   "$_dart_runtime:dart_os_fuchsia_config",
 ]
 
-_jit_config = _base_config + [
-                "$_dart_runtime:dart_maybe_interpreter_config",
-                "$_dart_runtime:dart_maybe_product_config",
-              ]
+_base_host_targeting_host_config = [ "$_dart_runtime:dart_config" ]
 
-_jit_product_config = _base_config + [
-                        "$_dart_runtime:dart_maybe_interpreter_config",
-                        "$_dart_runtime:dart_product_config",
-                      ]
+_maybe_product = [ "$_dart_runtime:dart_maybe_product_config" ]
 
-_jit_interpreter_config = _base_config + [
-                            "$_dart_runtime:dart_interpreter_config",
-                            "$_dart_runtime:dart_maybe_product_config",
-                          ]
+_product = [ "$_dart_runtime:dart_product_config" ]
 
-_jit_product_interpreter_config = _base_config + [
-                                    "$_dart_runtime:dart_interpreter_config",
-                                    "$_dart_runtime:dart_product_config",
-                                  ]
+_jit_config = _base_config + _maybe_product
+
+_jit_product_config = _base_config + _product
+
+_base_libfuzzer_config = [ "$_dart_runtime:dart_libfuzzer_config" ]
+
+_libfuzzer_config = _base_config + _base_libfuzzer_config
 
 _precompiled_runtime_config =
     _base_config + [
@@ -48,43 +42,29 @@ _precompiled_runtime_product_config =
       "$_dart_runtime:dart_product_config",
     ]
 
-_precompiler_config = _base_config + [
-                        "$_dart_runtime:dart_maybe_product_config",
-                        "$_dart_runtime:dart_precompiler_config",
-                      ]
-
-_precompiler_product_config = _base_config + [
-                                "$_dart_runtime:dart_product_config",
-                                "$_dart_runtime:dart_precompiler_config",
-                              ]
+_nosnapshot_precompiler_base = [
+  "$_dart_runtime:dart_nosnapshot_config",
+  "$_dart_runtime:dart_precompiler_config",
+]
 
 _nosnapshot_with_precompiler_config =
-    _base_config + [
-      "$_dart_runtime:dart_maybe_product_config",
-      "$_dart_runtime:dart_nosnapshot_config",
-      "$_dart_runtime:dart_precompiler_config",
-    ]
+    _base_config + _nosnapshot_precompiler_base + _maybe_product
 
 _nosnapshot_with_precompiler_product_config =
-    _base_config + [
-      "$_dart_runtime:dart_product_config",
-      "$_dart_runtime:dart_nosnapshot_config",
-      "$_dart_runtime:dart_precompiler_config",
-    ]
+    _base_config + _nosnapshot_precompiler_base + _product
 
 _nosnapshot_with_precompiler_fuchsia_config =
-    _base_fuchsia_config + [
-      "$_dart_runtime:dart_maybe_product_config",
-      "$_dart_runtime:dart_nosnapshot_config",
-      "$_dart_runtime:dart_precompiler_config",
-    ]
+    _base_fuchsia_config + _nosnapshot_precompiler_base + _maybe_product
 
 _nosnapshot_with_precompiler_product_fuchsia_config =
-    _base_fuchsia_config + [
-      "$_dart_runtime:dart_product_config",
-      "$_dart_runtime:dart_nosnapshot_config",
-      "$_dart_runtime:dart_precompiler_config",
-    ]
+    _base_fuchsia_config + _nosnapshot_precompiler_base + _product
+
+_nosnapshot_with_precompiler_host_targeting_host_config =
+    _base_host_targeting_host_config + _nosnapshot_precompiler_base +
+    _maybe_product
+
+_nosnapshot_with_precompiler_product_host_targeting_host_config =
+    _base_host_targeting_host_config + _nosnapshot_precompiler_base + _product
 
 _all_configs = [
   {
@@ -108,16 +88,6 @@ _all_configs = [
     snapshot = true
   },
   {
-    suffix = "_with_precompiler"
-    configs = _precompiler_config
-    snapshot = true
-  },
-  {
-    suffix = "_with_precompiler_product"
-    configs = _precompiler_product_config
-    snapshot = true
-  },
-  {
     suffix = "_nosnapshot_with_precompiler"
     configs = _nosnapshot_with_precompiler_config
     snapshot = false
@@ -137,23 +107,22 @@ _all_configs = [
     configs = _nosnapshot_with_precompiler_product_fuchsia_config
     snapshot = false
   },
+  {
+    suffix = "_nosnapshot_with_precompiler_host_targeting_host"
+    configs = _nosnapshot_with_precompiler_host_targeting_host_config
+    snapshot = false
+  },
+  {
+    suffix = "_nosnapshot_with_precompiler_product_host_targeting_host"
+    configs = _nosnapshot_with_precompiler_product_host_targeting_host_config
+    snapshot = false
+  },
+  {
+    suffix = "_libfuzzer"
+    configs = _libfuzzer_config
+    snapshot = true
+  },
 ]
-
-# The interpreter is not currently needed on Windows.
-if (!is_win) {
-  _all_configs += [
-    {
-      suffix = "_jit_interpreter"
-      configs = _jit_interpreter_config
-      snapshot = true
-    },
-    {
-      suffix = "_jit_product_interpreter"
-      configs = _jit_product_interpreter_config
-      snapshot = true
-    },
-  ]
-}
 
 # This template creates a target for each of the configurations listed above.
 # For example:
@@ -206,12 +175,6 @@ template("library_for_all_configs") {
   if (defined(invoker.extra_deps)) {
     extra_deps += invoker.extra_deps
   }
-  not_needed(invoker,
-             [
-               "snapshot_sources",
-               "nosnapshot_sources",
-               "nosnapshot_deps",
-             ])
   foreach(conf, _all_configs) {
     target(invoker.target_type, "${target_name}${conf.suffix}") {
       forward_variables_from(invoker,
@@ -221,9 +184,6 @@ template("library_for_all_configs") {
                                "extra_deps",
                                "configurable_deps",
                              ])
-      if (is_fuchsia) {
-        configs -= [ "//build/config:symbol_visibility_hidden" ]
-      }
       configs += conf.configs + extra_configs
       configured_deps = []
       foreach(dep, configurable_deps) {
@@ -231,11 +191,20 @@ template("library_for_all_configs") {
       }
       deps = configured_deps + extra_deps
       if (conf.snapshot) {
-        if (defined(invoker.snapshot_sources)) {
+        if (defined(snapshot_sources)) {
           sources += snapshot_sources
         }
+        if (defined(nosnapshot_sources)) {
+          not_needed([ "nosnapshot_sources" ])
+        }
+        if (defined(nosnapshot_deps)) {
+          not_needed([ "nosnapshot_deps" ])
+        }
       } else {
-        if (defined(invoker.nosnapshot_sources)) {
+        if (defined(snapshot_sources)) {
+          not_needed([ "snapshot_sources" ])
+        }
+        if (defined(nosnapshot_sources)) {
           sources += nosnapshot_sources
         }
         if (defined(nosnapshot_deps)) {

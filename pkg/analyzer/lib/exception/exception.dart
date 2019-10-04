@@ -1,8 +1,6 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
-library analyzer.exception.exception;
 
 /**
  * An exception that occurred during the analysis of one or more sources.
@@ -23,7 +21,7 @@ class AnalysisException implements Exception {
    * Initialize a newly created exception to have the given [message] and
    * [cause].
    */
-  AnalysisException([this.message = 'Exception', this.cause = null]);
+  AnalysisException([this.message = 'Exception', this.cause]);
 
   String toString() {
     StringBuffer buffer = new StringBuffer();

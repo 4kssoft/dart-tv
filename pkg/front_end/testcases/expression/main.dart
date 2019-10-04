@@ -7,31 +7,42 @@ library main;
 import 'dart:io' show File, Process, exit;
 
 int doitstat(int x) => x + 1;
+int _privateToplevel(int x) => x + 1;
 
 int globalVar = 6;
+int _globalPrivate = 7;
 
 class A<T> {
   const A();
   static int doit(int x) => x + 1;
   static int staticVar = 3;
   int doit_with_this(int x) => x + 1;
+
+  final int _priv = 0;
+  void _privMethod() {}
 }
 
 T id<T>(T x) => x;
 
-class B {
+class B extends A<Object> {
   int x;
-  final int y;
+  final int y = 7;
+  int _priv;
   String get z {
     return "";
   }
 
   void set z(int _) {}
+  void _privMethod() {}
 }
 
 class Bound {}
 
-class C<T extends Bound> {}
+class HasPrivate {
+  int _priv = 0;
+}
+
+class C<T extends Bound> extends HasPrivate {}
 
 void hasBound<T extends Bound>() {}
 
@@ -47,6 +58,13 @@ class D<T> {
     List<T> s;
   }
 }
+
+abstract class Built<V extends Built<V, B>, B extends Builder<V, B>> {}
+
+abstract class Builder<V extends Built<V, B>, B extends Builder<V, B>> {}
+
+class MiddlewareApi<State extends Built<State, StateBuilder>,
+    StateBuilder extends Builder<State, StateBuilder>> {}
 
 main() {
   exit(0);

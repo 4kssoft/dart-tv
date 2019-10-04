@@ -6,7 +6,7 @@ library universe.function_set;
 
 import '../common/names.dart' show Identifiers, Selectors;
 import '../elements/entities.dart';
-import '../types/abstract_value_domain.dart';
+import '../inferrer/abstract_value_domain.dart';
 import '../util/util.dart' show Hashing, Setlet;
 import 'selector.dart' show Selector;
 
@@ -20,7 +20,7 @@ class FunctionSet {
     Map<String, FunctionSetNode> nodes = new Map<String, FunctionSetNode>();
     for (MemberEntity member in liveInstanceMembers) {
       String name = member.name;
-      nodes.putIfAbsent(name, () => new FunctionSetNode(name)).add(member);
+      (nodes[name] ??= new FunctionSetNode(name)).add(member);
     }
     return new FunctionSet.internal(nodes);
   }
@@ -96,6 +96,7 @@ class FunctionSet {
 class SelectorMask {
   final Selector selector;
   final AbstractValue receiver;
+  @override
   final int hashCode;
 
   SelectorMask(this.selector, this.receiver)
@@ -108,18 +109,24 @@ class SelectorMask {
 
   bool applies(MemberEntity element, AbstractValueDomain domain) {
     if (!selector.appliesUnnamed(element)) return false;
-    return domain.canHit(receiver, element, selector);
+    return domain
+        .isTargetingMember(receiver, element, selector.memberName)
+        .isPotentiallyTrue;
   }
 
   bool needsNoSuchMethodHandling(AbstractValueDomain domain) {
-    return domain.needsNoSuchMethodHandling(receiver, selector);
+    return domain
+        .needsNoSuchMethodHandling(receiver, selector)
+        .isPotentiallyTrue;
   }
 
+  @override
   bool operator ==(other) {
     if (identical(this, other)) return true;
     return selector == other.selector && receiver == other.receiver;
   }
 
+  @override
   String toString() => '($selector,$receiver)';
 }
 
@@ -234,6 +241,7 @@ class FunctionSetNode {
     return result;
   }
 
+  @override
   String toString() {
     StringBuffer sb = new StringBuffer();
     sb.write('FunctionSetNode(');
@@ -269,6 +277,7 @@ class EmptyFunctionSetQuery implements FunctionSetQuery {
   @override
   Iterable<MemberEntity> get functions => const <MemberEntity>[];
 
+  @override
   String toString() => '<empty>';
 }
 
@@ -285,5 +294,6 @@ class FullFunctionSetQuery implements FunctionSetQuery {
     return _receiver ??= domain.computeReceiver(functions);
   }
 
+  @override
   String toString() => '$_receiver:$functions';
 }

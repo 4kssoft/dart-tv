@@ -26,6 +26,7 @@ class UnaryOperator {
   Selector get selector => new Selector(SelectorKind.OPERATOR,
       new PublicName(selectorName), CallStructure.NO_ARGS);
 
+  @override
   String toString() => name;
 
   /// The unary ! operator.
@@ -78,6 +79,7 @@ enum BinaryOperatorKind {
   MOD,
   SHL,
   SHR,
+  SHRU,
   GTEQ,
   GT,
   LTEQ,
@@ -102,6 +104,7 @@ class BinaryOperator {
 
   String get selectorName => name;
 
+  @override
   String toString() => name;
 
   /// The == operator.
@@ -146,6 +149,10 @@ class BinaryOperator {
   /// The binary >> operator.
   static const BinaryOperator SHR =
       const BinaryOperator._(BinaryOperatorKind.SHR, '>>');
+
+  /// The binary >>> operator.
+  static const BinaryOperator SHRU =
+      const BinaryOperator._(BinaryOperatorKind.SHRU, '>>');
 
   /// The binary >= operator.
   static const BinaryOperator GTEQ =
@@ -224,6 +231,8 @@ class BinaryOperator {
         return SHL;
       case '>>':
         return SHR;
+      case '>>>':
+        return SHRU;
       case '>=':
         return GTEQ;
       case '>':
@@ -268,6 +277,8 @@ class BinaryOperator {
         return SHL;
       case BinaryOperatorKind.SHR:
         return SHR;
+      case BinaryOperatorKind.SHRU:
+        return SHRU;
       case BinaryOperatorKind.GTEQ:
         return GTEQ;
       case BinaryOperatorKind.GT:
@@ -297,8 +308,10 @@ class BinaryOperator {
 class _NotEqualsOperator extends BinaryOperator {
   const _NotEqualsOperator() : super._(BinaryOperatorKind.NOT_EQ, '!=');
 
+  @override
   bool get isUserDefinable => false;
 
+  @override
   String get selectorName => '==';
 }
 
@@ -308,8 +321,10 @@ class _LogicalOperator extends BinaryOperator {
   const _LogicalOperator(BinaryOperatorKind kind, String name)
       : super._(kind, name);
 
+  @override
   bool get isUserDefinable => false;
 
+  @override
   String get selectorName => null;
 }
 
@@ -318,7 +333,9 @@ class _IfNullOperator extends BinaryOperator {
   const _IfNullOperator(BinaryOperatorKind kind, String name)
       : super._(kind, name);
 
+  @override
   bool get isUserDefinable => false;
 
+  @override
   String get selectorName => '??';
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -12,15 +12,30 @@ import '../support/integration_tests.dart';
 main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(AnalysisErrorIntegrationTest);
-    // TODO(scheglov): Restore similar test coverage when the front-end API
-    // allows it.  See https://github.com/dart-lang/sdk/issues/32258.
-    // defineReflectiveTests(AnalysisErrorIntegrationTest_UseCFE);
   });
 }
 
 @reflectiveTest
 class AnalysisErrorIntegrationTest
     extends AbstractAnalysisServerIntegrationTest {
+  test_analysisRootDoesNotExist() async {
+    String packagePath = sourcePath('package');
+    String filePath = sourcePath('package/lib/test.dart');
+    String content = '''
+main() {
+  print(null) // parse error: missing ';'
+}''';
+    await sendServerSetSubscriptions([ServerService.STATUS]);
+    await sendAnalysisUpdateContent({filePath: AddContentOverlay(content)});
+    await sendAnalysisSetAnalysisRoots([packagePath], []);
+    await analysisFinished;
+
+    expect(currentAnalysisErrors[filePath], isList);
+    List<AnalysisError> errors = currentAnalysisErrors[filePath];
+    expect(errors, hasLength(1));
+    expect(errors[0].location.file, equals(filePath));
+  }
+
   test_detect_simple_error() {
     String pathname = sourcePath('test.dart');
     writeFile(pathname, '''
@@ -91,7 +106,7 @@ abstract class C extends B {
   }
 }
 ''');
-    // ignore: deprecated_member_use
+    // ignore: deprecated_member_use_from_same_package
     await sendAnalysisUpdateOptions(
         new AnalysisOptions()..enableSuperMixins = true);
     standardAnalysisSetup();
@@ -99,24 +114,5 @@ abstract class C extends B {
     expect(currentAnalysisErrors[pathname], isList);
     List<AnalysisError> errors = currentAnalysisErrors[pathname];
     expect(errors, isEmpty);
-  }
-}
-
-@reflectiveTest
-class AnalysisErrorIntegrationTest_UseCFE extends AnalysisErrorIntegrationTest {
-  @override
-  bool get useCFE => true;
-
-  @override
-  @failingTest
-  test_super_mixins_disabled() {
-    // Disabling super mixins is not supported in the new FE.
-    return super.test_super_mixins_disabled();
-  }
-
-  @override
-  test_super_mixins_enabled() {
-    // This does pass with the new FE.
-    return super.test_super_mixins_enabled();
   }
 }

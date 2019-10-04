@@ -8,13 +8,14 @@ import 'package:kernel/ast.dart' as ir;
 
 import '../common_elements.dart';
 import '../compiler.dart' show Compiler;
-import '../constants/values.dart' show ConstantValue;
+import '../constants/values.dart';
 import '../deferred_load.dart';
 import '../elements/entities.dart';
+import '../ir/util.dart';
 import 'element_map.dart';
 
 class KernelDeferredLoadTask extends DeferredLoadTask {
-  KernelToElementMapForImpact _elementMap;
+  KernelToElementMap _elementMap;
   Map<ir.Library, Set<ir.NamedNode>> _additionalExportsSets =
       <ir.Library, Set<ir.NamedNode>>{};
 
@@ -22,36 +23,45 @@ class KernelDeferredLoadTask extends DeferredLoadTask {
 
   Iterable<ImportEntity> _findImportsTo(ir.NamedNode node, String nodeName,
       ir.Library enclosingLibrary, LibraryEntity library) {
-    List<ImportEntity> imports = [];
-    ir.Library source = _elementMap.getLibraryNode(library);
-    for (ir.LibraryDependency dependency in source.dependencies) {
-      if (dependency.isExport) continue;
-      if (!_isVisible(dependency.combinators, nodeName)) continue;
-      if (enclosingLibrary == dependency.targetLibrary ||
-          additionalExports(dependency.targetLibrary).contains(node)) {
-        imports.add(_elementMap.getImport(dependency));
+    return measureSubtask('find-imports', () {
+      List<ImportEntity> imports = [];
+      ir.Library source = _elementMap.getLibraryNode(library);
+      if (!source.dependencies.any((d) => d.isDeferred)) return const [];
+      for (ir.LibraryDependency dependency in source.dependencies) {
+        if (dependency.isExport) continue;
+        if (!_isVisible(dependency.combinators, nodeName)) continue;
+        if (enclosingLibrary == dependency.targetLibrary ||
+            additionalExports(dependency.targetLibrary).contains(node)) {
+          imports.add(_elementMap.getImport(dependency));
+        }
       }
-    }
-    return imports;
+      return imports;
+    });
   }
 
   @override
   Iterable<ImportEntity> classImportsTo(
       ClassEntity element, LibraryEntity library) {
-    ClassDefinition definition = _elementMap.getClassDefinition(element);
-    if (definition.kind != ClassKind.regular) {
-      // You can't import closures.
-      return const <ImportEntity>[];
-    }
-    ir.Class node = definition.node;
+    ir.Class node = _elementMap.getClassNode(element);
+    return _findImportsTo(node, node.name, node.enclosingLibrary, library);
+  }
+
+  @override
+  Iterable<ImportEntity> typedefImportsTo(
+      TypedefEntity element, LibraryEntity library) {
+    ir.Typedef node = _elementMap.getTypedefNode(element);
     return _findImportsTo(node, node.name, node.enclosingLibrary, library);
   }
 
   @override
   Iterable<ImportEntity> memberImportsTo(
       Entity element, LibraryEntity library) {
-    ir.Member node = _elementMap.getMemberDefinition(element).node;
-    return _findImportsTo(node, node.name.name, node.enclosingLibrary, library);
+    ir.Member node = _elementMap.getMemberNode(element);
+    return _findImportsTo(
+        node is ir.Constructor ? node.enclosingClass : node,
+        node is ir.Constructor ? node.enclosingClass.name : node.name.name,
+        node.enclosingLibrary,
+        library);
   }
 
   @override
@@ -68,7 +78,7 @@ class KernelDeferredLoadTask extends DeferredLoadTask {
 
   @override
   void collectConstantsInBody(MemberEntity element, Dependencies dependencies) {
-    ir.Member node = _elementMap.getMemberDefinition(element).node;
+    ir.Member node = _elementMap.getMemberNode(element);
 
     // Fetch the internal node in order to skip annotations on the member.
     // TODO(sigmund): replace this pattern when the kernel-ast provides a better
@@ -83,22 +93,6 @@ class KernelDeferredLoadTask extends DeferredLoadTask {
       node.initializers.forEach((i) => i.accept(visitor));
     }
     node.function?.accept(visitor);
-  }
-
-  /// Adds extra dependencies coming from mirror usage.
-  @override
-  void addDeferredMirrorElements(WorkQueue queue) {
-    throw new UnsupportedError(
-        "KernelDeferredLoadTask.addDeferredMirrorElements");
-  }
-
-  /// Add extra dependencies coming from mirror usage in [root] marking it with
-  /// [newSet].
-  @override
-  void addMirrorElementsForLibrary(
-      WorkQueue queue, LibraryEntity root, ImportSet newSet) {
-    throw new UnsupportedError(
-        "KernelDeferredLoadTask.addMirrorElementsForLibrary");
   }
 
   Set<ir.NamedNode> additionalExports(ir.Library library) {
@@ -123,7 +117,7 @@ bool _isVisible(List<ir.Combinator> combinators, String name) {
 }
 
 class ConstantCollector extends ir.RecursiveVisitor {
-  final KernelToElementMapForImpact elementMap;
+  final KernelToElementMap elementMap;
   final Dependencies dependencies;
 
   ConstantCollector(this.elementMap, this.dependencies);
@@ -134,7 +128,8 @@ class ConstantCollector extends ir.RecursiveVisitor {
     ConstantValue constant =
         elementMap.getConstantValue(node, requireConstant: required);
     if (constant != null) {
-      dependencies.constants.add(constant);
+      dependencies.addConstant(
+          constant, elementMap.getImport(getDeferredImport(node)));
     }
   }
 
@@ -166,6 +161,15 @@ class ConstantCollector extends ir.RecursiveVisitor {
   }
 
   @override
+  void visitSetLiteral(ir.SetLiteral literal) {
+    if (literal.isConst) {
+      add(literal);
+    } else {
+      super.visitSetLiteral(literal);
+    }
+  }
+
+  @override
   void visitMapLiteral(ir.MapLiteral literal) {
     if (literal.isConst) {
       add(literal);
@@ -184,6 +188,20 @@ class ConstantCollector extends ir.RecursiveVisitor {
   }
 
   @override
+  void visitTypeParameter(ir.TypeParameter node) {
+    // We avoid visiting metadata on the type parameter declaration. The bound
+    // cannot hold constants so we skip that as well.
+  }
+
+  @override
+  void visitVariableDeclaration(ir.VariableDeclaration node) {
+    // We avoid visiting metadata on the parameter declaration by only visiting
+    // the initializer. The type cannot hold constants so can kan skip that
+    // as well.
+    node.initializer?.accept(this);
+  }
+
+  @override
   void visitTypeLiteral(ir.TypeLiteral node) {
     if (node.type is! ir.TypeParameterType) add(node);
   }
@@ -193,5 +211,11 @@ class ConstantCollector extends ir.RecursiveVisitor {
     // TODO(johnniwinther): The CFE should mark constant instantiations as
     // constant.
     add(node, required: false);
+    super.visitInstantiation(node);
+  }
+
+  @override
+  void visitConstantExpression(ir.ConstantExpression node) {
+    add(node);
   }
 }

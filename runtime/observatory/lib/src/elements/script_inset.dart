@@ -16,7 +16,7 @@ import 'package:observatory/src/elements/helpers/tag.dart';
 import 'package:observatory/src/elements/helpers/uris.dart';
 import 'package:observatory/utils.dart';
 
-class ScriptInsetElement extends HtmlElement implements Renderable {
+class ScriptInsetElement extends CustomElement implements Renderable {
   static const tag = const Tag<ScriptInsetElement>('script-inset');
 
   RenderingScheduler _r;
@@ -58,8 +58,8 @@ class ScriptInsetElement extends HtmlElement implements Renderable {
     assert(events != null);
     assert(inDebuggerContext != null);
     assert(variables != null);
-    ScriptInsetElement e = document.createElement(tag.name);
-    e._r = new RenderingScheduler(e, queue: queue);
+    ScriptInsetElement e = new ScriptInsetElement.created();
+    e._r = new RenderingScheduler<ScriptInsetElement>(e, queue: queue);
     e._isolate = isolate;
     e._script = script;
     e._scripts = scripts;
@@ -73,9 +73,9 @@ class ScriptInsetElement extends HtmlElement implements Renderable {
     return e;
   }
 
-  ScriptInsetElement.created() : super.created();
+  ScriptInsetElement.created() : super.created(tag);
 
-  bool get noSource => _startPos == -1;
+  bool get noSource => _startPos == -1 || _loadedScript.source == null;
 
   @override
   void attached() {
@@ -84,8 +84,8 @@ class ScriptInsetElement extends HtmlElement implements Renderable {
     _subscription = _events.onDebugEvent
         .where((e) => e is M.BreakpointEvent)
         .map((e) => (e as M.BreakpointEvent).breakpoint)
-        .listen((M.Breakpoint b) {
-      final loc = b.location;
+        .listen((M.Breakpoint b) async {
+      final M.Location loc = b.location;
       int line;
       if (loc.script.id == script.id) {
         if (loc.tokenPos != null) {
@@ -94,7 +94,14 @@ class ScriptInsetElement extends HtmlElement implements Renderable {
           line = (loc as dynamic).line;
         }
       } else {
-        line = (loc as dynamic).line;
+        try {
+          line = (loc as dynamic).line;
+        } on NoSuchMethodError {
+          if (loc.tokenPos != null) {
+            M.Script scriptUsed = await _scripts.get(_isolate, loc.script.id);
+            line = scriptUsed.tokenToLine(loc.tokenPos);
+          }
+        }
       }
       if ((line == null) || ((line >= _startLine) && (line <= _endLine))) {
         _r.dirty();
@@ -106,16 +113,16 @@ class ScriptInsetElement extends HtmlElement implements Renderable {
   @override
   void detached() {
     super.detached();
-    children = [];
+    children = <Element>[];
     _r.disable(notify: true);
     _subscription.cancel();
   }
 
   void render() {
-    if (noSource) {
-      children = [new SpanElement()..text = 'No source'];
-    } else if (_loadedScript == null) {
-      children = [new SpanElement()..text = 'Loading...'];
+    if (_loadedScript == null) {
+      children = <Element>[new SpanElement()..text = 'Loading...'];
+    } else if (noSource) {
+      children = <Element>[new SpanElement()..text = 'No source'];
     } else {
       final table = linesTable();
       var firstBuild = false;
@@ -125,7 +132,7 @@ class ScriptInsetElement extends HtmlElement implements Renderable {
 
         firstBuild = true;
       }
-      children = [container];
+      children = <Element>[container];
       container.children.clear();
       container.children.add(table);
       _makeCssClassUncopyable(table, "noCopy");
@@ -150,7 +157,7 @@ class ScriptInsetElement extends HtmlElement implements Renderable {
   int _startLine;
   int _endLine;
 
-  Map<int, List<S.ServiceMap>> _rangeMap = {};
+  Map/*<int, List<S.ServiceMap>>*/ _rangeMap = {};
   Set _callSites = new Set<S.CallSite>();
   Set _possibleBreakpointLines = new Set<int>();
   Map<int, ScriptLineProfile> _profileMap = {};
@@ -279,6 +286,8 @@ class ScriptInsetElement extends HtmlElement implements Renderable {
   }
 
   Future _computeAnnotations() async {
+    if (noSource) return;
+
     _startLine = (_startPos != null
         ? _loadedScript.tokenToLine(_startPos)
         : 1 + _loadedScript.lineOffset);
@@ -474,7 +483,7 @@ class ScriptInsetElement extends HtmlElement implements Renderable {
     var rootUri = Uri.parse(script.library.uri);
     if (rootUri.scheme == 'dart') {
       // The relative paths from dart:* libraries to their parts are not valid.
-      rootUri = new Uri.directory(script.library.uri);
+      rootUri = Uri.parse(script.library.uri + '/');
     }
     var targetUri = rootUri.resolve(relativeUri);
     for (M.Script s in script.library.scripts) {
@@ -608,7 +617,7 @@ class ScriptInsetElement extends HtmlElement implements Renderable {
       button.disabled = false;
     });
     button.title = 'Refresh coverage';
-    button.children = [_iconRefresh.clone(true)];
+    button.children = <Element>[_iconRefresh.clone(true)];
     return button;
   }
 
@@ -624,7 +633,7 @@ class ScriptInsetElement extends HtmlElement implements Renderable {
       _refresh();
       button.disabled = false;
     });
-    button.children = [_iconWhatsHot.clone(true)];
+    button.children = <Element>[_iconWhatsHot.clone(true)];
     return button;
   }
 
@@ -830,7 +839,8 @@ class ScriptInsetElement extends HtmlElement implements Renderable {
 
   Element lineNumberElement(S.ScriptLine line, int lineNumPad) {
     var lineNumber = line == null ? "..." : line.line;
-    var e = span("$nbsp${lineNumber.toString().padLeft(lineNumPad,nbsp)}$nbsp");
+    var e =
+        span("$nbsp${lineNumber.toString().padLeft(lineNumPad, nbsp)}$nbsp");
     e.classes.add('noCopy');
     if (lineNumber == _currentLine) {
       hitsCurrent(e);
@@ -1367,29 +1377,29 @@ class ScriptLineProfile {
 final SvgSvgElement _iconRefresh = new SvgSvgElement()
   ..setAttribute('width', '24')
   ..setAttribute('height', '24')
-  ..children = [
+  ..children = <Element>[
     new PathElement()
       ..setAttribute(
           'd',
           'M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 '
-          '3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 '
-          '7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 '
-          '0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 '
-          '1.78L13 11h7V4l-2.35 2.35z')
+              '3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 '
+              '7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 '
+              '0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 '
+              '1.78L13 11h7V4l-2.35 2.35z')
   ];
 
 final SvgSvgElement _iconWhatsHot = new SvgSvgElement()
   ..setAttribute('width', '24')
   ..setAttribute('height', '24')
-  ..children = [
+  ..children = <Element>[
     new PathElement()
       ..setAttribute(
           'd',
           'M13.5.67s.74 2.65.74 4.8c0 2.06-1.35 3.73-3.41 '
-          '3.73-2.07 0-3.63-1.67-3.63-3.73l.03-.36C5.21 7.51 '
-          '4 10.62 4 14c0 4.42 3.58 8 8 8s8-3.58 8-8C20 8.61 '
-          '17.41 3.8 13.5.67zM11.71 19c-1.78 '
-          '0-3.22-1.4-3.22-3.14 0-1.62 1.05-2.76 2.81-3.12 '
-          '1.77-.36 3.6-1.21 4.62-2.58.39 1.29.59 2.65.59 '
-          '4.04 0 2.65-2.15 4.8-4.8 4.8z')
+              '3.73-2.07 0-3.63-1.67-3.63-3.73l.03-.36C5.21 7.51 '
+              '4 10.62 4 14c0 4.42 3.58 8 8 8s8-3.58 8-8C20 8.61 '
+              '17.41 3.8 13.5.67zM11.71 19c-1.78 '
+              '0-3.22-1.4-3.22-3.14 0-1.62 1.05-2.76 2.81-3.12 '
+              '1.77-.36 3.6-1.21 4.62-2.58.39 1.29.59 2.65.59 '
+              '4.04 0 2.65-2.15 4.8-4.8 4.8z')
   ];

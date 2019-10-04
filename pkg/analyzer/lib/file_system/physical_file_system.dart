@@ -1,12 +1,10 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-library analyzer.file_system.physical_file_system;
-
 import 'dart:async';
-import 'dart:core';
 import 'dart:io' as io;
+import 'dart:typed_data';
 
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/src/generated/source_io.dart';
@@ -15,18 +13,25 @@ import 'package:path/path.dart';
 import 'package:watcher/watcher.dart';
 
 /**
- * The name of the directory containing plugin specific subfolders used to
- * store data across sessions.
+ * The name of the directory containing plugin specific subfolders used to store
+ * data across sessions.
  */
 const String _SERVER_DIR = ".dartServer";
 
 /**
- * Returns the path to the user's home directory.
+ * Returns the path to default state location.
+ *
+ * Generally this is ~/.dartServer. It can be overridden via the
+ * ANALYZER_STATE_LOCATION_OVERRIDE environment variable, in which case this
+ * method will return the contents of that environment variable.
  */
 String _getStandardStateLocation() {
-  final home = io.Platform.isWindows
-      ? io.Platform.environment['LOCALAPPDATA']
-      : io.Platform.environment['HOME'];
+  final Map<String, String> env = io.Platform.environment;
+  if (env.containsKey('ANALYZER_STATE_LOCATION_OVERRIDE')) {
+    return env['ANALYZER_STATE_LOCATION_OVERRIDE'];
+  }
+
+  final home = io.Platform.isWindows ? env['LOCALAPPDATA'] : env['HOME'];
   return home != null && io.FileSystemEntity.isDirectorySync(home)
       ? join(home, _SERVER_DIR)
       : null;
@@ -83,13 +88,13 @@ class PhysicalResourceProvider implements ResourceProvider {
 
   @override
   File getFile(String path) {
-    path = normalize(path);
+    _ensureAbsoluteAndNormalized(path);
     return new _PhysicalFile(new io.File(path));
   }
 
   @override
   Folder getFolder(String path) {
-    path = normalize(path);
+    _ensureAbsoluteAndNormalized(path);
     return new _PhysicalFolder(new io.Directory(path));
   }
 
@@ -103,6 +108,7 @@ class PhysicalResourceProvider implements ResourceProvider {
 
   @override
   Resource getResource(String path) {
+    _ensureAbsoluteAndNormalized(path);
     if (io.FileSystemEntity.isDirectorySync(path)) {
       return getFolder(path);
     } else {
@@ -118,6 +124,22 @@ class PhysicalResourceProvider implements ResourceProvider {
       return new _PhysicalFolder(directory);
     }
     return null;
+  }
+
+  /**
+   * The file system abstraction supports only absolute and normalized paths.
+   * This method is used to validate any input paths to prevent errors later.
+   */
+  void _ensureAbsoluteAndNormalized(String path) {
+    assert(() {
+      if (!pathContext.isAbsolute(path)) {
+        throw new ArgumentError("Path must be absolute : $path");
+      }
+      if (pathContext.normalize(path) != path) {
+        throw new ArgumentError("Path must be normalized : $path");
+      }
+      return true;
+    }());
   }
 }
 
@@ -172,7 +194,7 @@ class _PhysicalFile extends _PhysicalResource implements File {
   }
 
   @override
-  List<int> readAsBytesSync() {
+  Uint8List readAsBytesSync() {
     _throwIfWindowsDeviceDriver();
     try {
       return _file.readAsBytesSync();
@@ -254,6 +276,7 @@ class _PhysicalFolder extends _PhysicalResource implements Folder {
 
   @override
   bool contains(String path) {
+    PhysicalResourceProvider.INSTANCE._ensureAbsoluteAndNormalized(path);
     return pathContext.isWithin(this.path, path);
   }
 
@@ -359,7 +382,7 @@ abstract class _PhysicalResource implements Resource {
   }
 
   @override
-  String get path => _entry.absolute.path;
+  String get path => _entry.path;
 
   /**
    * Return the path context used by this resource provider.

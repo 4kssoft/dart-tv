@@ -2,16 +2,12 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-/*kernel.class: A:*/
-/*!kernel.class: A:implicit=[A]*/
+/*strong.class: A:implicit=[A]*/
+/*omit.class: A:implicit=[A]*/
 abstract class A {}
 
 class B implements A {}
 
-/*kernel.class: C:
- deps=[lookup],
- explicit=[C<lookup.T>]
-*/
 /*strong.class: C:
   deps=[lookup],
   explicit=[C<lookup.T>,Map<String,C>],
@@ -30,8 +26,8 @@ void setup() {
   map['x'] = new C<B>();
 }
 
-/*kernel.element: lookup:direct,explicit=[C<lookup.T>]*/
-/*!kernel.element: lookup:direct,explicit=[C<lookup.T>],needsArgs*/
+/*strong.member: lookup:direct,explicit=[C<lookup.T>],needsArgs*/
+/*omit.member: lookup:direct,explicit=[C<lookup.T>],needsArgs*/
 C<T> lookup<T>(String key) {
   final value = map[key];
   if (value != null && value is C<T>) {

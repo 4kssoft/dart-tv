@@ -6,7 +6,7 @@ library dart2js.inferrer.type_graph_dump;
 import '../../compiler_new.dart';
 import '../elements/entities.dart';
 import '../elements/entity_utils.dart' as utils;
-import '../types/abstract_value_domain.dart';
+import 'abstract_value_domain.dart';
 import 'inferrer_engine.dart';
 import 'type_graph_nodes.dart';
 import 'debug.dart';
@@ -317,6 +317,7 @@ class _GraphGenerator extends TypeInformationVisitor {
     }
   }
 
+  @override
   void visitNarrowTypeInformation(NarrowTypeInformation info) {
     // Omit unused Narrows.
     if (!PRINT_GRAPH_ALL_NODES && info.users.isEmpty) return;
@@ -324,47 +325,67 @@ class _GraphGenerator extends TypeInformationVisitor {
         color: narrowColor);
   }
 
+  @override
   void visitPhiElementTypeInformation(PhiElementTypeInformation info) {
     // Omit unused Phis.
     if (!PRINT_GRAPH_ALL_NODES && info.users.isEmpty) return;
     addNode(info, 'Phi ${info.variable?.name ?? ''}', color: phiColor);
   }
 
+  @override
   void visitElementInContainerTypeInformation(
       ElementInContainerTypeInformation info) {
     addNode(info, 'ElementInContainer');
   }
 
+  @override
+  void visitElementInSetTypeInformation(ElementInSetTypeInformation info) {
+    addNode(info, 'ElementInSet');
+  }
+
+  @override
   void visitKeyInMapTypeInformation(KeyInMapTypeInformation info) {
     addNode(info, 'KeyInMap');
   }
 
+  @override
   void visitValueInMapTypeInformation(ValueInMapTypeInformation info) {
     addNode(info, 'ValueInMap');
   }
 
+  @override
   void visitListTypeInformation(ListTypeInformation info) {
     addNode(info, 'List');
   }
 
+  @override
+  void visitSetTypeInformation(SetTypeInformation info) {
+    addNode(info, 'Set');
+  }
+
+  @override
   void visitMapTypeInformation(MapTypeInformation info) {
     addNode(info, 'Map');
   }
 
+  @override
   void visitConcreteTypeInformation(ConcreteTypeInformation info) {
     addNode(info, 'Concrete');
   }
 
+  @override
   void visitStringLiteralTypeInformation(StringLiteralTypeInformation info) {
     String text = shorten(info.value).replaceAll('\n', '\\n');
     addNode(info, 'StringLiteral\n"$text"');
   }
 
+  @override
   void visitBoolLiteralTypeInformation(BoolLiteralTypeInformation info) {
     addNode(info, 'BoolLiteral\n${info.value}');
   }
 
-  void handleCall(CallSiteTypeInformation info, String text, Map inputs) {
+  void handleCall(CallSiteTypeInformation info, String text,
+      Map<String, TypeInformation> inputs) {
     String sourceCode = shorten('${info.debugName}');
     text = '$text\n$sourceCode';
     if (info.arguments != null) {
@@ -378,38 +399,46 @@ class _GraphGenerator extends TypeInformationVisitor {
     addNode(info, text, color: callColor, inputs: inputs);
   }
 
+  @override
   void visitClosureCallSiteTypeInformation(
       ClosureCallSiteTypeInformation info) {
     handleCall(info, 'ClosureCallSite', {});
   }
 
+  @override
   void visitStaticCallSiteTypeInformation(StaticCallSiteTypeInformation info) {
     handleCall(info, 'StaticCallSite', {});
   }
 
+  @override
   void visitDynamicCallSiteTypeInformation(
       DynamicCallSiteTypeInformation info) {
     handleCall(info, 'DynamicCallSite', {'obj': info.receiver});
   }
 
+  @override
   void visitMemberTypeInformation(MemberTypeInformation info) {
     addNode(info, 'Member\n${info.debugName}');
   }
 
+  @override
   void visitParameterTypeInformation(ParameterTypeInformation info) {
     addNode(info, 'Parameter ${info.debugName}');
   }
 
+  @override
   void visitClosureTypeInformation(ClosureTypeInformation info) {
     String text = shorten('${info.debugName}');
     addNode(info, 'Closure\n$text');
   }
 
+  @override
   void visitAwaitTypeInformation(AwaitTypeInformation info) {
     String text = shorten('${info.debugName}');
     addNode(info, 'Await\n$text');
   }
 
+  @override
   void visitYieldTypeInformation(YieldTypeInformation info) {
     String text = shorten('${info.debugName}');
     addNode(info, 'Yield\n$text');

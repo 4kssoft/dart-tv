@@ -5,23 +5,31 @@
 #ifndef RUNTIME_VM_OBJECT_H_
 #define RUNTIME_VM_OBJECT_H_
 
+#if defined(SHOULD_NOT_INCLUDE_RUNTIME)
+#error "Should not include runtime"
+#endif
+
+#include <tuple>
 #include "include/dart_api.h"
 #include "platform/assert.h"
 #include "platform/utils.h"
 #include "vm/bitmap.h"
+#include "vm/code_entry_kind.h"
+#include "vm/compiler/assembler/object_pool_builder.h"
 #include "vm/compiler/method_recognizer.h"
+#include "vm/compiler/runtime_api.h"
 #include "vm/dart.h"
 #include "vm/flags.h"
 #include "vm/globals.h"
 #include "vm/growable_array.h"
 #include "vm/handles.h"
-#include "vm/heap.h"
+#include "vm/heap/heap.h"
 #include "vm/isolate.h"
 #include "vm/json_stream.h"
 #include "vm/os.h"
 #include "vm/raw_object.h"
 #include "vm/report.h"
-#include "vm/scanner.h"
+#include "vm/static_type_exactness_state.h"
 #include "vm/tags.h"
 #include "vm/thread.h"
 #include "vm/token_position.h"
@@ -29,6 +37,10 @@
 namespace dart {
 
 // Forward declarations.
+namespace compiler {
+class Assembler;
+}
+
 namespace kernel {
 class Program;
 class TreeNode;
@@ -39,12 +51,12 @@ CLASS_LIST(DEFINE_FORWARD_DECLARATION)
 #undef DEFINE_FORWARD_DECLARATION
 class Api;
 class ArgumentsDescriptor;
-class Assembler;
 class Closure;
 class Code;
 class DeoptInstr;
 class DisassemblyFormatter;
 class FinalizablePersistentHandle;
+class FlowGraphCompiler;
 class HierarchyInfo;
 class LocalScope;
 class CodeStatistics;
@@ -63,53 +75,49 @@ class Symbols;
 
 #define BASE_OBJECT_IMPLEMENTATION(object, super)                              \
  public: /* NOLINT */                                                          \
+  using RawObjectType = Raw##object;                                           \
   Raw##object* raw() const { return reinterpret_cast<Raw##object*>(raw_); }    \
   bool Is##object() const { return true; }                                     \
-  static object& Handle(Zone* zone, Raw##object* raw_ptr) {                    \
-    object* obj = reinterpret_cast<object*>(VMHandles::AllocateHandle(zone));  \
-    initializeHandle(obj, raw_ptr);                                            \
-    return *obj;                                                               \
+  DART_NOINLINE static object& Handle() {                                      \
+    return HandleImpl(Thread::Current()->zone(), object::null());              \
   }                                                                            \
-  static object& Handle() {                                                    \
-    return Handle(Thread::Current()->zone(), object::null());                  \
+  DART_NOINLINE static object& Handle(Zone* zone) {                            \
+    return HandleImpl(zone, object::null());                                   \
   }                                                                            \
-  static object& Handle(Zone* zone) { return Handle(zone, object::null()); }   \
-  static object& Handle(Raw##object* raw_ptr) {                                \
-    return Handle(Thread::Current()->zone(), raw_ptr);                         \
+  DART_NOINLINE static object& Handle(Raw##object* raw_ptr) {                  \
+    return HandleImpl(Thread::Current()->zone(), raw_ptr);                     \
   }                                                                            \
-  static object& CheckedHandle(Zone* zone, RawObject* raw_ptr) {               \
-    object* obj = reinterpret_cast<object*>(VMHandles::AllocateHandle(zone));  \
-    initializeHandle(obj, raw_ptr);                                            \
-    if (!obj->Is##object()) {                                                  \
-      FATAL2("Handle check failed: saw %s expected %s", obj->ToCString(),      \
-             #object);                                                         \
-    }                                                                          \
-    return *obj;                                                               \
+  DART_NOINLINE static object& Handle(Zone* zone, Raw##object* raw_ptr) {      \
+    return HandleImpl(zone, raw_ptr);                                          \
   }                                                                            \
-  static object& CheckedHandle(RawObject* raw_ptr) {                           \
-    return CheckedHandle(Thread::Current()->zone(), raw_ptr);                  \
+  DART_NOINLINE static object& ZoneHandle() {                                  \
+    return ZoneHandleImpl(Thread::Current()->zone(), object::null());          \
   }                                                                            \
-  static object& ZoneHandle(Zone* zone, Raw##object* raw_ptr) {                \
-    object* obj =                                                              \
-        reinterpret_cast<object*>(VMHandles::AllocateZoneHandle(zone));        \
-    initializeHandle(obj, raw_ptr);                                            \
-    return *obj;                                                               \
+  DART_NOINLINE static object& ZoneHandle(Zone* zone) {                        \
+    return ZoneHandleImpl(zone, object::null());                               \
   }                                                                            \
-  static object* ReadOnlyHandle() {                                            \
+  DART_NOINLINE static object& ZoneHandle(Raw##object* raw_ptr) {              \
+    return ZoneHandleImpl(Thread::Current()->zone(), raw_ptr);                 \
+  }                                                                            \
+  DART_NOINLINE static object& ZoneHandle(Zone* zone, Raw##object* raw_ptr) {  \
+    return ZoneHandleImpl(zone, raw_ptr);                                      \
+  }                                                                            \
+  DART_NOINLINE static object* ReadOnlyHandle() {                              \
     object* obj = reinterpret_cast<object*>(Dart::AllocateReadOnlyHandle());   \
     initializeHandle(obj, object::null());                                     \
     return obj;                                                                \
   }                                                                            \
-  static object& ZoneHandle(Zone* zone) {                                      \
-    return ZoneHandle(zone, object::null());                                   \
+  DART_NOINLINE static object& CheckedHandle(Zone* zone, RawObject* raw_ptr) { \
+    object* obj = reinterpret_cast<object*>(VMHandles::AllocateHandle(zone));  \
+    initializeHandle(obj, raw_ptr);                                            \
+    if (!obj->Is##object()) {                                                  \
+      FATAL2("Handle check failed: saw %s expected %s", obj->ToCString(),      \
+             #object);                                                         \
+    }                                                                          \
+    return *obj;                                                               \
   }                                                                            \
-  static object& ZoneHandle() {                                                \
-    return ZoneHandle(Thread::Current()->zone(), object::null());              \
-  }                                                                            \
-  static object& ZoneHandle(Raw##object* raw_ptr) {                            \
-    return ZoneHandle(Thread::Current()->zone(), raw_ptr);                     \
-  }                                                                            \
-  static object& CheckedZoneHandle(Zone* zone, RawObject* raw_ptr) {           \
+  DART_NOINLINE static object& CheckedZoneHandle(Zone* zone,                   \
+                                                 RawObject* raw_ptr) {         \
     object* obj =                                                              \
         reinterpret_cast<object*>(VMHandles::AllocateZoneHandle(zone));        \
     initializeHandle(obj, raw_ptr);                                            \
@@ -119,7 +127,7 @@ class Symbols;
     }                                                                          \
     return *obj;                                                               \
   }                                                                            \
-  static object& CheckedZoneHandle(RawObject* raw_ptr) {                       \
+  DART_NOINLINE static object& CheckedZoneHandle(RawObject* raw_ptr) {         \
     return CheckedZoneHandle(Thread::Current()->zone(), raw_ptr);              \
   }                                                                            \
   /* T::Cast cannot be applied to a null Object, because the object vtable */  \
@@ -140,6 +148,17 @@ class Symbols;
   static const ClassId kClassId = k##object##Cid;                              \
                                                                                \
  private: /* NOLINT */                                                         \
+  static object& HandleImpl(Zone* zone, Raw##object* raw_ptr) {                \
+    object* obj = reinterpret_cast<object*>(VMHandles::AllocateHandle(zone));  \
+    initializeHandle(obj, raw_ptr);                                            \
+    return *obj;                                                               \
+  }                                                                            \
+  static object& ZoneHandleImpl(Zone* zone, Raw##object* raw_ptr) {            \
+    object* obj =                                                              \
+        reinterpret_cast<object*>(VMHandles::AllocateZoneHandle(zone));        \
+    initializeHandle(obj, raw_ptr);                                            \
+    return *obj;                                                               \
+  }                                                                            \
   /* Initialize the handle based on the raw_ptr in the presence of null. */    \
   static void initializeHandle(object* obj, RawObject* raw_ptr) {              \
     if (raw_ptr != Object::null()) {                                           \
@@ -156,10 +175,10 @@ class Symbols;
                                                                                \
  private: /* NOLINT */                                                         \
   void* operator new(size_t size);                                             \
-  object(const object& value);                                                 \
-  void operator=(Raw##super* value);                                           \
-  void operator=(const object& value);                                         \
-  void operator=(const super& value);
+  object(const object& value) = delete;                                        \
+  void operator=(Raw##super* value) = delete;                                  \
+  void operator=(const object& value) = delete;                                \
+  void operator=(const super& value) = delete;
 
 // Conditionally include object_service.cc functionality in the vtable to avoid
 // link errors like the following:
@@ -242,6 +261,9 @@ class Symbols;
 
 class Object {
  public:
+  using RawObjectType = RawObject;
+  static RawObject* RawCast(RawObject* obj) { return obj; }
+
   virtual ~Object() {}
 
   RawObject* raw() const { return raw_; }
@@ -294,9 +316,9 @@ class Object {
   bool IsNew() const { return raw()->IsNewObject(); }
   bool IsOld() const { return raw()->IsOldObject(); }
 #if defined(DEBUG)
-  bool InVMHeap() const;
+  bool InVMIsolateHeap() const;
 #else
-  bool InVMHeap() const { return raw()->IsVMHeapObject(); }
+  bool InVMIsolateHeap() const { return raw()->InVMIsolateHeap(); }
 #endif  // DEBUG
 
   // Print the object on stdout for debugging.
@@ -336,6 +358,8 @@ class Object {
     return *obj;
   }
 
+  static Object& ZoneHandle(Zone* zone) { return ZoneHandle(zone, null_); }
+
   static Object& ZoneHandle() {
     return ZoneHandle(Thread::Current()->zone(), null_);
   }
@@ -345,93 +369,6 @@ class Object {
   }
 
   static RawObject* null() { return null_; }
-
-  static const Object& null_object() {
-    ASSERT(null_object_ != NULL);
-    return *null_object_;
-  }
-  static const Array& null_array() {
-    ASSERT(null_array_ != NULL);
-    return *null_array_;
-  }
-  static const String& null_string() {
-    ASSERT(null_string_ != NULL);
-    return *null_string_;
-  }
-  static const Instance& null_instance() {
-    ASSERT(null_instance_ != NULL);
-    return *null_instance_;
-  }
-  static const Function& null_function() {
-    ASSERT(null_function_ != NULL);
-    return *null_function_;
-  }
-  static const TypeArguments& null_type_arguments() {
-    ASSERT(null_type_arguments_ != NULL);
-    return *null_type_arguments_;
-  }
-  static const TypeArguments& empty_type_arguments() {
-    ASSERT(empty_type_arguments_ != NULL);
-    return *empty_type_arguments_;
-  }
-
-  static const Array& empty_array() {
-    ASSERT(empty_array_ != NULL);
-    return *empty_array_;
-  }
-  static const Array& zero_array() {
-    ASSERT(zero_array_ != NULL);
-    return *zero_array_;
-  }
-
-  static const ContextScope& empty_context_scope() {
-    ASSERT(empty_context_scope_ != NULL);
-    return *empty_context_scope_;
-  }
-
-  static const ObjectPool& empty_object_pool() {
-    ASSERT(empty_object_pool_ != NULL);
-    return *empty_object_pool_;
-  }
-
-  static const PcDescriptors& empty_descriptors() {
-    ASSERT(empty_descriptors_ != NULL);
-    return *empty_descriptors_;
-  }
-
-  static const LocalVarDescriptors& empty_var_descriptors() {
-    ASSERT(empty_var_descriptors_ != NULL);
-    return *empty_var_descriptors_;
-  }
-
-  static const ExceptionHandlers& empty_exception_handlers() {
-    ASSERT(empty_exception_handlers_ != NULL);
-    return *empty_exception_handlers_;
-  }
-
-  static const Array& extractor_parameter_types() {
-    ASSERT(extractor_parameter_types_ != NULL);
-    return *extractor_parameter_types_;
-  }
-
-  static const Array& extractor_parameter_names() {
-    ASSERT(extractor_parameter_names_ != NULL);
-    return *extractor_parameter_names_;
-  }
-
-  // The sentinel is a value that cannot be produced by Dart code.
-  // It can be used to mark special values, for example to distinguish
-  // "uninitialized" fields.
-  static const Instance& sentinel() {
-    ASSERT(sentinel_ != NULL);
-    return *sentinel_;
-  }
-  // Value marking that we are transitioning from sentinel, e.g., computing
-  // a field value. Used to detect circular initialization.
-  static const Instance& transition_sentinel() {
-    ASSERT(transition_sentinel_ != NULL);
-    return *transition_sentinel_;
-  }
 
 #if defined(HASH_IN_OBJECT_HEADER)
   static uint32_t GetCachedHash(const RawObject* obj) {
@@ -443,77 +380,81 @@ class Object {
   }
 #endif
 
-  // Compiler's constant propagation constants.
-  static const Instance& unknown_constant() {
-    ASSERT(unknown_constant_ != NULL);
-    return *unknown_constant_;
-  }
-  static const Instance& non_constant() {
-    ASSERT(non_constant_ != NULL);
-    return *non_constant_;
-  }
+  // The list below enumerates read-only handles for singleton
+  // objects that are shared between the different isolates.
+  //
+  // - sentinel is a value that cannot be produced by Dart code. It can be used
+  // to mark special values, for example to distinguish "uninitialized" fields.
+  // - transition_sentinel is a value marking that we are transitioning from
+  // sentinel, e.g., computing a field value. Used to detect circular
+  // initialization.
+  // - unknown_constant and non_constant are optimizing compiler's constant
+  // propagation constants.
+#define SHARED_READONLY_HANDLES_LIST(V)                                        \
+  V(Object, null_object)                                                       \
+  V(Array, null_array)                                                         \
+  V(String, null_string)                                                       \
+  V(Instance, null_instance)                                                   \
+  V(Function, null_function)                                                   \
+  V(TypeArguments, null_type_arguments)                                        \
+  V(TypeArguments, empty_type_arguments)                                       \
+  V(Array, empty_array)                                                        \
+  V(Array, zero_array)                                                         \
+  V(ContextScope, empty_context_scope)                                         \
+  V(ObjectPool, empty_object_pool)                                             \
+  V(PcDescriptors, empty_descriptors)                                          \
+  V(LocalVarDescriptors, empty_var_descriptors)                                \
+  V(ExceptionHandlers, empty_exception_handlers)                               \
+  V(Array, extractor_parameter_types)                                          \
+  V(Array, extractor_parameter_names)                                          \
+  V(Bytecode, implicit_getter_bytecode)                                        \
+  V(Bytecode, implicit_setter_bytecode)                                        \
+  V(Bytecode, implicit_static_getter_bytecode)                                 \
+  V(Bytecode, method_extractor_bytecode)                                       \
+  V(Bytecode, invoke_closure_bytecode)                                         \
+  V(Bytecode, invoke_field_bytecode)                                           \
+  V(Bytecode, nsm_dispatcher_bytecode)                                         \
+  V(Bytecode, dynamic_invocation_forwarder_bytecode)                           \
+  V(Instance, sentinel)                                                        \
+  V(Instance, transition_sentinel)                                             \
+  V(Instance, unknown_constant)                                                \
+  V(Instance, non_constant)                                                    \
+  V(Bool, bool_true)                                                           \
+  V(Bool, bool_false)                                                          \
+  V(Smi, smi_illegal_cid)                                                      \
+  V(Smi, smi_zero)                                                             \
+  V(LanguageError, snapshot_writer_error)                                      \
+  V(LanguageError, branch_offset_error)                                        \
+  V(LanguageError, speculative_inlining_error)                                 \
+  V(LanguageError, background_compilation_error)                               \
+  V(Array, vm_isolate_snapshot_object_table)                                   \
+  V(Type, dynamic_type)                                                        \
+  V(Type, void_type)                                                           \
+  V(AbstractType, null_abstract_type)
 
-  static const Bool& bool_true() {
-    ASSERT(bool_true_ != NULL);
-    return *bool_true_;
+#define DEFINE_SHARED_READONLY_HANDLE_GETTER(Type, name)                       \
+  static const Type& name() {                                                  \
+    ASSERT(name##_ != nullptr);                                                \
+    return *name##_;                                                           \
   }
-  static const Bool& bool_false() {
-    ASSERT(bool_false_ != NULL);
-    return *bool_false_;
-  }
-
-  static const Smi& smi_illegal_cid() {
-    ASSERT(smi_illegal_cid_ != NULL);
-    return *smi_illegal_cid_;
-  }
-  static const LanguageError& snapshot_writer_error() {
-    ASSERT(snapshot_writer_error_ != NULL);
-    return *snapshot_writer_error_;
-  }
-
-  static const LanguageError& branch_offset_error() {
-    ASSERT(branch_offset_error_ != NULL);
-    return *branch_offset_error_;
-  }
-
-  static const LanguageError& speculative_inlining_error() {
-    ASSERT(speculative_inlining_error_ != NULL);
-    return *speculative_inlining_error_;
-  }
-
-  static const LanguageError& background_compilation_error() {
-    ASSERT(background_compilation_error_ != NULL);
-    return *background_compilation_error_;
-  }
-
-  static const Array& vm_isolate_snapshot_object_table() {
-    ASSERT(vm_isolate_snapshot_object_table_ != NULL);
-    return *vm_isolate_snapshot_object_table_;
-  }
-  static const Type& dynamic_type() {
-    ASSERT(dynamic_type_ != NULL);
-    return *dynamic_type_;
-  }
-  static const Type& void_type() {
-    ASSERT(void_type_ != NULL);
-    return *void_type_;
-  }
+  SHARED_READONLY_HANDLES_LIST(DEFINE_SHARED_READONLY_HANDLE_GETTER)
+#undef DEFINE_SHARED_READONLY_HANDLE_GETTER
 
   static void set_vm_isolate_snapshot_object_table(const Array& table);
 
   static RawClass* class_class() { return class_class_; }
   static RawClass* dynamic_class() { return dynamic_class_; }
   static RawClass* void_class() { return void_class_; }
-  static RawClass* unresolved_class_class() { return unresolved_class_class_; }
   static RawClass* type_arguments_class() { return type_arguments_class_; }
   static RawClass* patch_class_class() { return patch_class_class_; }
   static RawClass* function_class() { return function_class_; }
   static RawClass* closure_data_class() { return closure_data_class_; }
   static RawClass* signature_data_class() { return signature_data_class_; }
   static RawClass* redirection_data_class() { return redirection_data_class_; }
+  static RawClass* ffi_trampoline_data_class() {
+    return ffi_trampoline_data_class_;
+  }
   static RawClass* field_class() { return field_class_; }
-  static RawClass* literal_token_class() { return literal_token_class_; }
-  static RawClass* token_stream_class() { return token_stream_class_; }
   static RawClass* script_class() { return script_class_; }
   static RawClass* library_class() { return library_class_; }
   static RawClass* namespace_class() { return namespace_class_; }
@@ -521,6 +462,7 @@ class Object {
     return kernel_program_info_class_;
   }
   static RawClass* code_class() { return code_class_; }
+  static RawClass* bytecode_class() { return bytecode_class_; }
   static RawClass* instructions_class() { return instructions_class_; }
   static RawClass* object_pool_class() { return object_pool_class_; }
   static RawClass* pc_descriptors_class() { return pc_descriptors_class_; }
@@ -539,6 +481,7 @@ class Object {
     return unhandled_exception_class_;
   }
   static RawClass* unwind_error_class() { return unwind_error_class_; }
+  static RawClass* dyncalltypecheck_class() { return dyncalltypecheck_class_; }
   static RawClass* singletargetcache_class() {
     return singletargetcache_class_;
   }
@@ -551,10 +494,12 @@ class Object {
 
   // Initialize the VM isolate.
   static void InitNull(Isolate* isolate);
-  static void InitOnce(Isolate* isolate);
-  static void FinishInitOnce(Isolate* isolate);
+  static void Init(Isolate* isolate);
+  static void FinishInit(Isolate* isolate);
   static void FinalizeVMIsolate(Isolate* isolate);
   static void FinalizeReadOnlyObject(RawObject* object);
+
+  static void Cleanup();
 
   // Initialize a new isolate either from a Kernel IR, from source, or from a
   // snapshot.
@@ -573,9 +518,6 @@ class Object {
   static void VerifyBuiltinVtables();
 
   static const ClassId kClassId = kObjectCid;
-
-  // Different kinds of type tests.
-  enum TypeTestKind { kIsSubtypeOf = 0, kIsMoreSpecificThan };
 
   // Different kinds of name visibility.
   enum NameVisibility {
@@ -643,24 +585,9 @@ class Object {
   // methods below or their counterparts in RawObject, to ensure that the
   // write barrier is correctly applied.
 
-  template <typename type>
+  template <typename type, MemoryOrder order = MemoryOrder::kRelaxed>
   void StorePointer(type const* addr, type value) const {
-    raw()->StorePointer(addr, value);
-  }
-
-  // Store a range of pointers [from, from + count) into [to, to + count).
-  // TODO(koda): Use this to fix Object::Clone's broken store buffer logic.
-  void StorePointers(RawObject* const* to,
-                     RawObject* const* from,
-                     intptr_t count) {
-    ASSERT(Contains(reinterpret_cast<uword>(to)));
-    if (raw()->IsNewObject()) {
-      memmove(const_cast<RawObject**>(to), from, count * kWordSize);
-    } else {
-      for (intptr_t i = 0; i < count; ++i) {
-        StorePointer(&to[i], from[i]);
-      }
-    }
+    raw()->StorePointer<type, order>(addr, value);
   }
 
   // Use for storing into an explicitly Smi-typed field of an object
@@ -681,6 +608,29 @@ class Object {
     // Can't use Contains, as it uses tags_, which is set through this method.
     ASSERT(reinterpret_cast<uword>(addr) >= RawObject::ToAddr(raw()));
     *const_cast<FieldType*>(addr) = value;
+  }
+
+  template <typename FieldType, typename ValueType, MemoryOrder order>
+  void StoreNonPointer(const FieldType* addr, ValueType value) const {
+    // Can't use Contains, as it uses tags_, which is set through this method.
+    ASSERT(reinterpret_cast<uword>(addr) >= RawObject::ToAddr(raw()));
+
+    if (order == MemoryOrder::kRelease) {
+      AtomicOperations::StoreRelease(const_cast<FieldType*>(addr), value);
+    } else {
+      ASSERT(order == MemoryOrder::kRelaxed);
+      StoreNonPointer<FieldType, ValueType>(addr, value);
+    }
+  }
+
+  template <typename FieldType, MemoryOrder order = MemoryOrder::kRelaxed>
+  FieldType LoadNonPointer(const FieldType* addr) const {
+    if (order == MemoryOrder::kAcquire) {
+      return AtomicOperations::LoadAcquire(const_cast<FieldType*>(addr));
+    } else {
+      ASSERT(order == MemoryOrder::kRelaxed);
+      return *const_cast<FieldType*>(addr);
+    }
   }
 
   // Provides non-const access to non-pointer fields within the object. Such
@@ -731,10 +681,7 @@ class Object {
     return -kWordSize;
   }
 
-  static void InitializeObject(uword address,
-                               intptr_t id,
-                               intptr_t size,
-                               bool is_vm_object);
+  static void InitializeObject(uword address, intptr_t id, intptr_t size);
 
   static void RegisterClass(const Class& cls,
                             const String& name,
@@ -769,22 +716,22 @@ class Object {
   static RawClass* class_class_;             // Class of the Class vm object.
   static RawClass* dynamic_class_;           // Class of the 'dynamic' type.
   static RawClass* void_class_;              // Class of the 'void' type.
-  static RawClass* unresolved_class_class_;  // Class of UnresolvedClass.
   static RawClass* type_arguments_class_;  // Class of TypeArguments vm object.
   static RawClass* patch_class_class_;     // Class of the PatchClass vm object.
   static RawClass* function_class_;        // Class of the Function vm object.
   static RawClass* closure_data_class_;    // Class of ClosureData vm obj.
   static RawClass* signature_data_class_;  // Class of SignatureData vm obj.
   static RawClass* redirection_data_class_;  // Class of RedirectionData vm obj.
+  static RawClass* ffi_trampoline_data_class_;  // Class of FfiTrampolineData
+                                                // vm obj.
   static RawClass* field_class_;             // Class of the Field vm object.
-  static RawClass* literal_token_class_;     // Class of LiteralToken vm object.
-  static RawClass* token_stream_class_;  // Class of the TokenStream vm object.
   static RawClass* script_class_;        // Class of the Script vm object.
   static RawClass* library_class_;       // Class of the Library vm object.
   static RawClass* namespace_class_;     // Class of Namespace vm object.
   static RawClass* kernel_program_info_class_;  // Class of KernelProgramInfo vm
                                                 // object.
-  static RawClass* code_class_;          // Class of the Code vm object.
+  static RawClass* code_class_;                 // Class of the Code vm object.
+  static RawClass* bytecode_class_;      // Class of the Bytecode vm object.
   static RawClass* instructions_class_;  // Class of the Instructions vm object.
   static RawClass* object_pool_class_;   // Class of the ObjectPool vm object.
   static RawClass* pc_descriptors_class_;   // Class of PcDescriptors vm object.
@@ -795,6 +742,7 @@ class Object {
   static RawClass* deopt_info_class_;          // Class of DeoptInfo.
   static RawClass* context_class_;        // Class of the Context vm object.
   static RawClass* context_scope_class_;  // Class of ContextScope vm object.
+  static RawClass* dyncalltypecheck_class_;     // Class of ParameterTypeCheck.
   static RawClass* singletargetcache_class_;    // Class of SingleTargetCache.
   static RawClass* unlinkedcall_class_;         // Class of UnlinkedCall.
   static RawClass* icdata_class_;               // Class of ICData.
@@ -805,38 +753,9 @@ class Object {
   static RawClass* unhandled_exception_class_;  // Class of UnhandledException.
   static RawClass* unwind_error_class_;         // Class of UnwindError.
 
-  // The static values below are read-only handle pointers for singleton
-  // objects that are shared between the different isolates.
-  static Object* null_object_;
-  static Array* null_array_;
-  static String* null_string_;
-  static Instance* null_instance_;
-  static Function* null_function_;
-  static TypeArguments* null_type_arguments_;
-  static TypeArguments* empty_type_arguments_;
-  static Array* empty_array_;
-  static Array* zero_array_;
-  static ContextScope* empty_context_scope_;
-  static ObjectPool* empty_object_pool_;
-  static PcDescriptors* empty_descriptors_;
-  static LocalVarDescriptors* empty_var_descriptors_;
-  static ExceptionHandlers* empty_exception_handlers_;
-  static Array* extractor_parameter_types_;
-  static Array* extractor_parameter_names_;
-  static Instance* sentinel_;
-  static Instance* transition_sentinel_;
-  static Instance* unknown_constant_;
-  static Instance* non_constant_;
-  static Bool* bool_true_;
-  static Bool* bool_false_;
-  static Smi* smi_illegal_cid_;
-  static LanguageError* snapshot_writer_error_;
-  static LanguageError* branch_offset_error_;
-  static LanguageError* speculative_inlining_error_;
-  static LanguageError* background_compilation_error_;
-  static Array* vm_isolate_snapshot_object_table_;
-  static Type* dynamic_type_;
-  static Type* void_type_;
+#define DECLARE_SHARED_READONLY_HANDLE(Type, name) static Type* name##_;
+  SHARED_READONLY_HANDLES_LIST(DECLARE_SHARED_READONLY_HANDLE)
+#undef DECLARE_SHARED_READONLY_HANDLE
 
   friend void ClassTable::Register(const Class& cls);
   friend void RawObject::Validate(Isolate* isolate) const;
@@ -913,6 +832,13 @@ typedef ZoneGrowableHandlePtrArray<const String> URIs;
 
 class Class : public Object {
  public:
+  enum InvocationDispatcherEntry {
+    kInvocationDispatcherName,
+    kInvocationDispatcherArgsDesc,
+    kInvocationDispatcherFunction,
+    kInvocationDispatcherEntrySize,
+  };
+
   intptr_t instance_size() const {
     ASSERT(is_finalized() || is_prefinalized());
     return (raw_ptr()->instance_size_in_words_ * kWordSize);
@@ -958,10 +884,19 @@ class Class : public Object {
     ASSERT(is_valid_id(value));
     StoreNonPointer(&raw_ptr()->id_, value);
   }
+  static intptr_t id_offset() { return OFFSET_OF(RawClass, id_); }
+  static intptr_t num_type_arguments_offset() {
+    return OFFSET_OF(RawClass, num_type_arguments_);
+  }
 
   RawString* Name() const;
   RawString* ScrubbedName() const;
   RawString* UserVisibleName() const;
+
+  // The mixin for this class if one exists. Otherwise, returns a raw pointer
+  // to this class.
+  RawClass* Mixin() const;
+
   bool IsInFullSnapshot() const;
 
   virtual RawString* DictionaryName() const { return Name(); }
@@ -971,8 +906,8 @@ class Class : public Object {
 
   TokenPosition token_pos() const { return raw_ptr()->token_pos_; }
   void set_token_pos(TokenPosition value) const;
-
-  TokenPosition ComputeEndTokenPos() const;
+  TokenPosition end_token_pos() const { return raw_ptr()->end_token_pos_; }
+  void set_end_token_pos(TokenPosition value) const;
 
   int32_t SourceFingerprint() const;
 
@@ -993,7 +928,11 @@ class Class : public Object {
   // class B<T, S>
   // class C<R> extends B<R, int>
   // C.DeclarationType() --> C [R, int, R]
-  RawAbstractType* DeclarationType() const;
+  RawType* DeclarationType() const;
+
+  static intptr_t declaration_type_offset() {
+    return OFFSET_OF(RawClass, declaration_type_);
+  }
 
   RawLibrary* library() const { return raw_ptr()->library_; }
   void set_library(const Library& value) const;
@@ -1001,6 +940,7 @@ class Class : public Object {
   // The type parameters (and their bounds) are specified as an array of
   // TypeParameter.
   RawTypeArguments* type_parameters() const {
+    ASSERT(is_declaration_loaded());
     return raw_ptr()->type_parameters_;
   }
   void set_type_parameters(const TypeArguments& value) const;
@@ -1019,10 +959,6 @@ class Class : public Object {
   // The type argument vector is flattened and includes the type arguments of
   // the super class.
   intptr_t NumTypeArguments() const;
-
-  // Return the number of type arguments that are specific to this class, i.e.
-  // not overlapping with the type arguments of the super class of this class.
-  intptr_t NumOwnTypeArguments() const;
 
   // Return true if this class declares type parameters.
   bool IsGeneric() const { return NumTypeParameters(Thread::Current()) > 0; }
@@ -1053,24 +989,11 @@ class Class : public Object {
     return OFFSET_OF(RawClass, type_arguments_field_offset_in_words_);
   }
 
-  // Returns the cached canonical type of this class, i.e. the canonical type
-  // whose type class is this class and whose type arguments are the
-  // uninstantiated type parameters declared by this class if it is generic,
-  // e.g. Map<K, V>.
-  // Returns Type::null() if the canonical type is not cached yet.
-  RawType* CanonicalType() const;
-
-  // Caches the canonical type of this class.
-  void SetCanonicalType(const Type& type) const;
-
-  static intptr_t canonical_type_offset() {
-    return OFFSET_OF(RawClass, canonical_type_);
-  }
-
   // The super type of this class, Object type if not explicitly specified.
-  // Note that the super type may be bounded, as in this example:
-  // class C<T> extends S<T> { }; class S<T extends num> { };
-  RawAbstractType* super_type() const { return raw_ptr()->super_type_; }
+  RawAbstractType* super_type() const {
+    ASSERT(is_declaration_loaded());
+    return raw_ptr()->super_type_;
+  }
   void set_super_type(const AbstractType& value) const;
   static intptr_t super_type_offset() {
     return OFFSET_OF(RawClass, super_type_);
@@ -1082,20 +1005,19 @@ class Class : public Object {
   // classes.
   RawClass* SuperClass(bool original_classes = false) const;
 
-  RawType* mixin() const { return raw_ptr()->mixin_; }
-  void set_mixin(const Type& value) const;
-
-  // Note this returns false for mixin application aliases.
-  bool IsMixinApplication() const;
-
-  RawClass* GetPatchClass() const;
-
   // Interfaces is an array of Types.
-  RawArray* interfaces() const { return raw_ptr()->interfaces_; }
-  void set_interfaces(const Array& value) const;
-  static intptr_t interfaces_offset() {
-    return OFFSET_OF(RawClass, interfaces_);
+  RawArray* interfaces() const {
+    ASSERT(is_declaration_loaded());
+    return raw_ptr()->interfaces_;
   }
+  void set_interfaces(const Array& value) const;
+
+  // Returns the list of classes directly implementing this class.
+  RawGrowableObjectArray* direct_implementors() const {
+    return raw_ptr()->direct_implementors_;
+  }
+  void AddDirectImplementor(const Class& subclass, bool is_mixin) const;
+  void ClearDirectImplementors() const;
 
   // Returns the list of classes having this class as direct superclass.
   RawGrowableObjectArray* direct_subclasses() const {
@@ -1140,32 +1062,31 @@ class Class : public Object {
     return cls->ptr()->library_->ptr()->is_in_fullsnapshot_;
   }
 
-  // Check the subtype relationship.
-  bool IsSubtypeOf(const TypeArguments& type_arguments,
-                   const Class& other,
-                   const TypeArguments& other_type_arguments,
-                   Error* bound_error,
-                   TrailPtr bound_trail,
-                   Heap::Space space) const {
-    return TypeTest(kIsSubtypeOf, type_arguments, other, other_type_arguments,
-                    bound_error, bound_trail, space);
-  }
-
-  // Check the 'more specific' relationship.
-  bool IsMoreSpecificThan(const TypeArguments& type_arguments,
+  // Returns true if the type specified by cls and type_arguments is a
+  // subtype of the type specified by other class and other_type_arguments.
+  static bool IsSubtypeOf(const Class& cls,
+                          const TypeArguments& type_arguments,
                           const Class& other,
                           const TypeArguments& other_type_arguments,
-                          Error* bound_error,
-                          TrailPtr bound_trail,
-                          Heap::Space space) const {
-    return TypeTest(kIsMoreSpecificThan, type_arguments, other,
-                    other_type_arguments, bound_error, bound_trail, space);
-  }
+                          Heap::Space space);
+
+  // Returns true if the type specified by cls and type_arguments is a
+  // subtype of FutureOr<T> specified by other class and other_type_arguments.
+  // Returns false if other class is not a FutureOr.
+  static bool IsSubtypeOfFutureOr(Zone* zone,
+                                  const Class& cls,
+                                  const TypeArguments& type_arguments,
+                                  const Class& other,
+                                  const TypeArguments& other_type_arguments,
+                                  Heap::Space space);
 
   // Check if this is the top level class.
   bool IsTopLevel() const;
 
   bool IsPrivate() const;
+
+  DART_WARN_UNUSED_RESULT
+  RawError* VerifyEntryPoint() const;
 
   // Returns an array of instance and static fields defined by this class.
   RawArray* fields() const { return raw_ptr()->fields_; }
@@ -1173,7 +1094,10 @@ class Class : public Object {
   void AddField(const Field& field) const;
   void AddFields(const GrowableArray<const Field*>& fields) const;
 
-  void InjectCIDFields() const;
+  // If this is a dart:internal.ClassID class, then inject our own const
+  // fields. Returns true if synthetic fields are injected and regular
+  // field declarations should be ignored.
+  bool InjectCIDFields() const;
 
   // Returns an array of all instance fields of this class and its superclasses
   // indexed by offset in words.
@@ -1207,7 +1131,6 @@ class Class : public Object {
   RawFunction* LookupFunctionAllowPrivate(const String& name) const;
   RawFunction* LookupGetterFunction(const String& name) const;
   RawFunction* LookupSetterFunction(const String& name) const;
-  RawFunction* LookupCallFunctionForTypeTest() const;
   RawField* LookupInstanceField(const String& name) const;
   RawField* LookupStaticField(const String& name) const;
   RawField* LookupField(const String& name) const;
@@ -1215,8 +1138,6 @@ class Class : public Object {
                                     bool instance_only = false) const;
   RawField* LookupInstanceFieldAllowPrivate(const String& name) const;
   RawField* LookupStaticFieldAllowPrivate(const String& name) const;
-
-  RawLibraryPrefix* LookupLibraryPrefix(const String& name) const;
 
   RawDouble* LookupCanonicalDouble(Zone* zone, double value) const;
   RawMint* LookupCanonicalMint(Zone* zone, int64_t value) const;
@@ -1245,8 +1166,17 @@ class Class : public Object {
   }
   void set_is_abstract() const;
 
+  RawClass::ClassLoadingState class_loading_state() const {
+    return ClassLoadingBits::decode(raw_ptr()->state_bits_);
+  }
+
+  bool is_declaration_loaded() const {
+    return class_loading_state() >= RawClass::kDeclarationLoaded;
+  }
+  void set_is_declaration_loaded() const;
+
   bool is_type_finalized() const {
-    return TypeFinalizedBit::decode(raw_ptr()->state_bits_);
+    return class_loading_state() >= RawClass::kTypeFinalized;
   }
   void set_is_type_finalized() const;
 
@@ -1274,32 +1204,8 @@ class Class : public Object {
 
   void set_is_prefinalized() const;
 
-  bool is_refinalize_after_patch() const {
-    return ClassFinalizedBits::decode(raw_ptr()->state_bits_) ==
-           RawClass::kRefinalizeAfterPatch;
-  }
-
-  void SetRefinalizeAfterPatch() const;
-  void ResetFinalization() const;
-
-  bool is_marked_for_parsing() const {
-    return MarkedForParsingBit::decode(raw_ptr()->state_bits_);
-  }
-  void set_is_marked_for_parsing() const;
-  void reset_is_marked_for_parsing() const;
-
   bool is_const() const { return ConstBit::decode(raw_ptr()->state_bits_); }
   void set_is_const() const;
-
-  bool is_mixin_app_alias() const {
-    return MixinAppAliasBit::decode(raw_ptr()->state_bits_);
-  }
-  void set_is_mixin_app_alias() const;
-
-  bool is_mixin_type_applied() const {
-    return MixinTypeAppliedBit::decode(raw_ptr()->state_bits_);
-  }
-  void set_is_mixin_type_applied() const;
 
   // Tests if this is a mixin application class which was desugared
   // to a normal class by kernel mixin transformation
@@ -1317,15 +1223,13 @@ class Class : public Object {
   }
   void set_is_fields_marked_nullable() const;
 
-  bool is_cycle_free() const {
-    return CycleFreeBit::decode(raw_ptr()->state_bits_);
-  }
-  void set_is_cycle_free() const;
-
   bool is_allocated() const {
     return IsAllocatedBit::decode(raw_ptr()->state_bits_);
   }
   void set_is_allocated(bool value) const;
+
+  bool is_loaded() const { return IsLoadedBit::decode(raw_ptr()->state_bits_); }
+  void set_is_loaded(bool value) const;
 
   uint16_t num_native_fields() const { return raw_ptr()->num_native_fields_; }
   void set_num_native_fields(uint16_t value) const {
@@ -1335,17 +1239,71 @@ class Class : public Object {
   RawCode* allocation_stub() const { return raw_ptr()->allocation_stub_; }
   void set_allocation_stub(const Code& value) const;
 
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  intptr_t binary_declaration_offset() const {
+    return RawClass::BinaryDeclarationOffset::decode(
+        raw_ptr()->binary_declaration_);
+  }
+  void set_binary_declaration_offset(intptr_t value) const {
+    ASSERT(value >= 0);
+    StoreNonPointer(&raw_ptr()->binary_declaration_,
+                    RawClass::BinaryDeclarationOffset::update(
+                        value, raw_ptr()->binary_declaration_));
+  }
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+
   intptr_t kernel_offset() const {
 #if defined(DART_PRECOMPILED_RUNTIME)
-    return -1;
+    return 0;
 #else
-    return raw_ptr()->kernel_offset_;
+    ASSERT(!is_declared_in_bytecode());
+    return binary_declaration_offset();
 #endif
   }
 
-  void set_kernel_offset(intptr_t offset) const {
-    NOT_IN_PRECOMPILED(StoreNonPointer(&raw_ptr()->kernel_offset_, offset));
+  void set_kernel_offset(intptr_t value) const {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    UNREACHABLE();
+#else
+    ASSERT(!is_declared_in_bytecode());
+    set_binary_declaration_offset(value);
+#endif
   }
+
+  intptr_t bytecode_offset() const {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    return 0;
+#else
+    ASSERT(is_declared_in_bytecode());
+    return binary_declaration_offset();
+#endif
+  }
+
+  void set_bytecode_offset(intptr_t value) const {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    UNREACHABLE();
+#else
+    ASSERT(is_declared_in_bytecode());
+    set_binary_declaration_offset(value);
+#endif
+  }
+
+  bool is_declared_in_bytecode() const {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    return false;
+#else
+    return RawClass::IsDeclaredInBytecode::decode(
+        raw_ptr()->binary_declaration_);
+#endif
+  }
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  void set_is_declared_in_bytecode(bool value) const {
+    StoreNonPointer(&raw_ptr()->binary_declaration_,
+                    RawClass::IsDeclaredInBytecode::update(
+                        value, raw_ptr()->binary_declaration_));
+  }
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
   void DisableAllocationStub() const;
 
@@ -1362,23 +1320,25 @@ class Class : public Object {
 
   void Finalize() const;
 
-  // Apply given patch class to this class.
-  // Return true on success, or false and error otherwise.
-  bool ApplyPatch(const Class& patch, Error* error) const;
+  RawObject* Invoke(const String& selector,
+                    const Array& arguments,
+                    const Array& argument_names,
+                    bool respect_reflectable = true,
+                    bool check_is_entrypoint = false) const;
+  RawObject* InvokeGetter(const String& selector,
+                          bool throw_nsm_if_absent,
+                          bool respect_reflectable = true,
+                          bool check_is_entrypoint = false) const;
+  RawObject* InvokeSetter(const String& selector,
+                          const Instance& argument,
+                          bool respect_reflectable = true,
+                          bool check_is_entrypoint = false) const;
 
   // Evaluate the given expression as if it appeared in a static method of this
   // class and return the resulting value, or an error object if evaluating the
   // expression fails. The method has the formal (type) parameters given in
   // (type_)param_names, and is invoked with the (type)argument values given in
   // (type_)param_values.
-  RawObject* Evaluate(const String& expr,
-                      const Array& param_names,
-                      const Array& param_values) const;
-  RawObject* Evaluate(const String& expr,
-                      const Array& param_names,
-                      const Array& param_values,
-                      const Array& type_param_names,
-                      const TypeArguments& type_param_values) const;
   RawObject* EvaluateCompiledExpression(
       const uint8_t* kernel_bytes,
       intptr_t kernel_length,
@@ -1386,32 +1346,41 @@ class Class : public Object {
       const Array& param_values,
       const TypeArguments& type_param_values) const;
 
+  // Load class declaration (super type, interfaces, type parameters and
+  // number of type arguments) if it is not loaded yet.
+  void EnsureDeclarationLoaded() const;
+
   RawError* EnsureIsFinalized(Thread* thread) const;
 
   // Allocate a class used for VM internal objects.
   template <class FakeObject>
-  static RawClass* New();
+  static RawClass* New(Isolate* isolate, bool register_class = true);
 
   // Allocate instance classes.
   static RawClass* New(const Library& lib,
                        const String& name,
                        const Script& script,
-                       TokenPosition token_pos);
+                       TokenPosition token_pos,
+                       bool register_class = true);
   static RawClass* NewNativeWrapper(const Library& library,
                                     const String& name,
                                     int num_fields);
 
   // Allocate the raw string classes.
-  static RawClass* NewStringClass(intptr_t class_id);
+  static RawClass* NewStringClass(intptr_t class_id, Isolate* isolate);
 
   // Allocate the raw TypedData classes.
-  static RawClass* NewTypedDataClass(intptr_t class_id);
+  static RawClass* NewTypedDataClass(intptr_t class_id, Isolate* isolate);
 
-  // Allocate the raw TypedDataView classes.
-  static RawClass* NewTypedDataViewClass(intptr_t class_id);
+  // Allocate the raw TypedDataView/ByteDataView classes.
+  static RawClass* NewTypedDataViewClass(intptr_t class_id, Isolate* isolate);
 
   // Allocate the raw ExternalTypedData classes.
-  static RawClass* NewExternalTypedDataClass(intptr_t class_id);
+  static RawClass* NewExternalTypedDataClass(intptr_t class_id,
+                                             Isolate* isolate);
+
+  // Allocate the raw Pointer classes.
+  static RawClass* NewPointerClass(intptr_t class_id, Isolate* isolate);
 
   // Register code that has used CHA for optimization.
   // TODO(srdjan): Also register kind of CHA optimization (e.g.: leaf class,
@@ -1422,6 +1391,8 @@ class Class : public Object {
 
   void DisableAllCHAOptimizedCode();
 
+  void DisableCHAImplementorUsers() { DisableAllCHAOptimizedCode(); }
+
   // Return the list of code objects that were compiled using CHA of this class.
   // These code objects will be invalidated if new subclasses of this class
   // are finalized.
@@ -1431,18 +1402,28 @@ class Class : public Object {
   bool TraceAllocation(Isolate* isolate) const;
   void SetTraceAllocation(bool trace_allocation) const;
 
-  bool ValidatePostFinalizePatch(const Class& orig_class, Error* error) const;
-  void ReplaceEnum(const Class& old_enum) const;
-  void CopyStaticFieldValues(const Class& old_cls) const;
+  void ReplaceEnum(IsolateReloadContext* reload_context,
+                   const Class& old_enum) const;
+  void CopyStaticFieldValues(IsolateReloadContext* reload_context,
+                             const Class& old_cls) const;
   void PatchFieldsAndFunctions() const;
   void MigrateImplicitStaticClosures(IsolateReloadContext* context,
                                      const Class& new_cls) const;
   void CopyCanonicalConstants(const Class& old_cls) const;
-  void CopyCanonicalType(const Class& old_cls) const;
+  void CopyDeclarationType(const Class& old_cls) const;
   void CheckReload(const Class& replacement,
                    IsolateReloadContext* context) const;
 
+  void AddInvocationDispatcher(const String& target_name,
+                               const Array& args_desc,
+                               const Function& dispatcher) const;
+
  private:
+  RawType* declaration_type() const { return raw_ptr()->declaration_type_; }
+
+  // Caches the declaration type of this class.
+  void set_declaration_type(const Type& type) const;
+
   bool CanReloadFinalized(const Class& replacement,
                           IsolateReloadContext* context) const;
   bool CanReloadPreFinalized(const Class& replacement,
@@ -1465,54 +1446,49 @@ class Class : public Object {
   enum StateBits {
     kConstBit = 0,
     kImplementedBit = 1,
-    kTypeFinalizedBit = 2,
-    kClassFinalizedPos = 3,
+    kClassFinalizedPos = 2,
     kClassFinalizedSize = 2,
-    kAbstractBit = kClassFinalizedPos + kClassFinalizedSize,  // = 5
-    kPatchBit = 6,
-    kSynthesizedClassBit = 7,
-    kMarkedForParsingBit = 8,
-    kMixinAppAliasBit = 9,
-    kMixinTypeAppliedBit = 10,
-    kFieldsMarkedNullableBit = 11,
-    kCycleFreeBit = 12,
-    kEnumBit = 13,
-    kTransformedMixinApplicationBit = 14,
-    kIsAllocatedBit = 15,
+    kClassLoadingPos = kClassFinalizedPos + kClassFinalizedSize,  // = 4
+    kClassLoadingSize = 2,
+    kAbstractBit = kClassLoadingPos + kClassLoadingSize,  // = 6
+    kPatchBit,
+    kSynthesizedClassBit,
+    kMixinAppAliasBit,
+    kMixinTypeAppliedBit,
+    kFieldsMarkedNullableBit,
+    kEnumBit,
+    kTransformedMixinApplicationBit,
+    kIsAllocatedBit,
+    kIsLoadedBit,
+    kHasPragmaBit,
   };
-  class ConstBit : public BitField<uint16_t, bool, kConstBit, 1> {};
-  class ImplementedBit : public BitField<uint16_t, bool, kImplementedBit, 1> {};
-  class TypeFinalizedBit
-      : public BitField<uint16_t, bool, kTypeFinalizedBit, 1> {};
-  class ClassFinalizedBits : public BitField<uint16_t,
+  class ConstBit : public BitField<uint32_t, bool, kConstBit, 1> {};
+  class ImplementedBit : public BitField<uint32_t, bool, kImplementedBit, 1> {};
+  class ClassFinalizedBits : public BitField<uint32_t,
                                              RawClass::ClassFinalizedState,
                                              kClassFinalizedPos,
                                              kClassFinalizedSize> {};
-  class AbstractBit : public BitField<uint16_t, bool, kAbstractBit, 1> {};
-  class PatchBit : public BitField<uint16_t, bool, kPatchBit, 1> {};
+  class ClassLoadingBits : public BitField<uint32_t,
+                                           RawClass::ClassLoadingState,
+                                           kClassLoadingPos,
+                                           kClassLoadingSize> {};
+  class AbstractBit : public BitField<uint32_t, bool, kAbstractBit, 1> {};
+  class PatchBit : public BitField<uint32_t, bool, kPatchBit, 1> {};
   class SynthesizedClassBit
-      : public BitField<uint16_t, bool, kSynthesizedClassBit, 1> {};
-  class MarkedForParsingBit
-      : public BitField<uint16_t, bool, kMarkedForParsingBit, 1> {};
-  class MixinAppAliasBit
-      : public BitField<uint16_t, bool, kMixinAppAliasBit, 1> {};
-  class MixinTypeAppliedBit
-      : public BitField<uint16_t, bool, kMixinTypeAppliedBit, 1> {};
+      : public BitField<uint32_t, bool, kSynthesizedClassBit, 1> {};
   class FieldsMarkedNullableBit
-      : public BitField<uint16_t, bool, kFieldsMarkedNullableBit, 1> {};
-  class CycleFreeBit : public BitField<uint16_t, bool, kCycleFreeBit, 1> {};
-  class EnumBit : public BitField<uint16_t, bool, kEnumBit, 1> {};
+      : public BitField<uint32_t, bool, kFieldsMarkedNullableBit, 1> {};
+  class EnumBit : public BitField<uint32_t, bool, kEnumBit, 1> {};
   class TransformedMixinApplicationBit
-      : public BitField<uint16_t, bool, kTransformedMixinApplicationBit, 1> {};
-  class IsAllocatedBit : public BitField<uint16_t, bool, kIsAllocatedBit, 1> {};
+      : public BitField<uint32_t, bool, kTransformedMixinApplicationBit, 1> {};
+  class IsAllocatedBit : public BitField<uint32_t, bool, kIsAllocatedBit, 1> {};
+  class IsLoadedBit : public BitField<uint32_t, bool, kIsLoadedBit, 1> {};
+  class HasPragmaBit : public BitField<uint32_t, bool, kHasPragmaBit, 1> {};
 
   void set_name(const String& value) const;
   void set_user_name(const String& value) const;
   RawString* GenerateUserVisibleName() const;
   void set_state_bits(intptr_t bits) const;
-
-  void set_canonical_type(const Type& value) const;
-  RawType* canonical_type() const;
 
   RawArray* invocation_dispatcher_cache() const;
   void set_invocation_dispatcher_cache(const Array& cache) const;
@@ -1529,15 +1505,20 @@ class Class : public Object {
   static const intptr_t kUnknownNumTypeArguments = -1;
 
   int16_t num_type_arguments() const { return raw_ptr()->num_type_arguments_; }
-  void set_num_type_arguments(intptr_t value) const;
-  static intptr_t num_type_arguments_offset() {
-    return OFFSET_OF(RawClass, num_type_arguments_);
-  }
 
-  int16_t num_own_type_arguments() const {
-    return raw_ptr()->num_own_type_arguments_;
+ public:
+  void set_num_type_arguments(intptr_t value) const;
+
+  bool has_pragma() const {
+    return HasPragmaBit::decode(raw_ptr()->state_bits_);
   }
-  void set_num_own_type_arguments(intptr_t value) const;
+  void set_has_pragma(bool has_pragma) const;
+
+ private:
+  // Calculates number of type arguments of this class.
+  // This includes type arguments of a superclass and takes overlapping
+  // of type arguments into account.
+  intptr_t ComputeNumTypeArguments() const;
 
   // Assigns empty array to all raw class array fields.
   void InitEmptyFields();
@@ -1554,78 +1535,21 @@ class Class : public Object {
 
   // Allocate an instance class which has a VM implementation.
   template <class FakeInstance>
-  static RawClass* New(intptr_t id);
+  static RawClass* New(intptr_t id,
+                       Isolate* isolate,
+                       bool register_class = true);
 
   // Helper that calls 'Class::New<Instance>(kIllegalCid)'.
   static RawClass* NewInstanceClass();
-
-  // Check the subtype or 'more specific' relationship.
-  bool TypeTest(TypeTestKind test_kind,
-                const TypeArguments& type_arguments,
-                const Class& other,
-                const TypeArguments& other_type_arguments,
-                Error* bound_error,
-                TrailPtr bound_trail,
-                Heap::Space space) const;
-
-  // Returns true if the type specified by this class and type_arguments is a
-  // subtype of FutureOr<T> specified by other class and other_type_arguments.
-  // Returns false if other class is not a FutureOr.
-  bool FutureOrTypeTest(Zone* zone,
-                        const TypeArguments& type_arguments,
-                        const Class& other,
-                        const TypeArguments& other_type_arguments,
-                        Error* bound_error,
-                        TrailPtr bound_trail,
-                        Heap::Space space) const;
-
-  static bool TypeTestNonRecursive(const Class& cls,
-                                   TypeTestKind test_kind,
-                                   const TypeArguments& type_arguments,
-                                   const Class& other,
-                                   const TypeArguments& other_type_arguments,
-                                   Error* bound_error,
-                                   TrailPtr bound_trail,
-                                   Heap::Space space);
 
   FINAL_HEAP_OBJECT_IMPLEMENTATION(Class, Object);
   friend class AbstractType;
   friend class Instance;
   friend class Object;
   friend class Type;
+  friend class InterpreterHelpers;
   friend class Intrinsifier;
   friend class ClassFunctionVisitor;
-};
-
-// Unresolved class is used for storing unresolved names which will be resolved
-// to a class after all classes have been loaded and finalized.
-class UnresolvedClass : public Object {
- public:
-  RawObject* library_or_library_prefix() const {
-    return raw_ptr()->library_or_library_prefix_;
-  }
-  RawString* ident() const { return raw_ptr()->ident_; }
-  TokenPosition token_pos() const { return raw_ptr()->token_pos_; }
-
-  RawString* Name() const;
-
-  static intptr_t InstanceSize() {
-    return RoundedAllocationSize(sizeof(RawUnresolvedClass));
-  }
-
-  static RawUnresolvedClass* New(const Object& library_prefix,
-                                 const String& ident,
-                                 TokenPosition token_pos);
-
- private:
-  void set_library_or_library_prefix(const Object& library_prefix) const;
-  void set_ident(const String& ident) const;
-  void set_token_pos(TokenPosition token_pos) const;
-
-  static RawUnresolvedClass* New();
-
-  FINAL_HEAP_OBJECT_IMPLEMENTATION(UnresolvedClass, Object);
-  friend class Class;
 };
 
 // Classification of type genericity according to type parameter owners.
@@ -1640,10 +1564,10 @@ class PatchClass : public Object {
   RawClass* patched_class() const { return raw_ptr()->patched_class_; }
   RawClass* origin_class() const { return raw_ptr()->origin_class_; }
   RawScript* script() const { return raw_ptr()->script_; }
-  RawTypedData* library_kernel_data() const {
+  RawExternalTypedData* library_kernel_data() const {
     return raw_ptr()->library_kernel_data_;
   }
-  void set_library_kernel_data(const TypedData& data) const;
+  void set_library_kernel_data(const ExternalTypedData& data) const;
 
   intptr_t library_kernel_offset() const {
 #if !defined(DART_PRECOMPILED_RUNTIME)
@@ -1678,6 +1602,41 @@ class PatchClass : public Object {
   static RawPatchClass* New();
 
   FINAL_HEAP_OBJECT_IMPLEMENTATION(PatchClass, Object);
+  friend class Class;
+};
+
+class ParameterTypeCheck : public Object {
+ public:
+  // The FP-relative index of the parameter in a bytecode frame (after optional
+  // parameter marshalling) whose assignability needs to be checked, or 0 if
+  // this is a type parameter check.
+  intptr_t index() const { return raw_ptr()->index_; }
+  void set_index(intptr_t i) const { StoreNonPointer(&raw_ptr()->index_, i); }
+
+  // The type parameter to whose bound needs to be checked, or null if this is
+  // an ordinary parameter check.
+  RawAbstractType* param() const { return raw_ptr()->param_; }
+  void set_param(const AbstractType& t) const;
+
+  // FP[index] assignable to type, OR param is subtype of bound.
+  RawAbstractType* type_or_bound() const { return raw_ptr()->type_or_bound_; }
+  void set_type_or_bound(const AbstractType& t) const;
+
+  // The parameter or type parameter's name to use in an error message.
+  RawString* name() const { return raw_ptr()->name_; }
+  void set_name(const String& n) const;
+
+  RawSubtypeTestCache* cache() const { return raw_ptr()->cache_; }
+  void set_cache(const SubtypeTestCache& c) const;
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawParameterTypeCheck));
+  }
+
+  static RawParameterTypeCheck* New();
+
+ private:
+  FINAL_HEAP_OBJECT_IMPLEMENTATION(ParameterTypeCheck, Object);
   friend class Class;
 };
 
@@ -1770,8 +1729,24 @@ class ICData : public Object {
 
   bool IsImmutable() const;
 
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  RawAbstractType* receivers_static_type() const {
+    return raw_ptr()->receivers_static_type_;
+  }
+  void SetReceiversStaticType(const AbstractType& type) const;
+  bool is_tracking_exactness() const {
+    return TrackingExactnessBit::decode(raw_ptr()->state_bits_);
+  }
+  void set_tracking_exactness(bool value) const {
+    StoreNonPointer(
+        &raw_ptr()->state_bits_,
+        TrackingExactnessBit::update(value, raw_ptr()->state_bits_));
+  }
+#else
+  bool is_tracking_exactness() const { return false; }
+#endif
+
   void Reset(Zone* zone) const;
-  void ResetSwitchable(Zone* zone) const;
 
 // Note: only deopts with reasons before Unknown in this list are recorded in
 // the ICData. All other reasons are used purely for informational messages
@@ -1788,6 +1763,7 @@ class ICData : public Object {
   V(BinaryDoubleOp)                                                            \
   V(UnaryOp)                                                                   \
   V(UnboxInteger)                                                              \
+  V(Unbox)                                                                     \
   V(CheckArrayBound)                                                           \
   V(AtCall)                                                                    \
   V(GuardField)                                                                \
@@ -1819,17 +1795,35 @@ class ICData : public Object {
 
   // Call site classification that is helpful for hot-reload. Call sites with
   // different `RebindRule` have to be rebound differently.
+#define FOR_EACH_REBIND_RULE(V)                                                \
+  V(Instance)                                                                  \
+  V(NoRebind)                                                                  \
+  V(NSMDispatch)                                                               \
+  V(Optimized)                                                                 \
+  V(Static)                                                                    \
+  V(Super)
+
   enum RebindRule {
-    kInstance,
-    kNoRebind,
-    kNSMDispatch,
-    kOptimized,
-    kStatic,
-    kSuper,
-    kNumRebindRules,
+#define REBIND_ENUM_DEF(name) k##name,
+    FOR_EACH_REBIND_RULE(REBIND_ENUM_DEF)
+#undef REBIND_ENUM_DEF
+        kNumRebindRules,
   };
+  static const char* RebindRuleToCString(RebindRule r);
+  static bool ParseRebindRule(const char* str, RebindRule* out);
   RebindRule rebind_rule() const;
   void set_rebind_rule(uint32_t rebind_rule) const;
+
+  void set_is_megamorphic(bool value) const {
+    // We don't have concurrent RW access to [state_bits_].
+    const uint32_t updated_bits =
+        MegamorphicBit::update(value, raw_ptr()->state_bits_);
+
+    // Though we ensure that once the state bits are updated, all other previous
+    // writes to the IC are visible as well.
+    StoreNonPointer<uint32_t, uint32_t, MemoryOrder::kRelease>(
+        &raw_ptr()->state_bits_, updated_bits);
+  }
 
   // The length of the array. This includes all sentinel entries including
   // the final one.
@@ -1867,9 +1861,15 @@ class ICData : public Object {
     return OFFSET_OF(RawICData, args_descriptor_);
   }
 
-  static intptr_t ic_data_offset() { return OFFSET_OF(RawICData, ic_data_); }
+  static intptr_t entries_offset() { return OFFSET_OF(RawICData, entries_); }
 
   static intptr_t owner_offset() { return OFFSET_OF(RawICData, owner_); }
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  static intptr_t receivers_static_type_offset() {
+    return OFFSET_OF(RawICData, receivers_static_type_);
+  }
+#endif
 
   // Replaces entry |index| with the sentinel.
   void WriteSentinelAt(intptr_t index) const;
@@ -1877,17 +1877,9 @@ class ICData : public Object {
   // Clears the count for entry |index|.
   void ClearCountAt(intptr_t index) const;
 
-  // Clear all entries with the sentinel value (but will preserve initial
-  // smi smi checks).
-  void ClearWithSentinel() const;
-
   // Clear all entries with the sentinel value and reset the first entry
   // with the dummy target entry.
   void ClearAndSetStaticTarget(const Function& func) const;
-
-  // Returns the first index that should be used to for a new entry. Will
-  // grow the array if necessary.
-  RawArray* FindFreeIndex(intptr_t* index) const;
 
   void DebugDump() const;
 
@@ -1904,11 +1896,16 @@ class ICData : public Object {
   void AddCheck(const GrowableArray<intptr_t>& class_ids,
                 const Function& target,
                 intptr_t count = 1) const;
+
+  StaticTypeExactnessState GetExactnessAt(intptr_t count) const;
+
   // Adds sorted so that Smi is the first class-id. Use only for
   // num_args_tested == 1.
   void AddReceiverCheck(intptr_t receiver_class_id,
                         const Function& target,
-                        intptr_t count = 1) const;
+                        intptr_t count = 1,
+                        StaticTypeExactnessState exactness =
+                            StaticTypeExactnessState::NotTracking()) const;
 
   // Does entry |index| contain the sentinel value?
   bool IsSentinelAt(intptr_t index) const;
@@ -1931,8 +1928,6 @@ class ICData : public Object {
   intptr_t GetClassIdAt(intptr_t index, intptr_t arg_nr) const;
 
   RawFunction* GetTargetAt(intptr_t index) const;
-  RawFunction* GetTargetForReceiverClassId(intptr_t class_id,
-                                           intptr_t* count_return) const;
 
   RawObject* GetTargetOrCodeAt(intptr_t index) const;
   void SetCodeAt(intptr_t index, const Code& value) const;
@@ -1959,75 +1954,112 @@ class ICData : public Object {
   // Used for printing and optimizations.
   RawICData* AsUnaryClassChecksSortedByCount() const;
 
-  // Consider only used entries.
-  bool AllTargetsHaveSameOwner(intptr_t owner_cid) const;
-  bool AllReceiversAreNumbers() const;
-  bool HasOneTarget() const;
+  RawUnlinkedCall* AsUnlinkedCall() const;
+
   bool HasReceiverClassId(intptr_t class_id) const;
 
-  static RawICData* New(const Function& owner,
-                        const String& target_name,
-                        const Array& arguments_descriptor,
-                        intptr_t deopt_id,
-                        intptr_t num_args_tested,
-                        RebindRule rebind_rule);
+  // Note: passing non-null receiver_type enables exactness tracking for
+  // the receiver type. Receiver type is expected to be a fully
+  // instantiated generic (but not a FutureOr).
+  // See StaticTypeExactnessState for more information.
+  static RawICData* New(
+      const Function& owner,
+      const String& target_name,
+      const Array& arguments_descriptor,
+      intptr_t deopt_id,
+      intptr_t num_args_tested,
+      RebindRule rebind_rule,
+      const AbstractType& receiver_type = Object::null_abstract_type());
   static RawICData* NewFrom(const ICData& from, intptr_t num_args_tested);
 
   // Generates a new ICData with descriptor and data array copied (deep clone).
   static RawICData* Clone(const ICData& from);
 
-  static intptr_t TestEntryLengthFor(intptr_t num_args);
+  static intptr_t TestEntryLengthFor(intptr_t num_args,
+                                     bool tracking_exactness);
 
-  static intptr_t TargetIndexFor(intptr_t num_args) { return num_args; }
-  static intptr_t CodeIndexFor(intptr_t num_args) { return num_args; }
+  static intptr_t CountIndexFor(intptr_t num_args) { return num_args; }
+  static intptr_t EntryPointIndexFor(intptr_t num_args) { return num_args; }
 
-  static intptr_t CountIndexFor(intptr_t num_args) { return (num_args + 1); }
-  static intptr_t EntryPointIndexFor(intptr_t num_args) {
-    return (num_args + 1);
-  }
+  static intptr_t TargetIndexFor(intptr_t num_args) { return num_args + 1; }
+  static intptr_t CodeIndexFor(intptr_t num_args) { return num_args + 1; }
+
+  static intptr_t ExactnessIndexFor(intptr_t num_args) { return num_args + 2; }
 
   bool IsUsedAt(intptr_t i) const;
-
-  void GetUsedCidsForTwoArgs(GrowableArray<intptr_t>* first,
-                             GrowableArray<intptr_t>* second) const;
 
   void PrintToJSONArray(const JSONArray& jsarray,
                         TokenPosition token_pos) const;
 
   // Initialize the preallocated empty ICData entry arrays.
-  static void InitOnce();
+  static void Init();
 
-  enum { kCachedICDataArrayCount = 4 };
+  // Clear the preallocated empty ICData entry arrays.
+  static void Cleanup();
 
-#if defined(TAG_IC_DATA)
-  void set_tag(intptr_t value) const;
-  intptr_t tag() const { return raw_ptr()->tag_; }
-#endif
+  // We cache ICData with 0, 1, 2 arguments tested without exactness
+  // tracking and with 1 argument tested with exactness tracking.
+  enum {
+    kCachedICDataZeroArgTestedWithoutExactnessTrackingIdx = 0,
+    kCachedICDataMaxArgsTestedWithoutExactnessTracking = 2,
+    kCachedICDataOneArgWithExactnessTrackingIdx =
+        kCachedICDataZeroArgTestedWithoutExactnessTrackingIdx +
+        kCachedICDataMaxArgsTestedWithoutExactnessTracking + 1,
+    kCachedICDataArrayCount = kCachedICDataOneArgWithExactnessTrackingIdx + 1,
+  };
 
   bool is_static_call() const;
 
+  intptr_t FindCheck(const GrowableArray<intptr_t>& cids) const;
+
+  RawArray* entries() const {
+    return AtomicOperations::LoadAcquire(&raw_ptr()->entries_);
+  }
+
  private:
+  friend class FlowGraphSerializer;  // For is_megamorphic()
+
   static RawICData* New();
 
-  RawArray* ic_data() const { return raw_ptr()->ic_data_; }
+  // Grows the array and also sets the argument to the index that should be used
+  // for the new entry.
+  RawArray* Grow(intptr_t* index) const;
 
   void set_owner(const Function& value) const;
   void set_target_name(const String& value) const;
   void set_arguments_descriptor(const Array& value) const;
   void set_deopt_id(intptr_t value) const;
   void SetNumArgsTested(intptr_t value) const;
-  void set_ic_data_array(const Array& value) const;
+  void set_entries(const Array& value) const;
   void set_state_bits(uint32_t bits) const;
+
+  // This bit is set when a call site becomes megamorphic and starts using a
+  // MegamorphicCache instead of ICData. It means that the entries in the
+  // ICData are incomplete and the MegamorphicCache needs to also be consulted
+  // to list the call site's observed receiver classes and targets.
+  // In the compiler, this should only be read once by CallTargets to avoid the
+  // compiler seeing an unstable set of feedback.
+  bool is_megamorphic() const {
+    // Ensure any following load instructions do not get performed before this
+    // one.
+    const uint32_t bits = LoadNonPointer<uint32_t, MemoryOrder::kAcquire>(
+        &raw_ptr()->state_bits_);
+    return MegamorphicBit::decode(bits);
+  }
 
   bool ValidateInterceptor(const Function& target) const;
 
   enum {
     kNumArgsTestedPos = 0,
     kNumArgsTestedSize = 2,
-    kDeoptReasonPos = kNumArgsTestedPos + kNumArgsTestedSize,
+    kTrackingExactnessPos = kNumArgsTestedPos + kNumArgsTestedSize,
+    kTrackingExactnessSize = 1,
+    kDeoptReasonPos = kTrackingExactnessPos + kTrackingExactnessSize,
     kDeoptReasonSize = kLastRecordedDeoptReason + 1,
     kRebindRulePos = kDeoptReasonPos + kDeoptReasonSize,
-    kRebindRuleSize = 3
+    kRebindRuleSize = 3,
+    kMegamorphicPos = kRebindRulePos + kRebindRuleSize,
+    kMegamorphicSize = 1,
   };
 
   COMPILE_ASSERT(kNumRebindRules <= (1 << kRebindRuleSize));
@@ -2036,6 +2068,10 @@ class ICData : public Object {
                                             uint32_t,
                                             kNumArgsTestedPos,
                                             kNumArgsTestedSize> {};
+  class TrackingExactnessBit : public BitField<uint32_t,
+                                               bool,
+                                               kTrackingExactnessPos,
+                                               kTrackingExactnessSize> {};
   class DeoptReasonBits : public BitField<uint32_t,
                                           uint32_t,
                                           ICData::kDeoptReasonPos,
@@ -2044,21 +2080,27 @@ class ICData : public Object {
                                          uint32_t,
                                          ICData::kRebindRulePos,
                                          ICData::kRebindRuleSize> {};
+  class MegamorphicBit
+      : public BitField<uint32_t, bool, kMegamorphicPos, kMegamorphicSize> {};
+
 #if defined(DEBUG)
   // Used in asserts to verify that a check is not added twice.
   bool HasCheck(const GrowableArray<intptr_t>& cids) const;
 #endif  // DEBUG
 
   intptr_t TestEntryLength() const;
-  static RawArray* NewNonCachedEmptyICDataArray(intptr_t num_args_tested);
-  static RawArray* CachedEmptyICDataArray(intptr_t num_args_tested);
+  static RawArray* NewNonCachedEmptyICDataArray(intptr_t num_args_tested,
+                                                bool tracking_exactness);
+  static RawArray* CachedEmptyICDataArray(intptr_t num_args_tested,
+                                          bool tracking_exactness);
   static RawICData* NewDescriptor(Zone* zone,
                                   const Function& owner,
                                   const String& target_name,
                                   const Array& arguments_descriptor,
                                   intptr_t deopt_id,
                                   intptr_t num_args_tested,
-                                  RebindRule rebind_rule);
+                                  RebindRule rebind_rule,
+                                  const AbstractType& receiver_type);
 
   static void WriteSentinel(const Array& data, intptr_t test_entry_length);
 
@@ -2066,10 +2108,14 @@ class ICData : public Object {
   static RawArray* cached_icdata_arrays_[kCachedICDataArrayCount];
 
   FINAL_HEAP_OBJECT_IMPLEMENTATION(ICData, Object);
+  friend class CallSiteResetter;
+  friend class CallTargets;
   friend class Class;
-  friend class SnapshotWriter;
-  friend class Serializer;
   friend class Deserializer;
+  friend class ICDataTestTask;
+  friend class Interpreter;
+  friend class Serializer;
+  friend class SnapshotWriter;
 };
 
 // Often used constants for number of free function type parameters.
@@ -2117,6 +2163,35 @@ class Function : public Object {
   // Update the signature type (with a canonical version).
   void SetSignatureType(const Type& value) const;
 
+  // Set the "C signature" function for an FFI trampoline.
+  // Can only be used on FFI trampolines.
+  void SetFfiCSignature(const Function& sig) const;
+
+  // Retrieves the "C signature" function for an FFI trampoline.
+  // Can only be used on FFI trampolines.
+  RawFunction* FfiCSignature() const;
+
+  // Can only be called on FFI trampolines.
+  // -1 for Dart -> native calls.
+  int32_t FfiCallbackId() const;
+
+  // Can only be called on FFI trampolines.
+  void SetFfiCallbackId(int32_t value) const;
+
+  // Can only be called on FFI trampolines.
+  // Null for Dart -> native calls.
+  RawFunction* FfiCallbackTarget() const;
+
+  // Can only be called on FFI trampolines.
+  void SetFfiCallbackTarget(const Function& target) const;
+
+  // Can only be called on FFI trampolines.
+  // Null for Dart -> native calls.
+  RawInstance* FfiCallbackExceptionalReturn() const;
+
+  // Can only be called on FFI trampolines.
+  void SetFfiCallbackExceptionalReturn(const Instance& value) const;
+
   // Return a new function with instantiated result and parameter types.
   RawFunction* InstantiateSignatureFrom(
       const TypeArguments& instantiator_type_arguments,
@@ -2148,10 +2223,6 @@ class Function : public Object {
                                 intptr_t num_free_fun_type_params = kAllFree,
                                 TrailPtr trail = NULL) const;
 
-  // Reloading support:
-  void Reparent(const Class& new_cls) const;
-  void ZeroEdgeCounters() const;
-
   RawClass* Owner() const;
   void set_owner(const Object& value) const;
   RawClass* origin() const;
@@ -2171,6 +2242,9 @@ class Function : public Object {
   RawAbstractType* result_type() const { return raw_ptr()->result_type_; }
   void set_result_type(const AbstractType& value) const;
 
+  // The parameters, starting with NumImplicitParameters() parameters which are
+  // only visible to the VM, but not to Dart users.
+  // Note that type checks exclude implicit parameters.
   RawAbstractType* ParameterTypeAt(intptr_t index) const;
   void SetParameterTypeAt(intptr_t index, const AbstractType& value) const;
   RawArray* parameter_types() const { return raw_ptr()->parameter_types_; }
@@ -2223,6 +2297,7 @@ class Function : public Object {
   void AttachCode(const Code& value) const;
   void SetInstructions(const Code& value) const;
   void ClearCode() const;
+  void ClearBytecode() const;
 
   // Disables optimized code and switches to unoptimized code.
   void SwitchToUnoptimizedCode() const;
@@ -2242,7 +2317,13 @@ class Function : public Object {
 
   // Return the most recently compiled and installed code for this function.
   // It is not the only Code object that points to this function.
-  RawCode* CurrentCode() const { return raw_ptr()->code_; }
+  RawCode* CurrentCode() const { return CurrentCodeOf(raw()); }
+
+  bool SafeToClosurize() const;
+
+  static RawCode* CurrentCodeOf(const RawFunction* function) {
+    return function->ptr()->code_;
+  }
 
   RawCode* unoptimized_code() const {
 #if defined(DART_PRECOMPILED_RUNTIME)
@@ -2253,21 +2334,32 @@ class Function : public Object {
   }
   void set_unoptimized_code(const Code& value) const;
   bool HasCode() const;
-#if defined(DART_USE_INTERPRETER)
   static bool HasCode(RawFunction* function);
-  static bool HasBytecode(RawFunction* function);
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  static inline bool HasBytecode(RawFunction* function);
 #endif
 
   static intptr_t code_offset() { return OFFSET_OF(RawFunction, code_); }
+
+  static intptr_t result_type_offset() {
+    return OFFSET_OF(RawFunction, result_type_);
+  }
 
   static intptr_t entry_point_offset() {
     return OFFSET_OF(RawFunction, entry_point_);
   }
 
-#if defined(DART_USE_INTERPRETER)
-  void AttachBytecode(const Code& bytecode) const;
-  RawCode* Bytecode() const { return raw_ptr()->bytecode_; }
-  bool HasBytecode() const;
+  static intptr_t unchecked_entry_point_offset() {
+    return OFFSET_OF(RawFunction, unchecked_entry_point_);
+  }
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  bool IsBytecodeAllowed(Zone* zone) const;
+  void AttachBytecode(const Bytecode& bytecode) const;
+  RawBytecode* bytecode() const { return raw_ptr()->bytecode_; }
+  inline bool HasBytecode() const;
+#else
+  inline bool HasBytecode() const { return false; }
 #endif
 
   virtual intptr_t Hash() const;
@@ -2279,16 +2371,20 @@ class Function : public Object {
   RawContextScope* context_scope() const;
   void set_context_scope(const ContextScope& value) const;
 
-  RawField* LookupImplicitGetterSetterField() const;
-
   // Enclosing function of this local function.
   RawFunction* parent_function() const;
+
+  // Enclosing outermost function of this local function.
+  RawFunction* GetOutermostFunction() const;
 
   void set_extracted_method_closure(const Function& function) const;
   RawFunction* extracted_method_closure() const;
 
   void set_saved_args_desc(const Array& array) const;
   RawArray* saved_args_desc() const;
+
+  void set_accessor_field(const Field& value) const;
+  RawField* accessor_field() const;
 
   bool IsMethodExtractor() const {
     return kind() == RawFunction::kMethodExtractor;
@@ -2302,10 +2398,14 @@ class Function : public Object {
     return kind() == RawFunction::kInvokeFieldDispatcher;
   }
 
+  bool IsDynamicInvocationForwarder() const {
+    return kind() == RawFunction::kDynamicInvocationForwarder;
+  }
+
   bool IsImplicitGetterOrSetter() const {
     return kind() == RawFunction::kImplicitGetter ||
            kind() == RawFunction::kImplicitSetter ||
-           kind() == RawFunction::kImplicitStaticFinalGetter;
+           kind() == RawFunction::kImplicitStaticGetter;
   }
 
   // Returns true iff an implicit closure function has been created
@@ -2337,8 +2437,14 @@ class Function : public Object {
   RawFunction* RedirectionTarget() const;
   void SetRedirectionTarget(const Function& target) const;
 
+  RawFunction* ForwardingTarget() const;
+  void SetForwardingChecks(const Array& checks) const;
+
   RawFunction::Kind kind() const {
     return KindBits::decode(raw_ptr()->kind_tag_);
+  }
+  static RawFunction::Kind kind(RawFunction* function) {
+    return KindBits::decode(function->ptr()->kind_tag_);
   }
 
   RawFunction::AsyncModifier modifier() const {
@@ -2354,6 +2460,13 @@ class Function : public Object {
   bool IsFactory() const {
     return (kind() == RawFunction::kConstructor) && is_static();
   }
+
+  // Whether this function can receive an invocation where the number and names
+  // of arguments have not been checked.
+  bool CanReceiveDynamicInvocation() const {
+    return IsClosureFunction() || IsFfiTrampoline();
+  }
+
   bool IsDynamicFunction(bool allow_abstract = false) const {
     if (is_static() || (!allow_abstract && is_abstract())) {
       return false;
@@ -2367,12 +2480,14 @@ class Function : public Object {
       case RawFunction::kMethodExtractor:
       case RawFunction::kNoSuchMethodDispatcher:
       case RawFunction::kInvokeFieldDispatcher:
+      case RawFunction::kDynamicInvocationForwarder:
         return true;
       case RawFunction::kClosureFunction:
       case RawFunction::kImplicitClosureFunction:
       case RawFunction::kSignatureFunction:
       case RawFunction::kConstructor:
-      case RawFunction::kImplicitStaticFinalGetter:
+      case RawFunction::kImplicitStaticGetter:
+      case RawFunction::kFieldInitializer:
       case RawFunction::kIrregexpFunction:
         return false;
       default:
@@ -2390,7 +2505,8 @@ class Function : public Object {
       case RawFunction::kSetterFunction:
       case RawFunction::kImplicitGetter:
       case RawFunction::kImplicitSetter:
-      case RawFunction::kImplicitStaticFinalGetter:
+      case RawFunction::kImplicitStaticGetter:
+      case RawFunction::kFieldInitializer:
       case RawFunction::kIrregexpFunction:
         return true;
       case RawFunction::kClosureFunction:
@@ -2400,6 +2516,7 @@ class Function : public Object {
       case RawFunction::kMethodExtractor:
       case RawFunction::kNoSuchMethodDispatcher:
       case RawFunction::kInvokeFieldDispatcher:
+      case RawFunction::kDynamicInvocationForwarder:
         return false;
       default:
         UNREACHABLE();
@@ -2409,12 +2526,14 @@ class Function : public Object {
   bool IsInFactoryScope() const;
 
   bool NeedsArgumentTypeChecks(Isolate* I) const {
-    if (I->strong()) {
-      return IsNonImplicitClosureFunction() ||
-             !(is_static() || (kind() == RawFunction::kConstructor));
+    if (!I->should_emit_strong_mode_checks()) {
+      return false;
     }
-    return I->type_checks();
+    return IsClosureFunction() ||
+           !(is_static() || (kind() == RawFunction::kConstructor));
   }
+
+  bool MayHaveUncheckedEntryPoint(Isolate* I) const;
 
   TokenPosition token_pos() const {
 #if defined(DART_PRECOMPILED_RUNTIME)
@@ -2439,13 +2558,6 @@ class Function : public Object {
     StoreNonPointer(&raw_ptr()->end_token_pos_, value);
 #endif
   }
-
-  bool is_no_such_method_forwarder() const {
-    return RawFunction::PackedIsNoSuchMethodForwarder::decode(
-        raw_ptr()->packed_fields_);
-  }
-
-  void set_is_no_such_method_forwarder(bool value) const;
 
   intptr_t num_fixed_parameters() const {
     return RawFunction::PackedNumFixedParameters::decode(
@@ -2510,6 +2622,75 @@ class Function : public Object {
 
 #undef DEFINE_GETTERS_AND_SETTERS
 
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  intptr_t binary_declaration_offset() const {
+    return RawFunction::BinaryDeclarationOffset::decode(
+        raw_ptr()->binary_declaration_);
+  }
+  void set_binary_declaration_offset(intptr_t value) const {
+    ASSERT(value >= 0);
+    StoreNonPointer(&raw_ptr()->binary_declaration_,
+                    RawFunction::BinaryDeclarationOffset::update(
+                        value, raw_ptr()->binary_declaration_));
+  }
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+
+  intptr_t kernel_offset() const {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    return 0;
+#else
+    ASSERT(!is_declared_in_bytecode());
+    return binary_declaration_offset();
+#endif
+  }
+
+  void set_kernel_offset(intptr_t value) const {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    UNREACHABLE();
+#else
+    ASSERT(!is_declared_in_bytecode());
+    set_binary_declaration_offset(value);
+#endif
+  }
+
+  intptr_t bytecode_offset() const {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    return 0;
+#else
+    ASSERT(is_declared_in_bytecode());
+    return binary_declaration_offset();
+#endif
+  }
+
+  void set_bytecode_offset(intptr_t value) const {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    UNREACHABLE();
+#else
+    ASSERT(is_declared_in_bytecode());
+    set_binary_declaration_offset(value);
+#endif
+  }
+
+  bool is_declared_in_bytecode() const {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    return false;
+#else
+    return RawFunction::IsDeclaredInBytecode::decode(
+        raw_ptr()->binary_declaration_);
+#endif
+  }
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  void set_is_declared_in_bytecode(bool value) const {
+    StoreNonPointer(&raw_ptr()->binary_declaration_,
+                    RawFunction::IsDeclaredInBytecode::update(
+                        value, raw_ptr()->binary_declaration_));
+  }
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+
+  void InheritBinaryDeclarationFrom(const Function& src) const;
+  void InheritBinaryDeclarationFrom(const Field& src) const;
+
   static const intptr_t kMaxInstructionCount = (1 << 16) - 1;
 
   void SetOptimizedInstructionCountClamped(uintptr_t value) const {
@@ -2523,15 +2704,34 @@ class Function : public Object {
   }
 
   void SetKernelDataAndScript(const Script& script,
-                              const TypedData& data,
-                              intptr_t offset);
+                              const ExternalTypedData& data,
+                              intptr_t offset) const;
 
   intptr_t KernelDataProgramOffset() const;
 
-  RawTypedData* KernelData() const;
+  RawExternalTypedData* KernelData() const;
 
   bool IsOptimizable() const;
   void SetIsOptimizable(bool value) const;
+
+  // Whether this function must be optimized immediately and cannot be compiled
+  // with the unoptimizing compiler. Such a function must be sure to not
+  // deoptimize, since we won't generate deoptimization info or register
+  // dependencies. It will be compiled into optimized code immediately when it's
+  // run.
+  bool ForceOptimize() const {
+    if (IsFfiTrampoline()) {
+      return true;
+    }
+    // On DBC we use native calls instead of IR for the view factories (see
+    // kernel_to_il.cc)
+#if !defined(TARGET_ARCH_DBC)
+    if (IsTypedDataViewFactory()) {
+      return true;
+    }
+#endif
+    return false;
+  }
 
   bool CanBeInlined() const;
 
@@ -2546,12 +2746,22 @@ class Function : public Object {
 
   bool HasOptimizedCode() const;
 
+  // Whether the function is ready for compiler optimizations.
+  bool ShouldCompilerOptimize() const;
+
   // Returns true if the argument counts are valid for calling this function.
   // Otherwise, it returns false and the reason (if error_message is not NULL).
   bool AreValidArgumentCounts(intptr_t num_type_arguments,
                               intptr_t num_arguments,
                               intptr_t num_named_arguments,
                               String* error_message) const;
+
+  // Returns a TypeError if the provided arguments don't match the function
+  // parameter types, NULL otherwise. Assumes AreValidArguments is called first.
+  RawObject* DoArgumentTypesMatch(
+      const Array& args,
+      const ArgumentsDescriptor& arg_names,
+      const TypeArguments& instantiator_type_args) const;
 
   // Returns true if the type argument count, total argument count and the names
   // of optional arguments are valid for calling this function.
@@ -2571,44 +2781,18 @@ class Function : public Object {
 
   const char* ToQualifiedCString() const;
 
-  // Returns true if this function has parameters that are compatible with the
-  // parameters of the other function in order for this function to override the
-  // other function.
-  bool HasCompatibleParametersWith(const Function& other,
-                                   Error* bound_error) const;
-
   // Returns true if the type of this function is a subtype of the type of
   // the other function.
-  bool IsSubtypeOf(const Function& other,
-                   Error* bound_error,
-                   TrailPtr bound_trail,
-                   Heap::Space space) const {
-    return TypeTest(kIsSubtypeOf, other, bound_error, bound_trail, space);
-  }
-
-  // Returns true if the type of this function is more specific than the type of
-  // the other function.
-  bool IsMoreSpecificThan(const Function& other,
-                          Error* bound_error,
-                          TrailPtr bound_trail,
-                          Heap::Space space) const {
-    return TypeTest(kIsMoreSpecificThan, other, bound_error, bound_trail,
-                    space);
-  }
-
-  // Check the subtype or 'more specific' relationship.
-  bool TypeTest(TypeTestKind test_kind,
-                const Function& other,
-                Error* bound_error,
-                TrailPtr bound_trail,
-                Heap::Space space) const;
+  bool IsSubtypeOf(const Function& other, Heap::Space space) const;
 
   bool IsDispatcherOrImplicitAccessor() const {
     switch (kind()) {
       case RawFunction::kImplicitGetter:
       case RawFunction::kImplicitSetter:
+      case RawFunction::kImplicitStaticGetter:
       case RawFunction::kNoSuchMethodDispatcher:
       case RawFunction::kInvokeFieldDispatcher:
+      case RawFunction::kDynamicInvocationForwarder:
         return true;
       default:
         return false;
@@ -2633,6 +2817,13 @@ class Function : public Object {
   // Returns true if this function represents an implicit setter function.
   bool IsImplicitSetterFunction() const {
     return kind() == RawFunction::kImplicitSetter;
+  }
+
+  // Returns true if this function represents an the initializer for a static or
+  // instance field. The function returns the initial value and the caller is
+  // responsible for setting the field.
+  bool IsFieldInitializer() const {
+    return kind() == RawFunction::kFieldInitializer;
   }
 
   // Returns true if this function represents a (possibly implicit) closure
@@ -2684,6 +2875,14 @@ class Function : public Object {
            RawFunction::kSignatureFunction;
   }
 
+  // Returns true if this function represents an ffi trampoline.
+  bool IsFfiTrampoline() const { return kind() == RawFunction::kFfiTrampoline; }
+  static bool IsFfiTrampoline(RawFunction* function) {
+    NoSafepointScope no_safepoint;
+    return KindBits::decode(function->ptr()->kind_tag_) ==
+           RawFunction::kFfiTrampoline;
+  }
+
   bool IsAsyncFunction() const { return modifier() == RawFunction::kAsync; }
 
   bool IsAsyncClosure() const {
@@ -2718,14 +2917,24 @@ class Function : public Object {
     return modifier() != RawFunction::kNoModifier;
   }
 
+  bool IsTypedDataViewFactory() const {
+    if (is_native() && kind() == RawFunction::kConstructor) {
+      // This is a native factory constructor.
+      const Class& klass = Class::Handle(Owner());
+      return RawObject::IsTypedDataViewClassId(klass.id());
+    }
+    return false;
+  }
+
+  DART_WARN_UNUSED_RESULT
+  RawError* VerifyCallEntryPoint() const;
+
+  DART_WARN_UNUSED_RESULT
+  RawError* VerifyClosurizedEntryPoint() const;
+
   static intptr_t InstanceSize() {
     return RoundedAllocationSize(sizeof(RawFunction));
   }
-
-  static RawFunction* EvaluateHelper(const Class& cls,
-                                     const String& expr,
-                                     const Array& param_names,
-                                     bool is_static);
 
   static RawFunction* New(const String& name,
                           RawFunction::Kind kind,
@@ -2743,7 +2952,8 @@ class Function : public Object {
   static RawFunction* NewClosureFunctionWithKind(RawFunction::Kind kind,
                                                  const String& name,
                                                  const Function& parent,
-                                                 TokenPosition token_pos);
+                                                 TokenPosition token_pos,
+                                                 const Object& owner);
 
   // Allocates a new Function object representing a closure function.
   static RawFunction* NewClosureFunction(const String& name,
@@ -2770,9 +2980,19 @@ class Function : public Object {
   RawFunction* CreateMethodExtractor(const String& getter_name) const;
   RawFunction* GetMethodExtractor(const String& getter_name) const;
 
-  // Allocate new function object, clone values from this function. The
-  // owner of the clone is new_owner.
-  RawFunction* Clone(const Class& new_owner) const;
+  static bool IsDynamicInvocationForwarderName(const String& name);
+
+  static RawString* DemangleDynamicInvocationForwarderName(const String& name);
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  static RawString* CreateDynamicInvocationForwarderName(const String& name);
+
+  RawFunction* CreateDynamicInvocationForwarder(
+      const String& mangled_name) const;
+
+  RawFunction* GetDynamicInvocationForwarder(const String& mangled_name,
+                                             bool allow_add = true) const;
+#endif
 
   // Slow function, use in asserts to track changes in important library
   // functions.
@@ -2792,6 +3012,7 @@ class Function : public Object {
 
   RawArray* ic_data_array() const;
   void ClearICDataArray() const;
+  RawICData* FindICData(intptr_t deopt_id) const;
 
   // Sets deopt reason in all ICData-s with given deopt_id.
   void SetDeoptReasonForAll(intptr_t deopt_id, ICData::DeoptReasonId reason);
@@ -2853,9 +3074,6 @@ class Function : public Object {
   //          dispatchers is not visible. Synthetic code that can trigger
   //          exceptions such as the outer async functions that create Futures
   //          is visible.
-  // optimizable: Candidate for going through the optimizing compiler. False for
-  //              some functions known to be execute infrequently and functions
-  //              which have been de-optimized too many times.
   // instrinsic: Has a hand-written assembly prologue.
   // inlinable: Candidate for inlining. False for functions with features we
   //            don't support during inlining (e.g., optional parameters),
@@ -2864,6 +3082,10 @@ class Function : public Object {
   // redirecting: Redirecting generative or factory constructor.
   // external: Just a declaration that expects to be defined in another patch
   //           file.
+  // generated_body: Has a generated body.
+  // polymorphic_target: A polymorphic method.
+  // has_pragma: Has a @pragma decoration.
+  // no_such_method_forwarder: A stub method that just calls noSuchMethod.
 
 #define FOR_EACH_FUNCTION_KIND_BIT(V)                                          \
   V(Static, is_static)                                                         \
@@ -2872,16 +3094,15 @@ class Function : public Object {
   V(Reflectable, is_reflectable)                                               \
   V(Visible, is_visible)                                                       \
   V(Debuggable, is_debuggable)                                                 \
-  V(Optimizable, is_optimizable)                                               \
   V(Inlinable, is_inlinable)                                                   \
   V(Intrinsic, is_intrinsic)                                                   \
   V(Native, is_native)                                                         \
   V(Redirecting, is_redirecting)                                               \
   V(External, is_external)                                                     \
   V(GeneratedBody, is_generated_body)                                          \
-  V(AlwaysInline, always_inline)                                               \
   V(PolymorphicTarget, is_polymorphic_target)                                  \
-  V(HasPragma, has_pragma)
+  V(HasPragma, has_pragma)                                                     \
+  V(IsNoSuchMethodForwarder, is_no_such_method_forwarder)
 
 #define DEFINE_ACCESSORS(name, accessor_name)                                  \
   void set_##accessor_name(bool value) const {                                 \
@@ -2890,6 +3111,17 @@ class Function : public Object {
   bool accessor_name() const { return name##Bit::decode(raw_ptr()->kind_tag_); }
   FOR_EACH_FUNCTION_KIND_BIT(DEFINE_ACCESSORS)
 #undef DEFINE_ACCESSORS
+
+  // optimizable: Candidate for going through the optimizing compiler. False for
+  //              some functions known to be execute infrequently and functions
+  //              which have been de-optimized too many times.
+  bool is_optimizable() const {
+    return RawFunction::OptimizableBit::decode(raw_ptr()->packed_fields_);
+  }
+  void set_is_optimizable(bool value) const {
+    set_packed_fields(
+        RawFunction::OptimizableBit::update(value, raw_ptr()->packed_fields_));
+  }
 
   // Indicates whether this function can be optimized on the background compiler
   // thread.
@@ -2909,7 +3141,7 @@ class Function : public Object {
 
   enum KindTagBits {
     kKindTagPos = 0,
-    kKindTagSize = 4,
+    kKindTagSize = 5,
     kRecognizedTagPos = kKindTagPos + kKindTagSize,
     kRecognizedTagSize = 9,
     kModifierPos = kRecognizedTagPos + kRecognizedTagSize,
@@ -2959,7 +3191,6 @@ class Function : public Object {
   void set_num_optional_parameters(intptr_t value) const;  // Encoded value.
   void set_kind_tag(uint32_t value) const;
   void set_data(const Object& value) const;
-
   static RawFunction* New(Heap::Space space = Heap::kOld);
 
   RawString* QualifiedName(NameVisibility name_visibility) const;
@@ -2971,16 +3202,13 @@ class Function : public Object {
       GrowableHandlePtrArray<const String>* pieces) const;
   RawString* BuildSignature(NameVisibility name_visibility) const;
 
-  // Checks the type of the formal parameter at the given position for
-  // subtyping or 'more specific' relationship between the type of this function
-  // and the type of the other function.
-  bool TestParameterType(TypeTestKind test_kind,
-                         intptr_t parameter_position,
-                         intptr_t other_parameter_position,
-                         const Function& other,
-                         Error* bound_error,
-                         TrailPtr bound_trail,
-                         Heap::Space space) const;
+  // Returns true if the type of the formal parameter at the given position in
+  // this function is contravariant with the type of the other formal parameter
+  // at the given position in the other function.
+  bool IsContravariantParameter(intptr_t parameter_position,
+                                const Function& other,
+                                intptr_t other_parameter_position,
+                                Heap::Space space) const;
 
   FINAL_HEAP_OBJECT_IMPLEMENTATION(Function, Object);
   friend class Class;
@@ -3072,10 +3300,58 @@ class RedirectionData : public Object {
   friend class HeapProfiler;
 };
 
+enum class EntryPointPragma {
+  kAlways,
+  kNever,
+  kGetterOnly,
+  kSetterOnly,
+  kCallOnly
+};
+
+class FfiTrampolineData : public Object {
+ public:
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawFfiTrampolineData));
+  }
+
+ private:
+  // Signature type of this closure function.
+  RawType* signature_type() const { return raw_ptr()->signature_type_; }
+  void set_signature_type(const Type& value) const;
+
+  RawFunction* c_signature() const { return raw_ptr()->c_signature_; }
+  void set_c_signature(const Function& value) const;
+
+  RawFunction* callback_target() const { return raw_ptr()->callback_target_; }
+  void set_callback_target(const Function& value) const;
+
+  RawInstance* callback_exceptional_return() const {
+    return raw_ptr()->callback_exceptional_return_;
+  }
+  void set_callback_exceptional_return(const Instance& value) const;
+
+  int32_t callback_id() const { return raw_ptr()->callback_id_; }
+  void set_callback_id(int32_t value) const;
+
+  static RawFfiTrampolineData* New();
+
+  FINAL_HEAP_OBJECT_IMPLEMENTATION(FfiTrampolineData, Object);
+  friend class Class;
+  friend class Function;
+  friend class HeapProfiler;
+};
+
 class Field : public Object {
  public:
+  // The field that this field was cloned from, or this field itself if it isn't
+  // a clone. The purpose of cloning is that the fields the background compiler
+  // sees are consistent.
   RawField* Original() const;
+
+  // Set the original field that this field was cloned from.
   void SetOriginal(const Field& value) const;
+
+  // Returns whether this field is an original or a clone.
   bool IsOriginal() const {
     if (IsNull()) {
       return true;
@@ -3123,21 +3399,97 @@ class Field : public Object {
         value, raw_ptr()->kind_bits_));
   }
 
+  bool has_pragma() const {
+    return HasPragmaBit::decode(raw_ptr()->kind_bits_);
+  }
+  void set_has_pragma(bool value) const {
+    set_kind_bits(HasPragmaBit::update(value, raw_ptr()->kind_bits_));
+  }
+
+  bool is_covariant() const {
+    return CovariantBit::decode(raw_ptr()->kind_bits_);
+  }
+  void set_is_covariant(bool value) const {
+    set_kind_bits(CovariantBit::update(value, raw_ptr()->kind_bits_));
+  }
+
+  bool is_generic_covariant_impl() const {
+    return GenericCovariantImplBit::decode(raw_ptr()->kind_bits_);
+  }
+  void set_is_generic_covariant_impl(bool value) const {
+    set_kind_bits(
+        GenericCovariantImplBit::update(value, raw_ptr()->kind_bits_));
+  }
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  intptr_t binary_declaration_offset() const {
+    return RawField::BinaryDeclarationOffset::decode(
+        raw_ptr()->binary_declaration_);
+  }
+  void set_binary_declaration_offset(intptr_t value) const {
+    ASSERT(value >= 0);
+    StoreNonPointer(&raw_ptr()->binary_declaration_,
+                    RawField::BinaryDeclarationOffset::update(
+                        value, raw_ptr()->binary_declaration_));
+  }
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+
   intptr_t kernel_offset() const {
 #if defined(DART_PRECOMPILED_RUNTIME)
     return 0;
 #else
-    return raw_ptr()->kernel_offset_;
+    ASSERT(!is_declared_in_bytecode());
+    return binary_declaration_offset();
 #endif
   }
 
-  void set_kernel_offset(intptr_t offset) const {
+  void set_kernel_offset(intptr_t value) const {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    UNREACHABLE();
+#else
+    ASSERT(!is_declared_in_bytecode());
+    set_binary_declaration_offset(value);
+#endif
+  }
+
+  intptr_t bytecode_offset() const {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    return 0;
+#else
+    ASSERT(is_declared_in_bytecode());
+    return binary_declaration_offset();
+#endif
+  }
+
+  void set_bytecode_offset(intptr_t value) const {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    UNREACHABLE();
+#else
+    ASSERT(is_declared_in_bytecode());
+    set_binary_declaration_offset(value);
+#endif
+  }
+
+  bool is_declared_in_bytecode() const {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    return false;
+#else
+    return RawField::IsDeclaredInBytecode::decode(
+        raw_ptr()->binary_declaration_);
+#endif
+  }
+
 #if !defined(DART_PRECOMPILED_RUNTIME)
-    StoreNonPointer(&raw_ptr()->kernel_offset_, offset);
-#endif
+  void set_is_declared_in_bytecode(bool value) const {
+    StoreNonPointer(&raw_ptr()->binary_declaration_,
+                    RawField::IsDeclaredInBytecode::update(
+                        value, raw_ptr()->binary_declaration_));
   }
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
-  RawTypedData* KernelData() const;
+  void InheritBinaryDeclarationFrom(const Field& src) const;
+
+  RawExternalTypedData* KernelData() const;
 
   intptr_t KernelDataProgramOffset() const;
 
@@ -3149,6 +3501,13 @@ class Field : public Object {
   inline void SetStaticValue(const Instance& value,
                              bool save_initial_value = false) const;
 
+#ifndef DART_PRECOMPILED_RUNTIME
+  RawInstance* saved_initial_value() const {
+    return raw_ptr()->saved_initial_value_;
+  }
+  inline void set_saved_initial_value(const Instance& value) const;
+#endif
+
   RawClass* Owner() const;
   RawClass* Origin() const;  // Either mixin class, or same as owner().
   RawScript* Script() const;
@@ -3157,6 +3516,9 @@ class Field : public Object {
   RawAbstractType* type() const { return raw_ptr()->type_; }
   // Used by class finalizer, otherwise initialized in constructor.
   void SetFieldType(const AbstractType& value) const;
+
+  DART_WARN_UNUSED_RESULT
+  RawError* VerifyEntryPoint(EntryPointPragma kind) const;
 
   static intptr_t InstanceSize() {
     return RoundedAllocationSize(sizeof(RawField));
@@ -3179,9 +3541,6 @@ class Field : public Object {
                                TokenPosition token_pos,
                                TokenPosition end_token_pos);
 
-  // Allocate new field object, clone values from this field. The
-  // owner of the clone is new_owner.
-  RawField* Clone(const Class& new_owner) const;
   // Allocate new field object, clone values from this field. The
   // original is specified.
   RawField* Clone(const Field& original) const;
@@ -3213,21 +3572,40 @@ class Field : public Object {
         HasInitializerBit::update(has_initializer, raw_ptr()->kind_bits_));
   }
 
+  StaticTypeExactnessState static_type_exactness_state() const {
+    return StaticTypeExactnessState::Decode(
+        raw_ptr()->static_type_exactness_state_);
+  }
+
+  void set_static_type_exactness_state(StaticTypeExactnessState state) const {
+    StoreNonPointer(&raw_ptr()->static_type_exactness_state_, state.Encode());
+  }
+
+  static intptr_t static_type_exactness_state_offset() {
+    return OFFSET_OF(RawField, static_type_exactness_state_);
+  }
+
   // Return class id that any non-null value read from this field is guaranteed
   // to have or kDynamicCid if such class id is not known.
   // Stores to this field must update this information hence the name.
   intptr_t guarded_cid() const {
-#if defined(DEGUG)
+#if defined(DEBUG)
+    // This assertion ensures that the cid seen by the background compiler is
+    // consistent. So the assertion passes if the field is a clone. It also
+    // passes if the field is static, because we don't use field guards on
+    // static fields.
     Thread* thread = Thread::Current();
-    ASSERT(!IsOriginal() || thread->IsMutator() || thread->IsAtSafepoint());
+    ASSERT(!IsOriginal() || is_static() || thread->IsMutatorThread() ||
+           thread->IsAtSafepoint());
 #endif
     return raw_ptr()->guarded_cid_;
   }
 
   void set_guarded_cid(intptr_t cid) const {
-#if defined(DEGUG)
+#if defined(DEBUG)
     Thread* thread = Thread::Current();
-    ASSERT(!IsOriginal() || thread->IsMutator() || thread->IsAtSafepoint());
+    ASSERT(!IsOriginal() || is_static() || thread->IsMutatorThread() ||
+           thread->IsAtSafepoint());
 #endif
     StoreNonPointer(&raw_ptr()->guarded_cid_, cid);
   }
@@ -3277,9 +3655,20 @@ class Field : public Object {
   // Returns false if any value read from this field is guaranteed to be
   // not null.
   // Internally we is_nullable_ field contains either kNullCid (nullable) or
-  // any other value (non-nullable) instead of boolean. This is done to simplify
+  // kInvalidCid (non-nullable) instead of boolean. This is done to simplify
   // guarding sequence in the generated code.
-  bool is_nullable() const { return raw_ptr()->is_nullable_ == kNullCid; }
+  bool is_nullable(bool silence_assert = false) const {
+#if defined(DEBUG)
+    if (!silence_assert) {
+      // Same assert as guarded_cid(), because is_nullable() also needs to be
+      // consistent for the background compiler.
+      Thread* thread = Thread::Current();
+      ASSERT(!IsOriginal() || is_static() || thread->IsMutatorThread() ||
+             thread->IsAtSafepoint());
+    }
+#endif
+    return raw_ptr()->is_nullable_ == kNullCid;
+  }
   void set_is_nullable(bool val) const {
     ASSERT(Thread::Current()->IsMutatorThread());
     StoreNonPointer(&raw_ptr()->is_nullable_, val ? kNullCid : kIllegalCid);
@@ -3313,18 +3702,18 @@ class Field : public Object {
 
   bool IsUninitialized() const;
 
-  void EvaluateInitializer() const;
+  // Run initializer and set field value.
+  DART_WARN_UNUSED_RESULT RawError* Initialize() const;
 
-  RawFunction* PrecompiledInitializer() const {
-    return raw_ptr()->initializer_.precompiled_;
-  }
-  void SetPrecompiledInitializer(const Function& initializer) const;
-  bool HasPrecompiledInitializer() const;
+  // Run initializer only.
+  DART_WARN_UNUSED_RESULT RawObject* EvaluateInitializer() const;
 
-  RawInstance* SavedInitialStaticValue() const {
-    return raw_ptr()->initializer_.saved_value_;
+  RawFunction* EnsureInitializerFunction() const;
+  RawFunction* InitializerFunction() const {
+    return raw_ptr()->initializer_function_;
   }
-  void SetSavedInitialStaticValue(const Instance& value) const;
+  void SetInitializerFunction(const Function& initializer) const;
+  bool HasInitializerFunction() const;
 
   // For static fields only. Constructs a closure that gets/sets the
   // field value.
@@ -3343,8 +3732,10 @@ class Field : public Object {
   static RawString* LookupSetterSymbol(const String& field_name);
   static RawString* NameFromGetter(const String& getter_name);
   static RawString* NameFromSetter(const String& setter_name);
+  static RawString* NameFromInit(const String& init_name);
   static bool IsGetterName(const String& function_name);
   static bool IsSetterName(const String& function_name);
+  static bool IsInitName(const String& function_name);
 
  private:
   static void InitializeNew(const Field& result,
@@ -3356,6 +3747,7 @@ class Field : public Object {
                             const Object& owner,
                             TokenPosition token_pos,
                             TokenPosition end_token_pos);
+  friend class Interpreter;              // Access to bit field.
   friend class StoreInstanceFieldInstr;  // Generated code access to bit field.
 
   enum {
@@ -3367,26 +3759,38 @@ class Field : public Object {
     kReflectableBit,
     kDoubleInitializedBit,
     kInitializerChangedAfterInitializatonBit,
+    kHasPragmaBit,
+    kCovariantBit,
+    kGenericCovariantImplBit,
   };
-  class ConstBit : public BitField<uint8_t, bool, kConstBit, 1> {};
-  class StaticBit : public BitField<uint8_t, bool, kStaticBit, 1> {};
-  class FinalBit : public BitField<uint8_t, bool, kFinalBit, 1> {};
+  class ConstBit : public BitField<uint16_t, bool, kConstBit, 1> {};
+  class StaticBit : public BitField<uint16_t, bool, kStaticBit, 1> {};
+  class FinalBit : public BitField<uint16_t, bool, kFinalBit, 1> {};
   class HasInitializerBit
-      : public BitField<uint8_t, bool, kHasInitializerBit, 1> {};
+      : public BitField<uint16_t, bool, kHasInitializerBit, 1> {};
   class UnboxingCandidateBit
-      : public BitField<uint8_t, bool, kUnboxingCandidateBit, 1> {};
-  class ReflectableBit : public BitField<uint8_t, bool, kReflectableBit, 1> {};
+      : public BitField<uint16_t, bool, kUnboxingCandidateBit, 1> {};
+  class ReflectableBit : public BitField<uint16_t, bool, kReflectableBit, 1> {};
   class DoubleInitializedBit
-      : public BitField<uint8_t, bool, kDoubleInitializedBit, 1> {};
+      : public BitField<uint16_t, bool, kDoubleInitializedBit, 1> {};
   class InitializerChangedAfterInitializatonBit
-      : public BitField<uint8_t,
+      : public BitField<uint16_t,
                         bool,
                         kInitializerChangedAfterInitializatonBit,
                         1> {};
+  class HasPragmaBit : public BitField<uint16_t, bool, kHasPragmaBit, 1> {};
+  class CovariantBit : public BitField<uint16_t, bool, kCovariantBit, 1> {};
+  class GenericCovariantImplBit
+      : public BitField<uint16_t, bool, kGenericCovariantImplBit, 1> {};
 
   // Update guarded cid and guarded length for this field. Returns true, if
   // deoptimization of dependent code is required.
   bool UpdateGuardedCidAndLength(const Object& value) const;
+
+  // Update guarded exactness state for this field. Returns true, if
+  // deoptimization of dependent code is required.
+  // Assumes that guarded cid was already updated.
+  bool UpdateGuardedExactnessState(const Object& value) const;
 
   // Force this field's guard to be dynamic and deoptimize dependent code.
   void ForceDynamicGuardedCidAndLength() const;
@@ -3410,7 +3814,7 @@ class Field : public Object {
   void set_end_token_pos(TokenPosition token_pos) const {
     StoreNonPointer(&raw_ptr()->end_token_pos_, token_pos);
   }
-  void set_kind_bits(uint8_t value) const {
+  void set_kind_bits(uint16_t value) const {
     StoreNonPointer(&raw_ptr()->kind_bits_, value);
   }
 
@@ -3423,118 +3827,6 @@ class Field : public Object {
   friend class FieldSerializationCluster;
 };
 
-class LiteralToken : public Object {
- public:
-  Token::Kind kind() const { return raw_ptr()->kind_; }
-  RawString* literal() const { return raw_ptr()->literal_; }
-  RawObject* value() const { return raw_ptr()->value_; }
-
-  static intptr_t InstanceSize() {
-    return RoundedAllocationSize(sizeof(RawLiteralToken));
-  }
-
-  static RawLiteralToken* New();
-  static RawLiteralToken* New(Token::Kind kind, const String& literal);
-
- private:
-  void set_kind(Token::Kind kind) const {
-    StoreNonPointer(&raw_ptr()->kind_, kind);
-  }
-  void set_literal(const String& literal) const;
-  void set_value(const Object& value) const;
-
-  FINAL_HEAP_OBJECT_IMPLEMENTATION(LiteralToken, Object);
-  friend class Class;
-};
-
-class TokenStream : public Object {
- public:
-  RawGrowableObjectArray* TokenObjects() const;
-  void SetTokenObjects(const GrowableObjectArray& value) const;
-
-  RawExternalTypedData* GetStream() const;
-  void SetStream(const ExternalTypedData& stream) const;
-
-  RawString* GenerateSource() const;
-  RawString* GenerateSource(TokenPosition start, TokenPosition end) const;
-  intptr_t ComputeSourcePosition(TokenPosition tok_pos) const;
-
-  RawString* PrivateKey() const;
-
-  static const intptr_t kBytesPerElement = 1;
-  static const intptr_t kMaxElements = kSmiMax / kBytesPerElement;
-
-  static intptr_t InstanceSize() {
-    return RoundedAllocationSize(sizeof(RawTokenStream));
-  }
-
-  static RawTokenStream* New(intptr_t length);
-  static RawTokenStream* New(const String& source,
-                             const String& private_key,
-                             bool use_shared_tokens);
-
-  static void OpenSharedTokenList(Isolate* isolate);
-  static void CloseSharedTokenList(Isolate* isolate);
-
-  // The class Iterator encapsulates iteration over the tokens
-  // in a TokenStream object.
-  class Iterator : ValueObject {
-   public:
-    enum StreamType { kNoNewlines, kAllTokens };
-
-    Iterator(Zone* zone,
-             const TokenStream& tokens,
-             TokenPosition token_pos,
-             Iterator::StreamType stream_type = kNoNewlines);
-
-    void SetStream(const TokenStream& tokens, TokenPosition token_pos);
-    bool IsValid() const;
-
-    inline Token::Kind CurrentTokenKind() const { return cur_token_kind_; }
-
-    Token::Kind LookaheadTokenKind(intptr_t num_tokens);
-
-    TokenPosition CurrentPosition() const;
-    void SetCurrentPosition(TokenPosition token_pos);
-
-    void Advance();
-
-    RawObject* CurrentToken() const;
-    RawString* CurrentLiteral() const;
-    RawString* MakeLiteralToken(const Object& obj) const;
-
-   private:
-    // Read token from the token stream (could be a simple token or an index
-    // into the token objects array for IDENT or literal tokens).
-    intptr_t ReadToken() {
-      int64_t value = stream_.ReadUnsigned();
-      ASSERT((value >= 0) && (value <= kIntptrMax));
-      return static_cast<intptr_t>(value);
-    }
-
-    TokenStream& tokens_;
-    ExternalTypedData& data_;
-    ReadStream stream_;
-    Array& token_objects_;
-    Object& obj_;
-    intptr_t cur_token_pos_;
-    Token::Kind cur_token_kind_;
-    intptr_t cur_token_obj_index_;
-    Iterator::StreamType stream_type_;
-  };
-
- private:
-  void SetPrivateKey(const String& value) const;
-
-  static RawTokenStream* New();
-  static void DataFinalizer(void* isolate_callback_data,
-                            Dart_WeakPersistentHandle handle,
-                            void* peer);
-
-  FINAL_HEAP_OBJECT_IMPLEMENTATION(TokenStream, Object);
-  friend class Class;
-};
-
 class Script : public Object {
  public:
   RawString* url() const { return raw_ptr()->url_; }
@@ -3544,11 +3836,15 @@ class Script : public Object {
   RawString* resolved_url() const { return raw_ptr()->resolved_url_; }
   bool HasSource() const;
   RawString* Source() const;
-  RawString* GenerateSource() const;  // Generates source code from Tokenstream.
+  bool IsPartOfDartColonLibrary() const;
+
+  void LookupSourceAndLineStarts(Zone* zone) const;
   RawGrowableObjectArray* GenerateLineNumberArray() const;
+
   RawScript::Kind kind() const {
-    return static_cast<RawScript::Kind>(raw_ptr()->kind_);
+    return RawScript::KindBits::decode(raw_ptr()->kind_and_tags_);
   }
+
   const char* GetKindAsCString() const;
   intptr_t line_offset() const { return raw_ptr()->line_offset_; }
   intptr_t col_offset() const { return raw_ptr()->col_offset_; }
@@ -3573,10 +3869,7 @@ class Script : public Object {
 
   RawTypedData* kernel_string_offsets() const;
 
-  RawTokenStream* tokens() const {
-    ASSERT(kind() != RawScript::kKernelTag);
-    return raw_ptr()->tokens_;
-  }
+  RawTypedData* line_starts() const;
 
   void set_line_starts(const TypedData& value) const;
 
@@ -3586,7 +3879,7 @@ class Script : public Object {
 
   RawArray* yield_positions() const;
 
-  void Tokenize(const String& private_key, bool use_shared_tokens = true) const;
+  RawGrowableObjectArray* GetYieldPositions(const Function& function) const;
 
   RawLibrary* FindLibrary() const;
   RawString* GetLine(intptr_t line_number,
@@ -3613,9 +3906,6 @@ class Script : public Object {
                         TokenPosition* first_token_index,
                         TokenPosition* last_token_index) const;
 
-  int32_t SourceFingerprint() const;
-  int32_t SourceFingerprint(TokenPosition start, TokenPosition end) const;
-
   static intptr_t InstanceSize() {
     return RoundedAllocationSize(sizeof(RawScript));
   }
@@ -3629,13 +3919,20 @@ class Script : public Object {
                         const String& source,
                         RawScript::Kind kind);
 
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  void LoadSourceFromKernel(const uint8_t* kernel_buffer,
+                            intptr_t kernel_buffer_len) const;
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+
+  void SetLazyLookupSourceAndLineStarts(bool value) const;
+  bool IsLazyLookupSourceAndLineStarts() const;
+
  private:
   void set_resolved_url(const String& value) const;
   void set_source(const String& value) const;
   void set_kind(RawScript::Kind value) const;
+  void set_kind_and_tags(uint8_t value) const;
   void set_load_timestamp(int64_t value) const;
-  void set_tokens(const TokenStream& value) const;
-  RawTypedData* line_starts() const;
   RawArray* debug_positions() const;
 
   static RawScript* New();
@@ -3723,16 +4020,6 @@ class Library : public Object {
   void SetLoadInProgress() const;
   bool Loaded() const { return raw_ptr()->load_state_ == RawLibrary::kLoaded; }
   void SetLoaded() const;
-  bool LoadFailed() const {
-    return raw_ptr()->load_state_ == RawLibrary::kLoadError;
-  }
-  RawInstance* LoadError() const { return raw_ptr()->load_error_; }
-  void SetLoadError(const Instance& error) const;
-  RawInstance* TransitiveLoadError() const;
-
-  void AddPatchClass(const Class& cls) const;
-  RawClass* GetPatchClass(const String& name) const;
-  void RemovePatchClass(const Class& cls) const;
 
   static intptr_t InstanceSize() {
     return RoundedAllocationSize(sizeof(RawLibrary));
@@ -3740,21 +4027,25 @@ class Library : public Object {
 
   static RawLibrary* New(const String& url);
 
+  RawObject* Invoke(const String& selector,
+                    const Array& arguments,
+                    const Array& argument_names,
+                    bool respect_reflectable = true,
+                    bool check_is_entrypoint = false) const;
+  RawObject* InvokeGetter(const String& selector,
+                          bool throw_nsm_if_absent,
+                          bool respect_reflectable = true,
+                          bool check_is_entrypoint = false) const;
+  RawObject* InvokeSetter(const String& selector,
+                          const Instance& argument,
+                          bool respect_reflectable = true,
+                          bool check_is_entrypoint = false) const;
+
   // Evaluate the given expression as if it appeared in an top-level method of
   // this library and return the resulting value, or an error object if
   // evaluating the expression fails. The method has the formal (type)
   // parameters given in (type_)param_names, and is invoked with the (type)
   // argument values given in (type_)param_values.
-  RawObject* Evaluate(const String& expr,
-                      const Array& param_names,
-                      const Array& param_values) const;
-
-  RawObject* Evaluate(const String& expr,
-                      const Array& param_names,
-                      const Array& param_values,
-                      const Array& type_param_names,
-                      const TypeArguments& type_arguments) const;
-
   RawObject* EvaluateCompiledExpression(
       const uint8_t* kernel_bytes,
       intptr_t kernel_length,
@@ -3769,12 +4060,10 @@ class Library : public Object {
   // more regular.
   void AddClass(const Class& cls) const;
   void AddObject(const Object& obj, const String& name) const;
-  void ReplaceObject(const Object& obj, const String& name) const;
   RawObject* LookupReExport(const String& name,
                             ZoneGrowableArray<intptr_t>* visited = NULL) const;
   RawObject* LookupObjectAllowPrivate(const String& name) const;
-  RawObject* LookupLocalObjectAllowPrivate(const String& name) const;
-  RawObject* LookupLocalObject(const String& name) const;
+  RawObject* LookupLocalOrReExportObject(const String& name) const;
   RawObject* LookupImportedObject(const String& name) const;
   RawClass* LookupClass(const String& name) const;
   RawClass* LookupClassAllowPrivate(const String& name) const;
@@ -3785,7 +4074,14 @@ class Library : public Object {
   RawFunction* LookupFunctionAllowPrivate(const String& name) const;
   RawFunction* LookupLocalFunction(const String& name) const;
   RawLibraryPrefix* LookupLocalLibraryPrefix(const String& name) const;
-  RawScript* LookupScript(const String& url) const;
+
+  // Look up a Script based on a url. If 'useResolvedUri' is not provided or is
+  // false, 'url' should have a 'dart:' scheme for Dart core libraries,
+  // a 'package:' scheme for packages, and 'file:' scheme otherwise.
+  //
+  // If 'useResolvedUri' is true, 'url' should have a 'org-dartlang-sdk:' scheme
+  // for Dart core libraries and a 'file:' scheme otherwise.
+  RawScript* LookupScript(const String& url, bool useResolvedUri = false) const;
   RawArray* LoadedScripts() const;
 
   // Resolve name in the scope of this library. First check the cache
@@ -3804,27 +4100,49 @@ class Library : public Object {
   void AddClassMetadata(const Class& cls,
                         const Object& tl_owner,
                         TokenPosition token_pos,
-                        intptr_t kernel_offset = 0) const;
+                        intptr_t kernel_offset,
+                        intptr_t bytecode_offset) const;
   void AddFieldMetadata(const Field& field,
                         TokenPosition token_pos,
-                        intptr_t kernel_offset = 0) const;
+                        intptr_t kernel_offset,
+                        intptr_t bytecode_offset) const;
   void AddFunctionMetadata(const Function& func,
                            TokenPosition token_pos,
-                           intptr_t kernel_offset = 0) const;
+                           intptr_t kernel_offset,
+                           intptr_t bytecode_offset) const;
   void AddLibraryMetadata(const Object& tl_owner,
-                          TokenPosition token_pos) const;
+                          TokenPosition token_pos,
+                          intptr_t kernel_offset,
+                          intptr_t bytecode_offset) const;
   void AddTypeParameterMetadata(const TypeParameter& param,
                                 TokenPosition token_pos) const;
   void CloneMetadataFrom(const Library& from_library,
                          const Function& from_fun,
                          const Function& to_fun) const;
   RawObject* GetMetadata(const Object& obj) const;
+  RawArray* GetExtendedMetadata(const Object& obj, intptr_t count) const;
+
+  // Tries to finds a @pragma annotation on [object].
+  //
+  // If successful returns `true`. If an error happens during constant
+  // evaluation, returns `false.
+  //
+  // If [only_core] is true, then the annotations on the object will only
+  // be inspected if it is part of a core library.
+  //
+  // WARNING: If the isolate received an [UnwindError] this function will not
+  // return and rather unwinds until the enclosing setjmp() handler.
+  static bool FindPragma(Thread* T,
+                         bool only_core,
+                         const Object& object,
+                         const String& pragma_name,
+                         Object* options);
 
   RawClass* toplevel_class() const { return raw_ptr()->toplevel_class_; }
   void set_toplevel_class(const Class& value) const;
 
-  RawGrowableObjectArray* patch_classes() const {
-    return raw_ptr()->patch_classes_;
+  RawGrowableObjectArray* owned_scripts() const {
+    return raw_ptr()->owned_scripts_;
   }
 
   // Library imports.
@@ -3834,7 +4152,6 @@ class Library : public Object {
   intptr_t num_imports() const { return raw_ptr()->num_imports_; }
   RawNamespace* ImportAt(intptr_t index) const;
   RawLibrary* ImportLibraryAt(intptr_t index) const;
-  bool ImportsCorelib() const;
 
   void DropDependenciesAndCaches() const;
 
@@ -3859,8 +4176,6 @@ class Library : public Object {
     StoreNonPointer(&raw_ptr()->is_in_fullsnapshot_, value);
   }
 
-  RawError* Patch(const Script& script) const;
-
   RawString* PrivateName(const String& name) const;
 
   intptr_t index() const { return raw_ptr()->index_; }
@@ -3882,23 +4197,79 @@ class Library : public Object {
     StoreNonPointer(&raw_ptr()->is_dart_scheme_, value);
   }
 
-  bool IsCoreLibrary() const { return raw() == CoreLibrary(); }
+  // Includes 'dart:async', 'dart:typed_data', etc.
+  bool IsAnyCoreLibrary() const;
 
   inline intptr_t UrlHash() const;
 
-  RawTypedData* kernel_data() const { return raw_ptr()->kernel_data_; }
-  void set_kernel_data(const TypedData& data) const;
+  RawExternalTypedData* kernel_data() const { return raw_ptr()->kernel_data_; }
+  void set_kernel_data(const ExternalTypedData& data) const;
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  intptr_t binary_declaration_offset() const {
+    return RawLibrary::BinaryDeclarationOffset::decode(
+        raw_ptr()->binary_declaration_);
+  }
+  void set_binary_declaration_offset(intptr_t value) const {
+    ASSERT(value >= 0);
+    StoreNonPointer(&raw_ptr()->binary_declaration_,
+                    RawLibrary::BinaryDeclarationOffset::update(
+                        value, raw_ptr()->binary_declaration_));
+  }
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
   intptr_t kernel_offset() const {
-#if !defined(DART_PRECOMPILED_RUNTIME)
-    return raw_ptr()->kernel_offset_;
+#if defined(DART_PRECOMPILED_RUNTIME)
+    return 0;
 #else
-    return -1;
+    ASSERT(!is_declared_in_bytecode());
+    return binary_declaration_offset();
 #endif
   }
-  void set_kernel_offset(intptr_t offset) const {
-    NOT_IN_PRECOMPILED(StoreNonPointer(&raw_ptr()->kernel_offset_, offset));
+
+  void set_kernel_offset(intptr_t value) const {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    UNREACHABLE();
+#else
+    ASSERT(!is_declared_in_bytecode());
+    set_binary_declaration_offset(value);
+#endif
   }
+
+  intptr_t bytecode_offset() const {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    return 0;
+#else
+    ASSERT(is_declared_in_bytecode());
+    return binary_declaration_offset();
+#endif
+  }
+
+  void set_bytecode_offset(intptr_t value) const {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    UNREACHABLE();
+#else
+    ASSERT(is_declared_in_bytecode());
+    set_binary_declaration_offset(value);
+#endif
+  }
+
+  bool is_declared_in_bytecode() const {
+#if defined(DART_PRECOMPILED_RUNTIME)
+    return false;
+#else
+    return RawLibrary::IsDeclaredInBytecode::decode(
+        raw_ptr()->binary_declaration_);
+#endif
+  }
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  void set_is_declared_in_bytecode(bool value) const {
+    StoreNonPointer(&raw_ptr()->binary_declaration_,
+                    RawLibrary::IsDeclaredInBytecode::update(
+                        value, raw_ptr()->binary_declaration_));
+  }
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
   static RawLibrary* LookupLibrary(Thread* thread, const String& url);
   static RawLibrary* GetLibrary(intptr_t index);
@@ -3911,6 +4282,7 @@ class Library : public Object {
   static RawLibrary* CoreLibrary();
   static RawLibrary* CollectionLibrary();
   static RawLibrary* DeveloperLibrary();
+  static RawLibrary* FfiLibrary();
   static RawLibrary* InternalLibrary();
   static RawLibrary* IsolateLibrary();
   static RawLibrary* MathLibrary();
@@ -3921,10 +4293,16 @@ class Library : public Object {
   static RawLibrary* ProfilerLibrary();
   static RawLibrary* TypedDataLibrary();
   static RawLibrary* VMServiceLibrary();
+  static RawLibrary* WasmLibrary();
 
   // Eagerly compile all classes and functions in the library.
-  static RawError* CompileAll();
-  static RawError* ParseAll(Thread* thread);
+  static RawError* CompileAll(bool ignore_error = false);
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  // Finalize all classes in all libraries.
+  static RawError* FinalizeAllClasses();
+  // Eagerly read all bytecode.
+  static RawError* ReadAllBytecode();
+#endif
 
 #if defined(DART_NO_SNAPSHOT)
   // Checks function fingerprints. Prints mismatches and aborts if
@@ -3933,8 +4311,13 @@ class Library : public Object {
 #endif  // defined(DART_NO_SNAPSHOT).
 
   static bool IsPrivate(const String& name);
+
   // Construct the full name of a corelib member.
   static const String& PrivateCoreLibName(const String& member);
+
+  // Returns true if [name] matches full name of corelib [member].
+  static bool IsPrivateCoreLibName(const String& name, const String& member);
+
   // Lookup class in the core lib which also contains various VM
   // helper methods and classes. Allow look up of private classes.
   static RawClass* LookupCoreClass(const String& class_name);
@@ -3958,6 +4341,9 @@ class Library : public Object {
   // of this library. If a top level function 'name' does not exist we look
   // for a top level getter 'name' that returns a closure.
   RawObject* GetFunctionClosure(const String& name) const;
+
+  // Ensures that all top-level functions and variables (fields) are loaded.
+  void EnsureTopLevelClassIsFinalized() const;
 
  private:
   static const int kInitialImportsCapacity = 4;
@@ -3997,6 +4383,8 @@ class Library : public Object {
   void RehashDictionary(const Array& old_dict, intptr_t new_dict_size) const;
   static RawLibrary* NewLibraryHelper(const String& url, bool import_core_lib);
   RawObject* LookupEntry(const String& name, intptr_t* index) const;
+  RawObject* LookupLocalObjectAllowPrivate(const String& name) const;
+  RawObject* LookupLocalObject(const String& name) const;
 
   void AllocatePrivateKey() const;
 
@@ -4005,7 +4393,8 @@ class Library : public Object {
   void AddMetadata(const Object& owner,
                    const String& name,
                    TokenPosition token_pos,
-                   intptr_t kernel_offset = 0) const;
+                   intptr_t kernel_offset,
+                   intptr_t bytecode_offset) const;
 
   FINAL_HEAP_OBJECT_IMPLEMENTATION(Library, Object);
 
@@ -4028,7 +4417,9 @@ class Namespace : public Object {
   RawArray* show_names() const { return raw_ptr()->show_names_; }
   RawArray* hide_names() const { return raw_ptr()->hide_names_; }
 
-  void AddMetadata(const Object& owner, TokenPosition token_pos);
+  void AddMetadata(const Object& owner,
+                   TokenPosition token_pos,
+                   intptr_t kernel_offset = 0);
   RawObject* GetMetadata() const;
 
   static intptr_t InstanceSize() {
@@ -4057,11 +4448,15 @@ class Namespace : public Object {
 class KernelProgramInfo : public Object {
  public:
   static RawKernelProgramInfo* New(const TypedData& string_offsets,
-                                   const TypedData& string_data,
+                                   const ExternalTypedData& string_data,
                                    const TypedData& canonical_names,
-                                   const TypedData& metadata_payload,
-                                   const TypedData& metadata_mappings,
-                                   const Array& scripts);
+                                   const ExternalTypedData& metadata_payload,
+                                   const ExternalTypedData& metadata_mappings,
+                                   const ExternalTypedData& constants_table,
+                                   const Array& scripts,
+                                   const Array& libraries_cache,
+                                   const Array& classes_cache,
+                                   const uint32_t binary_version);
 
   static intptr_t InstanceSize() {
     return RoundedAllocationSize(sizeof(RawKernelProgramInfo));
@@ -4069,22 +4464,34 @@ class KernelProgramInfo : public Object {
 
   RawTypedData* string_offsets() const { return raw_ptr()->string_offsets_; }
 
-  RawTypedData* string_data() const { return raw_ptr()->string_data_; }
+  RawExternalTypedData* string_data() const { return raw_ptr()->string_data_; }
 
   RawTypedData* canonical_names() const { return raw_ptr()->canonical_names_; }
 
-  RawTypedData* metadata_payloads() const {
+  RawExternalTypedData* metadata_payloads() const {
     return raw_ptr()->metadata_payloads_;
   }
 
-  RawTypedData* metadata_mappings() const {
+  RawExternalTypedData* metadata_mappings() const {
     return raw_ptr()->metadata_mappings_;
   }
 
+  RawExternalTypedData* constants_table() const {
+    return raw_ptr()->constants_table_;
+  }
+
+  void set_constants_table(const ExternalTypedData& value) const;
+
   RawArray* scripts() const { return raw_ptr()->scripts_; }
+  void set_scripts(const Array& scripts) const;
 
   RawArray* constants() const { return raw_ptr()->constants_; }
   void set_constants(const Array& constants) const;
+
+  uint32_t kernel_binary_version() const {
+    return raw_ptr()->kernel_binary_version_;
+  }
+  void set_kernel_binary_version(uint32_t version) const;
 
   // If we load a kernel blob with evaluated constants, then we delay setting
   // the native names of [Function] objects until we've read the constant table
@@ -4096,7 +4503,32 @@ class KernelProgramInfo : public Object {
   }
   void set_potential_natives(const GrowableObjectArray& candidates) const;
 
+  RawGrowableObjectArray* potential_pragma_functions() const {
+    return raw_ptr()->potential_pragma_functions_;
+  }
+  void set_potential_pragma_functions(
+      const GrowableObjectArray& candidates) const;
+
   RawScript* ScriptAt(intptr_t index) const;
+
+  RawArray* libraries_cache() const { return raw_ptr()->libraries_cache_; }
+  void set_libraries_cache(const Array& cache) const;
+  RawLibrary* LookupLibrary(Thread* thread, const Smi& name_index) const;
+  RawLibrary* InsertLibrary(Thread* thread,
+                            const Smi& name_index,
+                            const Library& lib) const;
+
+  RawArray* classes_cache() const { return raw_ptr()->classes_cache_; }
+  void set_classes_cache(const Array& cache) const;
+  RawClass* LookupClass(Thread* thread, const Smi& name_index) const;
+  RawClass* InsertClass(Thread* thread,
+                        const Smi& name_index,
+                        const Class& klass) const;
+
+  RawArray* bytecode_component() const {
+    return raw_ptr()->bytecode_component_;
+  }
+  void set_bytecode_component(const Array& bytecode_component) const;
 
  private:
   static RawKernelProgramInfo* New();
@@ -4110,16 +4542,15 @@ class KernelProgramInfo : public Object {
 // with it which is stored in-inline after all the entries.
 class ObjectPool : public Object {
  public:
-  enum EntryType {
-    kTaggedObject,
-    kImmediate,
-    kNativeFunction,
-    kNativeFunctionWrapper,
-  };
+  using EntryType = compiler::ObjectPoolBuilderEntry::EntryType;
+  using Patchability = compiler::ObjectPoolBuilderEntry::Patchability;
+  using TypeBits = compiler::ObjectPoolBuilderEntry::TypeBits;
+  using PatchableBit = compiler::ObjectPoolBuilderEntry::PatchableBit;
 
   struct Entry {
     Entry() : raw_value_(), type_() {}
-    explicit Entry(const Object* obj) : obj_(obj), type_(kTaggedObject) {}
+    explicit Entry(const Object* obj)
+        : obj_(obj), type_(EntryType::kTaggedObject) {}
     Entry(uword value, EntryType info) : raw_value_(value), type_(info) {}
     union {
       const Object* obj_;
@@ -4142,29 +4573,46 @@ class ObjectPool : public Object {
            sizeof(RawObjectPool::Entry) * index;
   }
 
+  struct ArrayLayout {
+    static intptr_t elements_start_offset() {
+      return ObjectPool::data_offset();
+    }
+
+    static constexpr intptr_t kElementSize = sizeof(RawObjectPool::Entry);
+  };
+
   EntryType TypeAt(intptr_t index) const {
-    return static_cast<EntryType>(raw_ptr()->entry_types()[index]);
+    return TypeBits::decode(raw_ptr()->entry_bits()[index]);
   }
-  void SetTypeAt(intptr_t index, EntryType type) const {
-    StoreNonPointer(&raw_ptr()->entry_types()[index],
-                    static_cast<uint8_t>(type));
+
+  Patchability PatchableAt(intptr_t index) const {
+    return PatchableBit::decode(raw_ptr()->entry_bits()[index]);
+  }
+
+  void SetTypeAt(intptr_t index, EntryType type, Patchability patchable) const {
+    const uint8_t bits =
+        PatchableBit::encode(patchable) | TypeBits::encode(type);
+    StoreNonPointer(&raw_ptr()->entry_bits()[index], bits);
   }
 
   RawObject* ObjectAt(intptr_t index) const {
-    ASSERT(TypeAt(index) == kTaggedObject);
+    ASSERT((TypeAt(index) == EntryType::kTaggedObject) ||
+           (TypeAt(index) == EntryType::kNativeEntryData));
     return EntryAddr(index)->raw_obj_;
   }
   void SetObjectAt(intptr_t index, const Object& obj) const {
-    ASSERT(TypeAt(index) == kTaggedObject);
+    ASSERT((TypeAt(index) == EntryType::kTaggedObject) ||
+           (TypeAt(index) == EntryType::kNativeEntryData) ||
+           (TypeAt(index) == EntryType::kImmediate && obj.IsSmi()));
     StorePointer(&EntryAddr(index)->raw_obj_, obj.raw());
   }
 
   uword RawValueAt(intptr_t index) const {
-    ASSERT(TypeAt(index) != kTaggedObject);
+    ASSERT(TypeAt(index) != EntryType::kTaggedObject);
     return EntryAddr(index)->raw_value_;
   }
   void SetRawValueAt(intptr_t index, uword raw_value) const {
-    ASSERT(TypeAt(index) != kTaggedObject);
+    ASSERT(TypeAt(index) != EntryType::kTaggedObject);
     StoreNonPointer(&EntryAddr(index)->raw_value_, raw_value);
   }
 
@@ -4186,12 +4634,17 @@ class ObjectPool : public Object {
                                  (len * kBytesPerElement));
   }
 
+  static RawObjectPool* NewFromBuilder(
+      const compiler::ObjectPoolBuilder& builder);
   static RawObjectPool* New(intptr_t len);
+
+  void CopyInto(compiler::ObjectPoolBuilder* builder) const;
 
   // Returns the pool index from the offset relative to a tagged RawObjectPool*,
   // adjusting for the tag-bit.
   static intptr_t IndexFromOffset(intptr_t offset) {
-    ASSERT(Utils::IsAligned(offset + kHeapObjectTag, kWordSize));
+    ASSERT(
+        Utils::IsAligned(offset + kHeapObjectTag, compiler::target::kWordSize));
     return (offset + kHeapObjectTag - data_offset()) /
            sizeof(RawObjectPool::Entry);
   }
@@ -4239,43 +4692,90 @@ class Instructions : public Object {
     return FlagsBits::decode(instr->ptr()->size_and_flags_);
   }
 
+  static bool ContainsPc(RawInstructions* instruction, uword pc) {
+    const uword offset = pc - PayloadStart(instruction);
+    // We use <= instead of < here because the saved-pc can be outside the
+    // instruction stream if the last instruction is a call we don't expect to
+    // return (e.g. because it throws an exception).
+    return offset <= static_cast<uword>(Size(instruction));
+  }
+
   uword PayloadStart() const { return PayloadStart(raw()); }
-  uword CheckedEntryPoint() const { return CheckedEntryPoint(raw()); }
+  uword MonomorphicEntryPoint() const { return MonomorphicEntryPoint(raw()); }
+  uword MonomorphicUncheckedEntryPoint() const {
+    return MonomorphicUncheckedEntryPoint(raw());
+  }
+  uword EntryPoint() const { return EntryPoint(raw()); }
   uword UncheckedEntryPoint() const { return UncheckedEntryPoint(raw()); }
   static uword PayloadStart(const RawInstructions* instr) {
     return reinterpret_cast<uword>(instr->ptr()) + HeaderSize();
   }
 
+  // Note: We keep the checked entrypoint offsets even (emitting NOPs if
+  // necessary) to allow them to be seen as Smis by the GC.
 #if defined(TARGET_ARCH_IA32)
-  static const intptr_t kCheckedEntryOffset = 0;
-  static const intptr_t kUncheckedEntryOffset = 0;
+  static const intptr_t kMonomorphicEntryOffsetJIT = 6;
+  static const intptr_t kPolymorphicEntryOffsetJIT = 34;
+  static const intptr_t kMonomorphicEntryOffsetAOT = 0;
+  static const intptr_t kPolymorphicEntryOffsetAOT = 0;
 #elif defined(TARGET_ARCH_X64)
-  static const intptr_t kCheckedEntryOffset = 15;
-  static const intptr_t kUncheckedEntryOffset = 34;
+  static const intptr_t kMonomorphicEntryOffsetJIT = 8;
+  static const intptr_t kPolymorphicEntryOffsetJIT = 40;
+  static const intptr_t kMonomorphicEntryOffsetAOT = 8;
+  static const intptr_t kPolymorphicEntryOffsetAOT = 32;
 #elif defined(TARGET_ARCH_ARM)
-  static const intptr_t kCheckedEntryOffset = 8;
-  static const intptr_t kUncheckedEntryOffset = 32;
+  static const intptr_t kMonomorphicEntryOffsetJIT = 0;
+  static const intptr_t kPolymorphicEntryOffsetJIT = 40;
+  static const intptr_t kMonomorphicEntryOffsetAOT = 0;
+  static const intptr_t kPolymorphicEntryOffsetAOT = 20;
 #elif defined(TARGET_ARCH_ARM64)
-  static const intptr_t kCheckedEntryOffset = 16;
-  static const intptr_t kUncheckedEntryOffset = 40;
+  static const intptr_t kMonomorphicEntryOffsetJIT = 8;
+  static const intptr_t kPolymorphicEntryOffsetJIT = 48;
+  static const intptr_t kMonomorphicEntryOffsetAOT = 8;
+  static const intptr_t kPolymorphicEntryOffsetAOT = 28;
 #elif defined(TARGET_ARCH_DBC)
-  static const intptr_t kCheckedEntryOffset = 0;
-  static const intptr_t kUncheckedEntryOffset = 0;
+  static const intptr_t kMonomorphicEntryOffsetJIT = 0;
+  static const intptr_t kPolymorphicEntryOffsetJIT = 0;
+  static const intptr_t kMonomorphicEntryOffsetAOT = 0;
+  static const intptr_t kPolymorphicEntryOffsetAOT = 0;
 #else
 #error Missing entry offsets for current architecture
 #endif
 
-  static uword CheckedEntryPoint(const RawInstructions* instr) {
+  static uword MonomorphicEntryPoint(const RawInstructions* instr) {
     uword entry = PayloadStart(instr);
     if (!HasSingleEntryPoint(instr)) {
-      entry += kCheckedEntryOffset;
+      entry += !FLAG_precompiled_mode ? kMonomorphicEntryOffsetJIT
+                                      : kMonomorphicEntryOffsetAOT;
     }
     return entry;
   }
-  static uword UncheckedEntryPoint(const RawInstructions* instr) {
+
+  static uword EntryPoint(const RawInstructions* instr) {
     uword entry = PayloadStart(instr);
     if (!HasSingleEntryPoint(instr)) {
-      entry += kUncheckedEntryOffset;
+      entry += !FLAG_precompiled_mode ? kPolymorphicEntryOffsetJIT
+                                      : kPolymorphicEntryOffsetAOT;
+    }
+    return entry;
+  }
+
+  static uword UncheckedEntryPoint(const RawInstructions* instr) {
+    uword entry =
+        PayloadStart(instr) + instr->ptr()->unchecked_entrypoint_pc_offset_;
+    if (!HasSingleEntryPoint(instr)) {
+      entry += !FLAG_precompiled_mode ? kPolymorphicEntryOffsetJIT
+                                      : kPolymorphicEntryOffsetAOT;
+    }
+    return entry;
+  }
+
+  static uword MonomorphicUncheckedEntryPoint(const RawInstructions* instr) {
+    uword entry =
+        PayloadStart(instr) + instr->ptr()->unchecked_entrypoint_pc_offset_;
+    if (!HasSingleEntryPoint(instr)) {
+      entry += !FLAG_precompiled_mode ? kMonomorphicEntryOffsetJIT
+                                      : kMonomorphicEntryOffsetAOT;
     }
     return entry;
   }
@@ -4299,9 +4799,9 @@ class Instructions : public Object {
   }
 
   static intptr_t HeaderSize() {
-    intptr_t alignment = OS::PreferredCodeAlignment();
-    intptr_t aligned_size = Utils::RoundUp(sizeof(RawInstructions), alignment);
-    ASSERT(aligned_size == alignment);
+    const intptr_t alignment = OS::PreferredCodeAlignment();
+    const intptr_t aligned_size =
+        Utils::RoundUp(sizeof(RawInstructions), alignment);
     return aligned_size;
   }
 
@@ -4311,11 +4811,13 @@ class Instructions : public Object {
   }
 
   bool Equals(const Instructions& other) const {
-    if (Size() != other.Size()) {
-      return false;
-    }
+    return Equals(raw(), other.raw());
+  }
+
+  static bool Equals(RawInstructions* a, RawInstructions* b) {
+    if (Size(a) != Size(b)) return false;
     NoSafepointScope no_safepoint;
-    return memcmp(raw_ptr(), other.raw_ptr(), InstanceSize(Size())) == 0;
+    return memcmp(a->ptr(), b->ptr(), InstanceSize(Size(a))) == 0;
   }
 
   CodeStatistics* stats() const {
@@ -4332,6 +4834,10 @@ class Instructions : public Object {
 #endif
   }
 
+  uword unchecked_entrypoint_pc_offset() const {
+    return raw_ptr()->unchecked_entrypoint_pc_offset_;
+  }
+
  private:
   void SetSize(intptr_t value) const {
     ASSERT(value >= 0);
@@ -4344,17 +4850,24 @@ class Instructions : public Object {
                     FlagsBits::update(value, raw_ptr()->size_and_flags_));
   }
 
+  void set_unchecked_entrypoint_pc_offset(uword value) const {
+    StoreNonPointer(&raw_ptr()->unchecked_entrypoint_pc_offset_, value);
+  }
+
   // New is a private method as RawInstruction and RawCode objects should
   // only be created using the Code::FinalizeCode method. This method creates
   // the RawInstruction and RawCode objects, sets up the pointer offsets
   // and links the two in a GC safe manner.
-  static RawInstructions* New(intptr_t size, bool has_single_entry_point);
+  static RawInstructions* New(intptr_t size,
+                              bool has_single_entry_point,
+                              uword unchecked_entrypoint_pc_offset);
 
   FINAL_HEAP_OBJECT_IMPLEMENTATION(Instructions, Object);
   friend class Class;
   friend class Code;
   friend class AssemblyImageWriter;
   friend class BlobImageWriter;
+  friend class ImageWriter;
 };
 
 class LocalVarDescriptors : public Object {
@@ -4582,12 +5095,6 @@ class StackMap : public Object {
 
   intptr_t Length() const { return raw_ptr()->length_; }
 
-  uint32_t PcOffset() const { return raw_ptr()->pc_offset_; }
-  void SetPcOffset(uint32_t value) const {
-    ASSERT(value <= kMaxUint32);
-    StoreNonPointer(&raw_ptr()->pc_offset_, value);
-  }
-
   intptr_t SlowPathBitCount() const { return raw_ptr()->slow_path_bit_count_; }
   void SetSlowPathBitCount(intptr_t bit_count) const {
     ASSERT(bit_count <= kMaxUint16);
@@ -4619,13 +5126,7 @@ class StackMap : public Object {
   static intptr_t InstanceSize(intptr_t length) {
     return RoundedAllocationSize(UnroundedSize(length));
   }
-  static RawStackMap* New(intptr_t pc_offset,
-                          BitmapBuilder* bmap,
-                          intptr_t register_bit_count);
-
-  static RawStackMap* New(intptr_t length,
-                          intptr_t register_bit_count,
-                          intptr_t pc_offset);
+  static RawStackMap* New(BitmapBuilder* bmap, intptr_t slow_path_bit_count);
 
  private:
   void SetLength(intptr_t length) const {
@@ -4661,7 +5162,6 @@ class ExceptionHandlers : public Object {
                       uword handler_pc_offset,
                       bool needs_stacktrace,
                       bool has_catch_all,
-                      TokenPosition token_pos,
                       bool is_generated) const;
 
   RawArray* GetHandledTypes(intptr_t try_index) const;
@@ -4699,6 +5199,7 @@ class ExceptionHandlers : public Object {
 
 class Code : public Object {
  public:
+  // When dual mapping, this returns the executable view.
   RawInstructions* active_instructions() const {
 #if defined(DART_PRECOMPILED_RUNTIME)
     UNREACHABLE();
@@ -4708,20 +5209,50 @@ class Code : public Object {
 #endif
   }
 
+  // When dual mapping, these return the executable view.
   RawInstructions* instructions() const { return raw_ptr()->instructions_; }
   static RawInstructions* InstructionsOf(const RawCode* code) {
     return code->ptr()->instructions_;
+  }
+
+  static uword EntryPoint(const RawCode* code) {
+    return Instructions::EntryPoint(InstructionsOf(code));
   }
 
   static intptr_t saved_instructions_offset() {
     return OFFSET_OF(RawCode, instructions_);
   }
 
-  static intptr_t entry_point_offset() {
-    return OFFSET_OF(RawCode, entry_point_);
+  using EntryKind = CodeEntryKind;
+
+  static const char* EntryKindToCString(EntryKind kind);
+  static bool ParseEntryKind(const char* str, EntryKind* out);
+
+  static intptr_t entry_point_offset(EntryKind kind = EntryKind::kNormal) {
+    switch (kind) {
+      case EntryKind::kNormal:
+        return OFFSET_OF(RawCode, entry_point_);
+      case EntryKind::kUnchecked:
+        return OFFSET_OF(RawCode, unchecked_entry_point_);
+      case EntryKind::kMonomorphic:
+        return OFFSET_OF(RawCode, monomorphic_entry_point_);
+      case EntryKind::kMonomorphicUnchecked:
+        return OFFSET_OF(RawCode, monomorphic_unchecked_entry_point_);
+      default:
+        UNREACHABLE();
+    }
   }
-  static intptr_t checked_entry_point_offset() {
-    return OFFSET_OF(RawCode, checked_entry_point_);
+
+  static intptr_t function_entry_point_offset(EntryKind kind) {
+    switch (kind) {
+      case EntryKind::kNormal:
+        return Function::entry_point_offset();
+      case EntryKind::kUnchecked:
+        return Function::unchecked_entry_point_offset();
+      default:
+        ASSERT(false && "Invalid entry kind.");
+        UNREACHABLE();
+    }
   }
 
   RawObjectPool* object_pool() const { return raw_ptr()->object_pool_; }
@@ -4737,26 +5268,42 @@ class Code : public Object {
     return OptimizedBit::decode(raw_ptr()->state_bits_);
   }
   void set_is_optimized(bool value) const;
+  static bool IsOptimized(RawCode* code) {
+    return Code::OptimizedBit::decode(code->ptr()->state_bits_);
+  }
+
+  bool is_force_optimized() const {
+    return ForceOptimizedBit::decode(raw_ptr()->state_bits_);
+  }
+  void set_is_force_optimized(bool value) const;
+  static bool IsForceOptimized(RawCode* code) {
+    return Code::ForceOptimizedBit::decode(code->ptr()->state_bits_);
+  }
+
   bool is_alive() const { return AliveBit::decode(raw_ptr()->state_bits_); }
   void set_is_alive(bool value) const;
 
   uword PayloadStart() const {
     return Instructions::PayloadStart(instructions());
   }
+  uword EntryPoint() const { return Instructions::EntryPoint(instructions()); }
   uword UncheckedEntryPoint() const {
-    const Instructions& instr = Instructions::Handle(instructions());
-    return instr.UncheckedEntryPoint();
+    return Instructions::UncheckedEntryPoint(instructions());
   }
-  uword CheckedEntryPoint() const {
-    const Instructions& instr = Instructions::Handle(instructions());
-    return instr.CheckedEntryPoint();
+  uword MonomorphicEntryPoint() const {
+    return Instructions::MonomorphicEntryPoint(instructions());
+  }
+  uword MonomorphicUncheckedEntryPoint() const {
+    return Instructions::MonomorphicUncheckedEntryPoint(instructions());
   }
   intptr_t Size() const { return Instructions::Size(instructions()); }
-  RawObjectPool* GetObjectPool() const { return object_pool(); }
+  RawObjectPool* GetObjectPool() const;
   bool ContainsInstructionAt(uword addr) const {
-    const Instructions& instr = Instructions::Handle(instructions());
-    const uword offset = addr - instr.PayloadStart();
-    return offset < static_cast<uword>(instr.Size());
+    return ContainsInstructionAt(raw(), addr);
+  }
+
+  static bool ContainsInstructionAt(const RawCode* code, uword addr) {
+    return Instructions::ContainsPc(code->ptr()->instructions_, addr);
   }
 
   // Returns true if there is a debugger breakpoint set in this code object.
@@ -4779,13 +5326,6 @@ class Code : public Object {
     StorePointer(&raw_ptr()->code_source_map_, code_source_map.raw());
   }
 
-  RawArray* await_token_positions() const;
-  void set_await_token_positions(const Array& await_token_positions) const;
-
-  // Used during reloading (see object_reload.cc). Calls Reset on all ICDatas
-  // that are embedded inside the Code object.
-  void ResetICDatas(Zone* zone) const;
-
   // Array of DeoptInfo objects.
   RawArray* deopt_info_array() const {
 #if defined(DART_PRECOMPILED_RUNTIME)
@@ -4801,10 +5341,10 @@ class Code : public Object {
   RawSmi* variables() const { return raw_ptr()->catch_entry_.variables_; }
   void set_variables(const Smi& smi) const;
 #else
-  RawTypedData* catch_entry_state_maps() const {
-    return raw_ptr()->catch_entry_.catch_entry_state_maps_;
+  RawTypedData* catch_entry_moves_maps() const {
+    return raw_ptr()->catch_entry_.catch_entry_moves_maps_;
   }
-  void set_catch_entry_state_maps(const TypedData& maps) const;
+  void set_catch_entry_moves_maps(const TypedData& maps) const;
 #endif
 
   RawArray* stackmaps() const { return raw_ptr()->stackmaps_; }
@@ -4812,13 +5352,34 @@ class Code : public Object {
   RawStackMap* GetStackMap(uint32_t pc_offset,
                            Array* stackmaps,
                            StackMap* map) const;
+  enum CallKind {
+    kPcRelativeCall = 1,
+    kPcRelativeTailCall = 2,
+    kCallViaCode = 3,
+  };
 
-  enum {
-    kSCallTableOffsetEntry = 0,
-    kSCallTableFunctionEntry = 1,
-    kSCallTableCodeEntry = 2,
+  enum CallEntryPoint {
+    kDefaultEntry,
+    kUncheckedEntry,
+  };
+
+  enum SCallTableEntry {
+    kSCallTableKindAndOffset = 0,
+    kSCallTableCodeTarget = 1,
+    kSCallTableFunctionTarget = 2,
     kSCallTableEntryLength = 3,
   };
+
+  enum class PoolAttachment {
+    kAttachPool,
+    kNotAttachPool,
+  };
+
+  class KindField : public BitField<intptr_t, CallKind, 0, 2> {};
+  class EntryPointField
+      : public BitField<intptr_t, CallEntryPoint, KindField::kNextBit, 1> {};
+  class OffsetField
+      : public BitField<intptr_t, intptr_t, EntryPointField::kNextBit, 27> {};
 
   void set_static_calls_target_table(const Array& value) const;
   RawArray* static_calls_target_table() const {
@@ -4843,6 +5404,9 @@ class Code : public Object {
   void SetStubCallTargetCodeAt(uword pc, const Code& code) const;
 
   void Disassemble(DisassemblyFormatter* formatter = NULL) const;
+
+  // Returns true if all BSS relocations in the code have been patched.
+  bool VerifyBSSRelocations() const;
 
   class Comments : public ZoneAllocated {
    public:
@@ -4877,7 +5441,7 @@ class Code : public Object {
   void set_comments(const Comments& comments) const;
 
   RawObject* return_address_metadata() const {
-#if defined(DART_PRECOMPILED_RUNTIME)
+#if defined(PRODUCT)
     UNREACHABLE();
     return NULL;
 #else
@@ -4918,7 +5482,7 @@ class Code : public Object {
   void DumpSourcePositions() const;
 
   RawLocalVarDescriptors* var_descriptors() const {
-#if defined(DART_PRECOMPILED_RUNTIME)
+#if defined(PRODUCT)
     UNREACHABLE();
     return NULL;
 #else
@@ -4926,7 +5490,7 @@ class Code : public Object {
 #endif
   }
   void set_var_descriptors(const LocalVarDescriptors& value) const {
-#if defined(DART_PRECOMPILED_RUNTIME)
+#if defined(PRODUCT)
     UNREACHABLE();
 #else
     ASSERT(value.IsOld());
@@ -4934,7 +5498,7 @@ class Code : public Object {
 #endif
   }
 
-  // Will compute local var descriptors is necessary.
+  // Will compute local var descriptors if necessary.
   RawLocalVarDescriptors* GetLocalVarDescriptors() const;
 
   RawExceptionHandlers* exception_handlers() const {
@@ -4945,6 +5509,9 @@ class Code : public Object {
     StorePointer(&raw_ptr()->exception_handlers_, handlers.raw());
   }
 
+  // WARNING: function() returns the owner which is not guaranteed to be
+  // a Function. It is up to the caller to guarantee it isn't a stub, class,
+  // or something else.
   // TODO(turnidge): Consider dropping this function and making
   // everybody use owner().  Currently this function is misused - even
   // while generating the snapshot.
@@ -4953,17 +5520,12 @@ class Code : public Object {
   }
 
   RawObject* owner() const { return raw_ptr()->owner_; }
-
-  void set_owner(const Function& function) const {
-    ASSERT(function.IsOld());
-    StorePointer(&raw_ptr()->owner_,
-                 reinterpret_cast<RawObject*>(function.raw()));
+  void set_owner(const Object& owner) const {
+    ASSERT(owner.IsFunction() || owner.IsClass() || owner.IsAbstractType());
+    StorePointer(&raw_ptr()->owner_, owner.raw());
   }
 
-  void set_owner(const Class& cls) {
-    ASSERT(cls.IsOld());
-    StorePointer(&raw_ptr()->owner_, reinterpret_cast<RawObject*>(cls.raw()));
-  }
+  static intptr_t owner_offset() { return OFFSET_OF(RawCode, owner_); }
 
   // We would have a VisitPointers function here to traverse all the
   // embedded objects in the instructions using pointer_offsets.
@@ -4981,20 +5543,43 @@ class Code : public Object {
     return RoundedAllocationSize(sizeof(RawCode) + (len * kBytesPerElement));
   }
 #if !defined(DART_PRECOMPILED_RUNTIME)
-  static RawCode* FinalizeCode(const Function& function,
-                               Assembler* assembler,
-                               bool optimized = false,
-                               CodeStatistics* stats = nullptr);
-  static RawCode* FinalizeCode(const char* name,
-                               Assembler* assembler,
+  // Finalizes the generated code, by generating various kinds of metadata (e.g.
+  // stack maps, pc descriptors, ...) and attach them to a newly generated
+  // [Code] object.
+  //
+  // If Code::PoolAttachment::kAttachPool is specified for [pool_attachment]
+  // then a new [ObjectPool] will be attached to the code object as well.
+  // Otherwise the caller is responsible for doing this via
+  // `Object::set_object_pool()`.
+  static RawCode* FinalizeCode(FlowGraphCompiler* compiler,
+                               compiler::Assembler* assembler,
+                               PoolAttachment pool_attachment,
                                bool optimized,
-                               CodeStatistics* stats = nullptr);
-#if defined(DART_USE_INTERPRETER)
-  static RawCode* FinalizeBytecode(void* bytecode_data,
-                                   intptr_t bytecode_size,
-                                   const ObjectPool& object_pool,
-                                   CodeStatistics* stats = nullptr);
-#endif
+                               CodeStatistics* stats);
+
+  // Notifies all active [CodeObserver]s.
+  static void NotifyCodeObservers(const Code& code, bool optimized);
+  static void NotifyCodeObservers(const Function& function,
+                                  const Code& code,
+                                  bool optimized);
+  static void NotifyCodeObservers(const char* name,
+                                  const Code& code,
+                                  bool optimized);
+
+  // Calls [FinalizeCode] and also notifies [CodeObserver]s.
+  static RawCode* FinalizeCodeAndNotify(const Function& function,
+                                        FlowGraphCompiler* compiler,
+                                        compiler::Assembler* assembler,
+                                        PoolAttachment pool_attachment,
+                                        bool optimized = false,
+                                        CodeStatistics* stats = nullptr);
+  static RawCode* FinalizeCodeAndNotify(const char* name,
+                                        FlowGraphCompiler* compiler,
+                                        compiler::Assembler* assembler,
+                                        PoolAttachment pool_attachment,
+                                        bool optimized = false,
+                                        CodeStatistics* stats = nullptr);
+
 #endif
   static RawCode* LookupCode(uword pc);
   static RawCode* LookupCodeInVmIsolate(uword pc);
@@ -5014,15 +5599,16 @@ class Code : public Object {
   const char* QualifiedName() const;
 
   int64_t compile_timestamp() const {
-#if defined(DART_PRECOMPILED_RUNTIME)
+#if defined(PRODUCT)
     return 0;
 #else
     return raw_ptr()->compile_timestamp_;
 #endif
   }
 
-  bool IsAllocationStubCode() const;
   bool IsStubCode() const;
+  bool IsAllocationStubCode() const;
+  bool IsTypeTestStubCode() const;
   bool IsFunctionCode() const;
 
   void DisableDartCode() const;
@@ -5049,12 +5635,19 @@ class Code : public Object {
   friend class RawCode;
   enum {
     kOptimizedBit = 0,
-    kAliveBit = 1,
-    kPtrOffBit = 2,
-    kPtrOffSize = 30,
+    kForceOptimizedBit = 1,
+    kAliveBit = 2,
+    kPtrOffBit = 3,
+    kPtrOffSize = 29,
   };
 
   class OptimizedBit : public BitField<int32_t, bool, kOptimizedBit, 1> {};
+
+  // Force-optimized is true if the Code was generated for a function with
+  // Function::ForceOptimize().
+  class ForceOptimizedBit
+      : public BitField<int32_t, bool, kForceOptimizedBit, 1> {};
+
   class AliveBit : public BitField<int32_t, bool, kAliveBit, 1> {};
   class PtrOffBits
       : public BitField<int32_t, intptr_t, kPtrOffBit, kPtrOffSize> {};
@@ -5073,14 +5666,10 @@ class Code : public Object {
     DISALLOW_COPY_AND_ASSIGN(SlowFindRawCodeVisitor);
   };
 
-  static bool IsOptimized(RawCode* code) {
-    return Code::OptimizedBit::decode(code->ptr()->state_bits_);
-  }
-
   static const intptr_t kEntrySize = sizeof(int32_t);  // NOLINT
 
   void set_compile_timestamp(int64_t timestamp) const {
-#if defined(DART_PRECOMPILED_RUNTIME)
+#if defined(PRODUCT)
     UNREACHABLE();
 #else
     StoreNonPointer(&raw_ptr()->compile_timestamp_, timestamp);
@@ -5121,14 +5710,167 @@ class Code : public Object {
 
   FINAL_HEAP_OBJECT_IMPLEMENTATION(Code, Object);
   friend class Class;
+  friend class CodeTestHelper;
   friend class SnapshotWriter;
+  friend class StubCode;     // for set_object_pool
+  friend class Precompiler;  // for set_object_pool
   friend class FunctionSerializationCluster;
   friend class CodeSerializationCluster;
+  friend class StubCode;               // for set_object_pool
+  friend class MegamorphicCacheTable;  // for set_object_pool
   friend class CodePatcher;     // for set_instructions
   friend class ProgramVisitor;  // for set_instructions
   // So that the RawFunction pointer visitor can determine whether code the
   // function points to is optimized.
   friend class RawFunction;
+  friend class CallSiteResetter;
+};
+
+class Bytecode : public Object {
+ public:
+  uword instructions() const { return raw_ptr()->instructions_; }
+
+  uword PayloadStart() const { return instructions(); }
+  intptr_t Size() const { return raw_ptr()->instructions_size_; }
+
+  RawObjectPool* object_pool() const { return raw_ptr()->object_pool_; }
+
+  bool ContainsInstructionAt(uword addr) const {
+    return RawBytecode::ContainsPC(raw(), addr);
+  }
+
+  RawPcDescriptors* pc_descriptors() const {
+    return raw_ptr()->pc_descriptors_;
+  }
+  void set_pc_descriptors(const PcDescriptors& descriptors) const {
+    ASSERT(descriptors.IsOld());
+    StorePointer(&raw_ptr()->pc_descriptors_, descriptors.raw());
+  }
+
+  void Disassemble(DisassemblyFormatter* formatter = NULL) const;
+
+  RawExceptionHandlers* exception_handlers() const {
+    return raw_ptr()->exception_handlers_;
+  }
+  void set_exception_handlers(const ExceptionHandlers& handlers) const {
+    ASSERT(handlers.IsOld());
+    StorePointer(&raw_ptr()->exception_handlers_, handlers.raw());
+  }
+
+  RawFunction* function() const { return raw_ptr()->function_; }
+
+  void set_function(const Function& function) const {
+    ASSERT(function.IsOld());
+    StorePointer(&raw_ptr()->function_, function.raw());
+  }
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawBytecode));
+  }
+  static RawBytecode* New(uword instructions,
+                          intptr_t instructions_size,
+                          intptr_t instructions_offset,
+                          const ObjectPool& object_pool);
+
+  RawExternalTypedData* GetBinary(Zone* zone) const;
+
+  TokenPosition GetTokenIndexOfPC(uword return_address) const;
+  intptr_t GetTryIndexAtPc(uword return_address) const;
+
+  // Return the pc of the first 'DebugCheck' opcode of the bytecode.
+  // Return 0 if none is found.
+  uword GetFirstDebugCheckOpcodePc() const;
+
+  // Return the pc after the first 'debug checked' opcode in the range.
+  // Return 0 if none is found.
+  uword GetDebugCheckedOpcodeReturnAddress(uword from_offset,
+                                           uword to_offset) const;
+
+  intptr_t instructions_binary_offset() const {
+    return raw_ptr()->instructions_binary_offset_;
+  }
+  void set_instructions_binary_offset(intptr_t value) const {
+    StoreNonPointer(&raw_ptr()->instructions_binary_offset_, value);
+  }
+
+  intptr_t source_positions_binary_offset() const {
+    return raw_ptr()->source_positions_binary_offset_;
+  }
+  void set_source_positions_binary_offset(intptr_t value) const {
+    StoreNonPointer(&raw_ptr()->source_positions_binary_offset_, value);
+  }
+  bool HasSourcePositions() const {
+    return (source_positions_binary_offset() != 0);
+  }
+
+  intptr_t local_variables_binary_offset() const {
+    return raw_ptr()->local_variables_binary_offset_;
+  }
+  void set_local_variables_binary_offset(intptr_t value) const {
+    StoreNonPointer(&raw_ptr()->local_variables_binary_offset_, value);
+  }
+  bool HasLocalVariablesInfo() const {
+    return (local_variables_binary_offset() != 0);
+  }
+
+  RawLocalVarDescriptors* var_descriptors() const {
+#if defined(PRODUCT)
+    UNREACHABLE();
+    return nullptr;
+#else
+    return raw_ptr()->var_descriptors_;
+#endif
+  }
+  void set_var_descriptors(const LocalVarDescriptors& value) const {
+#if defined(PRODUCT)
+    UNREACHABLE();
+#else
+    ASSERT(value.IsOld());
+    StorePointer(&raw_ptr()->var_descriptors_, value.raw());
+#endif
+  }
+
+  // Will compute local var descriptors if necessary.
+  RawLocalVarDescriptors* GetLocalVarDescriptors() const;
+
+  const char* Name() const;
+  const char* QualifiedName() const;
+  const char* FullyQualifiedName() const;
+
+  class SlowFindRawBytecodeVisitor : public FindObjectVisitor {
+   public:
+    explicit SlowFindRawBytecodeVisitor(uword pc) : pc_(pc) {}
+    virtual ~SlowFindRawBytecodeVisitor() {}
+
+    // Check if object matches find condition.
+    virtual bool FindObject(RawObject* obj) const;
+
+   private:
+    const uword pc_;
+
+    DISALLOW_COPY_AND_ASSIGN(SlowFindRawBytecodeVisitor);
+  };
+
+  static RawBytecode* FindCode(uword pc);
+
+ private:
+  void set_instructions(uword instructions) const {
+    StoreNonPointer(&raw_ptr()->instructions_, instructions);
+  }
+  void set_instructions_size(intptr_t size) const {
+    StoreNonPointer(&raw_ptr()->instructions_size_, size);
+  }
+  void set_object_pool(const ObjectPool& object_pool) const {
+    StorePointer(&raw_ptr()->object_pool_, object_pool.raw());
+  }
+
+  friend class BytecodeDeserializationCluster;
+  friend class RawObject;  // For RawObject::SizeFromClass().
+  friend class RawBytecode;
+
+  FINAL_HEAP_OBJECT_IMPLEMENTATION(Bytecode, Object);
+  friend class Class;
+  friend class SnapshotWriter;
 };
 
 class Context : public Object {
@@ -5143,11 +5885,16 @@ class Context : public Object {
   static intptr_t num_variables_offset() {
     return OFFSET_OF(RawContext, num_variables_);
   }
+  static intptr_t NumVariables(const RawContext* context) {
+    return context->ptr()->num_variables_;
+  }
 
   RawObject* At(intptr_t context_index) const {
     return *ObjectAddr(context_index);
   }
   inline void SetAt(intptr_t context_index, const Object& value) const;
+
+  intptr_t GetLevel() const;
 
   void Dump(int indent = 0) const;
 
@@ -5159,13 +5906,17 @@ class Context : public Object {
            (kWordSize * context_index);
   }
 
+  static bool IsValidLength(intptr_t len) {
+    return 0 <= len && len <= compiler::target::Array::kMaxElements;
+  }
+
   static intptr_t InstanceSize() {
     ASSERT(sizeof(RawContext) == OFFSET_OF_RETURNED_VALUE(RawContext, data));
     return 0;
   }
 
   static intptr_t InstanceSize(intptr_t len) {
-    ASSERT(0 <= len && len <= kMaxElements);
+    ASSERT(IsValidLength(len));
     return RoundedAllocationSize(sizeof(RawContext) + (len * kBytesPerElement));
   }
 
@@ -5272,6 +6023,12 @@ class MegamorphicCache : public Object {
   static const intptr_t kSpreadFactor = 7;
   static const double kLoadFactor;
 
+  enum EntryType {
+    kClassIdIndex,
+    kTargetFunctionIndex,
+    kEntryLength,
+  };
+
   RawArray* buckets() const;
   void set_buckets(const Array& buckets) const;
 
@@ -5298,13 +6055,15 @@ class MegamorphicCache : public Object {
   static RawMegamorphicCache* New(const String& target_name,
                                   const Array& arguments_descriptor);
 
-  void EnsureCapacity() const;
+  void Insert(const Smi& class_id, const Object& target) const;
 
-  void Insert(const Smi& class_id, const Function& target) const;
+  void SwitchToBareInstructions();
 
   static intptr_t InstanceSize() {
     return RoundedAllocationSize(sizeof(RawMegamorphicCache));
   }
+
+  static RawMegamorphicCache* Clone(const MegamorphicCache& from);
 
  private:
   friend class Class;
@@ -5316,16 +6075,14 @@ class MegamorphicCache : public Object {
   void set_target_name(const String& value) const;
   void set_arguments_descriptor(const Array& value) const;
 
-  enum {
-    kClassIdIndex,
-    kTargetFunctionIndex,
-    kEntryLength,
-  };
+  // The caller must hold Isolate::megamorphic_mutex().
+  void EnsureCapacityLocked() const;
+  void InsertLocked(const Smi& class_id, const Object& target) const;
 
   static inline void SetEntry(const Array& array,
                               intptr_t index,
                               const Smi& class_id,
-                              const Function& target);
+                              const Object& target);
 
   static inline RawObject* GetClassId(const Array& array, intptr_t index);
   static inline RawObject* GetTargetFunction(const Array& array,
@@ -5337,12 +6094,14 @@ class MegamorphicCache : public Object {
 class SubtypeTestCache : public Object {
  public:
   enum Entries {
-    kInstanceClassIdOrFunction = 0,
-    kInstanceTypeArguments = 1,
-    kInstantiatorTypeArguments = 2,
-    kFunctionTypeArguments = 3,
-    kTestResult = 4,
-    kTestEntryLength = 5,
+    kTestResult = 0,
+    kInstanceClassIdOrFunction = 1,
+    kInstanceTypeArguments = 2,
+    kInstantiatorTypeArguments = 3,
+    kFunctionTypeArguments = 4,
+    kInstanceParentFunctionTypeArguments = 5,
+    kInstanceDelayedFunctionTypeArguments = 6,
+    kTestEntryLength = 7,
   };
 
   intptr_t NumberOfChecks() const;
@@ -5350,13 +6109,18 @@ class SubtypeTestCache : public Object {
                 const TypeArguments& instance_type_arguments,
                 const TypeArguments& instantiator_type_arguments,
                 const TypeArguments& function_type_arguments,
+                const TypeArguments& instance_parent_function_type_arguments,
+                const TypeArguments& instance_delayed_type_arguments,
                 const Bool& test_result) const;
   void GetCheck(intptr_t ix,
                 Object* instance_class_id_or_function,
                 TypeArguments* instance_type_arguments,
                 TypeArguments* instantiator_type_arguments,
                 TypeArguments* function_type_arguments,
+                TypeArguments* instance_parent_function_type_arguments,
+                TypeArguments* instance_delayed_type_arguments,
                 Bool* test_result) const;
+  void Reset() const;
 
   static RawSubtypeTestCache* New();
 
@@ -5368,7 +6132,13 @@ class SubtypeTestCache : public Object {
     return OFFSET_OF(RawSubtypeTestCache, cache_);
   }
 
+  static void Init();
+  static void Cleanup();
+
  private:
+  // A VM heap allocated preinitialized empty subtype entry array.
+  static RawArray* cached_array_;
+
   RawArray* cache() const { return raw_ptr()->cache_; }
 
   void set_cache(const Array& value) const;
@@ -5377,6 +6147,8 @@ class SubtypeTestCache : public Object {
 
   FINAL_HEAP_OBJECT_IMPLEMENTATION(SubtypeTestCache, Object);
   friend class Class;
+  friend class Serializer;
+  friend class Deserializer;
 };
 
 class Error : public Object {
@@ -5567,6 +6339,8 @@ class Instance : public Object {
   virtual bool CheckAndCanonicalizeFields(Thread* thread,
                                           const char** error_str) const;
 
+  RawInstance* CopyShallowToOldSpace(Thread* thread) const;
+
 #if defined(DEBUG)
   // Check if instance is canonical.
   virtual bool CheckIsCanonical(Thread* thread) const;
@@ -5581,6 +6355,9 @@ class Instance : public Object {
 
   RawAbstractType* GetType(Heap::Space space) const;
 
+  // Access the arguments of the [Type] of this [Instance].
+  // Note: for [Type]s instead of [Instance]s with a [Type] attached, use
+  // [arguments()] and [set_arguments()]
   virtual RawTypeArguments* GetTypeArguments() const;
   virtual void SetTypeArguments(const TypeArguments& value) const;
 
@@ -5588,15 +6365,12 @@ class Instance : public Object {
   // The type argument vectors are used to instantiate the other type if needed.
   bool IsInstanceOf(const AbstractType& other,
                     const TypeArguments& other_instantiator_type_arguments,
-                    const TypeArguments& other_function_type_arguments,
-                    Error* bound_error) const;
+                    const TypeArguments& other_function_type_arguments) const;
 
   // Returns true if the type of this instance is a subtype of FutureOr<T>
   // specified by instantiated type 'other'.
   // Returns false if other type is not a FutureOr.
-  bool IsFutureOrInstanceOf(Zone* zone,
-                            const AbstractType& other,
-                            Error* bound_error) const;
+  bool IsFutureOrInstanceOf(Zone* zone, const AbstractType& other) const;
 
   bool IsValidNativeIndex(int index) const {
     return ((index >= 0) && (index < clazz()->ptr()->num_native_fields_));
@@ -5619,23 +6393,24 @@ class Instance : public Object {
   // (if not NULL) to call.
   bool IsCallable(Function* function) const;
 
+  RawObject* Invoke(const String& selector,
+                    const Array& arguments,
+                    const Array& argument_names,
+                    bool respect_reflectable = true,
+                    bool check_is_entrypoint = false) const;
+  RawObject* InvokeGetter(const String& selector,
+                          bool respect_reflectable = true,
+                          bool check_is_entrypoint = false) const;
+  RawObject* InvokeSetter(const String& selector,
+                          const Instance& argument,
+                          bool respect_reflectable = true,
+                          bool check_is_entrypoint = false) const;
+
   // Evaluate the given expression as if it appeared in an instance method of
   // this instance and return the resulting value, or an error object if
   // evaluating the expression fails. The method has the formal (type)
   // parameters given in (type_)param_names, and is invoked with the (type)
   // argument values given in (type_)param_values.
-  RawObject* Evaluate(const Class& method_cls,
-                      const String& expr,
-                      const Array& param_names,
-                      const Array& param_values) const;
-
-  RawObject* Evaluate(const Class& method_cls,
-                      const String& expr,
-                      const Array& param_names,
-                      const Array& param_values,
-                      const Array& type_param_names,
-                      const TypeArguments& type_param_values) const;
-
   RawObject* EvaluateCompiledExpression(
       const Class& method_cls,
       const uint8_t* kernel_bytes,
@@ -5660,6 +6435,14 @@ class Instance : public Object {
   static intptr_t DataOffsetFor(intptr_t cid);
   static intptr_t ElementSizeFor(intptr_t cid);
 
+  // Pointers may be subtyped, but their subtypes may not get extra fields.
+  // The subtype runtime representation has exactly the same object layout,
+  // only the class_id is different. So, it is safe to use subtype instances in
+  // Pointer handles.
+  virtual bool IsPointer() const;
+
+  static intptr_t NextFieldOffset() { return sizeof(RawInstance); }
+
  protected:
 #ifndef PRODUCT
   virtual void PrintSharedInstanceJSON(JSONObject* jsobj, bool ref) const;
@@ -5681,8 +6464,6 @@ class Instance : public Object {
   }
   bool IsValidFieldOffset(intptr_t offset) const;
 
-  static intptr_t NextFieldOffset() { return sizeof(RawInstance); }
-
   // The following raw methods are used for morphing.
   // They are needed due to the extraction of the class in IsValidFieldOffset.
   RawObject** RawFieldAddrAtOffset(intptr_t offset) const {
@@ -5700,6 +6481,7 @@ class Instance : public Object {
   friend class ByteBuffer;
   friend class Class;
   friend class Closure;
+  friend class Pointer;
   friend class DeferredObject;
   friend class RegExp;
   friend class SnapshotWriter;
@@ -5721,27 +6503,12 @@ class LibraryPrefix : public Instance {
   intptr_t num_imports() const { return raw_ptr()->num_imports_; }
   RawLibrary* importer() const { return raw_ptr()->importer_; }
 
-  RawInstance* LoadError() const;
-
-  bool ContainsLibrary(const Library& library) const;
   RawLibrary* GetLibrary(int index) const;
   void AddImport(const Namespace& import) const;
   RawObject* LookupObject(const String& name) const;
   RawClass* LookupClass(const String& class_name) const;
 
   bool is_deferred_load() const { return raw_ptr()->is_deferred_load_; }
-  bool is_loaded() const { return raw_ptr()->is_loaded_; }
-  bool LoadLibrary() const;
-
-  // Return the list of code objects that were compiled when this
-  // prefix was not yet loaded. These code objects will be invalidated
-  // when the prefix is loaded.
-  RawArray* dependent_code() const;
-  void set_dependent_code(const Array& array) const;
-
-  // Add the given code object to the list of dependent ones.
-  void RegisterDependentCode(const Code& code) const;
-  void InvalidateDependentCode() const;
 
   static intptr_t InstanceSize() {
     return RoundedAllocationSize(sizeof(RawLibraryPrefix));
@@ -5760,7 +6527,6 @@ class LibraryPrefix : public Instance {
   void set_imports(const Array& value) const;
   void set_num_imports(intptr_t value) const;
   void set_importer(const Library& value) const;
-  void set_is_loaded() const;
 
   static RawLibraryPrefix* New();
 
@@ -5778,11 +6544,20 @@ class TypeArguments : public Instance {
 
   intptr_t Length() const;
   RawAbstractType* TypeAt(intptr_t index) const;
+  RawAbstractType* TypeAtNullSafe(intptr_t index) const;
   static intptr_t type_at_offset(intptr_t index) {
     return OFFSET_OF_RETURNED_VALUE(RawTypeArguments, types) +
            index * kWordSize;
   }
   void SetTypeAt(intptr_t index, const AbstractType& value) const;
+
+  struct ArrayLayout {
+    static intptr_t elements_start_offset() {
+      return TypeArguments::type_at_offset(0);
+    }
+
+    static constexpr intptr_t kElementSize = kWordSize;
+  };
 
   // The name of this type argument vector, e.g. "<T, dynamic, List<T>, Smi>".
   RawString* Name() const { return SubvectorName(0, Length(), kInternalName); }
@@ -5814,6 +6589,10 @@ class TypeArguments : public Instance {
                             intptr_t other_length,
                             intptr_t total_length) const;
 
+  // Concatenate [this] and [other] vectors of type parameters.
+  RawTypeArguments* ConcatenateTypeParameters(Zone* zone,
+                                              const TypeArguments& other) const;
+
   // Check if the subvector of length 'len' starting at 'from_index' of this
   // type argument vector consists solely of DynamicType, ObjectType, or
   // VoidType.
@@ -5824,24 +6603,7 @@ class TypeArguments : public Instance {
   bool IsSubtypeOf(const TypeArguments& other,
                    intptr_t from_index,
                    intptr_t len,
-                   Error* bound_error,
-                   TrailPtr bound_trail,
-                   Heap::Space space) const {
-    return TypeTest(kIsSubtypeOf, other, from_index, len, bound_error,
-                    bound_trail, space);
-  }
-
-  // Check the 'more specific' relationship, considering only a subvector of
-  // length 'len' starting at 'from_index'.
-  bool IsMoreSpecificThan(const TypeArguments& other,
-                          intptr_t from_index,
-                          intptr_t len,
-                          Error* bound_error,
-                          TrailPtr bound_trail,
-                          Heap::Space space) const {
-    return TypeTest(kIsMoreSpecificThan, other, from_index, len, bound_error,
-                    bound_trail, space);
-  }
+                   Heap::Space space) const;
 
   // Check if the vectors are equal (they may be null).
   bool Equals(const TypeArguments& other) const {
@@ -5870,28 +6632,18 @@ class TypeArguments : public Instance {
                                TrailPtr trail = NULL) const;
   bool IsUninstantiatedIdentity() const;
   bool CanShareInstantiatorTypeArguments(const Class& instantiator_class) const;
+  bool CanShareFunctionTypeArguments(const Function& function) const;
 
-  // Return true if all types of this vector are respectively, resolved,
-  // finalized, or bounded.
-  bool IsResolved() const;
+  // Return true if all types of this vector are finalized.
   bool IsFinalized() const;
-  bool IsBounded() const;
 
   // Return true if this vector contains a recursive type argument.
   bool IsRecursive() const;
 
-  // Set the scope of this type argument vector to the given function.
-  void SetScopeFunction(const Function& function) const;
-
-  // Clone this type argument vector and clone all unfinalized type arguments.
-  // Finalized type arguments are shared.
-  RawTypeArguments* CloneUnfinalized() const;
-
-  // Clone this type argument vector and clone all uninstantiated type
-  // arguments, changing the class owner of type parameters.
-  // Instantiated type arguments are shared.
-  RawTypeArguments* CloneUninstantiated(const Class& new_owner,
-                                        TrailPtr trail = NULL) const;
+  virtual RawInstance* CheckAndCanonicalize(Thread* thread,
+                                            const char** error_str) const {
+    return Canonicalize();
+  }
 
   // Canonicalize only if instantiated, otherwise returns 'this'.
   RawTypeArguments* Canonicalize(TrailPtr trail = NULL) const;
@@ -5905,22 +6657,18 @@ class TypeArguments : public Instance {
   // where each reference to a type parameter is replaced with the corresponding
   // type from the various type argument vectors (class instantiator, function,
   // or parent functions via the current context).
-  // If bound_error is not NULL, it may be set to reflect a bound error.
   RawTypeArguments* InstantiateFrom(
       const TypeArguments& instantiator_type_arguments,
       const TypeArguments& function_type_arguments,
       intptr_t num_free_fun_type_params,
-      Error* bound_error,
       TrailPtr instantiation_trail,
-      TrailPtr bound_trail,
       Heap::Space space) const;
 
   // Runtime instantiation with canonicalization. Not to be used during type
   // finalization at compile time.
   RawTypeArguments* InstantiateAndCanonicalizeFrom(
       const TypeArguments& instantiator_type_arguments,
-      const TypeArguments& function_type_arguments,
-      Error* bound_error) const;
+      const TypeArguments& function_type_arguments) const;
 
   // Return true if this type argument vector has cached instantiations.
   bool HasInstantiations() const;
@@ -5971,16 +6719,6 @@ class TypeArguments : public Instance {
                       intptr_t from_index,
                       intptr_t len) const;
 
-  // Check the subtype or 'more specific' relationship, considering only a
-  // subvector of length 'len' starting at 'from_index'.
-  bool TypeTest(TypeTestKind test_kind,
-                const TypeArguments& other,
-                intptr_t from_index,
-                intptr_t len,
-                Error* bound_error,
-                TrailPtr bound_trail,
-                Heap::Space space) const;
-
   // Return the internal or public name of a subvector of this type argument
   // vector, e.g. "<T, dynamic, List<T>, int>".
   RawString* SubvectorName(intptr_t from_index,
@@ -6014,17 +6752,9 @@ class AbstractType : public Instance {
   virtual void SetIsFinalized() const;
   virtual bool IsBeingFinalized() const;
   virtual void SetIsBeingFinalized() const;
-  virtual bool IsMalformed() const;
-  virtual bool IsMalbounded() const;
-  virtual bool IsMalformedOrMalbounded() const;
-  virtual RawLanguageError* error() const;
-  virtual void set_error(const LanguageError& value) const;
-  virtual bool IsResolved() const;
-  virtual void SetIsResolved() const;
-  virtual bool HasResolvedTypeClass() const;
+  virtual bool HasTypeClass() const { return type_class_id() != kIllegalCid; }
   virtual classid_t type_class_id() const;
   virtual RawClass* type_class() const;
-  virtual RawUnresolvedClass* unresolved_class() const;
   virtual RawTypeArguments* arguments() const;
   virtual void set_arguments(const TypeArguments& value) const;
   virtual TokenPosition token_pos() const;
@@ -6041,9 +6771,6 @@ class AbstractType : public Instance {
   virtual bool IsEquivalent(const Instance& other, TrailPtr trail = NULL) const;
   virtual bool IsRecursive() const;
 
-  // Set the scope of this type to the given function.
-  virtual void SetScopeFunction(const Function& function) const;
-
   // Check if this type represents a function type.
   virtual bool IsFunctionType() const { return false; }
 
@@ -6058,28 +6785,12 @@ class AbstractType : public Instance {
   // must remain uninstantiated, because only T is a free variable in this type.
   //
   // Return a new type, or return 'this' if it is already instantiated.
-  // If bound_error is not NULL, it may be set to reflect a bound error.
   virtual RawAbstractType* InstantiateFrom(
       const TypeArguments& instantiator_type_arguments,
       const TypeArguments& function_type_arguments,
       intptr_t num_free_fun_type_params,
-      Error* bound_error,
       TrailPtr instantiation_trail,
-      TrailPtr bound_trail,
       Heap::Space space) const;
-
-  // Return a clone of this unfinalized type or the type itself if it is
-  // already finalized. Apply recursively to type arguments, i.e. finalized
-  // type arguments of an unfinalized type are not cloned, but shared.
-  virtual RawAbstractType* CloneUnfinalized() const;
-
-  // Return a clone of this uninstantiated type where all references to type
-  // parameters are replaced with references to type parameters of the same name
-  // but belonging to the new owner class.
-  // Apply recursively to type arguments, i.e. instantiated type arguments of
-  // an uninstantiated type are not cloned, but shared.
-  virtual RawAbstractType* CloneUninstantiated(const Class& new_owner,
-                                               TrailPtr trail = NULL) const;
 
   virtual RawInstance* CheckAndCanonicalize(Thread* thread,
                                             const char** error_str) const {
@@ -6144,9 +6855,7 @@ class AbstractType : public Instance {
   // Check if this type is a still uninitialized TypeRef.
   bool IsNullTypeRef() const;
 
-  // Check if this type represents the 'dynamic' type or if it is malformed,
-  // since a malformed type is mapped to 'dynamic'.
-  // Call IsMalformed() first, if distinction is required.
+  // Check if this type represents the 'dynamic' type.
   bool IsDynamicType() const;
 
   // Check if this type represents the 'void' type.
@@ -6167,9 +6876,6 @@ class AbstractType : public Instance {
 
   // Check if this type represents the 'int' type.
   bool IsIntType() const;
-
-  // Check if this type represents the '_int64' type.
-  bool IsInt64Type() const;
 
   // Check if this type represents the 'double' type.
   bool IsDoubleType() const;
@@ -6198,29 +6904,17 @@ class AbstractType : public Instance {
   // Check if this type represents the Dart '_Closure' type.
   bool IsDartClosureType() const;
 
-  // Check the subtype relationship.
-  bool IsSubtypeOf(const AbstractType& other,
-                   Error* bound_error,
-                   TrailPtr bound_trail,
-                   Heap::Space space) const {
-    return TypeTest(kIsSubtypeOf, other, bound_error, bound_trail, space);
-  }
+  // Check if this type represents the 'Pointer' type from "dart:ffi".
+  bool IsFfiPointerType() const;
 
-  // Check the 'more specific' relationship.
-  bool IsMoreSpecificThan(const AbstractType& other,
-                          Error* bound_error,
-                          TrailPtr bound_trail,
-                          Heap::Space space) const {
-    return TypeTest(kIsMoreSpecificThan, other, bound_error, bound_trail,
-                    space);
-  }
+  // Check the subtype relationship.
+  bool IsSubtypeOf(const AbstractType& other, Heap::Space space) const;
 
   // Returns true iff subtype is a subtype of supertype, false otherwise or if
   // an error occurred.
   static bool InstantiateAndTestSubtype(
       AbstractType* subtype,
       AbstractType* supertype,
-      Error* bound_error,
       const TypeArguments& instantiator_type_args,
       const TypeArguments& function_type_args);
 
@@ -6231,24 +6925,16 @@ class AbstractType : public Instance {
   uword type_test_stub_entry_point() const {
     return raw_ptr()->type_test_stub_entry_point_;
   }
+  RawCode* type_test_stub() const { return raw_ptr()->type_test_stub_; }
 
-  void SetTypeTestingStub(const Instructions& instr) const;
+  void SetTypeTestingStub(const Code& stub) const;
 
  private:
-  // Check the 'is subtype of' or 'is more specific than' relationship.
-  bool TypeTest(TypeTestKind test_kind,
-                const AbstractType& other,
-                Error* bound_error,
-                TrailPtr bound_trail,
-                Heap::Space space) const;
-
   // Returns true if this type is a subtype of FutureOr<T> specified by 'other'.
   // Returns false if other type is not a FutureOr.
-  bool FutureOrTypeTest(Zone* zone,
-                        const AbstractType& other,
-                        Error* bound_error,
-                        TrailPtr bound_trail,
-                        Heap::Space space) const;
+  bool IsSubtypeOfFutureOr(Zone* zone,
+                           const AbstractType& other,
+                           Heap::Space space) const;
 
   // Return the internal or public name of this type, including the names of its
   // type arguments, if any.
@@ -6263,7 +6949,6 @@ class AbstractType : public Instance {
 
 // A Type consists of a class, possibly parameterized with type
 // arguments. Example: C<T1, T2>.
-// An unresolved class is a String specifying the class name.
 //
 // Caution: 'RawType*' denotes a 'raw' pointer to a VM object of class Type, as
 // opposed to 'Type' denoting a 'handle' to the same object. 'RawType' does not
@@ -6273,9 +6958,7 @@ class Type : public AbstractType {
   static intptr_t type_class_id_offset() {
     return OFFSET_OF(RawType, type_class_id_);
   }
-  static intptr_t arguments_offset() {
-    return OFFSET_OF(RawType, type_class_id_);
-  }
+  static intptr_t arguments_offset() { return OFFSET_OF(RawType, arguments_); }
   static intptr_t type_state_offset() {
     return OFFSET_OF(RawType, type_state_);
   }
@@ -6290,21 +6973,13 @@ class Type : public AbstractType {
     return raw_ptr()->type_state_ == RawType::kBeingFinalized;
   }
   virtual void SetIsBeingFinalized() const;
-  virtual bool IsMalformed() const;
-  virtual bool IsMalbounded() const;
-  virtual bool IsMalformedOrMalbounded() const;
-  virtual RawLanguageError* error() const;
-  virtual void set_error(const LanguageError& value) const;
-  virtual bool IsResolved() const {
-    return raw_ptr()->type_state_ >= RawType::kResolved;
+  virtual bool HasTypeClass() const {
+    ASSERT(type_class_id() != kIllegalCid);
+    return true;
   }
-  virtual void SetIsResolved() const;
-  virtual bool HasResolvedTypeClass() const;  // Own type class resolved.
   virtual classid_t type_class_id() const;
   virtual RawClass* type_class() const;
   void set_type_class(const Class& value) const;
-  void set_unresolved_class(const Object& value) const;
-  virtual RawUnresolvedClass* unresolved_class() const;
   virtual RawTypeArguments* arguments() const { return raw_ptr()->arguments_; }
   virtual void set_arguments(const TypeArguments& value) const;
   virtual TokenPosition token_pos() const { return raw_ptr()->token_pos_; }
@@ -6313,13 +6988,14 @@ class Type : public AbstractType {
                               TrailPtr trail = NULL) const;
   virtual bool IsEquivalent(const Instance& other, TrailPtr trail = NULL) const;
   virtual bool IsRecursive() const;
-  virtual void SetScopeFunction(const Function& function) const;
   // If signature is not null, this type represents a function type. Note that
   // the signature fully represents the type and type arguments can be ignored.
   // However, in case of a generic typedef, they document how the typedef class
   // was parameterized to obtain the actual signature.
   RawFunction* signature() const;
   void set_signature(const Function& value) const;
+  static intptr_t signature_offset() { return OFFSET_OF(RawType, signature_); }
+
   virtual bool IsFunctionType() const {
     return signature() != Function::null();
   }
@@ -6327,13 +7003,8 @@ class Type : public AbstractType {
       const TypeArguments& instantiator_type_arguments,
       const TypeArguments& function_type_arguments,
       intptr_t num_free_fun_type_params,
-      Error* bound_error,
       TrailPtr instantiation_trail,
-      TrailPtr bound_trail,
       Heap::Space space) const;
-  virtual RawAbstractType* CloneUnfinalized() const;
-  virtual RawAbstractType* CloneUninstantiated(const Class& new_owner,
-                                               TrailPtr trail = NULL) const;
   virtual RawAbstractType* Canonicalize(TrailPtr trail = NULL) const;
 #if defined(DEBUG)
   // Check if type is canonical.
@@ -6364,9 +7035,6 @@ class Type : public AbstractType {
 
   // The 'int' type.
   static RawType* IntType();
-
-  // The '_int64' type.
-  static RawType* Int64Type();
 
   // The 'Smi' type.
   static RawType* SmiType();
@@ -6404,7 +7072,7 @@ class Type : public AbstractType {
   // The finalized type of the given non-parameterized class.
   static RawType* NewNonParameterizedType(const Class& type_class);
 
-  static RawType* New(const Object& clazz,
+  static RawType* New(const Class& clazz,
                       const TypeArguments& arguments,
                       TokenPosition token_pos,
                       Heap::Space space = Heap::kOld);
@@ -6440,22 +7108,9 @@ class TypeRef : public AbstractType {
     const AbstractType& ref_type = AbstractType::Handle(type());
     return ref_type.IsNull() || ref_type.IsBeingFinalized();
   }
-  virtual bool IsMalformed() const {
-    return AbstractType::Handle(type()).IsMalformed();
-  }
-  virtual bool IsMalbounded() const {
-    return AbstractType::Handle(type()).IsMalbounded();
-  }
-  virtual bool IsMalformedOrMalbounded() const {
-    return AbstractType::Handle(type()).IsMalformedOrMalbounded();
-  }
-  virtual RawLanguageError* error() const {
-    return AbstractType::Handle(type()).error();
-  }
-  virtual bool IsResolved() const { return true; }
-  virtual bool HasResolvedTypeClass() const {
+  virtual bool HasTypeClass() const {
     return (type() != AbstractType::null()) &&
-           AbstractType::Handle(type()).HasResolvedTypeClass();
+           AbstractType::Handle(type()).HasTypeClass();
   }
   RawAbstractType* type() const { return raw_ptr()->type_; }
   void set_type(const AbstractType& value) const;
@@ -6476,17 +7131,16 @@ class TypeRef : public AbstractType {
                               TrailPtr trail = NULL) const;
   virtual bool IsEquivalent(const Instance& other, TrailPtr trail = NULL) const;
   virtual bool IsRecursive() const { return true; }
-  virtual void SetScopeFunction(const Function& function) const;
+  virtual bool IsFunctionType() const {
+    const AbstractType& ref_type = AbstractType::Handle(type());
+    return !ref_type.IsNull() && ref_type.IsFunctionType();
+  }
   virtual RawTypeRef* InstantiateFrom(
       const TypeArguments& instantiator_type_arguments,
       const TypeArguments& function_type_arguments,
       intptr_t num_free_fun_type_params,
-      Error* bound_error,
       TrailPtr instantiation_trail,
-      TrailPtr bound_trail,
       Heap::Space space) const;
-  virtual RawTypeRef* CloneUninstantiated(const Class& new_owner,
-                                          TrailPtr trail = NULL) const;
   virtual RawAbstractType* Canonicalize(TrailPtr trail = NULL) const;
 #if defined(DEBUG)
   // Check if typeref is canonical.
@@ -6522,16 +7176,16 @@ class TypeRef : public AbstractType {
 class TypeParameter : public AbstractType {
  public:
   virtual bool IsFinalized() const {
-    ASSERT(raw_ptr()->type_state_ != RawTypeParameter::kFinalizedInstantiated);
-    return raw_ptr()->type_state_ == RawTypeParameter::kFinalizedUninstantiated;
+    return RawTypeParameter::FinalizedBit::decode(raw_ptr()->flags_);
   }
   virtual void SetIsFinalized() const;
   virtual bool IsBeingFinalized() const { return false; }
-  virtual bool IsMalformed() const { return false; }
-  virtual bool IsMalbounded() const { return false; }
-  virtual bool IsMalformedOrMalbounded() const { return false; }
-  virtual bool IsResolved() const { return true; }
-  virtual bool HasResolvedTypeClass() const { return false; }
+  bool IsGenericCovariantImpl() const {
+    return RawTypeParameter::GenericCovariantImplBit::decode(raw_ptr()->flags_);
+  }
+  void SetGenericCovariantImpl(bool value) const;
+  virtual bool HasTypeClass() const { return false; }
+  virtual classid_t type_class_id() const { return kIllegalCid; }
   classid_t parameterized_class_id() const;
   RawClass* parameterized_class() const;
   RawFunction* parameterized_function() const {
@@ -6548,33 +7202,18 @@ class TypeParameter : public AbstractType {
   void set_index(intptr_t value) const;
   RawAbstractType* bound() const { return raw_ptr()->bound_; }
   void set_bound(const AbstractType& value) const;
-  // Returns true if bounded_type is below upper_bound, otherwise return false
-  // and set bound_error if both bounded_type and upper_bound are instantiated.
-  // If one or both are not instantiated, returning false only means that the
-  // bound cannot be checked yet and this is not an error.
-  bool CheckBound(const AbstractType& bounded_type,
-                  const AbstractType& upper_bound,
-                  Error* bound_error,
-                  TrailPtr bound_trail,
-                  Heap::Space space) const;
   virtual TokenPosition token_pos() const { return raw_ptr()->token_pos_; }
   virtual bool IsInstantiated(Genericity genericity = kAny,
                               intptr_t num_free_fun_type_params = kAllFree,
                               TrailPtr trail = NULL) const;
   virtual bool IsEquivalent(const Instance& other, TrailPtr trail = NULL) const;
   virtual bool IsRecursive() const { return false; }
-  virtual void SetScopeFunction(const Function& function) const {}
   virtual RawAbstractType* InstantiateFrom(
       const TypeArguments& instantiator_type_arguments,
       const TypeArguments& function_type_arguments,
       intptr_t num_free_fun_type_params,
-      Error* bound_error,
       TrailPtr instantiation_trail,
-      TrailPtr bound_trail,
       Heap::Space space) const;
-  virtual RawAbstractType* CloneUnfinalized() const;
-  virtual RawAbstractType* CloneUninstantiated(const Class& new_owner,
-                                               TrailPtr trail = NULL) const;
   virtual RawAbstractType* Canonicalize(TrailPtr trail = NULL) const {
     return raw();
   }
@@ -6596,6 +7235,7 @@ class TypeParameter : public AbstractType {
                                intptr_t index,
                                const String& name,
                                const AbstractType& bound,
+                               bool is_generic_covariant_impl,
                                TokenPosition token_pos);
 
  private:
@@ -6606,164 +7246,13 @@ class TypeParameter : public AbstractType {
   void set_parameterized_function(const Function& value) const;
   void set_name(const String& value) const;
   void set_token_pos(TokenPosition token_pos) const;
-  void set_type_state(int8_t state) const;
+  void set_flags(uint8_t flags) const;
 
   static RawTypeParameter* New();
 
   FINAL_HEAP_OBJECT_IMPLEMENTATION(TypeParameter, AbstractType);
   friend class Class;
   friend class ClearTypeHashVisitor;
-};
-
-// A BoundedType represents a type instantiated at compile time from a type
-// parameter specifying a bound that either cannot be checked at compile time
-// because the type or the bound are still uninstantiated or can be checked and
-// would trigger a bound error in checked mode. The bound must be checked at
-// runtime once the type and its bound are instantiated and when the execution
-// mode is known to be checked mode.
-class BoundedType : public AbstractType {
- public:
-  virtual bool IsFinalized() const {
-    return AbstractType::Handle(type()).IsFinalized();
-  }
-  virtual bool IsBeingFinalized() const {
-    return AbstractType::Handle(type()).IsBeingFinalized();
-  }
-  virtual bool IsMalformed() const;
-  virtual bool IsMalbounded() const;
-  virtual bool IsMalformedOrMalbounded() const;
-  virtual RawLanguageError* error() const;
-  virtual bool IsResolved() const { return true; }
-  virtual bool HasResolvedTypeClass() const {
-    return AbstractType::Handle(type()).HasResolvedTypeClass();
-  }
-  virtual classid_t type_class_id() const {
-    return AbstractType::Handle(type()).type_class_id();
-  }
-  virtual RawClass* type_class() const {
-    return AbstractType::Handle(type()).type_class();
-  }
-  virtual RawUnresolvedClass* unresolved_class() const {
-    return AbstractType::Handle(type()).unresolved_class();
-  }
-  virtual RawTypeArguments* arguments() const {
-    return AbstractType::Handle(type()).arguments();
-  }
-  RawAbstractType* type() const { return raw_ptr()->type_; }
-  RawAbstractType* bound() const { return raw_ptr()->bound_; }
-  RawTypeParameter* type_parameter() const {
-    return raw_ptr()->type_parameter_;
-  }
-  virtual TokenPosition token_pos() const {
-    return AbstractType::Handle(type()).token_pos();
-  }
-  virtual bool IsInstantiated(Genericity genericity = kAny,
-                              intptr_t num_free_fun_type_params = kAllFree,
-                              TrailPtr trail = NULL) const {
-    // It is not possible to encounter an instantiated bounded type with an
-    // uninstantiated upper bound. Therefore, we do not need to check if the
-    // bound is instantiated. Moreover, doing so could lead into cycles, as in
-    // class C<T extends C<C>> { }.
-    return AbstractType::Handle(type()).IsInstantiated(
-        genericity, num_free_fun_type_params, trail);
-  }
-  virtual bool IsEquivalent(const Instance& other, TrailPtr trail = NULL) const;
-  virtual bool IsRecursive() const;
-  virtual void SetScopeFunction(const Function& function) const;
-  virtual RawAbstractType* InstantiateFrom(
-      const TypeArguments& instantiator_type_arguments,
-      const TypeArguments& function_type_arguments,
-      intptr_t num_free_fun_type_params,
-      Error* bound_error,
-      TrailPtr instantiation_trail,
-      TrailPtr bound_trail,
-      Heap::Space space) const;
-  virtual RawAbstractType* CloneUnfinalized() const;
-  virtual RawAbstractType* CloneUninstantiated(const Class& new_owner,
-                                               TrailPtr trail = NULL) const;
-  virtual RawAbstractType* Canonicalize(TrailPtr trail = NULL) const {
-    return raw();
-  }
-#if defined(DEBUG)
-  // Check if bounded type is canonical.
-  virtual bool CheckIsCanonical(Thread* thread) const { return true; }
-#endif  // DEBUG
-  virtual void EnumerateURIs(URIs* uris) const;
-
-  virtual intptr_t Hash() const;
-
-  static intptr_t InstanceSize() {
-    return RoundedAllocationSize(sizeof(RawBoundedType));
-  }
-
-  static RawBoundedType* New(const AbstractType& type,
-                             const AbstractType& bound,
-                             const TypeParameter& type_parameter);
-
- private:
-  intptr_t ComputeHash() const;
-  void SetHash(intptr_t value) const;
-
-  void set_type(const AbstractType& value) const;
-  void set_bound(const AbstractType& value) const;
-  void set_type_parameter(const TypeParameter& value) const;
-
-  static RawBoundedType* New();
-
-  FINAL_HEAP_OBJECT_IMPLEMENTATION(BoundedType, AbstractType);
-  friend class Class;
-  friend class ClearTypeHashVisitor;
-};
-
-// A MixinAppType represents a parsed mixin application clause, e.g.
-// "S<T> with M<U>, N<V>".
-// MixinAppType objects do not survive finalization, so they do not
-// need to be written to and read from snapshots.
-// The class finalizer creates synthesized classes S&M and S&M&N if they do not
-// yet exist in the library declaring the mixin application clause.
-class MixinAppType : public AbstractType {
- public:
-  // A MixinAppType object is unfinalized by definition, since it is replaced at
-  // class finalization time with a finalized (and possibly malformed or
-  // malbounded) Type object.
-  virtual bool IsFinalized() const { return false; }
-  virtual bool IsMalformed() const { return false; }
-  virtual bool IsMalbounded() const { return false; }
-  virtual bool IsMalformedOrMalbounded() const { return false; }
-  virtual bool IsResolved() const { return false; }
-  virtual bool HasResolvedTypeClass() const { return false; }
-  virtual RawString* Name() const;
-  virtual TokenPosition token_pos() const;
-
-  // Returns the mixin composition depth of this mixin application type.
-  intptr_t Depth() const;
-
-  // Returns the declared super type of the mixin application, which will also
-  // be the super type of the first synthesized class, e.g. class "S&M" will
-  // refer to super type "S<T>".
-  RawAbstractType* super_type() const { return raw_ptr()->super_type_; }
-
-  // Returns the mixin type at the given mixin composition depth, e.g. N<V> at
-  // depth 0 and M<U> at depth 1.
-  RawAbstractType* MixinTypeAt(intptr_t depth) const;
-
-  static intptr_t InstanceSize() {
-    return RoundedAllocationSize(sizeof(RawMixinAppType));
-  }
-
-  static RawMixinAppType* New(const AbstractType& super_type,
-                              const Array& mixin_types);
-
- private:
-  void set_super_type(const AbstractType& value) const;
-
-  RawArray* mixin_types() const { return raw_ptr()->mixin_types_; }
-  void set_mixin_types(const Array& value) const;
-
-  static RawMixinAppType* New();
-
-  FINAL_HEAP_OBJECT_IMPLEMENTATION(MixinAppType, AbstractType);
-  friend class Class;
 };
 
 class Number : public Instance {
@@ -6799,6 +7288,7 @@ class Integer : public Number {
   // Returns a canonical Integer object allocated in the old gen space.
   // Returns null if integer is out of range.
   static RawInteger* NewCanonical(const String& str);
+  static RawInteger* NewCanonical(int64_t value);
 
   static RawInteger* New(int64_t value, Heap::Space space = Heap::kNew);
 
@@ -6842,6 +7332,19 @@ class Integer : public Number {
   RawInteger* BitOp(Token::Kind operation,
                     const Integer& other,
                     Heap::Space space = Heap::kNew) const;
+  RawInteger* ShiftOp(Token::Kind operation,
+                      const Integer& other,
+                      Heap::Space space = Heap::kNew) const;
+
+  static int64_t GetInt64Value(const RawInteger* obj) {
+    intptr_t raw_value = reinterpret_cast<intptr_t>(obj);
+    if ((raw_value & kSmiTagMask) == kSmiTag) {
+      return (raw_value >> kSmiTagShift);
+    } else {
+      ASSERT(obj->IsMint());
+      return reinterpret_cast<const RawMint*>(obj)->ptr()->value_;
+    }
+  }
 
  private:
   OBJECT_IMPLEMENTATION(Integer, Number);
@@ -6854,7 +7357,7 @@ class Smi : public Integer {
   static const intptr_t kMaxValue = kSmiMax;
   static const intptr_t kMinValue = kSmiMin;
 
-  intptr_t Value() const { return ValueFromRaw(raw_value()); }
+  intptr_t Value() const { return ValueFromRawSmi(raw()); }
 
   virtual bool Equals(const Instance& other) const;
   virtual bool IsZero() const { return Value() == 0; }
@@ -6871,9 +7374,10 @@ class Smi : public Integer {
   static intptr_t InstanceSize() { return 0; }
 
   static RawSmi* New(intptr_t value) {
-    intptr_t raw_smi = (value << kSmiTagShift) | kSmiTag;
-    ASSERT(ValueFromRaw(raw_smi) == value);
-    return reinterpret_cast<RawSmi*>(raw_smi);
+    RawSmi* raw_smi = reinterpret_cast<RawSmi*>(
+        (static_cast<uintptr_t>(value) << kSmiTagShift) | kSmiTag);
+    ASSERT(ValueFromRawSmi(raw_smi) == value);
+    return raw_smi;
   }
 
   static RawSmi* FromAlignedAddress(uword address) {
@@ -6884,20 +7388,14 @@ class Smi : public Integer {
   static RawClass* Class();
 
   static intptr_t Value(const RawSmi* raw_smi) {
-    return ValueFromRaw(reinterpret_cast<uword>(raw_smi));
+    return ValueFromRawSmi(raw_smi);
   }
 
   static intptr_t RawValue(intptr_t value) {
     return reinterpret_cast<intptr_t>(New(value));
   }
 
-  static bool IsValid(int64_t value) {
-    return (value >= kMinValue) && (value <= kMaxValue);
-  }
-
-  RawInteger* ShiftOp(Token::Kind kind,
-                      const Smi& other,
-                      Heap::Space space = Heap::kNew) const;
+  static bool IsValid(int64_t value) { return compiler::target::IsSmi(value); }
 
   void operator=(RawSmi* value) {
     raw_ = value;
@@ -6914,12 +7412,6 @@ class Smi : public Integer {
     return -kWordSize;
   }
 
-  static intptr_t ValueFromRaw(uword raw_value) {
-    intptr_t value = raw_value;
-    ASSERT((value & kSmiTagMask) == kSmiTag);
-    return (value >> kSmiTagShift);
-  }
-
   static cpp_vtable handle_vtable_;
 
   Smi() : Integer() {}
@@ -6930,6 +7422,18 @@ class Smi : public Integer {
   friend class Object;
   friend class ReusableSmiHandleScope;
   friend class Thread;
+};
+
+class SmiTraits : AllStatic {
+ public:
+  static const char* Name() { return "SmiTraits"; }
+  static bool ReportStats() { return false; }
+
+  static bool IsMatch(const Object& a, const Object& b) {
+    return Smi::Cast(a).Value() == Smi::Cast(b).Value();
+  }
+
+  static uword Hash(const Object& obj) { return Smi::Cast(obj).Value(); }
 };
 
 class Mint : public Integer {
@@ -7102,8 +7606,6 @@ class String : public Instance {
 
   uint16_t CharAt(intptr_t index) const;
 
-  Scanner::CharAtFunc CharAtFunc() const;
-
   intptr_t CharSize() const;
 
   inline bool Equals(const String& str) const;
@@ -7141,6 +7643,7 @@ class String : public Instance {
   intptr_t CompareTo(const String& other) const;
 
   bool StartsWith(const String& other) const;
+  bool EndsWith(const String& other) const;
 
   // Strings are canonicalized using the symbol table.
   virtual RawInstance* CheckAndCanonicalize(Thread* thread,
@@ -7344,10 +7847,9 @@ class String : public Instance {
   friend class TwoByteString;
   friend class ExternalOneByteString;
   friend class ExternalTwoByteString;
-  // So that SkippedCodeFunctions can print a debug string from a NoHandleScope.
-  friend class SkippedCodeFunctions;
   friend class RawOneByteString;
   friend class RODataSerializationCluster;  // SetHash
+  friend class Pass2Visitor;                // Stack "handle"
 };
 
 class OneByteString : public AllStatic {
@@ -7832,10 +8334,16 @@ class Array : public Instance {
   // architecture.
   static const intptr_t kHashBits = 30;
 
-  intptr_t Length() const {
-    ASSERT(!IsNull());
-    return Smi::Value(raw_ptr()->length_);
+  // Returns `true` if we use card marking for arrays of length [array_length].
+  static bool UseCardMarkingForAllocation(const intptr_t array_length) {
+    return Array::InstanceSize(array_length) > Heap::kNewAllocatableSize;
   }
+
+  intptr_t Length() const { return LengthOf(raw()); }
+  static intptr_t LengthOf(const RawArray* array) {
+    return Smi::Value(array->ptr()->length_);
+  }
+
   static intptr_t length_offset() { return OFFSET_OF(RawArray, length_); }
   static intptr_t data_offset() {
     return OFFSET_OF_RETURNED_VALUE(RawArray, data);
@@ -7844,10 +8352,37 @@ class Array : public Instance {
     return OFFSET_OF_RETURNED_VALUE(RawArray, data) + kWordSize * index;
   }
 
+  struct ArrayLayout {
+    static intptr_t elements_start_offset() { return Array::data_offset(); }
+
+    static constexpr intptr_t kElementSize = kWordSize;
+  };
+
+  static bool Equals(RawArray* a, RawArray* b) {
+    if (a == b) return true;
+    if (a->IsRawNull() || b->IsRawNull()) return false;
+    if (a->ptr()->length_ != b->ptr()->length_) return false;
+    if (a->ptr()->type_arguments_ != b->ptr()->type_arguments_) return false;
+    const intptr_t length = LengthOf(a);
+    return memcmp(a->ptr()->data(), b->ptr()->data(), kWordSize * length) == 0;
+  }
+
+  static RawObject** DataOf(RawArray* array) { return array->ptr()->data(); }
+
   RawObject* At(intptr_t index) const { return *ObjectAddr(index); }
   void SetAt(intptr_t index, const Object& value) const {
     // TODO(iposva): Add storing NoSafepointScope.
-    StorePointer(ObjectAddr(index), value.raw());
+    StoreArrayPointer(ObjectAddr(index), value.raw());
+  }
+
+  // Access to the array with acquire release semantics.
+  RawObject* AtAcquire(intptr_t index) const {
+    return AtomicOperations::LoadAcquire(ObjectAddr(index));
+  }
+  void SetAtRelease(intptr_t index, const Object& value) const {
+    // TODO(iposva): Add storing NoSafepointScope.
+    StoreArrayPointer<RawObject*, MemoryOrder::kRelease>(ObjectAddr(index),
+                                                         value.raw());
   }
 
   bool IsImmutable() const { return raw()->GetClassId() == kImmutableArrayCid; }
@@ -7864,7 +8399,7 @@ class Array : public Instance {
             value.IsInstantiated() /*&& value.IsCanonical()*/));
     // TODO(asiva): Values read from a message snapshot are not properly marked
     // as canonical. See for example tests/isolate/mandel_isolate_test.dart.
-    StorePointer(&raw_ptr()->type_arguments_, value.raw());
+    StoreArrayPointer(&raw_ptr()->type_arguments_, value.raw());
   }
 
   virtual bool CanonicalizeEquals(const Instance& other) const;
@@ -7879,6 +8414,10 @@ class Array : public Instance {
     return OFFSET_OF(RawArray, type_arguments_);
   }
 
+  static bool IsValidLength(intptr_t len) {
+    return 0 <= len && len <= kMaxElements;
+  }
+
   static intptr_t InstanceSize() {
     ASSERT(sizeof(RawArray) == OFFSET_OF_RETURNED_VALUE(RawArray, data));
     return 0;
@@ -7887,7 +8426,7 @@ class Array : public Instance {
   static intptr_t InstanceSize(intptr_t len) {
     // Ensure that variable length data is not adding to the object length.
     ASSERT(sizeof(RawArray) == (sizeof(RawInstance) + (2 * kWordSize)));
-    ASSERT(0 <= len && len <= kMaxElements);
+    ASSERT(IsValidLength(len));
     return RoundedAllocationSize(sizeof(RawArray) + (len * kBytesPerElement));
   }
 
@@ -7911,13 +8450,17 @@ class Array : public Instance {
                         intptr_t new_length,
                         Heap::Space space = Heap::kNew);
 
+  // Truncates the array to a given length. 'new_length' must be less than
+  // or equal to 'source.Length()'. The remaining unused part of the array is
+  // marked as an Array object or a regular Object so that it can be traversed
+  // during garbage collection.
+  void Truncate(intptr_t new_length) const;
+
   // Return an Array object that contains all the elements currently present
   // in the specified Growable Object Array. This is done by first truncating
   // the Growable Object Array's backing array to the currently used size and
   // returning the truncated backing array.
-  // The remaining unused part of the backing array is marked as an Array
-  // object or a regular Object so that it can be traversed during garbage
-  // collection. The backing array of the original Growable Object Array is
+  // The backing array of the original Growable Object Array is
   // set to an empty array.
   // If the unique parameter is false, the function is allowed to return
   // a shared Array instance.
@@ -7946,9 +8489,30 @@ class Array : public Instance {
     StoreSmi(&raw_ptr()->length_, Smi::New(value));
   }
 
+  template <typename type, MemoryOrder order = MemoryOrder::kRelaxed>
+  void StoreArrayPointer(type const* addr, type value) const {
+    raw()->StoreArrayPointer<type, order>(addr, value);
+  }
+
+  // Store a range of pointers [from, from + count) into [to, to + count).
+  // TODO(koda): Use this to fix Object::Clone's broken store buffer logic.
+  void StoreArrayPointers(RawObject* const* to,
+                          RawObject* const* from,
+                          intptr_t count) {
+    ASSERT(Contains(reinterpret_cast<uword>(to)));
+    if (raw()->IsNewObject()) {
+      memmove(const_cast<RawObject**>(to), from, count * kWordSize);
+    } else {
+      for (intptr_t i = 0; i < count; ++i) {
+        StoreArrayPointer(&to[i], from[i]);
+      }
+    }
+  }
+
   FINAL_HEAP_OBJECT_IMPLEMENTATION(Array, Instance);
   friend class Class;
   friend class ImmutableArray;
+  friend class Interpreter;
   friend class Object;
   friend class String;
 };
@@ -8017,7 +8581,7 @@ class GrowableObjectArray : public Instance {
     ASSERT(index < Length());
 
     // TODO(iposva): Add storing NoSafepointScope.
-    data()->StorePointer(ObjectAddr(index), value.raw());
+    data()->StoreArrayPointer(ObjectAddr(index), value.raw());
   }
 
   void Add(const Object& value, Heap::Space space = Heap::kNew) const;
@@ -8072,6 +8636,14 @@ class GrowableObjectArray : public Instance {
                                      Heap::Space space = Heap::kNew);
   static RawGrowableObjectArray* New(const Array& array,
                                      Heap::Space space = Heap::kNew);
+
+  static RawSmi* NoSafepointLength(const RawGrowableObjectArray* array) {
+    return array->ptr()->length_;
+  }
+
+  static RawArray* NoSafepointData(const RawGrowableObjectArray* array) {
+    return array->ptr()->data_;
+  }
 
  private:
   RawArray* DataArray() const { return data()->ptr(); }
@@ -8182,39 +8754,96 @@ class Float64x2 : public Instance {
   friend class Class;
 };
 
-class TypedData : public Instance {
+class TypedDataBase : public Instance {
  public:
-  // We use 30 bits for the hash code so hashes in a snapshot taken on a
-  // 64-bit architecture stay in Smi range when loaded on a 32-bit
-  // architecture.
-  static const intptr_t kHashBits = 30;
+  static intptr_t length_offset() {
+    return OFFSET_OF(RawTypedDataBase, length_);
+  }
+
+  static intptr_t data_field_offset() {
+    return OFFSET_OF(RawTypedDataBase, data_);
+  }
+
+  RawSmi* length() const { return raw_ptr()->length_; }
 
   intptr_t Length() const {
     ASSERT(!IsNull());
     return Smi::Value(raw_ptr()->length_);
   }
 
-  intptr_t ElementSizeInBytes() const {
-    intptr_t cid = raw()->GetClassId();
-    return ElementSizeInBytes(cid);
+  intptr_t LengthInBytes() const {
+    return ElementSizeInBytes(raw()->GetClassId()) * Length();
   }
 
   TypedDataElementType ElementType() const {
-    intptr_t cid = raw()->GetClassId();
-    return ElementType(cid);
+    return ElementType(raw()->GetClassId());
   }
 
-  intptr_t LengthInBytes() const {
-    intptr_t cid = raw()->GetClassId();
-    return (ElementSizeInBytes(cid) * Length());
+  intptr_t ElementSizeInBytes() const {
+    return element_size(ElementType(raw()->GetClassId()));
+  }
+
+  static intptr_t ElementSizeInBytes(classid_t cid) {
+    return element_size(ElementType(cid));
+  }
+
+  static TypedDataElementType ElementType(classid_t cid) {
+    if (cid == kByteDataViewCid) {
+      return kUint8ArrayElement;
+    } else if (RawObject::IsTypedDataClassId(cid)) {
+      const intptr_t index =
+          (cid - kTypedDataInt8ArrayCid - kTypedDataCidRemainderInternal) / 3;
+      return static_cast<TypedDataElementType>(index);
+    } else if (RawObject::IsTypedDataViewClassId(cid)) {
+      const intptr_t index =
+          (cid - kTypedDataInt8ArrayCid - kTypedDataCidRemainderView) / 3;
+      return static_cast<TypedDataElementType>(index);
+    } else {
+      ASSERT(RawObject::IsExternalTypedDataClassId(cid));
+      const intptr_t index =
+          (cid - kTypedDataInt8ArrayCid - kTypedDataCidRemainderExternal) / 3;
+      return static_cast<TypedDataElementType>(index);
+    }
   }
 
   void* DataAddr(intptr_t byte_offset) const {
     ASSERT((byte_offset == 0) ||
            ((byte_offset > 0) && (byte_offset < LengthInBytes())));
-    return reinterpret_cast<void*>(UnsafeMutableNonPointer(raw_ptr()->data()) +
-                                   byte_offset);
+    return reinterpret_cast<void*>(Validate(raw_ptr()->data_) + byte_offset);
   }
+
+ protected:
+  void SetLength(intptr_t value) const {
+    ASSERT(value <= Smi::kMaxValue);
+    StoreSmi(&raw_ptr()->length_, Smi::New(value));
+  }
+
+  virtual uint8_t* Validate(uint8_t* data) const {
+    return UnsafeMutableNonPointer(data);
+  }
+
+ private:
+  friend class Class;
+
+  static intptr_t element_size(intptr_t index) {
+    ASSERT(0 <= index && index < kNumElementSizes);
+    intptr_t size = element_size_table[index];
+    ASSERT(size != 0);
+    return size;
+  }
+  static const intptr_t kNumElementSizes =
+      (kTypedDataFloat64x2ArrayCid - kTypedDataInt8ArrayCid) / 3 + 1;
+  static const intptr_t element_size_table[kNumElementSizes];
+
+  HEAP_OBJECT_IMPLEMENTATION(TypedDataBase, Instance);
+};
+
+class TypedData : public TypedDataBase {
+ public:
+  // We use 30 bits for the hash code so hashes in a snapshot taken on a
+  // 64-bit architecture stay in Smi range when loaded on a 32-bit
+  // architecture.
+  static const intptr_t kHashBits = 30;
 
   virtual bool CanonicalizeEquals(const Instance& other) const;
   virtual uint32_t CanonicalizeHash() const;
@@ -8247,31 +8876,17 @@ class TypedData : public Instance {
 
 #undef TYPED_GETTER_SETTER
 
-  static intptr_t length_offset() { return OFFSET_OF(RawTypedData, length_); }
-
-  static intptr_t data_offset() {
-    return OFFSET_OF_RETURNED_VALUE(RawTypedData, data);
-  }
+  static intptr_t data_offset() { return RawTypedData::payload_offset(); }
 
   static intptr_t InstanceSize() {
     ASSERT(sizeof(RawTypedData) ==
-           OFFSET_OF_RETURNED_VALUE(RawTypedData, data));
+           OFFSET_OF_RETURNED_VALUE(RawTypedData, internal_data));
     return 0;
   }
 
   static intptr_t InstanceSize(intptr_t lengthInBytes) {
     ASSERT(0 <= lengthInBytes && lengthInBytes <= kSmiMax);
     return RoundedAllocationSize(sizeof(RawTypedData) + lengthInBytes);
-  }
-
-  static intptr_t ElementSizeInBytes(intptr_t class_id) {
-    ASSERT(RawObject::IsTypedDataClassId(class_id));
-    return element_size(ElementType(class_id));
-  }
-
-  static TypedDataElementType ElementType(intptr_t class_id) {
-    ASSERT(RawObject::IsTypedDataClassId(class_id));
-    return static_cast<TypedDataElementType>(class_id - kTypedDataInt8ArrayCid);
   }
 
   static intptr_t MaxElements(intptr_t class_id) {
@@ -8342,12 +8957,8 @@ class TypedData : public Instance {
     return RawObject::IsTypedDataClassId(cid);
   }
 
-  static RawTypedData* EmptyUint32Array(Thread* thread);
-
  protected:
-  void SetLength(intptr_t value) const {
-    StoreSmi(&raw_ptr()->length_, Smi::New(value));
-  }
+  void RecomputeDataField() { raw()->RecomputeDataField(); }
 
  private:
   // Provides const access to non-pointer, non-aligned data within the object.
@@ -8362,49 +8973,17 @@ class TypedData : public Instance {
                                               byte_offset);
   }
 
-  static intptr_t element_size(intptr_t index) {
-    ASSERT(0 <= index && index < kNumElementSizes);
-    intptr_t size = element_size_table[index];
-    ASSERT(size != 0);
-    return size;
-  }
-  static const intptr_t kNumElementSizes =
-      kTypedDataFloat64x2ArrayCid - kTypedDataInt8ArrayCid + 1;
-  static const intptr_t element_size_table[kNumElementSizes];
-
-  FINAL_HEAP_OBJECT_IMPLEMENTATION(TypedData, Instance);
+  FINAL_HEAP_OBJECT_IMPLEMENTATION(TypedData, TypedDataBase);
   friend class Class;
   friend class ExternalTypedData;
   friend class TypedDataView;
 };
 
-class ExternalTypedData : public Instance {
+class ExternalTypedData : public TypedDataBase {
  public:
-  intptr_t Length() const {
-    ASSERT(!IsNull());
-    return Smi::Value(raw_ptr()->length_);
-  }
-
-  intptr_t ElementSizeInBytes() const {
-    intptr_t cid = raw()->GetClassId();
-    return ElementSizeInBytes(cid);
-  }
-
-  TypedDataElementType ElementType() const {
-    intptr_t cid = raw()->GetClassId();
-    return ElementType(cid);
-  }
-
-  intptr_t LengthInBytes() const {
-    intptr_t cid = raw()->GetClassId();
-    return (ElementSizeInBytes(cid) * Length());
-  }
-
-  void* DataAddr(intptr_t byte_offset) const {
-    ASSERT((byte_offset == 0) ||
-           ((byte_offset > 0) && (byte_offset < LengthInBytes())));
-    return reinterpret_cast<void*>(raw_ptr()->data_ + byte_offset);
-  }
+  // Alignment of data when serializing ExternalTypedData in a clustered
+  // snapshot. Should be independent of word size.
+  static const int kDataSerializationAlignment = 8;
 
 #define TYPED_GETTER_SETTER(name, type)                                        \
   type Get##name(intptr_t byte_offset) const {                                 \
@@ -8434,27 +9013,12 @@ class ExternalTypedData : public Instance {
       Dart_WeakPersistentHandleFinalizer callback,
       intptr_t external_size) const;
 
-  static intptr_t length_offset() {
-    return OFFSET_OF(RawExternalTypedData, length_);
-  }
-
   static intptr_t data_offset() {
     return OFFSET_OF(RawExternalTypedData, data_);
   }
 
   static intptr_t InstanceSize() {
     return RoundedAllocationSize(sizeof(RawExternalTypedData));
-  }
-
-  static intptr_t ElementSizeInBytes(intptr_t class_id) {
-    ASSERT(RawObject::IsExternalTypedDataClassId(class_id));
-    return TypedData::element_size(ElementType(class_id));
-  }
-
-  static TypedDataElementType ElementType(intptr_t class_id) {
-    ASSERT(RawObject::IsExternalTypedDataClassId(class_id));
-    return static_cast<TypedDataElementType>(class_id -
-                                             kExternalTypedDataInt8ArrayCid);
   }
 
   static intptr_t MaxElements(intptr_t class_id) {
@@ -8474,7 +9038,10 @@ class ExternalTypedData : public Instance {
   }
 
  protected:
+  virtual uint8_t* Validate(uint8_t* data) const { return data; }
+
   void SetLength(intptr_t value) const {
+    ASSERT(value <= Smi::kMaxValue);
     StoreSmi(&raw_ptr()->length_, Smi::New(value));
   }
 
@@ -8485,67 +9052,83 @@ class ExternalTypedData : public Instance {
   }
 
  private:
-  FINAL_HEAP_OBJECT_IMPLEMENTATION(ExternalTypedData, Instance);
+  FINAL_HEAP_OBJECT_IMPLEMENTATION(ExternalTypedData, TypedDataBase);
   friend class Class;
 };
 
-class TypedDataView : public AllStatic {
+class TypedDataView : public TypedDataBase {
  public:
-  static intptr_t ElementSizeInBytes(const Instance& view_obj) {
-    ASSERT(!view_obj.IsNull());
-    intptr_t cid = view_obj.raw()->GetClassId();
-    return ElementSizeInBytes(cid);
+  static RawTypedDataView* New(intptr_t class_id,
+                               Heap::Space space = Heap::kNew);
+  static RawTypedDataView* New(intptr_t class_id,
+                               const TypedDataBase& typed_data,
+                               intptr_t offset_in_bytes,
+                               intptr_t length,
+                               Heap::Space space = Heap::kNew);
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawTypedDataView));
   }
 
-  static RawInstance* Data(const Instance& view_obj) {
-    ASSERT(!view_obj.IsNull());
-    return *reinterpret_cast<RawInstance* const*>(view_obj.raw_ptr() +
-                                                  kDataOffset);
+  static RawInstance* Data(const TypedDataView& view) {
+    return view.typed_data();
   }
 
-  static RawSmi* OffsetInBytes(const Instance& view_obj) {
-    ASSERT(!view_obj.IsNull());
-    return *reinterpret_cast<RawSmi* const*>(view_obj.raw_ptr() +
-                                             kOffsetInBytesOffset);
+  static RawSmi* OffsetInBytes(const TypedDataView& view) {
+    return view.offset_in_bytes();
   }
 
-  static RawSmi* Length(const Instance& view_obj) {
-    ASSERT(!view_obj.IsNull());
-    return *reinterpret_cast<RawSmi* const*>(view_obj.raw_ptr() +
-                                             kLengthOffset);
-  }
-
-  static bool IsExternalTypedDataView(const Instance& view_obj) {
-    const Instance& data = Instance::Handle(Data(view_obj));
+  static bool IsExternalTypedDataView(const TypedDataView& view_obj) {
+    const auto& data = Instance::Handle(Data(view_obj));
     intptr_t cid = data.raw()->GetClassId();
     ASSERT(RawObject::IsTypedDataClassId(cid) ||
            RawObject::IsExternalTypedDataClassId(cid));
     return RawObject::IsExternalTypedDataClassId(cid);
   }
 
-  static intptr_t NumberOfFields() { return kLengthOffset; }
-
-  static intptr_t data_offset() { return kWordSize * kDataOffset; }
+  static intptr_t data_offset() {
+    return OFFSET_OF(RawTypedDataView, typed_data_);
+  }
 
   static intptr_t offset_in_bytes_offset() {
-    return kWordSize * kOffsetInBytesOffset;
+    return OFFSET_OF(RawTypedDataView, offset_in_bytes_);
   }
 
-  static intptr_t length_offset() { return kWordSize * kLengthOffset; }
+  RawInstance* typed_data() const { return raw_ptr()->typed_data_; }
 
-  static intptr_t ElementSizeInBytes(intptr_t class_id) {
-    ASSERT(RawObject::IsTypedDataViewClassId(class_id));
-    return (class_id == kByteDataViewCid)
-               ? 1
-               : TypedData::element_size(class_id - kTypedDataInt8ArrayViewCid);
+  void InitializeWith(const TypedDataBase& typed_data,
+                      intptr_t offset_in_bytes,
+                      intptr_t length) {
+    const classid_t cid = typed_data.GetClassId();
+    ASSERT(RawObject::IsTypedDataClassId(cid) ||
+           RawObject::IsExternalTypedDataClassId(cid));
+    StorePointer(&raw_ptr()->typed_data_, typed_data.raw());
+    StoreSmi(&raw_ptr()->length_, Smi::New(length));
+    StoreSmi(&raw_ptr()->offset_in_bytes_, Smi::New(offset_in_bytes));
+
+    // Update the inner pointer.
+    RecomputeDataField();
   }
+
+  RawSmi* offset_in_bytes() const { return raw_ptr()->offset_in_bytes_; }
+
+ protected:
+  virtual uint8_t* Validate(uint8_t* data) const { return data; }
 
  private:
-  enum {
-    kDataOffset = 1,
-    kOffsetInBytesOffset = 2,
-    kLengthOffset = 3,
-  };
+  void RecomputeDataField() { raw()->RecomputeDataField(); }
+
+  void Clear() {
+    StoreSmi(&raw_ptr()->length_, Smi::New(0));
+    StoreSmi(&raw_ptr()->offset_in_bytes_, Smi::New(0));
+    StoreNonPointer(&raw_ptr()->data_, nullptr);
+    StorePointer(&raw_ptr()->typed_data_,
+                 TypedDataBase::RawCast(Object::null()));
+  }
+
+  FINAL_HEAP_OBJECT_IMPLEMENTATION(TypedDataView, TypedDataBase);
+  friend class Class;
+  friend class TypedDataViewDeserializationCluster;
 };
 
 class ByteBuffer : public AllStatic {
@@ -8564,6 +9147,81 @@ class ByteBuffer : public AllStatic {
   enum {
     kDataOffset = 1,
   };
+};
+
+class Pointer : public Instance {
+ public:
+  static RawPointer* New(const AbstractType& type_arg,
+                         uword native_address,
+                         Heap::Space space = Heap::kNew);
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawPointer));
+  }
+
+  static bool IsPointer(const Instance& obj);
+
+  size_t NativeAddress() const {
+    return Integer::Handle(raw_ptr()->c_memory_address_).AsInt64Value();
+  }
+
+  void SetNativeAddress(size_t address) const {
+    const auto& address_boxed = Integer::Handle(Integer::New(address));
+    NoSafepointScope no_safepoint_scope;
+    StorePointer(&raw_ptr()->c_memory_address_, address_boxed.raw());
+  }
+
+  static intptr_t type_arguments_offset() {
+    return OFFSET_OF(RawPointer, type_arguments_);
+  }
+
+  static intptr_t c_memory_address_offset() {
+    return OFFSET_OF(RawPointer, c_memory_address_);
+  }
+
+  static intptr_t NextFieldOffset() { return sizeof(RawPointer); }
+
+  static const intptr_t kNativeTypeArgPos = 0;
+
+  // Fetches the NativeType type argument.
+  RawAbstractType* type_argument() const {
+    TypeArguments& type_args = TypeArguments::Handle(GetTypeArguments());
+    return type_args.TypeAtNullSafe(Pointer::kNativeTypeArgPos);
+  }
+
+ private:
+  HEAP_OBJECT_IMPLEMENTATION(Pointer, Instance);
+
+  friend class Class;
+};
+
+class DynamicLibrary : public Instance {
+ public:
+  static RawDynamicLibrary* New(void* handle, Heap::Space space = Heap::kNew);
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawDynamicLibrary));
+  }
+
+  static bool IsDynamicLibrary(const Instance& obj) {
+    ASSERT(!obj.IsNull());
+    intptr_t cid = obj.raw()->GetClassId();
+    return RawObject::IsFfiDynamicLibraryClassId(cid);
+  }
+
+  void* GetHandle() const {
+    ASSERT(!IsNull());
+    return raw_ptr()->handle_;
+  }
+
+  void SetHandle(void* value) const {
+    StoreNonPointer(&raw_ptr()->handle_, value);
+  }
+
+ private:
+  FINAL_HEAP_OBJECT_IMPLEMENTATION(DynamicLibrary, Instance);
+
+  friend class Class;
 };
 
 // Corresponds to
@@ -8826,6 +9484,50 @@ class SendPort : public Instance {
   friend class Class;
 };
 
+// This is allocated when new instance of TransferableTypedData is created in
+// [TransferableTypedData::New].
+class TransferableTypedDataPeer {
+ public:
+  // [data] backing store should be malloc'ed, not new'ed.
+  TransferableTypedDataPeer(uint8_t* data, intptr_t length)
+      : data_(data), length_(length), handle_(nullptr) {}
+
+  ~TransferableTypedDataPeer() { free(data_); }
+
+  uint8_t* data() const { return data_; }
+  intptr_t length() const { return length_; }
+  FinalizablePersistentHandle* handle() const { return handle_; }
+  void set_handle(FinalizablePersistentHandle* handle) { handle_ = handle; }
+
+  void ClearData() {
+    data_ = nullptr;
+    length_ = 0;
+    handle_ = nullptr;
+  }
+
+ private:
+  uint8_t* data_;
+  intptr_t length_;
+  FinalizablePersistentHandle* handle_;
+
+  DISALLOW_COPY_AND_ASSIGN(TransferableTypedDataPeer);
+};
+
+class TransferableTypedData : public Instance {
+ public:
+  static RawTransferableTypedData* New(uint8_t* data,
+                                       intptr_t len,
+                                       Heap::Space space = Heap::kNew);
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawTransferableTypedData));
+  }
+
+ private:
+  FINAL_HEAP_OBJECT_IMPLEMENTATION(TransferableTypedData, Instance);
+  friend class Class;
+};
+
 // Internal stacktrace object used in exceptions for printing stack traces.
 class StackTrace : public Instance {
  public:
@@ -8838,8 +9540,8 @@ class StackTrace : public Instance {
   void set_expand_inlined(bool value) const;
 
   RawArray* code_array() const { return raw_ptr()->code_array_; }
-  RawCode* CodeAtFrame(intptr_t frame_index) const;
-  void SetCodeAtFrame(intptr_t frame_index, const Code& code) const;
+  RawObject* CodeAtFrame(intptr_t frame_index) const;
+  void SetCodeAtFrame(intptr_t frame_index, const Object& code) const;
 
   RawArray* pc_offset_array() const { return raw_ptr()->pc_offset_array_; }
   RawSmi* PcOffsetAtFrame(intptr_t frame_index) const;
@@ -8870,6 +9572,55 @@ class StackTrace : public Instance {
   friend class Debugger;
 };
 
+class RegExpFlags {
+ public:
+  // Flags are passed to a regex object as follows:
+  // 'i': ignore case, 'g': do global matches, 'm': pattern is multi line,
+  // 'u': pattern is full Unicode, not just BMP, 's': '.' in pattern matches
+  // all characters including line terminators.
+  enum Flags {
+    kNone = 0,
+    kGlobal = 1,
+    kIgnoreCase = 2,
+    kMultiLine = 4,
+    kUnicode = 8,
+    kDotAll = 16,
+  };
+
+  static const int kDefaultFlags = 0;
+
+  RegExpFlags() : value_(kDefaultFlags) {}
+  explicit RegExpFlags(int value) : value_(value) {}
+
+  inline bool IsGlobal() const { return (value_ & kGlobal) != 0; }
+  inline bool IgnoreCase() const { return (value_ & kIgnoreCase) != 0; }
+  inline bool IsMultiLine() const { return (value_ & kMultiLine) != 0; }
+  inline bool IsUnicode() const { return (value_ & kUnicode) != 0; }
+  inline bool IsDotAll() const { return (value_ & kDotAll) != 0; }
+
+  inline bool NeedsUnicodeCaseEquivalents() {
+    // Both unicode and ignore_case flags are set. We need to use ICU to find
+    // the closure over case equivalents.
+    return IsUnicode() && IgnoreCase();
+  }
+
+  void SetGlobal() { value_ |= kGlobal; }
+  void SetIgnoreCase() { value_ |= kIgnoreCase; }
+  void SetMultiLine() { value_ |= kMultiLine; }
+  void SetUnicode() { value_ |= kUnicode; }
+  void SetDotAll() { value_ |= kDotAll; }
+
+  const char* ToCString() const;
+
+  int value() const { return value_; }
+
+  bool operator==(const RegExpFlags& other) { return value_ == other.value_; }
+  bool operator!=(const RegExpFlags& other) { return value_ != other.value_; }
+
+ private:
+  int value_;
+};
+
 // Internal JavaScript regular expression object.
 class RegExp : public Instance {
  public:
@@ -8878,44 +9629,35 @@ class RegExp : public Instance {
   // kSimple: A simple pattern to match against, using string indexOf operation.
   // kComplex: A complex pattern to match.
   enum RegExType {
-    kUnitialized = 0,
+    kUninitialized = 0,
     kSimple = 1,
     kComplex = 2,
-  };
-
-  // Flags are passed to a regex object as follows:
-  // 'i': ignore case, 'g': do global matches, 'm': pattern is multi line.
-  enum Flags {
-    kNone = 0,
-    kGlobal = 1,
-    kIgnoreCase = 2,
-    kMultiLine = 4,
   };
 
   enum {
     kTypePos = 0,
     kTypeSize = 2,
     kFlagsPos = 2,
-    kFlagsSize = 4,
+    kFlagsSize = 5,
   };
 
   class TypeBits : public BitField<int8_t, RegExType, kTypePos, kTypeSize> {};
   class FlagsBits : public BitField<int8_t, intptr_t, kFlagsPos, kFlagsSize> {};
 
-  bool is_initialized() const { return (type() != kUnitialized); }
+  bool is_initialized() const { return (type() != kUninitialized); }
   bool is_simple() const { return (type() == kSimple); }
   bool is_complex() const { return (type() == kComplex); }
 
-  bool is_global() const { return (flags() & kGlobal); }
-  bool is_ignore_case() const { return (flags() & kIgnoreCase); }
-  bool is_multi_line() const { return (flags() & kMultiLine); }
-
-  intptr_t num_registers() const { return raw_ptr()->num_registers_; }
+  intptr_t num_registers(bool is_one_byte) const {
+    return is_one_byte ? raw_ptr()->num_one_byte_registers_
+                       : raw_ptr()->num_two_byte_registers_;
+  }
 
   RawString* pattern() const { return raw_ptr()->pattern_; }
   RawSmi* num_bracket_expressions() const {
     return raw_ptr()->num_bracket_expressions_;
   }
+  RawArray* capture_name_map() const { return raw_ptr()->capture_name_map_; }
 
   RawTypedData* bytecode(bool is_one_byte, bool sticky) const {
     if (sticky) {
@@ -8972,17 +9714,49 @@ class RegExp : public Instance {
                     const TypedData& bytecode) const;
 
   void set_num_bracket_expressions(intptr_t value) const;
-  void set_is_global() const { set_flags(flags() | kGlobal); }
-  void set_is_ignore_case() const { set_flags(flags() | kIgnoreCase); }
-  void set_is_multi_line() const { set_flags(flags() | kMultiLine); }
+  void set_capture_name_map(const Array& array) const;
+  void set_is_global() const {
+    RegExpFlags f = flags();
+    f.SetGlobal();
+    set_flags(f);
+  }
+  void set_is_ignore_case() const {
+    RegExpFlags f = flags();
+    f.SetIgnoreCase();
+    set_flags(f);
+  }
+  void set_is_multi_line() const {
+    RegExpFlags f = flags();
+    f.SetMultiLine();
+    set_flags(f);
+  }
+  void set_is_unicode() const {
+    RegExpFlags f = flags();
+    f.SetUnicode();
+    set_flags(f);
+  }
+  void set_is_dot_all() const {
+    RegExpFlags f = flags();
+    f.SetDotAll();
+    set_flags(f);
+  }
   void set_is_simple() const { set_type(kSimple); }
   void set_is_complex() const { set_type(kComplex); }
-  void set_num_registers(intptr_t value) const {
-    StoreNonPointer(&raw_ptr()->num_registers_, value);
+  void set_num_registers(bool is_one_byte, intptr_t value) const {
+    if (is_one_byte) {
+      StoreNonPointer(&raw_ptr()->num_one_byte_registers_, value);
+    } else {
+      StoreNonPointer(&raw_ptr()->num_two_byte_registers_, value);
+    }
   }
 
-  void* GetDataStartAddress() const;
-  static RawRegExp* FromDataStartAddress(void* data);
+  RegExpFlags flags() const {
+    return RegExpFlags(FlagsBits::decode(raw_ptr()->type_flags_));
+  }
+  void set_flags(RegExpFlags flags) const {
+    StoreNonPointer(&raw_ptr()->type_flags_,
+                    FlagsBits::update(flags.value(), raw_ptr()->type_flags_));
+  }
   const char* Flags() const;
 
   virtual bool CanonicalizeEquals(const Instance& other) const;
@@ -8998,13 +9772,8 @@ class RegExp : public Instance {
     StoreNonPointer(&raw_ptr()->type_flags_,
                     TypeBits::update(type, raw_ptr()->type_flags_));
   }
-  void set_flags(intptr_t value) const {
-    StoreNonPointer(&raw_ptr()->type_flags_,
-                    FlagsBits::update(value, raw_ptr()->type_flags_));
-  }
 
   RegExType type() const { return TypeBits::decode(raw_ptr()->type_flags_); }
-  intptr_t flags() const { return FlagsBits::decode(raw_ptr()->type_flags_); }
 
   FINAL_HEAP_OBJECT_IMPLEMENTATION(RegExp, Instance);
   friend class Class;
@@ -9032,8 +9801,9 @@ class WeakProperty : public Instance {
 
   static void Clear(RawWeakProperty* raw_weak) {
     ASSERT(raw_weak->ptr()->next_ == 0);
-    raw_weak->StorePointer(&(raw_weak->ptr()->key_), Object::null());
-    raw_weak->StorePointer(&(raw_weak->ptr()->value_), Object::null());
+    // This action is performed by the GC. No barrier.
+    raw_weak->ptr()->key_ = Object::null();
+    raw_weak->ptr()->value_ = Object::null();
   }
 
  private:
@@ -9139,11 +9909,25 @@ DART_FORCE_INLINE void Object::SetRaw(RawObject* value) {
     Isolate* isolate = Isolate::Current();
     Heap* isolate_heap = isolate->heap();
     Heap* vm_isolate_heap = Dart::vm_isolate()->heap();
-    ASSERT(isolate_heap->Contains(RawObject::ToAddr(raw_)) ||
-           vm_isolate_heap->Contains(RawObject::ToAddr(raw_)));
+    uword addr = RawObject::ToAddr(raw_);
+    if (!isolate_heap->Contains(addr) && !vm_isolate_heap->Contains(addr)) {
+      ASSERT(FLAG_write_protect_code);
+      addr = RawObject::ToAddr(HeapPage::ToWritable(raw_));
+      ASSERT(isolate_heap->Contains(addr) || vm_isolate_heap->Contains(addr));
+    }
   }
 #endif
 }
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+bool Function::HasBytecode() const {
+  return raw_ptr()->bytecode_ != Bytecode::null();
+}
+
+bool Function::HasBytecode(RawFunction* function) {
+  return function->ptr()->bytecode_ != Bytecode::null();
+}
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
 intptr_t Field::Offset() const {
   ASSERT(is_instance());  // Valid only for dart instance fields.
@@ -9169,10 +9953,17 @@ void Field::SetStaticValue(const Instance& value,
   ASSERT(is_static());  // Valid only for static dart fields.
   StorePointer(&raw_ptr()->value_.static_value_, value.raw());
   if (save_initial_value) {
-    ASSERT(!HasPrecompiledInitializer());
-    StorePointer(&raw_ptr()->initializer_.saved_value_, value.raw());
+#if !defined(DART_PRECOMPILED_RUNTIME)
+    StorePointer(&raw_ptr()->saved_initial_value_, value.raw());
+#endif
   }
 }
+
+#ifndef DART_PRECOMPILED_RUNTIME
+void Field::set_saved_initial_value(const Instance& value) const {
+  StorePointer(&raw_ptr()->saved_initial_value_, value.raw());
+}
+#endif
 
 void Context::SetAt(intptr_t index, const Object& value) const {
   StorePointer(ObjectAddr(index), value.raw());
@@ -9232,8 +10023,20 @@ intptr_t Library::UrlHash() const {
 void MegamorphicCache::SetEntry(const Array& array,
                                 intptr_t index,
                                 const Smi& class_id,
-                                const Function& target) {
+                                const Object& target) {
+  ASSERT(target.IsFunction() || target.IsSmi());
   array.SetAt((index * kEntryLength) + kClassIdIndex, class_id);
+#if defined(DART_PRECOMPILED_RUNTIME)
+  if (FLAG_precompiled_mode && FLAG_use_bare_instructions) {
+    if (target.IsFunction()) {
+      const auto& function = Function::Cast(target);
+      const auto& entry_point = Smi::Handle(
+          Smi::FromAlignedAddress(Code::EntryPoint(function.CurrentCode())));
+      array.SetAt((index * kEntryLength) + kTargetFunctionIndex, entry_point);
+      return;
+    }
+  }
+#endif  // defined(DART_PRECOMPILED_RUNTIME)
   array.SetAt((index * kEntryLength) + kTargetFunctionIndex, target);
 }
 
@@ -9275,20 +10078,6 @@ inline void TypeParameter::SetHash(intptr_t value) const {
   StoreSmi(&raw_ptr()->hash_, Smi::New(value));
 }
 
-inline intptr_t BoundedType::Hash() const {
-  intptr_t result = Smi::Value(raw_ptr()->hash_);
-  if (result != 0) {
-    return result;
-  }
-  return ComputeHash();
-}
-
-inline void BoundedType::SetHash(intptr_t value) const {
-  // This is only safe because we create a new Smi, which does not cause
-  // heap allocation.
-  StoreSmi(&raw_ptr()->hash_, Smi::New(value));
-}
-
 inline intptr_t TypeArguments::Hash() const {
   if (IsNull()) return 0;
   intptr_t result = Smi::Value(raw_ptr()->hash_);
@@ -9303,6 +10092,159 @@ inline void TypeArguments::SetHash(intptr_t value) const {
   // heap allocation.
   StoreSmi(&raw_ptr()->hash_, Smi::New(value));
 }
+
+// A view on an [Array] as a list of tuples, optionally starting at an offset.
+//
+// Example: We store a list of (kind, function, code) tuples into the
+// [Code::static_calls_target_table] array of type [Array].
+//
+// This helper class can then be used via
+//
+//     using CallTableView = ArrayOfTuplesVied<
+//         Code::Kind, std::tuple<Smi, Function, Code>>;
+//
+//     auto& array = Array::Handle(code.static_calls_targets_table());
+//     CallTableView static_calls(array);
+//
+//     // Using convenient for loop.
+//     auto& function = Function::Handle();
+//     for (auto& call : static_calls) {
+//       function = call.Get<Code::kSCallTableFunctionTarget>();
+//       call.Set<Code::kSCallTableFunctionTarget>(function);
+//     }
+//
+//     // Using manual loop.
+//     auto& function = Function::Handle();
+//     for (intptr_t i = 0; i < static_calls.Length(); ++i) {
+//       auto call = static_calls[i];
+//       function = call.Get<Code::kSCallTableFunctionTarget>();
+//       call.Set<Code::kSCallTableFunctionTarget>(function);
+//     }
+//
+//
+// Template parameters:
+//
+//   * [EnumType] must be a normal enum which enumerates the entries of the
+//     tuple
+//
+//   * [kStartOffset] is the offset at which the first tuple in the array
+//     starts (can be 0).
+//
+//   * [TupleT] must be a std::tuple<...> where "..." are the heap object handle
+//     classes (e.g. 'Code', 'Smi', 'Object')
+template <typename EnumType, typename TupleT, int kStartOffset = 0>
+class ArrayOfTuplesView {
+ public:
+  static constexpr intptr_t EntrySize = std::tuple_size<TupleT>::value;
+
+  class Iterator;
+
+  class TupleView {
+   public:
+    TupleView(const Array& array, intptr_t index)
+        : array_(array), index_(index) {
+    }
+
+    template <EnumType kElement>
+    typename std::tuple_element<kElement, TupleT>::type::RawObjectType* Get()
+        const {
+      using object_type = typename std::tuple_element<kElement, TupleT>::type;
+      return object_type::RawCast(array_.At(index_ + kElement));
+    }
+
+    template <EnumType kElement>
+    void Set(const typename std::tuple_element<kElement, TupleT>::type& value)
+        const {
+      array_.SetAt(index_ + kElement, value);
+    }
+
+    intptr_t index() const { return (index_ - kStartOffset) / EntrySize; }
+
+   private:
+    const Array& array_;
+    intptr_t index_;
+
+    friend class Iterator;
+  };
+
+  class Iterator {
+   public:
+    Iterator(const Array& array, intptr_t index) : entry_(array, index) {}
+
+    bool operator==(const Iterator& other) {
+      return entry_.index_ == other.entry_.index_;
+    }
+    bool operator!=(const Iterator& other) {
+      return entry_.index_ != other.entry_.index_;
+    }
+
+    const TupleView& operator*() const { return entry_; }
+
+    Iterator& operator++() {
+      entry_.index_ += EntrySize;
+      return *this;
+    }
+
+   private:
+    TupleView entry_;
+  };
+
+  explicit ArrayOfTuplesView(const Array& array) : array_(array), index_(-1) {
+    ASSERT(!array.IsNull());
+    ASSERT(array.Length() >= kStartOffset);
+    ASSERT((array.Length() - kStartOffset) % EntrySize == kStartOffset);
+  }
+
+  intptr_t Length() const {
+    return (array_.Length() - kStartOffset) / EntrySize;
+  }
+
+  TupleView At(intptr_t i) const {
+    return TupleView(array_, kStartOffset + i * EntrySize);
+  }
+
+  TupleView operator[](intptr_t i) const { return At(i); }
+
+  Iterator begin() const { return Iterator(array_, kStartOffset); }
+
+  Iterator end() const {
+    return Iterator(array_, kStartOffset + Length() * EntrySize);
+  }
+
+ private:
+  const Array& array_;
+  intptr_t index_;
+};
+
+using InvocationDispatcherTable =
+    ArrayOfTuplesView<Class::InvocationDispatcherEntry,
+                      std::tuple<String, Array, Function>>;
+
+using StaticCallsTable =
+    ArrayOfTuplesView<Code::SCallTableEntry, std::tuple<Smi, Code, Function>>;
+
+using SubtypeTestCacheTable = ArrayOfTuplesView<SubtypeTestCache::Entries,
+                                                std::tuple<Object,
+                                                           Object,
+                                                           TypeArguments,
+                                                           TypeArguments,
+                                                           TypeArguments,
+                                                           TypeArguments,
+                                                           TypeArguments>>;
+
+using MegamorphicCacheEntries =
+    ArrayOfTuplesView<MegamorphicCache::EntryType, std::tuple<Smi, Object>>;
+
+void DumpTypeTable(Isolate* isolate);
+void DumpTypeArgumentsTable(Isolate* isolate);
+
+EntryPointPragma FindEntryPointPragma(Isolate* I,
+                                      const Array& metadata,
+                                      Field* reusable_field_handle,
+                                      Object* reusable_object_handle);
+
+DART_WARN_UNUSED_RESULT
+RawError* EntryPointFieldInvocationError(const String& getter_name);
 
 }  // namespace dart
 

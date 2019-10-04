@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -39,6 +39,8 @@ dependencies:
 dev_dependencies:
   markdown: '>=0.7.1+2 <0.8.0'
   unittest: '>=0.11.0 <0.12.0'
+dependency_overrides:
+  foo: 1.2.0
 """;
 
   Pubspec ps = new Pubspec.parse(src);
@@ -81,6 +83,10 @@ dev_dependencies:
 
       testDepListContains('dev_dependencies', ps.devDependencies, [
         {'markdown': '>=0.7.1+2 <0.8.0'}
+      ]);
+
+      testDepListContains('dependency_overrides', ps.dependencyOverrides, [
+        {'foo': '1.2.0'}
       ]);
 
       group('hosted', () {

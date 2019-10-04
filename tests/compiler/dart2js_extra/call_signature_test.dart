@@ -2,7 +2,7 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-// Regression test. Crash occured when trying to create a signature function
+// Regression test. Crash occurred when trying to create a signature function
 // for the non-live 'call' method on the live class 'A'.
 
 import 'package:expect/expect.dart';
@@ -13,11 +13,11 @@ class A<T> {
 }
 
 class B<T> {
-  @NoInline()
+  @pragma('dart2js:noInline')
   m(f) => f is Function(T);
 }
 
-@NoInline()
+@pragma('dart2js:noInline')
 create() => new B<A<int>>();
 
 main() {

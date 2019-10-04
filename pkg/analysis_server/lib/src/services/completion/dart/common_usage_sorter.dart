@@ -1,4 +1,4 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -33,7 +33,7 @@ class CommonUsageSorter implements DartContributionSorter {
    * The names are ordered from most relevant to least relevant.
    * Names not listed are considered equally less relevant than those listed.
    */
-  Map<String, List<String>> selectorRelevance;
+  final Map<String, List<String>> selectorRelevance;
 
   CommonUsageSorter([this.selectorRelevance = defaultSelectorRelevance]);
 
@@ -137,9 +137,9 @@ class _BestTypeVisitor extends UnifyingAstVisitor<DartType> {
 
   @override
   DartType visitPrefixedIdentifier(PrefixedIdentifier node) =>
-      node.identifier == entity ? node.prefix?.bestType : null;
+      node.identifier == entity ? node.prefix?.staticType : null;
 
   @override
   DartType visitPropertyAccess(PropertyAccess node) =>
-      node.propertyName == entity ? node.realTarget?.bestType : null;
+      node.propertyName == entity ? node.realTarget?.staticType : null;
 }

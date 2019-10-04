@@ -8,27 +8,22 @@ library class_set_test;
 
 import 'package:expect/expect.dart';
 import 'package:async_helper/async_helper.dart';
-import 'package:compiler/src/commandline_options.dart';
 import 'package:compiler/src/elements/entities.dart' show ClassEntity;
 import 'package:compiler/src/universe/class_set.dart';
 import 'package:compiler/src/util/enumset.dart';
 import 'package:compiler/src/world.dart';
-import 'package:front_end/src/fasta/util/link.dart' show Link;
-import '../type_test_helper.dart';
+import '../helpers/type_test_helper.dart';
 
 void main() {
   asyncTest(() async {
-    print('--test from kernel------------------------------------------------');
     await testAll();
-    print('--test from kernel (strong)---------------------------------------');
-    await testAll(strongMode: true);
   });
 }
 
-testAll({bool strongMode: false}) async {
+testAll() async {
   await testIterators();
   await testForEach();
-  await testClosures(strongMode: strongMode);
+  await testClosures();
 }
 
 testIterators() async {
@@ -46,7 +41,7 @@ testIterators() async {
       class E extends C {}
       class F extends C {}
       class G extends C {}
-      """, mainSource: r"""
+
       main() {
         new A();
         new C();
@@ -68,7 +63,7 @@ testIterators() async {
 
   void checkClass(ClassEntity cls,
       {bool directlyInstantiated: false, bool indirectlyInstantiated: false}) {
-    ClassHierarchyNode node = world.getClassHierarchyNode(cls);
+    ClassHierarchyNode node = world.classHierarchy.getClassHierarchyNode(cls);
     Expect.isNotNull(node, "Expected ClassHierarchyNode for $cls.");
     Expect.equals(
         directlyInstantiated || indirectlyInstantiated,
@@ -102,9 +97,9 @@ testIterators() async {
       return node != null ? node.cls : null;
     }
 
-    List<ClassEntity> classesOf(Link<ClassHierarchyNode> link) {
-      if (link == null) return null;
-      return link.map(classOf).toList();
+    List<ClassEntity> classesOf(Iterable<ClassHierarchyNode> list) {
+      if (list == null) return null;
+      return list.map(classOf).toList();
     }
 
     ClassEntity foundRoot = iterator.root.cls;
@@ -139,193 +134,145 @@ testIterators() async {
   }
 
   iterator = new ClassHierarchyNodeIterable(
-          world.getClassHierarchyNode(G), ClassHierarchyNode.ALL)
+          world.classHierarchy.getClassHierarchyNode(G), ClassHierarchyNode.ALL)
       .iterator;
   checkState(G, currentNode: null, stack: null);
-  Expect.isNull(iterator.current);
   Expect.isTrue(iterator.moveNext());
   checkState(G, currentNode: G, stack: []);
-  Expect.equals(G, iterator.current);
   Expect.isFalse(iterator.moveNext());
   checkState(G, currentNode: null, stack: []);
   Expect.isNull(iterator.current);
 
   iterator = new ClassHierarchyNodeIterable(
-          world.getClassHierarchyNode(G), ClassHierarchyNode.ALL,
+          world.classHierarchy.getClassHierarchyNode(G), ClassHierarchyNode.ALL,
           includeRoot: false)
       .iterator;
   checkState(G, currentNode: null, stack: null);
-  Expect.isNull(iterator.current);
   Expect.isFalse(iterator.moveNext());
   checkState(G, currentNode: null, stack: []);
-  Expect.isNull(iterator.current);
 
   iterator = new ClassHierarchyNodeIterable(
-          world.getClassHierarchyNode(C), ClassHierarchyNode.ALL)
+          world.classHierarchy.getClassHierarchyNode(C), ClassHierarchyNode.ALL)
       .iterator;
   checkState(C, currentNode: null, stack: null);
-  Expect.isNull(iterator.current);
   Expect.isTrue(iterator.moveNext());
-  checkState(C, currentNode: C, stack: [E, F, G]);
-  Expect.equals(C, iterator.current);
+  checkState(C, currentNode: C, stack: [G, F, E]);
   Expect.isTrue(iterator.moveNext());
-  checkState(C, currentNode: E, stack: [F, G]);
-  Expect.equals(E, iterator.current);
+  checkState(C, currentNode: E, stack: [G, F]);
   Expect.isTrue(iterator.moveNext());
   checkState(C, currentNode: F, stack: [G]);
-  Expect.equals(F, iterator.current);
   Expect.isTrue(iterator.moveNext());
   checkState(C, currentNode: G, stack: []);
-  Expect.equals(G, iterator.current);
   Expect.isFalse(iterator.moveNext());
   checkState(C, currentNode: null, stack: []);
-  Expect.isNull(iterator.current);
 
   iterator = new ClassHierarchyNodeIterable(
-          world.getClassHierarchyNode(D), ClassHierarchyNode.ALL)
+          world.classHierarchy.getClassHierarchyNode(D), ClassHierarchyNode.ALL)
       .iterator;
   checkState(D, currentNode: null, stack: null);
-  Expect.isNull(iterator.current);
   Expect.isTrue(iterator.moveNext());
   checkState(D, currentNode: D, stack: []);
-  Expect.equals(D, iterator.current);
   Expect.isFalse(iterator.moveNext());
   checkState(D, currentNode: null, stack: []);
-  Expect.isNull(iterator.current);
 
   iterator = new ClassHierarchyNodeIterable(
-          world.getClassHierarchyNode(B), ClassHierarchyNode.ALL)
+          world.classHierarchy.getClassHierarchyNode(B), ClassHierarchyNode.ALL)
       .iterator;
   checkState(B, currentNode: null, stack: null);
-  Expect.isNull(iterator.current);
   Expect.isTrue(iterator.moveNext());
   checkState(B, currentNode: B, stack: [D]);
-  Expect.equals(B, iterator.current);
   Expect.isTrue(iterator.moveNext());
   checkState(B, currentNode: D, stack: []);
-  Expect.equals(D, iterator.current);
   Expect.isFalse(iterator.moveNext());
   checkState(B, currentNode: null, stack: []);
-  Expect.isNull(iterator.current);
 
   iterator = new ClassHierarchyNodeIterable(
-          world.getClassHierarchyNode(B), ClassHierarchyNode.ALL,
+          world.classHierarchy.getClassHierarchyNode(B), ClassHierarchyNode.ALL,
           includeRoot: false)
       .iterator;
   checkState(B, currentNode: null, stack: null);
-  Expect.isNull(iterator.current);
   Expect.isTrue(iterator.moveNext());
   checkState(B, currentNode: D, stack: []);
-  Expect.equals(D, iterator.current);
   Expect.isFalse(iterator.moveNext());
   checkState(B, currentNode: null, stack: []);
-  Expect.isNull(iterator.current);
 
   iterator = new ClassHierarchyNodeIterable(
-      world.getClassHierarchyNode(B),
+      world.classHierarchy.getClassHierarchyNode(B),
       new EnumSet<Instantiation>.fromValues(<Instantiation>[
         Instantiation.DIRECTLY_INSTANTIATED,
         Instantiation.UNINSTANTIATED
       ])).iterator;
   checkState(B, currentNode: null, stack: null);
-  Expect.isNull(iterator.current);
   Expect.isTrue(iterator.moveNext());
   checkState(B, currentNode: D, stack: []);
-  Expect.equals(D, iterator.current);
   Expect.isFalse(iterator.moveNext());
   checkState(B, currentNode: null, stack: []);
-  Expect.isNull(iterator.current);
 
   iterator = new ClassHierarchyNodeIterable(
-          world.getClassHierarchyNode(A), ClassHierarchyNode.ALL)
+          world.classHierarchy.getClassHierarchyNode(A), ClassHierarchyNode.ALL)
       .iterator;
   checkState(A, currentNode: null, stack: null);
-  Expect.isNull(iterator.current);
   Expect.isTrue(iterator.moveNext());
   checkState(A, currentNode: A, stack: [C, B]);
-  Expect.equals(A, iterator.current);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: C, stack: [E, F, G, B]);
-  Expect.equals(C, iterator.current);
+  checkState(A, currentNode: B, stack: [C, D]);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: E, stack: [F, G, B]);
-  Expect.equals(E, iterator.current);
+  checkState(A, currentNode: D, stack: [C]);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: F, stack: [G, B]);
-  Expect.equals(F, iterator.current);
+  checkState(A, currentNode: C, stack: [G, F, E]);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: G, stack: [B]);
-  Expect.equals(G, iterator.current);
+  checkState(A, currentNode: E, stack: [G, F]);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: B, stack: [D]);
-  Expect.equals(B, iterator.current);
+  checkState(A, currentNode: F, stack: [G]);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: D, stack: []);
-  Expect.equals(D, iterator.current);
+  checkState(A, currentNode: G, stack: []);
   Expect.isFalse(iterator.moveNext());
   checkState(A, currentNode: null, stack: []);
-  Expect.isNull(iterator.current);
 
   iterator = new ClassHierarchyNodeIterable(
-          world.getClassHierarchyNode(A), ClassHierarchyNode.ALL,
+          world.classHierarchy.getClassHierarchyNode(A), ClassHierarchyNode.ALL,
           includeRoot: false)
       .iterator;
   checkState(A, currentNode: null, stack: null);
-  Expect.isNull(iterator.current);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: C, stack: [E, F, G, B]);
-  Expect.equals(C, iterator.current);
+  checkState(A, currentNode: B, stack: [C, D]);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: E, stack: [F, G, B]);
-  Expect.equals(E, iterator.current);
+  checkState(A, currentNode: D, stack: [C]);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: F, stack: [G, B]);
-  Expect.equals(F, iterator.current);
+  checkState(A, currentNode: C, stack: [G, F, E]);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: G, stack: [B]);
-  Expect.equals(G, iterator.current);
+  checkState(A, currentNode: E, stack: [G, F]);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: B, stack: [D]);
-  Expect.equals(B, iterator.current);
+  checkState(A, currentNode: F, stack: [G]);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: D, stack: []);
-  Expect.equals(D, iterator.current);
+  checkState(A, currentNode: G, stack: []);
   Expect.isFalse(iterator.moveNext());
   checkState(A, currentNode: null, stack: []);
-  Expect.isNull(iterator.current);
 
   iterator = new ClassHierarchyNodeIterable(
-      world.getClassHierarchyNode(A),
+      world.classHierarchy.getClassHierarchyNode(A),
       new EnumSet<Instantiation>.fromValues(<Instantiation>[
         Instantiation.DIRECTLY_INSTANTIATED,
         Instantiation.UNINSTANTIATED
       ])).iterator;
   checkState(A, currentNode: null, stack: null);
-  Expect.isNull(iterator.current);
   Expect.isTrue(iterator.moveNext());
   checkState(A, currentNode: A, stack: [C, B]);
-  Expect.equals(A, iterator.current);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: C, stack: [E, F, G, B]);
-  Expect.equals(C, iterator.current);
+  checkState(A, currentNode: D, stack: [C]);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: E, stack: [F, G, B]);
-  Expect.equals(E, iterator.current);
+  checkState(A, currentNode: C, stack: [G, F, E]);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: F, stack: [G, B]);
-  Expect.equals(F, iterator.current);
+  checkState(A, currentNode: E, stack: [G, F]);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: G, stack: [B]);
-  Expect.equals(G, iterator.current);
+  checkState(A, currentNode: F, stack: [G]);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: D, stack: []);
-  Expect.equals(D, iterator.current);
+  checkState(A, currentNode: G, stack: []);
   Expect.isFalse(iterator.moveNext());
   checkState(A, currentNode: null, stack: []);
-  Expect.isNull(iterator.current);
 
   iterator = new ClassHierarchyNodeIterable(
-          world.getClassHierarchyNode(A),
+          world.classHierarchy.getClassHierarchyNode(A),
           new EnumSet<Instantiation>.fromValues(<Instantiation>[
             Instantiation.DIRECTLY_INSTANTIATED,
             Instantiation.UNINSTANTIATED
@@ -333,25 +280,18 @@ testIterators() async {
           includeRoot: false)
       .iterator;
   checkState(A, currentNode: null, stack: null);
-  Expect.isNull(iterator.current);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: C, stack: [E, F, G, B]);
-  Expect.equals(C, iterator.current);
+  checkState(A, currentNode: D, stack: [C]);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: E, stack: [F, G, B]);
-  Expect.equals(E, iterator.current);
+  checkState(A, currentNode: C, stack: [G, F, E]);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: F, stack: [G, B]);
-  Expect.equals(F, iterator.current);
+  checkState(A, currentNode: E, stack: [G, F]);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: G, stack: [B]);
-  Expect.equals(G, iterator.current);
+  checkState(A, currentNode: F, stack: [G]);
   Expect.isTrue(iterator.moveNext());
-  checkState(A, currentNode: D, stack: []);
-  Expect.equals(D, iterator.current);
+  checkState(A, currentNode: G, stack: []);
   Expect.isFalse(iterator.moveNext());
   checkState(A, currentNode: null, stack: []);
-  Expect.isNull(iterator.current);
 }
 
 testForEach() async {
@@ -374,7 +314,7 @@ testForEach() async {
       class H extends F {}
       class I extends F {}
       class X {}
-      """, mainSource: r"""
+
       main() {
         new A();
         new C();
@@ -400,10 +340,11 @@ testForEach() async {
   ClassEntity X = env.getClass("X");
 
   void checkForEachSubclass(ClassEntity cls, List<ClassEntity> expected) {
-    ClassSet classSet = world.getClassSet(cls);
+    ClassSet classSet = world.classHierarchy.getClassSet(cls);
     List<ClassEntity> visited = <ClassEntity>[];
     classSet.forEachSubclass((cls) {
       visited.add(cls);
+      return IterationStep.CONTINUE;
     }, ClassHierarchyNode.ALL);
 
     Expect.listEquals(
@@ -425,22 +366,23 @@ testForEach() async {
         "Actual: $visited, expected: $expected\n$classSet");
   }
 
-  checkForEachSubclass(A, [A, B, D, C, G, F, I, H, E]);
+  checkForEachSubclass(A, [A, B, D, C, E, F, H, I, G]);
   checkForEachSubclass(B, [B, D]);
-  checkForEachSubclass(C, [C, G, F, I, H, E]);
+  checkForEachSubclass(C, [C, E, F, H, I, G]);
   checkForEachSubclass(D, [D]);
   checkForEachSubclass(E, [E]);
-  checkForEachSubclass(F, [F, I, H]);
+  checkForEachSubclass(F, [F, H, I]);
   checkForEachSubclass(G, [G]);
   checkForEachSubclass(H, [H]);
   checkForEachSubclass(I, [I]);
   checkForEachSubclass(X, [X]);
 
   void checkForEachSubtype(ClassEntity cls, List<ClassEntity> expected) {
-    ClassSet classSet = world.getClassSet(cls);
+    ClassSet classSet = world.classHierarchy.getClassSet(cls);
     List<ClassEntity> visited = <ClassEntity>[];
     classSet.forEachSubtype((cls) {
       visited.add(cls);
+      return IterationStep.CONTINUE;
     }, ClassHierarchyNode.ALL);
 
     Expect.listEquals(
@@ -462,16 +404,16 @@ testForEach() async {
         "Actual: $visited, expected: $expected\n$classSet");
   }
 
-  checkForEachSubtype(A, [A, B, D, C, G, F, I, H, E]);
-  checkForEachSubtype(B, [B, D, F, I, H, G]);
-  checkForEachSubtype(C, [C, G, F, I, H, E]);
+  checkForEachSubtype(A, [A, B, D, C, E, F, H, I, G]);
+  checkForEachSubtype(B, [B, D, F, H, I, G]);
+  checkForEachSubtype(C, [C, E, F, H, I, G]);
   checkForEachSubtype(D, [D, G]);
   checkForEachSubtype(E, [E]);
-  checkForEachSubtype(F, [F, I, H]);
+  checkForEachSubtype(F, [F, H, I]);
   checkForEachSubtype(G, [G]);
   checkForEachSubtype(H, [H]);
   checkForEachSubtype(I, [I]);
-  checkForEachSubtype(X, [X, A, B, D, C, G, F, I, H, E]);
+  checkForEachSubtype(X, [X, A, B, D, C, E, F, H, I, G]);
 
   void checkForEach(ClassEntity cls, List<ClassEntity> expected,
       {ClassEntity stop,
@@ -482,7 +424,7 @@ testForEach() async {
       mask = ClassHierarchyNode.ALL;
     }
 
-    ClassSet classSet = world.getClassSet(cls);
+    ClassSet classSet = world.classHierarchy.getClassSet(cls);
     List<ClassEntity> visited = <ClassEntity>[];
 
     IterationStep visit(_cls) {
@@ -511,35 +453,35 @@ testForEach() async {
         "Actual: $visited, expected: $expected\n$classSet");
   }
 
-  checkForEach(A, [A, B, D, C, G, F, I, H, E]);
+  checkForEach(A, [A, B, D, C, E, F, H, I, G]);
   checkForEach(A, [A], stop: A);
-  checkForEach(A, [A, B, C, G, F, I, H, E], skipSubclasses: [B]);
+  checkForEach(A, [A, B, C, E, F, H, I, G], skipSubclasses: [B]);
   checkForEach(A, [A, B, C], skipSubclasses: [B, C]);
-  checkForEach(A, [A, B, C, G], stop: G, skipSubclasses: [B]);
+  checkForEach(A, [A, B, C, E, F], stop: F, skipSubclasses: [B]);
 
-  checkForEach(B, [B, D, F, I, H, G], forEachSubtype: true);
+  checkForEach(B, [B, D, F, H, I, G], forEachSubtype: true);
   checkForEach(B, [B, D], stop: D, forEachSubtype: true);
   checkForEach(B, [B, D, F, G], skipSubclasses: [F], forEachSubtype: true);
-  checkForEach(B, [B, F, I, H, G], skipSubclasses: [B], forEachSubtype: true);
-  checkForEach(B, [B, D, F, I, H, G],
+  checkForEach(B, [B, F, H, I, G], skipSubclasses: [B], forEachSubtype: true);
+  checkForEach(B, [B, D, F, H, I, G],
       skipSubclasses: [D], forEachSubtype: true);
 
-  checkForEach(X, [X, A, B, D, C, G, F, I, H, E], forEachSubtype: true);
+  checkForEach(X, [X, A, B, D, C, E, F, H, I, G], forEachSubtype: true);
   checkForEach(X, [X, A, B, D], stop: D, forEachSubtype: true);
-  checkForEach(X, [X, A, B, D, C, G, F, E],
+  checkForEach(X, [X, A, B, D, C, E, F, G],
       skipSubclasses: [F], forEachSubtype: true);
-  checkForEach(X, [X, A, B, D, C, G, F, I, H, E],
+  checkForEach(X, [X, A, B, D, C, E, F, H, I, G],
       skipSubclasses: [X], forEachSubtype: true);
-  checkForEach(X, [X, A, B, D, C, G, F, I, H, E],
+  checkForEach(X, [X, A, B, D, C, E, F, H, I, G],
       skipSubclasses: [D], forEachSubtype: true);
-  checkForEach(X, [A, D, C, G, F, I, H, E],
+  checkForEach(X, [A, D, C, E, F, H, I, G],
       forEachSubtype: true, mask: ClassHierarchyNode.EXPLICITLY_INSTANTIATED);
-  checkForEach(X, [A, B, D, C, G, F, I, H, E],
+  checkForEach(X, [A, B, D, C, E, F, H, I, G],
       forEachSubtype: true, mask: ClassHierarchyNode.INSTANTIATED);
 
   void checkAny(ClassEntity cls, List<ClassEntity> expected,
       {ClassEntity find, bool expectedResult, bool anySubtype: false}) {
-    ClassSet classSet = world.getClassSet(cls);
+    ClassSet classSet = world.classHierarchy.getClassSet(cls);
     List<ClassEntity> visited = <ClassEntity>[];
 
     bool visit(cls) {
@@ -570,39 +512,36 @@ testForEach() async {
         "Actual: $visited, expected: $expected\n$classSet");
   }
 
-  checkAny(A, [A, B, D, C, G, F, I, H, E], expectedResult: false);
+  checkAny(A, [A, B, D, C, E, F, H, I, G], expectedResult: false);
   checkAny(A, [A], find: A, expectedResult: true);
-  checkAny(A, [A, B, D, C, G, F, I], find: I, expectedResult: true);
+  checkAny(A, [A, B, D, C, E, F, H], find: H, expectedResult: true);
 
-  checkAny(B, [B, D, F, I, H, G], anySubtype: true, expectedResult: false);
-  checkAny(B, [B, D, F, I, H, G],
+  checkAny(B, [B, D, F, H, I, G], anySubtype: true, expectedResult: false);
+  checkAny(B, [B, D, F, H, I, G],
       find: A, anySubtype: true, expectedResult: false);
   checkAny(B, [B, D], find: D, anySubtype: true, expectedResult: true);
-  checkAny(B, [B, D, F, I], find: I, anySubtype: true, expectedResult: true);
+  checkAny(B, [B, D, F, H, I], find: I, anySubtype: true, expectedResult: true);
 
-  checkAny(X, [X, A, B, D, C, G, F, I, H, E],
+  checkAny(X, [X, A, B, D, C, E, F, H, I, G],
       anySubtype: true, expectedResult: false);
   checkAny(X, [X, A], find: A, anySubtype: true, expectedResult: true);
   checkAny(X, [X, A, B, D], find: D, anySubtype: true, expectedResult: true);
-  checkAny(X, [X, A, B, D, C, G, F, I],
+  checkAny(X, [X, A, B, D, C, E, F, H, I],
       find: I, anySubtype: true, expectedResult: true);
 }
 
-testClosures({bool strongMode}) async {
+testClosures() async {
   var env = await TypeEnvironment.create(r"""
       class A {
         call() => null;
       }
-      """,
-      mainSource: r"""
+
       main() {
         new A();
         () {};
         local() {}
       }
-      """,
-      options: strongMode ? [Flags.strongMode] : [],
-      testBackendWorld: true);
+      """, testBackendWorld: true);
   JClosedWorld world = env.jClosedWorld;
 
   ClassEntity functionClass = world.commonElements.functionClass;
@@ -612,12 +551,12 @@ testClosures({bool strongMode}) async {
   checkIsFunction(ClassEntity cls, {bool expected: true}) {
     Expect.equals(
         expected,
-        world.isSubtypeOf(cls, functionClass),
+        world.classHierarchy.isSubtypeOf(cls, functionClass),
         "Expected $cls ${expected ? '' : 'not '}to be a subtype "
         "of $functionClass.");
   }
 
-  checkIsFunction(A, expected: !strongMode);
+  checkIsFunction(A, expected: false);
 
-  world.forEachStrictSubtypeOf(closureClass, checkIsFunction);
+  world.classHierarchy.forEachStrictSubtypeOf(closureClass, checkIsFunction);
 }

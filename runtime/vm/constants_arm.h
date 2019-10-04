@@ -5,10 +5,14 @@
 #ifndef RUNTIME_VM_CONSTANTS_ARM_H_
 #define RUNTIME_VM_CONSTANTS_ARM_H_
 
+#ifndef RUNTIME_VM_CONSTANTS_H_
+#error Do not include constants_arm.h directly; use constants.h instead.
+#endif
+
 #include "platform/assert.h"
 #include "platform/globals.h"
 
-namespace dart {
+namespace arch_arm {
 
 // We support both VFPv3-D16 and VFPv3-D32 profiles, but currently only one at
 // a time.
@@ -45,15 +49,15 @@ namespace dart {
 
 // iOS ABI
 // See "iOS ABI Function Call Guide"
-// R0-R1: Argument / result / volatile
-// R2-R3: Argument / volatile
-// R4-R6: Preserved
-// R7:    Frame pointer
-// R8-R9: Preserved
-// R12:   Volatile
-// R13:   Stack pointer
-// R14:   Link register
-// R15:   Program counter
+// R0-R1:  Argument / result / volatile
+// R2-R3:  Argument / volatile
+// R4-R6:  Preserved
+// R7:     Frame pointer
+// R8-R11: Preserved
+// R12:    Volatile
+// R13:    Stack pointer
+// R14:    Link register
+// R15:    Program counter
 // Stack alignment: 4 bytes always, 4 bytes at public interfaces
 
 // iOS passes floating point arguments in integer registers (softfp)
@@ -261,6 +265,9 @@ const FpuRegister FpuTMP = QTMP;
 const int kNumberOfFpuRegisters = kNumberOfQRegisters;
 const FpuRegister kNoFpuRegister = kNoQRegister;
 
+extern const char* cpu_reg_names[kNumberOfCpuRegisters];
+extern const char* fpu_reg_names[kNumberOfFpuRegisters];
+
 // Register aliases.
 const Register TMP = IP;            // Used as scratch register by assembler.
 const Register TMP2 = kNoRegister;  // There is no second assembler temporary.
@@ -268,7 +275,6 @@ const Register PP = R5;     // Caches object pool pointer in generated code.
 const Register SPREG = SP;  // Stack pointer register.
 const Register FPREG = FP;  // Frame pointer register.
 const Register LRREG = LR;  // Link register.
-const Register ICREG = R9;  // IC data register.
 const Register ARGS_DESC_REG = R4;
 const Register CODE_REG = R6;
 const Register THR = R10;  // Caches current thread in generated code.
@@ -277,13 +283,14 @@ const Register CALLEE_SAVED_TEMP = R8;
 // R15 encodes APSR in the vmrs instruction.
 const Register APSR = R15;
 
-// Exception object is passed in this register to the catch handlers when an
-// exception is thrown.
+// ABI for catch-clause entry point.
 const Register kExceptionObjectReg = R0;
-
-// Stack trace object is passed in this register to the catch handlers when
-// an exception is thrown.
 const Register kStackTraceObjectReg = R1;
+
+// ABI for write barrier stub.
+const Register kWriteBarrierObjectReg = R1;
+const Register kWriteBarrierValueReg = R0;
+const Register kWriteBarrierSlotReg = R9;
 
 // List of registers used in load/store multiple.
 typedef uint16_t RegList;
@@ -307,10 +314,15 @@ const QRegister kAbiLastPreservedFpuReg = Q7;
 const int kAbiPreservedFpuRegCount = 4;
 
 const RegList kReservedCpuRegisters = (1 << SPREG) | (1 << FPREG) | (1 << TMP) |
-                                      (1 << PP) | (1 << THR) | (1 << PC);
+                                      (1 << PP) | (1 << THR) | (1 << LR) |
+                                      (1 << PC);
+constexpr intptr_t kNumberOfReservedCpuRegisters = 7;
 // CPU registers available to Dart allocator.
-const RegList kDartAvailableCpuRegs =
+constexpr RegList kDartAvailableCpuRegs =
     kAllCpuRegistersList & ~kReservedCpuRegisters;
+constexpr int kNumberOfDartAvailableCpuRegs =
+    kNumberOfCpuRegisters - kNumberOfReservedCpuRegisters;
+const intptr_t kStoreBufferWrapperSize = 24;
 // Registers available to Dart that are not preserved by runtime calls.
 const RegList kDartVolatileCpuRegs =
     kDartAvailableCpuRegs & ~kAbiPreservedCpuRegs;
@@ -322,6 +334,50 @@ const int kDartVolatileCpuRegCount = 5;
 const QRegister kDartFirstVolatileFpuReg = Q0;
 const QRegister kDartLastVolatileFpuReg = Q3;
 const int kDartVolatileFpuRegCount = 4;
+
+#define R(REG) (1 << REG)
+
+class CallingConventions {
+ public:
+  static const intptr_t kArgumentRegisters = kAbiArgumentCpuRegs;
+  static const Register ArgumentRegisters[];
+  static const intptr_t kNumArgRegs = 4;
+
+  static const FpuRegister FpuArgumentRegisters[];
+  static const intptr_t kFpuArgumentRegisters = 0;
+  static const intptr_t kNumFpuArgRegs = 0;
+
+  static constexpr bool kArgumentIntRegXorFpuReg = false;
+
+  static constexpr intptr_t kCalleeSaveCpuRegisters = kAbiPreservedCpuRegs;
+
+  // Whether floating-point values should be passed as integers ("softfp" vs
+  // "hardfp"). Android and iOS always use the "softfp" calling convention, even
+  // when hardfp support is present.
+#if defined(TARGET_OS_MACOS_IOS) || defined(TARGET_OS_ANDROID)
+  static constexpr bool kAbiSoftFP = true;
+#else
+  static constexpr bool kAbiSoftFP = false;
+#endif
+
+  // Whether 64-bit arguments must be aligned to an even register or 8-byte
+  // stack address. True for ARM 32-bit, see "Procedure Call Standard for the
+  // ARM Architecture".
+  static constexpr bool kAlignArguments = true;
+
+  static constexpr Register kReturnReg = R0;
+  static constexpr Register kSecondReturnReg = R1;
+  static constexpr FpuRegister kReturnFpuReg = kNoFpuRegister;
+
+  // We choose these to avoid overlap between themselves and reserved registers.
+  static constexpr Register kFirstNonArgumentRegister = R8;
+  static constexpr Register kSecondNonArgumentRegister = R9;
+  static constexpr Register kFirstCalleeSavedCpuReg = NOTFP;
+  static constexpr Register kSecondCalleeSavedCpuReg = R4;
+  static constexpr Register kStackPointerRegister = SPREG;
+};
+
+#undef R
 
 // Values for the condition field as defined in section A3.2.
 enum Condition {
@@ -491,7 +547,6 @@ class Instr {
       ((AL << kConditionShift) | (0x32 << 20) | (0xf << 12));
 
   static const int32_t kBreakPointCode = 0xdeb0;      // For breakpoint.
-  static const int32_t kStopMessageCode = 0xdeb1;     // For Stop(message).
   static const int32_t kSimulatorBreakCode = 0xdeb2;  // For breakpoint in sim.
   static const int32_t kSimulatorRedirectCode = 0xca11;  // For redirection.
 
@@ -605,14 +660,14 @@ class Instr {
   inline float ImmFloatField() const {
     uint32_t imm32 = (Bit(19) << 31) | (((1 << 5) - Bit(18)) << 25) |
                      (Bits(16, 2) << 23) | (Bits(0, 4) << 19);
-    return bit_cast<float, uint32_t>(imm32);
+    return ::dart::bit_cast<float, uint32_t>(imm32);
   }
 
   // Field used in VFP double immediate move instruction
   inline double ImmDoubleField() const {
     uint64_t imm64 = (Bit(19) * (1LL << 63)) | (((1LL << 8) - Bit(18)) << 54) |
                      (Bits(16, 2) * (1LL << 52)) | (Bits(0, 4) * (1LL << 48));
-    return bit_cast<double, uint64_t>(imm64);
+    return ::dart::bit_cast<double, uint64_t>(imm64);
   }
 
   inline Register DivRdField() const {
@@ -753,13 +808,13 @@ class Instr {
   // reference to an instruction is to convert a pointer. There is no way
   // to allocate or create instances of class Instr.
   // Use the At(pc) function to create references to Instr.
-  static Instr* At(uword pc) { return reinterpret_cast<Instr*>(pc); }
+  static Instr* At(::dart::uword pc) { return reinterpret_cast<Instr*>(pc); }
 
  private:
   DISALLOW_ALLOCATION();
   DISALLOW_IMPLICIT_CONSTRUCTORS(Instr);
 };
 
-}  // namespace dart
+}  // namespace arch_arm
 
 #endif  // RUNTIME_VM_CONSTANTS_ARM_H_

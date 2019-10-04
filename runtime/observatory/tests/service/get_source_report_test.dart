@@ -1,7 +1,6 @@
 // Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-// VMOptions=--error_on_bad_type --error_on_bad_override
 
 import 'package:observatory/service_io.dart';
 import 'package:unittest/unittest.dart';
@@ -35,6 +34,19 @@ void testFunction() {
   MyClass.myFunction(10000);
 }
 
+class MyConstClass {
+  const MyConstClass();
+  static const MyConstClass instance = null ?? const MyConstClass();
+
+  void foo() {
+    debugger();
+  }
+}
+
+void testFunction2() {
+  MyConstClass.instance.foo();
+}
+
 bool allRangesCompiled(coverage) {
   for (int i = 0; i < coverage['ranges'].length; i++) {
     if (!coverage['ranges'][i]['compiled']) {
@@ -61,12 +73,12 @@ var tests = <IsolateTest>[
 
     var expectedRange = {
       'scriptIndex': 0,
-      'startPos': ifKernel(501, 40),
-      'endPos': ifKernel(633, 89),
+      'startPos': 432,
+      'endPos': 576,
       'compiled': true,
       'coverage': {
-        'hits': ifKernel([501, 539, 590, 619], [40, 55, 73, 83]),
-        'misses': ifKernel([552], [61])
+        'hits': [432, 482, 533, 562],
+        'misses': [495],
       }
     };
 
@@ -76,8 +88,10 @@ var tests = <IsolateTest>[
       'scriptId': func.location.script.id
     };
     var coverage = await isolate.invokeRpcNoUpgrade('getSourceReport', params);
+    final numRanges = coverage['ranges'].length;
     expect(coverage['type'], equals('SourceReport'));
-    expect(coverage['ranges'].length, 6);
+
+    expect(numRanges, equals(12));
     expect(coverage['ranges'][0], equals(expectedRange));
     expect(coverage['scripts'].length, 1);
     expect(
@@ -92,7 +106,7 @@ var tests = <IsolateTest>[
     };
     coverage = await isolate.invokeRpcNoUpgrade('getSourceReport', params);
     expect(coverage['type'], equals('SourceReport'));
-    expect(coverage['ranges'].length, 6);
+    expect(coverage['ranges'].length, numRanges);
     expect(allRangesCompiled(coverage), isTrue);
 
     // One function

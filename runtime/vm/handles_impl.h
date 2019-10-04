@@ -5,7 +5,7 @@
 #ifndef RUNTIME_VM_HANDLES_IMPL_H_
 #define RUNTIME_VM_HANDLES_IMPL_H_
 
-#include "vm/heap.h"
+#include "vm/heap/heap.h"
 #include "vm/thread.h"
 #include "vm/visitor.h"
 
@@ -82,7 +82,7 @@ uword Handles<kHandleSizeInWords, kHandlesPerChunk, kOffsetOfRawPtr>::
 #if defined(DEBUG)
   Thread* thread = Thread::Current();
   ASSERT(thread->top_handle_scope() != NULL);
-  ASSERT(thread->no_handle_scope_depth() == 0);
+  ASSERT(thread->MayAllocateHandles());
 #endif  // DEBUG
   Handles* handles = zone->handles();
   ASSERT(handles != NULL);
@@ -97,7 +97,7 @@ uword Handles<kHandleSizeInWords, kHandlesPerChunk, kOffsetOfRawPtr>::
 #if defined(DEBUG)
   Thread* thread = Thread::Current();
   ASSERT(zone->ContainsNestedZone(thread->zone()));
-  ASSERT(thread->no_handle_scope_depth() == 0);
+  ASSERT(thread->MayAllocateHandles());
 #endif  // DEBUG
   Handles* handles = zone->handles();
   ASSERT(handles != NULL);

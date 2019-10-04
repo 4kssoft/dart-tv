@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -11,13 +11,12 @@ import '../support/integration_tests.dart';
 main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(FormatTest);
-    defineReflectiveTests(FormatTest_UseCFE);
   });
 }
 
 @reflectiveTest
 class FormatTest extends AbstractAnalysisServerIntegrationTest {
-  String formatTestSetup({bool withErrors: false}) {
+  String formatTestSetup({bool withErrors = false}) {
     String pathname = sourcePath('test.dart');
 
     if (withErrors) {
@@ -78,10 +77,4 @@ class Class1 {
       expect(message.error['code'], 'FORMAT_WITH_ERRORS');
     }
   }
-}
-
-@reflectiveTest
-class FormatTest_UseCFE extends FormatTest {
-  @override
-  bool get useCFE => true;
 }

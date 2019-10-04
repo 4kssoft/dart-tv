@@ -2,9 +2,9 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-main() {
+void main() {
   // ignore: unused_local_variable
-  Foo foo = new Foo.named();
+  Foo foo = Foo.named();
 }
 
 class Foo {

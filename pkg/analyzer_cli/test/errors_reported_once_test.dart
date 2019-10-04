@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -50,6 +50,25 @@ class ErrorsReportedOnceTest {
     // Ensure that we only have one copy of the error.
     final String unusedWarning = 'Unused import';
     String output = outSink.toString();
+    expect(output, contains(unusedWarning));
+    expect(unusedWarning.allMatches(output).toList(), hasLength(1));
+  }
+
+  test_once_machine() async {
+    String testDir = path.join(testDirectory, 'data', 'errors_reported_once');
+    Driver driver = new Driver(isTesting: true);
+    await driver.start([
+      '--format',
+      'machine',
+      path.join(testDir, 'foo.dart'),
+      path.join(testDir, 'bar.dart')
+    ]);
+
+    expect(exitCode, 0);
+
+    // Ensure that we only have one copy of the error.
+    final String unusedWarning = 'Unused import';
+    String output = errorSink.toString();
     expect(output, contains(unusedWarning));
     expect(unusedWarning.allMatches(output).toList(), hasLength(1));
   }

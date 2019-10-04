@@ -5,29 +5,45 @@
 import "package:expect/expect.dart";
 
 /*class: A:needsArgs*/
-/*element: A.:needsSignature*/
+
+/*strong.member: A.:*/
+/*omit.member: A.:*/
 class A<X, Y, Z> {
-  /*element: A.shift:needsSignature*/
+  /*strong.member: A.shift:*/
+  /*omit.member: A.shift:*/
   shift() => new A<Z, X, Y>();
-  /*element: A.swap:needsSignature*/
+
+  /*strong.member: A.swap:*/
+  /*omit.member: A.swap:*/
   swap() => new A<Z, Y, X>();
-  /*element: A.first:needsSignature*/
+
+  /*strong.member: A.first:*/
+  /*omit.member: A.first:*/
   first() => new A<X, X, X>();
-  /*element: A.last:needsSignature*/
+
+  /*strong.member: A.last:*/
+  /*omit.member: A.last:*/
   last() => new A<Z, Z, Z>();
-  /*element: A.wrap:needsSignature*/
+
+  /*strong.member: A.wrap:*/
+  /*omit.member: A.wrap:*/
   wrap() => new A<A<X, X, X>, A<Y, Y, Y>, A<Z, Z, Z>>();
 }
 
-/*element: B.:needsSignature*/
+/*strong.member: B.:*/
+/*omit.member: B.:*/
 class B extends A<U, V, W> {}
 
 /*class: C:needsArgs*/
-/*element: C.:needsSignature*/
+
+/*strong.member: C.:*/
+/*omit.member: C.:*/
 class C<T> extends A<U, T, W> {}
 
 /*class: D:needsArgs*/
-/*element: D.:needsSignature*/
+
+/*strong.member: D.:*/
+/*omit.member: D.:*/
 class D<X, Y, Z> extends A<Y, Z, X> {}
 
 class U {}
@@ -36,10 +52,12 @@ class V {}
 
 class W {}
 
-/*element: sameType:needsSignature*/
+/*strong.member: sameType:*/
+/*omit.member: sameType:*/
 sameType(a, b) => Expect.equals(a.runtimeType, b.runtimeType);
 
-/*element: main:needsSignature*/
+/*strong.member: main:*/
+/*omit.member: main:*/
 main() {
   A a = new A<U, V, W>();
   sameType(new A<W, U, V>(), a.shift());

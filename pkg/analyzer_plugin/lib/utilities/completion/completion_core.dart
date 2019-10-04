@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -33,7 +33,7 @@ abstract class CompletionCollector {
    * Hence, this setter throws a [StateError] if the length has already been
    * set.
    */
-  void set length(int length);
+  set length(int length);
 
   /**
    * Set the offset of the region of text that should be replaced by the
@@ -43,7 +43,7 @@ abstract class CompletionCollector {
    * Hence, this setter throws a [StateError] if the offset has already been
    * set.
    */
-  void set offset(int offset);
+  set offset(int offset);
 
   /**
    * Indicates if the collector's offset has been set (and ultimately the
@@ -72,7 +72,7 @@ abstract class CompletionContributor {
    * Contribute completion suggestions for the completion location specified by
    * the given [request] into the given [collector].
    */
-  Future<Null> computeSuggestions(
+  Future<void> computeSuggestions(
       covariant CompletionRequest request, CompletionCollector collector);
 }
 
@@ -97,8 +97,8 @@ class CompletionGenerator {
    * [path]. If any of the contributors throws an exception, also create a
    * non-fatal 'plugin.error' notification.
    */
-  Future<GeneratorResult> generateCompletionResponse(
-      CompletionRequest request) async {
+  Future<GeneratorResult<CompletionGetSuggestionsResult>>
+      generateCompletionResponse(CompletionRequest request) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     List<Notification> notifications = <Notification>[];
@@ -160,5 +160,5 @@ abstract class DartCompletionRequest implements CompletionRequest {
    * The analysis result for the file in which the completion is being
    * requested.
    */
-  ResolveResult get result;
+  ResolvedUnitResult get result;
 }

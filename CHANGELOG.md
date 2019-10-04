@@ -1,581 +1,1772 @@
-## 2.0.0-dev.XX.0
-(Add new changes here, and they will be copied to the
- change section for the next dev version)
+## Next release
+(Add new changes here, and they will be copied to the change section for the
+ next release)
 
 ### Language
 
-#### Strong Mode
+*   **Breaking change** [#37985](https://github.com/dart-lang/sdk/issues/37985):
+    Inference is changed when using `Null` values in a `FutureOr` context.
+    Namely, constraints of the forms similar to `Null` <: `FutureOr<T>` now
+    yield `Null` as the solution for `T`.  For example, the following code will
+    now print "Null", and it was printing "dynamic" before (note that the
+    anonymous closure `() {}` in the example has `Null` as its return type):
+
+```dart
+import 'dart:async';
+void foo<T>(FutureOr<T> Function() f) { print(T); }
+main() { foo(() {}); }
+```
+
+
+### Core libraries
+
+* Default values of parameters of abstract methods are no longer available
+  via `dart:mirrors`.
 
 ### Dart VM
 
-### Tool Changes
+### Tools
 
 #### Pub
 
-#### Other Tools
+#### Linter
 
-### Core library changes
+The Linter was updated to `0.1.99`, which includes:
 
-## 2.0.0-dev.61.0
+* fixed unsafe casts in `overridden_fields`
+* (internal) migration to the mock SDK in `package:analyzer` for testing
+* fixed empty argument list access in `use_full_hex_values_for_flutter_color_fix`
+* new lint: `prefer_relative_imports`
+* improved messages for `await_only_futures`
+
+## 2.5.1 - 2019-09-27
+
+This is a patch release that prevents type inference failures in the analyzer
+(Issue [38365][]).
+
+[38365]: https://github.com/dart-lang/sdk/issues/38365
+
+## 2.5.0 - 2019-09-10
+
+### Language
+
+The set of operations allowed in constant expressions has been expanded as
+described in
+the [constant update proposal](https://github.com/dart-lang/language/issues/61).
+The control flow and spread collection features shipped in Dart 2.3 are now also
+supported in constants
+as
+[described in the specification here](https://github.com/dart-lang/language/blob/master/accepted/2.3/unified-collections/feature-specification.md#constant-semantics).
+
+Specifically, it is now valid to use the following operations in constant
+expressions under the appropriate conditions:
+  - Casts (`e as T`) and type tests (`e is T`).
+  - Comparisons to `null`, even for types which override the `==` operator.
+  - The `&`, `|`, and `^` binary operators on booleans.
+  - The spread operators (`...` and `...?`).
+  - An `if` element in a collection literal.
+
+```dart
+// Example: these are now valid constants.
+const Object i = 3;
+const list = [i as int];
+const set = {if (list is List<int>) ...list};
+const map = {if (i is int) i : "int"};
+```
+
+In addition, the semantics of constant evaluation has been changed as follows:
+  - The `&&` operator only evaluates its second operand if the first evaluates
+  to true.
+  - The `||` operator only evaluates its second operand if the first evaluates
+  to false.
+  - The `??` operator only evaluates its second operand if the first evaluates
+  to null.
+  - The conditional operator (`e ? e1 : e2`) only evaluates one of the two
+    branches, depending on the value of the first operand.
+
+```dart
+// Example: x is now a valid constant definition.
+const String s = null;
+const int x = (s == null) ? 0 : s.length;
+```
+
+### Core libraries
+
+* **Breaking change** [#36900](https://github.com/dart-lang/sdk/issues/36900):
+  The following methods and
+  properties across various core libraries, which used to declare a return type
+  of `List<int>`, were updated to declare a return type of `Uint8List`:
+
+  * `BytesBuilder.takeBytes()`
+  * `BytesBuilder.toBytes()`
+  * `Datagram.data`
+  * `File.readAsBytes()` (`Future<Uint8List>`)
+  * `File.readAsBytesSync()`
+  * `InternetAddress.rawAddress`
+  * `RandomAccessFile.read()` (`Future<Uint8List>`)
+  * `RandomAccessFile.readSync()`
+  * `RawSocket.read()`
+  * `Utf8Codec.encode()` (and `Utf8Encoder.convert()`)
+
+  In addition, the following classes were updated to implement
+  `Stream<Uint8List>` rather than `Stream<List<int>>`:
+
+  * `HttpRequest`
+  * `Socket`
+
+  **Possible errors and how to fix them**
+
+    * > The argument type 'Utf8Decoder' can't be assigned to the parameter type 'StreamTransformer<Uint8List, dynamic>'
+
+      > type 'Utf8Decoder' is not a subtype of type 'StreamTransformer' of 'streamTransformer'"
+
+      You can fix these call sites by updating your code to use
+      `StreamTransformer.bind()` instead of `Stream.transform()`, like so:
+
+      *Before:* `stream.transform(utf8.decoder)`
+      *After:* `utf8.decoder.bind(stream)`
+
+    * > The argument type 'IOSink' can't be assigned to the parameter type 'StreamConsumer<Uint8List>'
+
+      > type '_IOSinkImpl' is not a subtype of type 'StreamConsumer<Uint8List>' of 'streamConsumer'
+
+      You can fix these call sites by casting your stream instance to a `Stream<List<int>>` before calling `.pipe()` on the stream, like so:
+
+      *Before:* `stream.pipe(consumer)`
+      *After:* `stream.cast<List<int>>().pipe(consumer)`
+
+  Finally, the following typed lists were updated to have their `sublist()`
+  methods declare a return type that is the same as the source list:
+
+  * `Int8List.sublist()` → `Int8List`
+  * `Int16List.sublist()` → `Int16List`
+  * `Int32List.sublist()` → `Int32List`
+  * `Int64List.sublist()` → `Int64List`
+  * `Int32x4List.sublist()` → `Int32x4List`
+  * `Float32List.sublist()` → `Float32List`
+  * `Float64List.sublist()` → `Float64List`
+  * `Float32x4List.sublist()` → `Float32x4List`
+  * `Float64x2List.sublist()` → `Float64x2List`
+  * `Uint8List.sublist()` → `Uint8List`
+  * `Uint8ClampedList.sublist()` → `Uint8ClampedList`
+  * `Uint16List.sublist()` → `Uint16List`
+  * `Uint32List.sublist()` → `Uint32List`
+  * `Uint64List.sublist()` → `Uint64List`
+
+#### `dart:async`
+
+* Add `value` and `error` constructors on `Stream`
+  to allow easily creating single-value or single-error streams.
+
+#### `dart:core`
+
+* Update `Uri` class to support [RFC6874](https://tools.ietf.org/html/rfc6874):
+  "%25" or "%" can be appended to the end of a valid IPv6 representing a Zone
+  Identifier. A valid zone ID consists of unreversed character or Percent
+  encoded octet, which was defined in RFC3986.
+  IPv6addrz = IPv6address "%25" ZoneID
+
+  [29456]: https://github.com/dart-lang/sdk/issues/29456
+
+#### `dart:io`
+
+* **Breaking change** [#37192](https://github.com/dart-lang/sdk/issues/37192):
+  The `Cookie` class's constructor's `name` and `value`
+  optional positional parameters are now mandatory. The
+  signature changes from:
+
+      Cookie([String name, String value])
+
+  to
+
+      Cookie(String name, String value)
+
+  However, it has not been possible to set `name` and `value` to null since Dart
+  1.3.0 (2014) where a bug made it impossible. Any code not using both
+  parameters or setting any to null would necessarily get a noSuchMethod
+  exception at runtime. This change catches such erroneous uses at compile time.
+  Since code could not previously correctly omit the parameters, this is not
+  really a breaking change.
+
+* **Breaking change** [#37192](https://github.com/dart-lang/sdk/issues/37192):
+  The `Cookie` class's `name` and `value` setters now
+  validates that the strings are made from the allowed character set and are not
+  null. The constructor already made these checks and this
+  fixes the loophole where the setters didn't also validate.
 
 ### Dart VM
 
-* `async` functions now start synchronously by default.
-  Passing the `--no-sync-async` flag will produce the old behavior,
-  starting `async` functions asynchronously.
-
-### Tool Changes
+### Tools
 
 #### Pub
 
-* Fix support for running executables in Dart 2 mode.
+ * Clean-up invalid git repositories in cache when fetching from git.
+ * **Breaking change**  [#36765](https://github.com/dart-lang/sdk/issues/36765):
+   Packages published to [pub.dev](https://pub.dev) can no longer contain git
+   dependencies. These packages will be rejected by the server.
+
+#### Linter
+
+The Linter was updated to `0.1.96`, which includes:
+
+* fixed false positives in `unnecessary_parens`
+* various changes to migrate to preferred analyzer APIs
+* rule test fixes
+
+#### Dartdoc
+
+Dartdoc was updated to `0.28.4`; this version includes several fixes and is based
+on a newer version of the analyzer package.
+
+## 2.4.1 - 2019-08-07
+
+This is a patch release that fixes a performance regression in JIT mode, as
+well as a potential crash of our AOT compiler.
+
+### Dart VM
+
+* Fixed a performance regression where usage of `Int32List` could trigger
+  repeated deoptimizations in JIT mode (Issue [37551][]).
+
+* Fixed a bug where usage of a static getter with name `length` could cause a
+  crash in our AOT compiler (Issue [35121][]).
+
+[37551]: https://github.com/dart-lang/sdk/issues/37551
+[35121]: https://github.com/dart-lang/sdk/issues/35121
+
+### Dart Dev Compiler (DDC)
+
+Callbacks passed to JS and wrapped with `allowInterop` or
+`allowInteropCaptureThis` are now strict about argument counts and argument
+types. This may mean that tests which were previously passing and relying on
+loose argument checking (too many or too few arguments, or arguments with too
+specific types like `List<Something>` instead of `List<dynamic>`) may start
+failing. This changes makes DDC behave more like dart2js with the default flags.
+
+## 2.4.0 - 2019-06-27
+
+### Core libraries
+
+#### `dart:isolate`
+
+* `TransferableTypedData` class was added to facilitate faster cross-isolate
+communication of `Uint8List` data.
+
+* **Breaking change**: `Isolate.resolvePackageUri` will always throw an
+  `UnsupportedError` when compiled with dart2js or DDC. This was the only
+  remaining API in `dart:isolate` that didn't automatically throw since we
+  dropped support for this library in [Dart 2.0.0][1]. Note that the API already
+  throws in dart2js if the API is used directly without manually setting up a
+  `defaultPackagesBase` hook.
+
+[1]: https://github.com/dart-lang/sdk/blob/master/CHANGELOG.md#200---2018-08-07
+
+
+#### `dart:developer`
+* Exposed `result`, `errorCode` and `errorDetail` getters in
+  `ServiceExtensionResponse` to allow for better debugging of VM service
+  extension RPC results.
+
+#### `dart:io`
+
+* Fixed `Cookie` class interoperability with certain websites by allowing the
+  cookie values to be the empty string (Issue [35804][]) and not stripping
+  double quotes from the value (Issue [33327][]) in accordance with RFC 6265.
+
+  [33327]: https://github.com/dart-lang/sdk/issues/33327
+  [35804]: https://github.com/dart-lang/sdk/issues/35804
+
+* [#36971](https://github.com/dart-lang/sdk/issues/36971):
+  The `HttpClientResponse` interface has been extended with the addition of a
+  new `compressionState` getter, which specifies whether the body of a
+  response was compressed when it was received and whether it has been
+  automatically uncompressed via `HttpClient.autoUncompress`.
+
+  As part of this change, a corresponding new enum was added to `dart:io`:
+  `HttpClientResponseCompressionState`.
+
+  This is a **breaking change** for those implementing the `HttpClientResponse`
+  interface as subclasses will need to implement the new getter.
+
+#### `dart:async`
+
+* **Breaking change** [#36382](https://github.com/dart-lang/sdk/issues/36382):
+  The `await for` allowed `null` as a stream due to a bug
+  in `StreamIterator` class. This bug has now been fixed.
+
+#### `dart:core`
+
+* [#36171](https://github.com/dart-lang/sdk/issues/36171):
+  The `RegExp` interface has been extended with two new
+  constructor named parameters:
+
+  * `unicode:` (`bool`, default: `false`), for Unicode patterns
+  * `dotAll:` (`bool`, default: `false`), to change the matching behavior of
+    '.' to also match line terminating characters.
+
+  Appropriate properties for these named parameters have also been added so
+  their use can be detected after construction.
+
+  In addition, `RegExp` methods that originally returned `Match` objects
+  now return a more specific subtype, `RegExpMatch`, which adds two features:
+
+  * `Iterable<String> groupNames`, a property that contains the names of all
+    named capture groups
+  * `String namedGroup(String name)`, a method that retrieves the match for
+    the given named capture group
+
+  This is a **breaking change** for implementers of the `RegExp` interface.
+  Subclasses will need to add the new properties and may have to update the
+  return types on overridden methods.
+
+### Language
+
+*   **Breaking change** [#35097](https://github.com/dart-lang/sdk/issues/35097):
+    Covariance of type variables used in super-interfaces
+    is now enforced. For example, the following code was
+    previously accepted and will now be rejected:
+
+```dart
+class A<X> {};
+class B<X> extends A<void Function(X)> {};
+```
+
+* The identifier `async` can now be used in asynchronous and generator
+  functions.
+
+### Dart for the Web
+
+#### Dart Dev Compiler (DDC)
+
+* Improve `NoSuchMethod` errors for failing dynamic calls. Now they include
+  specific information about the nature of the error such as:
+  * Attempting to call a null value.
+  * Calling an object instance with a null `call()` method.
+  * Passing too few or too many arguments.
+  * Passing incorrect named arguments.
+  * Passing too few or too many type arguments.
+  * Passing type arguments to a non-generic method.
+
+### Tools
+
+#### Linter
+
+The Linter was updated to `0.1.91`, which includes the following changes:
+
+* Fixed missed cases in `prefer_const_constructors`
+* Fixed `prefer_initializing_formals` to no longer suggest API breaking changes
+* Updated `omit_local_variable_types` to allow explicit `dynamic`s
+* Fixed null-reference in `unrelated_type_equality_checks`
+* New lint: `unsafe_html`
+* Broadened `prefer_null_aware_operators` to work beyond local variables.
+* Added `prefer_if_null_operators`.
+* Fixed `prefer_contains` false positives.
+* Fixed `unnecessary_parenthesis` false positives.
+* Fixed `prefer_asserts_in_initializer_lists` false positives
+* Fixed `curly_braces_in_flow_control_structures` to handle more cases
+* New lint: `prefer_double_quotes`
+* New lint: `sort_child_properties_last`
+* Fixed `type_annotate_public_apis` false positive for `static const` initializers
+
+#### Pub
+
+* `pub publish` will no longer warn about missing dependencies for import
+   statements in `example/`.
+* OAuth2 authentication will explicitely ask for the `openid` scope.
+
+## 2.3.2 - 2019-06-11
+
+This is a patch version release with a security improvement.
+
+### Security vulnerability
+
+*  **Security improvement:** On Linux and Android, starting a process with
+   `Process.run`, `Process.runSync`, or `Process.start` would first search the
+   current directory before searching `PATH` (Issue [37101][]). This behavior
+   effectively put the current working directory in the front of `PATH`, even if
+   it wasn't in the `PATH`. This release changes that behavior to only searching
+   the directories in the `PATH` environment variable. Operating systems other
+   than Linux and Android didn't have this behavior and aren't affected by this
+   vulnerability.
+
+   This vulnerability could result in execution of untrusted code if a command
+   without a slash in its name was run inside an untrusted directory containing
+   an executable file with that name:
+
+   ```dart
+   Process.run("ls", workingDirectory: "/untrusted/directory")
+   ```
+
+   This would attempt to run `/untrusted/directory/ls` if it existed, even
+   though it is not in the `PATH`. It was always safe to instead use an absolute
+   path or a path containing a slash.
+
+   This vulnerability was introduced in Dart 2.0.0.
+
+[37101]: https://github.com/dart-lang/sdk/issues/37101
+
+## 2.3.1 - 2019-05-21
+
+This is a patch version release with bug fixes.
+
+### Tools
+
+#### dart2js
+
+* Fixed a bug that caused the compiler to crash when it compiled UI-as-code
+  features within fields (Issue [36864][]).
+
+[36864]: https://github.com/dart-lang/sdk/issues/36864
+
+## 2.3.0 - 2019-05-08
+
+The focus in this release is on the new "UI-as-code" language features which
+make collections more expressive and declarative.
+
+### Language
+
+Flutter is growing rapidly, which means many Dart users are building UI in code
+out of big deeply-nested expressions. Our goal with 2.3.0 was to [make that kind
+of code easier to write and maintain][ui-as-code]. Collection literals are a
+large component, so we focused on three features to make collections more
+powerful. We'll use list literals in the examples below, but these features also
+work in map and set literals.
+
+[ui-as-code]: https://medium.com/dartlang/making-dart-a-better-language-for-ui-f1ccaf9f546c
+
+#### Spread
+
+Placing `...` before an expression inside a collection literal unpacks the
+result of the expression and inserts its elements directly inside the new
+collection. Where before you had to write something like this:
+
+```dart
+CupertinoPageScaffold(
+  child: ListView(children: [
+    Tab2Header()
+  ]..addAll(buildTab2Conversation())
+    ..add(buildFooter())),
+);
+```
+
+Now you can write this:
+
+```dart
+CupertinoPageScaffold(
+  child: ListView(children: [
+    Tab2Header(),
+    ...buildTab2Conversation(),
+    buildFooter()
+  ]),
+);
+```
+
+If you know the expression might evaluate to null and you want to treat that as
+equivalent to zero elements, you can use the null-aware spread `...?`.
+
+#### Collection if
+
+Sometimes you might want to include one or more elements in a collection only
+under certain conditions. If you're lucky, you can use a `?:` operator to
+selectively swap out a single element, but if you want to exchange more than one
+or omit elements, you are forced to write imperative code like this:
+
+```dart
+Widget build(BuildContext context) {
+  var children = [
+    IconButton(icon: Icon(Icons.menu)),
+    Expanded(child: title)
+  ];
+
+  if (isAndroid) {
+    children.add(IconButton(icon: Icon(Icons.search)));
+  }
+
+  return Row(children: children);
+}
+```
+
+We now allow `if` inside collection literals to conditionally omit or (with
+`else`) swap out an element:
+
+```dart
+Widget build(BuildContext context) {
+  return Row(
+    children: [
+      IconButton(icon: Icon(Icons.menu)),
+      Expanded(child: title),
+      if (isAndroid)
+        IconButton(icon: Icon(Icons.search)),
+    ],
+  );
+}
+```
+
+Unlike the existing `?:` operator, a collection `if` can be composed with
+spreads to conditionally include or omit multiple items:
+
+```dart
+Widget build(BuildContext context) {
+  return Row(
+    children: [
+      IconButton(icon: Icon(Icons.menu)),
+      if (isAndroid) ...[
+        Expanded(child: title),
+        IconButton(icon: Icon(Icons.search)),
+      ]
+    ],
+  );
+}
+```
+
+#### Collection for
+
+In many cases, the higher-order methods on Iterable give you a declarative way
+to modify a collection in the context of a single expression. But some
+operations, especially involving both transforming and filtering, can be
+cumbersome to express in a functional style.
+
+To solve this problem, you can use `for` inside a collection literal. Each
+iteration of the loop produces an element which is then inserted in the
+resulting collection. Consider the following code:
+
+```dart
+var command = [
+  engineDartPath,
+  frontendServer,
+  ...fileSystemRoots.map((root) => "--filesystem-root=$root"),
+  ...entryPoints
+      .where((entryPoint) => fileExists("lib/$entryPoint.json"))
+      .map((entryPoint) => "lib/$entryPoint"),
+  mainPath
+];
+```
+
+With a collection `for`, the code becomes simpler:
+
+```dart
+var command = [
+  engineDartPath,
+  frontendServer,
+  for (var root in fileSystemRoots) "--filesystem-root=$root",
+  for (var entryPoint in entryPoints)
+    if (fileExists("lib/$entryPoint.json")) "lib/$entryPoint",
+  mainPath
+];
+```
+
+As you can see, all three of these features can be freely composed. For full
+details of the changes, see [the official proposal][ui-as-code proposal].
+
+[ui-as-code proposal]: https://github.com/dart-lang/language/blob/master/accepted/future-releases/unified-collections/feature-specification.md
+
+**Note: These features are not currently supported in *const* collection
+literals. In a future release, we intend to relax this restriction and allow
+spread and collection `if` inside const collections.**
 
 ### Core library changes
 
-* `dart:io`
-  * Dart-styled constants have been added for `HttpStatus`, `HttpHeaders`,
-    `ContentType`, `HttpClient`, `WebSocketStatus`, `CompressionOptions`,
-    and `WebSocket`. The `SCREAMING_CAPS` constants are marked deprecated.
-    Note that `HttpStatus.CONTINUE` is now `HttpStatus.continue_`, and that
-    e.g. `HttpHeaders.FIELD_NAME` is now `HttpHeaders.fieldNameHeader`.
+#### `dart:isolate`
 
-## 2.0.0-dev.60.0
+*   Added `debugName` property to `Isolate`.
+*   Added `debugName` optional parameter to `Isolate.spawn` and
+    `Isolate.spawnUri`.
 
-### Core library changes
+#### `dart:core`
 
-* `dart:convert`
-  * Allow `utf8.decoder.fuse(json.decoder)` to ignore leading Unicode BOM.
+*   RegExp patterns can now use lookbehind assertions.
+*   RegExp patterns can now use named capture groups and named backreferences.
+    Currently, named group matches can only be retrieved in Dart either by the
+    implicit index of the named group or by downcasting the returned Match
+    object to the type RegExpMatch. The RegExpMatch interface contains methods
+    for retrieving the available group names and retrieving a match by group
+    name.
 
-### Tool Changes
+### Dart VM
+
+*   The VM service now requires an authentication code by default. This behavior
+    can be disabled by providing the `--disable-service-auth-codes` flag.
+
+*   Support for deprecated flags '-c' and '--checked' has been removed.
+
+### Dart for the Web
+
+#### dart2js
+
+A binary format was added to dump-info. The old JSON format is still available
+and provided by default, but we are starting to deprecate it. The new binary
+format is more compact and cheaper to generate. On some large apps we tested, it
+was 4x faster to serialize and used 6x less memory.
+
+To use the binary format today, use `--dump-info=binary`, instead of
+`--dump-info`.
+
+What to expect next?
+
+*   The [visualizer tool][visualizer] will not be updated to support the new
+    binary format, but you can find several command-line tools at
+    `package:dart2js_info` that provide similar features to those in the
+    visualizer.
+
+*   The command-line tools in `package:dart2js_info` also work with the old JSON
+    format, so you can start using them even before you enable the new format.
+
+*   In a future release `--dump-info` will default to `--dump-info=binary`. At
+    that point, there will be an option to fallback to the JSON format, but the
+    visualizer tool will be deprecated.
+
+*   A release after that, the JSON format will no longer be available from
+    dart2js, but may be available from a command-line tool in
+    `package:dart2js_info`.
+
+[visualizer]: https://dart-lang.github.io/dump-info-visualizer/
+
+### Tools
+
+#### dartfmt
+
+*   Tweak set literal formatting to follow other collection literals.
+*   Add support for "UI as code" features.
+*   Properly format trailing commas in assertions.
+*   Improve indentation of adjacent strings in argument lists.
+
+#### Linter
+
+The Linter was updated to `0.1.86`, which includes the following changes:
+
+*   Added the following lints: `prefer_inlined_adds`,
+    `prefer_for_elements_to_map_fromIterable`,
+    `prefer_if_elements_to_conditional_expressions`,
+    `diagnostic_describe_all_properties`.
+*   Updated `file_names` to skip prefixed-extension Dart files (`.css.dart`,
+  `.g.dart`, etc.).
+*   Fixed false positives in `unnecessary_parenthesis`.
+
+#### Pub
+
+*   Added a CHANGELOG validator that complains if you `pub publish` without
+    mentioning the current version.
+*   Removed validation of library names when doing `pub publish`.
+*   Added support for `pub global activate`ing package from a custom pub URL.
+*   Added subcommand: `pub logout`. Logs you out of the current session.
+
+#### Dart native
+
+Initial support for compiling Dart apps to native machine code has been added.
+Two new tools have been added to the `bin` folder of the Dart SDK:
+
+* `dart2aot`: AOT (ahead-of-time) compiles a Dart program to native
+machine code. The tool is supported on Windows, macOS, and Linux.
+
+* `dartaotruntime`: A small runtime used for executing an AOT compiled program.
+
+## 2.2.0 - 2019-02-26
+
+### Language
+
+Sets now have a literal syntax like lists and maps do:
+
+```dart
+var set = {1, 2, 3};
+```
+
+Using curly braces makes empty sets ambiguous with maps:
+
+```dart
+var collection = {}; // Empty set or map?
+```
+
+To avoid breaking existing code, an ambiguous literal is treated as a map.
+To create an empty set, you can rely on either a surrounding context type
+or an explicit type argument:
+
+```dart
+// Variable type forces this to be a set:
+Set<int> set = {};
+
+// A single type argument means this must be a set:
+var set2 = <int>{};
+```
+
+Set literals are released on all platforms. The `set-literals` experiment flag
+has been disabled.
+
+### Tools
 
 #### Analyzer
 
-* New static checking of duplicate shown or hidden names in an export directive
-  ([issue 33182]).
+*   The `DEPRECATED_MEMBER_USE` hint was split into two hints:
 
-[issue 33182]: https://github.com/dart-lang/sdk/issues/33182
+    *   `DEPRECATED_MEMBER_USE` reports on usage of `@deprecated` members
+        declared in a different package.
+    *   `DEPRECATED_MEMBER_USE_FROM_SAME_PACKAGE` reports on usage of
+        `@deprecated` members declared in the same package.
 
-## 2.0.0-dev.59.0
+#### Linter
+
+Upgraded the linter to `0.1.82` which adds the following improvements:
+
+*   Added `provide_deprecation_message`, and
+    `use_full_hex_values_for_flutter_colors`, `prefer_null_aware_operators`.
+*   Fixed `prefer_const_declarations` set literal false-positives.
+*   Updated `prefer_collection_literals` to support set literals.
+*   Updated `unnecessary_parenthesis` play nicer with cascades.
+*   Removed deprecated lints from the "all options" sample.
+*   Stopped registering "default lints".
+*   Fixed `hash_and_equals` to respect `hashCode` fields.
+
+### Other libraries
+
+#### `package:kernel`
+
+*   **Breaking change:** The `klass` getter on the `InstanceConstant` class in
+    the Kernel AST API has been renamed to `classNode` for consistency.
+
+*   **Breaking change:** Updated `Link` implementation to utilize true symbolic
+    links instead of junctions on Windows. Existing junctions will continue to
+    work with the new `Link` implementation, but all new links will create
+    symbolic links.
+
+    To create a symbolic link, Dart must be run with administrative privileges
+    or Developer Mode must be enabled, otherwise a `FileSystemException` will be
+    raised with errno set to `ERROR_PRIVILEGE_NOT_HELD` (Issue [33966]).
+
+[33966]: https://github.com/dart-lang/sdk/issues/33966
+
+## 2.1.1 - 2019-02-18
+
+This is a patch version release. Again, the team's focus was mostly on improving
+performance and stability after the large changes in Dart 2.0.0. In particular,
+dart2js now always uses the "fast startup" emitter and the old emitter has been
+removed.
+
+There are a couple of very minor **breaking changes:**
+
+*   In `dart:io`, adding to a closed `IOSink` now throws a `StateError`.
+
+*   On the Dart VM, a soundness hole when using `dart:mirrors` to reflectively
+    invoke a method in an incorrect way that violates its static types has
+    been fixed (Issue [35611][]).
 
 ### Language
 
-The change to make bounds on generic functions invariant has landed in the
-analyzer.  The analyzer will now issue an invalid override error on the
-following program ([issue 29014][sdk#29014]).
+This release has no language changes.
+
+### Core library
+
+#### `dart:core`
+
+*   Made `DateTime.parse()` also recognize `,` as a valid decimal separator
+    when parsing from a string (Issue [35576][]).
+
+[35576]: https://github.com/dart-lang/sdk/issues/35576
+
+#### `dart:html`
+
+*   Added methods `Element.removeAttribute`, `Element.removeAttributeNS`,
+    `Element.hasAttribute` and `Element.hasAttributeNS`. (Issue [35655][]).
+*   Improved dart2js compilation of `element.attributes.remove(name)` to
+    generate `element.removeAttribute(name)`, so that there is no performance
+    reason to migrate to the above methods.
+*   Fixed a number of `dart:html` bugs:
+
+    *   Fixed HTML API's with callback typedef to correctly convert Dart
+        functions to JS functions (Issue [35484]).
+    *   HttpStatus constants exposed in `dart:html` (Issue [34318]).
+    *   Expose DomName `ondblclick` and `dblclickEvent` for Angular analyzer.
+    *   Fixed `removeAll` on `classes`; `elements` parameter should be
+        `Iterable<Object>` to match Set's `removeAll` not `Iterable<E>` (Issue
+        [30278]).
+    *   Fixed a number of methods on DataTransferItem, Entry, FileEntry and
+        DirectoryEntry which previously returned NativeJavaScriptObject.  This
+        fixes handling drag/drop of files/directories (Issue [35510]).
+    *   Added ability to allow local file access from Chrome browser in ddb.
+
+[35655]: https://github.com/dart-lang/sdk/issues/35655
+[30278]: https://github.com/dart-lang/sdk/issues/30278
+[34318]: https://github.com/dart-lang/sdk/issues/34318
+[35484]: https://github.com/dart-lang/sdk/issues/35484
+[35510]: https://github.com/dart-lang/sdk/issues/35510
+
+#### `dart:io`
+
+*   **Breaking Change:** Adding to a closed `IOSink` now throws a `StateError`.
+*   Added ability to get and set low level socket options.
+
+[29554]: https://github.com/dart-lang/sdk/issues/29554
+
+### Dart VM
+
+In previous releases it was possible to violate static types using
+`dart:mirrors`. This code would run without any TypeErrors and print
+"impossible" output:
 
 ```dart
+import 'dart:mirrors';
+
 class A {
-  void f<T extends int>() {}
-}
-
-class B extends A {
-  @override
-  void f<T extends num>() {}
-}
-```
-
-[sdk#29014]: https://github.com/dart-lang/sdk/issues/29014
-
-## 2.0.0-dev.58.0
-
-## 2.0.0-dev.57.0
-
-* Support Javascript Promise APIs as a Dart Future.  In Javascript a Promise has two
-  callbacks one for success and one for failure.  For success the Future returns the
-  value e.g.,
-
-BackgroundFetchManager.get is exposed as:
-
-```dart
-  Future<BackgroundFetchRegistration> get(String id)
-```
-
-usage could be:
-
-   BackgroundFetchRegistration result = await fetchMgr.get('abc');
-
-  The underlying JS Promise to Future mechanism will be exposed as a public API in a future checkin.
-
-## 2.0.0-dev.56.0
-
-### Language
-
-* Invocations of noSuchMethod receive default values for optional args.
-  * The following program used to print "No arguments passed", and now prints
-    "First argument is 3".
-
-```dart
-abstract class B {
-  void m([int x = 3]);
-}
-
-class A implements B {
-  noSuchMethod(Invocation i) {
-    if (i.positionalArguments.length == 0) {
-      print("No arguments passed");
-    } else {
-      print("First argument is ${i.positionalArguments[0]}");
+  void method(int v) {
+    if (v != null && v is! int) {
+      print("This should be impossible: expected null or int got ${v}");
     }
   }
 }
 
 void main() {
-  A().m();
+  final obj = A();
+  reflect(obj).invoke(#method, ['not-an-number']);
 }
 ```
 
-### Core library changes
+This bug is fixed now. Only code that already violates static typing will break.
+See Issue [35611][] for more details.
 
-* `dart:core`
-  * Deprecated the `NoSuchMethodError` constructor.
+[35611]: https://github.com/dart-lang/sdk/issues/35611
 
-* `dart:mirrors`
-  * Marked `MirrorsUsed` as deprecated. The mirrors library is no longer
-    supported by dart2js, and `MirrorsUsed` only affected dart2js.
-
-* `dart:io`
-  * Added `X509Certificate.der`, `X509Certificate.pem`, and
-    `X509Certificate.sha1`.
-  * Added `FileSystemEntity.fromRawPath` constructor to allow for
-    the creation of `FileSystemEntity` using `Uint8List` buffers.
-
-### Dart VM
-
-* `async` functions now start synchronously when previewing Dart 2 with
-  `--preview-dart-2`.  Build tools (e.g., build_runner) may override the
-  default and/or allow developers to configure.  Passing the
-  `--no-sync-async` flag will produce the old behavior, starting `async`
-  functions asynchronously.
-
-### Tool Changes
-
-#### dartfmt
-
-  * Support metadata annotations on enum cases.
-
-## 2.0.0-dev.55.0
-
-### Language
-
-* Changed the `cast` method to always change the type.  Deprecated the
-  `retype` method and made it redirect to `cast`.  Applies to all of the
-  following interfaces:
-  * `Stream`:
-  * `StreamTransformer`
-  * `Iterable`
-  * `Map`
-
-### Tool Changes
+### Dart for the Web
 
 #### dart2js
 
-* Several fixes to improve support for running output of dart2js as a webworker.
+*   The old "full emitter" back-end is removed and dart2js always uses the "fast
+    startup" back-end. The generated fast startup code is optimized to load
+    faster, even though it can be slightly larger. The `--fast-startup` and
+    `--no-fast-startup` are allowed but ignored. They will be removed in a
+    future version.
 
-* `dart:isolate` implementation removed. To launch background tasks,
-  please use webworkers instead. APIs for webworkers can be accessed from
-  `dart:html` or JS-interop.
+*   We fixed a bug in how deferred constructor calls were incorrectly not marked
+    as deferred. The old behavior didn't cause breakages, but was imprecise and
+    pushed more code to the main output unit.
 
-#### Pub
+*   A new deferred split algorithm implementation was added.
 
-* Use forward-slash paths to Git on Windows
+    This implementation fixes a soundness bug and addresses performance issues
+    of the previous implementation, because of that it can have a visible impact
+    on apps. In particular:
 
-## 2.0.0-dev.54.0
+    *   We fixed a performance issue which was introduced when we migrated to
+        the common front-end. On large apps, the fix can cut 2/3 of the time
+        spent on this task.
 
-### Core library changes
+    *   We fixed a bug in how inferred types were categorized (Issue [35311][]).
+        The old behavior was unsound and could produce broken programs. The fix
+        may cause more code to be pulled into the main output unit.
 
-* `dart:io`
-  * Added Dart-styled constants to  `ZLibOptions`, `FileMode`, `FileLock`,
-    `FileSystemEntityType`, `FileSystemEvent`, `ProcessStartMode`,
-    `ProcessSignal`, `InternetAddressType`, `InternetAddress`,
-    `SocketDirection`, `SocketOption`, `RawSocketEvent`, and `StdioType`, and
-    deprecated the old `SCREAMING_CAPS` constants.
-  * Added the Dart-styled top-level constants `zlib`, `gzip`, and
-    `systemEncoding`, and deprecated the old `SCREAMING_CAPS` top-level
-    constants.
-  * Removed the top-level `FileMode` constants `READ`, `WRITE`, `APPEND`,
-    `WRITE_ONLY`, and `WRITE_ONLY_APPEND`. Please use e.g. `FileMode.read`
-    instead.
+        This shows up frequently when returning deferred values from closures
+        since the closure's inferred return type is the deferred type. For
+        example, if you have:
 
-### Tool Changes
+        ```dart
+        () async {
+          await deferred_prefix.loadLibrary();
+          return new deferred_prefix.Foo();
+        }
+        ```
 
-#### Pub
+        The closure's return type is `Future<Foo>`. The old implementation
+        defers `Foo`, and incorrectly makes the return type `Future<dynamic>`.
+        This may break in places where the correct type is expected.
 
-* Retry on 500 errors from the pub server.
+        The new implementation will not defer `Foo`, and will place it in the
+        main output unit. If your intent is to defer it, then you need to ensure
+        the return type is not inferred to be `Foo`. For example, you can do so
+        by changing the code to a named closure with a declared type, or by
+        ensuring that the return expression has the type you want, like:
 
-## 2.0.0-dev.53.0
+        ```dart
+        () async {
+          await deferred_prefix.loadLibrary();
+          return new deferred_prefix.Foo() as dynamic;
+        }
+        ```
 
-## 2.0.0-dev.52.0
+        Because the new implementation might require you to inspect and fix your
+        app, we exposed two temporary flags:
 
-### Tool Changes
+    *   The `--report-invalid-deferred-types` causes dart2js to run both the
+        old and new algorithms and report any cases where an invalid type was
+        detected.
 
-#### Dart Dev Compiler
+    *   The `--new-deferred-split` flag enables this new algorithm.
 
-* Failed `as` casts on `Iterable<T>`, `Map<T>`, `Future<T>`, and `Stream<T>`
-  are no longer ignored. These failures were ignored to make it easier to
-  migrate Dart 1 code to strong mode, but ignoring them is a hole in the type
-  system. This closes part of that hole. (We still need to stop ignoring
-  "as" cast failures on function types, and implicit cast failures on the above
-  types and function types.)
+*   The `--categories=*` flag is being replaced. `--categories=all` was only
+    used for testing and it is no longer supported. `--categories=Server`
+    continues to work at this time but it is deprecated, please use
+    `--server-mode` instead.
 
-* `async` functions now start synchronously by default.  Build tools
-  (e.g., build_runner) may override the default and/or allow
-  developers to configure.
+*   The `--library-root` flag was replaced by `--libraries-spec`. This flag is
+    rarely used by developers invoking dart2js directly. It's important for
+    integrating dart2js with build systems. See `--help` for more details on the
+    new flag.
 
-## 2.0.0-dev.51.0
+[35311]: https://github.com/dart-lang/sdk/issues/35311
 
-### Tool Changes
-
-#### dartfmt
-  * Fixes a runtime error when dart_style is itself run in Dart 2.
-  * Force splitting an empty block as the then body of an if with an else.
-  * Uses the new lowercase Dart 2 constant names.
-
-#### Pub
-
-* The `build` and `serve` commands will now fail and point users to
-  https://webdev.dartlang.org/dart-2
-
-#### dart2js
-
-* `async` functions now start synchronously. This will be the default behavior
-  across all tools. To temporarily opt-out, use the `--no-sync-async` flag.
-
-## 2.0.0-dev.50.0
-
-## 2.0.0-dev.49.0
-
-### Tool Changes
-
-#### Pub
-
-* Fix another bug where the version solver could crash when resolving a conflict
-  involving pre-release constraints ([`pub_semver` issue 20][]).
-
-[`pub_semver` issue 20]: https://github.com/dart-lang/pub_semver/issues/20
-
-## 2.0.0-dev.48.0
-
-### Core library changes
-
-* `dart:core`
-  * Added `tryParse` static method to `int`, `double`, `num`, `BigInt`,
-    `Uri` and `DateTime`.
-  * Deprecated `onError` parameter on `int.parse`, `double.parse`
-    and `num.parse`.
-
-## 2.0.0-dev.47.0
-
-### Tool Changes
+### Tools
 
 #### Analyzer
 
-* The command line analyzer (dartanalyzer) and the analysis server no longer
-  treat directories named `packages` specially. Previously they had ignored
-  these directories - and their contents - from the point of view of analysis. Now
-  they'll be treated just as regular directories. This special-casing of
-  `packages` directories was to support using symlinks for package: resolution;
-  that functionality is now handled by `.packages` files.
+*   Support for `declarations-casts` has been removed and the `implicit-casts`
+    option now has the combined semantics of both options. This means that
+    users that disable `implicit-casts` might now see errors that were not
+    previously being reported.
 
-## 2.0.0-dev.46.0
+*   New hints added:
 
-## 2.0.0-dev.45.0
+    *   `NON_CONST_CALL_TO_LITERAL_CONSTRUCTOR` and
+        `NON_CONST_CALL_TO_LITERAL_CONSTRUCTOR_USING_NEW` inform you when a
+        `@literal` const constructor is called in a non-const context (or with
+        `new`).
+    *   `INVALID_LITERAL_ANNOTATION` reports when something other than a const
+        constructor is annotated with `@literal`.
+    *   `SUBTYPE_OF_SEALED_CLASS` reports when any class or mixin subclasses
+        (extends, implements, mixes in, or constrains to) a `@sealed` class, and
+        the two are declared in different packages.
+    *   `MIXIN_ON_SEALED_CLASS` reports when a `@sealed` class is used as a
+        superclass constraint of a mixin.
 
-### Core library changes
+#### dartdoc
 
-* `dart:async`
-  * Removed the deprecated `defaultValue` parameter on `Stream.firstWhere` and
-    `Stream.lastWhere`.
+Default styles now work much better on mobile. Simple browsing and searching of
+API docs now work in many cases.
 
-### Tool Changes
+Upgraded the linter to `0.1.78` which adds the following improvements:
 
-#### Pub
+*   Added `prefer_final_in_for_each`, `unnecessary_await_in_return`,
+    `use_function_type_syntax_for_parameters`,
+    `avoid_returning_null_for_future`, and `avoid_shadowing_type_parameters`.
+*   Updated `invariant_booleans` status to experimental.
+*   Fixed `type_annotate_public_apis` false positives on local functions.
+*   Fixed `avoid_shadowing_type_parameters` to report shadowed type parameters
+    in generic typedefs.
+*   Fixed `use_setters_to_change_properties` to not wrongly lint overriding
+    methods.
+*   Fixed `cascade_invocations` to not lint awaited targets.
+*   Fixed `prefer_conditional_assignment` false positives.
+*   Fixed `join_return_with_assignment` false positives.
+*   Fixed `cascade_invocations` false positives.
+*   Deprecated `prefer_bool_in_asserts` as it is redundant in Dart 2.
 
-* Fix a bug where the version solver could loop infinitely when resolving a
-  conflict involving pre-release constraints ([issue 1863][pub#1863]).
+## 2.1.0 - 2018-11-15
 
-[pub#1863]: https://github.com/dart-lang/pub/issues/1863
+This is a minor version release. The team's focus was mostly on improving
+performance and stability after the large changes in Dart 2.0.0. Notable
+changes:
 
-## 2.0.0-dev.45.0
+*   We've introduced a dedicated syntax for declaring a mixin. Instead of the
+    `class` keyword, it uses `mixin`:
 
-### Tool Changes
+    ```dart
+    mixin SetMixin<E> implements Set<E> {
+      ...
+    }
+    ```
 
-#### Pub
+    The new syntax also enables `super` calls inside mixins.
 
-* Fix a bug where the version solver could crash when resolving a conflict
-  involving pre-release constraints ([issue 1856][pub#1856]).
+*   Integer literals now work in double contexts. When passing a literal number
+    to a function that expects a `double`, you no longer need an explicit `.0`
+    at the end of the number. In releases before 2.1, you need code like this
+    when setting a double like `fontSize`:
 
-[pub#1856]: https://github.com/dart-lang/pub/issues/1856
+    ```dart
+    TextStyle(fontSize: 18.0)
+    ```
 
+    Now you can remove the `.0`:
 
-## 2.0.0-dev.44.0
+    ```dart
+    TextStyle(fontSize: 18)
+    ```
 
-### Tool Changes
+    In releases before 2.1, `fontSize : 18` causes a static error. This was a
+    common mistake and source of friction.
 
-#### Pub
+*   **Breaking change:** A number of static errors that should have been
+    detected and reported were not supported in 2.0.0. These are reported now,
+    which means existing incorrect code may show new errors.
 
-* Pub has a brand new version solver! It supports all the same features as the
-  old version solver, but it's much less likely to stall out on difficult
-  package graphs, and it's much clearer about why a solution can't be found when
-  version solving fails.
-
-## 2.0.0-dev.43.0
-
-## 2.0.0-dev.42.0
-
-### Core library changes
-
-* `dart:collection`
-  * Removed `Maps` class. Extend `MapBase` or mix in `MapMixin` instead to
-    provide map method implementations for a class.
-* `dart:html`
-  * Removed deprecated `query` and `queryAll` use `querySelector` and `queryAllSelector`.
-  * Removed experimental `Document` method `getCSSCanvasContext` and property
-    `supportsCssCanvasContext`.
-  * Removed obsolete `Element` property `xtag` no longer supported in browsers.
-  * Exposed `ServiceWorker` class.
-  * Added constructor to `MessageChannel` and `MessagePort` `addEventListener` automatically calls
-    `start` method to receive queued messages.
-* `dart:io`
-  * Added `IOOverrides.socketConnect`.
-
-### Tool Changes
-
-#### dart2js
-
-* Fixed bug where dart2js crashed when invoked from `pub build` and `pub serve`
-  when given files that contain non-ASCII characters ([issue 32561][sdk#32561]).
-
-* Fixed `--no-frequency-based-minification`, which was not working together with
-  the common front-end ([issue 32600][sdk#32600]).
-
-* Support `--categories=Server` with the common front-end. This included also
-  fixes for the constant value `bool.fromEnvironment("*")` of
-  "dart.libraries.io", "dart.libraries.mirrors", "dart.libraries.isolate", and
-  "dart.libraries.html".
-
-[sdk#32561]: https://github.com/dart-lang/sdk/issues/32561
-[sdk#32600]: https://github.com/dart-lang/sdk/issues/32600
-
-#### Pub
-
-* Pub will now automatically retry HTTP requests that fail with an IO error
-  ([issue 1826][pub#1826]).
-
-* `pub deps` now includes the SDK version. This makes the output more helpful
-  when included in bug reports ([issue 1827][pub#1827]).
-
-* `build` and `serve` now print a deprecation warning pointing users to
-  https://webdev.dartlang.org/dart-2 ([issue 1823][pub#1823]).
-
-[pub#1823]: https://github.com/dart-lang/pub/issues/1823
-[pub#1826]: https://github.com/dart-lang/pub/issues/1826
-[pub#1827]: https://github.com/dart-lang/pub/issues/1827
-
-## 2.0.0-dev.41.0
-
-Not released, due to a failure in the pub tool.
-
-## 2.0.0-dev.40.0
-
-### Core library changes
-
-* The Web libraries were re-genereated using Chrome 63 WebIDLs.
-  See https://github.com/dart-lang/sdk/wiki/Chrome-63-Dart-Web-Libraries for
-  details.
-
-## 2.0.0-dev.39.0
-### Tool Changes
-#### Pub
-
-* Fixed bug in dart2js transformer when using the common front-end.
-
-## 2.0.0-dev.37.0
-### Tool Changes
-#### dart2js
-  * The dart2js compiler now uses the common front-end by default. This is a
-    step towards supporting Dart 2.0. At this time dart2js has no semantic
-    changes: the Dart 2.0 strong-mode semantics are not enabled, so dart2js
-    continues to support the Dart 1 type system. This change however lets us
-    start supporting new syntactic features of Dart 2.0, like optional
-    new/const. With this change you may notice:
-
-    * small code differences (~1% code size): some code is generated slightly
-      different, this is expected because the internal representation of the
-      program has small differences between the old and new front end.
-
-    * source-maps changes: with the new front-end, dart2js also is using a new
-      mechanism to generate source-map files. We don't expect big differences
-      here either, the new source-maps try to encode more data for locations
-      that are commonly used during debugging.
-
-    * some missing errors: the CFE is not complete and may not report some
-      static errors that the old front-end did. This is temporary. If you run
-      the analyzer on all your project already, you may never notice those
-      missing error messages.
-
-    * as announced earlier, this is the first version of dart2js that no longer
-      supports `dart:mirrors`.
-
-    * this is the first version of dart2js that no longer supports
-      `--package-root`, which long ago was deprecated in favor of `--packages`.
-
-#### Pub
-
-* dart2js transformer runs with the common front-end.
-
-## 2.0.0-dev.36.0
-
-### Core library changes
-* `dart:core`
-  * Temporarily disabled the `whereType` method until generic methods are
-    enabled on all platforms
-    ([issue 32463](https://github.com/dart-lang/sdk/issues/32463)).
-  * Changed return type of `UriData.dataAsBytes` to `Uint8List`.
-* `dart:convert`
-  * Added `jsonEncode`, `jsonDecode`, `base64Encode`, `base64UrlEncode` and
-    `base64Decode` top-level functions.
-  * Changed return type of `encode` on `AsciiCodec` and `Latin1Codec`,
-    and `convert` on `AsciiEncoder`, `Latin1Encoder`, to `Uint8List`.
-
-## 2.0.0
+*   `dart:core` now exports `Future` and `Stream`. You no longer need to import
+    `dart:async` to use those very common types.
 
 ### Language
-* A string in a `part of` declaration may now be used to refer to the library
-  this file is part of.
-  A library part can now declare its library either as:
-  `part of name.of.library;` or as `part of "uriReferenceOfLibrary.dart";`.
-  This allows libraries with no library declarations (and therefore no name)
-  to have parts, and it allows tools to easily find the library of a part
-  file.
-* Added support for starting `async` functions synchronously. All tools (VM,
-  dart2js, DDC) have now a flag `--sync-async` to enable this behavior.
-  Currently this behavior is opt-in. It will become the default.
-* The type `void` is now a Top type like `dynamic`, and `Object`. It also now
-  has new errors for being used where not allowed (such as being assigned to any
-  non-`void`-typed parameter). Some libraries (importantly, mockito) may need to
-  be updated to accept void values to keep their APIs working.
 
-#### Strong Mode
+*   Introduced a new syntax for mixin declarations.
 
-* Future flattening is now done only as specified in the Dart 2.0 spec, rather
-than more broadly.  This means that the following code will now have an error on
-the assignment to `y`.
+    ```dart
+    mixin SetMixin<E> implements Set<E> {
+      ...
+    }
+    ```
 
-  ```dart
-  test() {
-    Future<int> f;
-    var x = f.then<Future<List<int>>>((x) => []);
-    Future<List<int>> y = x;
-  }
-  ```
+    Most classes that are intended to be used as mixins are intended to *only*
+    be used as mixins. The library author doesn't want users to be able to
+    construct or subclass the class. The new syntax makes that intent clear and
+    enforces it in the type system. It is an error to extend or construct a type
+    declared using `mixin`. (You can implement it since mixins expose an
+    implicit interface.)
 
-### Core library changes
+    Over time, we expect most mixin declarations to use the new syntax. However,
+    if you have a "mixin" class where users *are* extending or constructing it,
+    note that moving it to the new syntax is a breaking API change since it
+    prevents users from doing that. If you have a type like this that is a
+    mixin as well as being a concrete class and/or superclass, then the existing
+    syntax is what you want.
 
-* `dart:async`
+    If you need to use a `super` inside a mixin, the new syntax is required.
+    This was previously only allowed with the experimental `--supermixins` flag
+    because it has some complex interactions with the type system. The new
+    syntax addresses those issues and lets you use `super` calls by declaring
+    the superclass constraint your mixin requires:
 
-  * `Stream`:
-    * Added `cast`, `castFrom`, and `retype`.
-    * Changed `firstWhere`, `lastWhere`, and `singleWhere` to return `Future<T>`
-      and added an optional `T orElse()` callback.
-  * `StreamTransformer`: added `cast`, `castFrom`, `retype`.
-  * `StreamTransformerBase`: new class.
-  * `Timer`: added `tick` property.
-  * `Zone`
-    * changed to be strong-mode clean.
-      This required some breaking API changes.
-      See https://goo.gl/y9mW2x for more information.
-    * Added `bindBinaryCallbackGuarded`, `bindCallbackGuarded`, and
-      `bindUnaryCallbackGuarded`.
-    * Renamed `Zone.ROOT` to `Zone.root`.
+    ```dart
+    class Superclass {
+      superclassMethod() {
+        print("in superclass");
+      }
+    }
 
-* `dart:cli`
+    mixin SomeMixin on Superclass {
+      mixinMethod() {
+        // This is OK:
+        super.superclassMethod();
+      }
+    }
 
-  * *New* "provisional" library for CLI-specific features.
+    class GoodSub extends Superclass with SomeMixin {}
 
-  * `waitFor`: function that suspends a stack to wait for a `Future` to
+    class BadSub extends Object with SomeMixin {}
+    // Error: Since the super() call in mixinMethod() can't find a
+    // superclassMethod() to call, this is prohibited.
+    ```
+
+    Even if you don't need to use `super` calls, the new mixin syntax is good
+    because it clearly expresses that you intend the type to be mixed in.
+
+*   Allow integer literals to be used in double contexts. An integer literal
+    used in a place where a double is required is now interpreted as a double
+    value. The numerical value of the literal needs to be precisely
+    representable as a double value.
+
+*   Integer literals compiled to JavaScript are now allowed to have any value
+    that can be exactly represented as a JavaScript `Number`. They were
+    previously limited to such numbers that were also representable as signed
+    64-bit integers.
+
+**(Breaking)** A number of static errors that should have been detected and
+reported were not supported in 2.0.0. These are reported now, which means
+existing incorrect code may show new errors:
+
+*   **Setters with the same name as the enclosing class aren't allowed.** (Issue
+    [34225][].) It is not allowed to have a class member with the same name as
+    the enclosing class:
+
+    ```dart
+    class A {
+      set A(int x) {}
+    }
+    ```
+
+    Dart 2.0.0 incorrectly allows this for setters (only). Dart 2.1.0 rejects
+    it.
+
+    *To fix:* This is unlikely to break anything, since it violates all style
+    guides anyway.
+
+*   **Constant constructors cannot redirect to non-constant constructors.**
+    (Issue [34161][].) It is not allowed to have a constant constructor that
+    redirects to a non-constant constructor:
+
+    ```dart
+    class A {
+      const A.foo() : this(); // Redirecting to A()
+      A() {}
+    }
+    ```
+
+    Dart 2.0.0 incorrectly allows this. Dart 2.1.0 rejects it.
+
+    *To fix:* Make the target of the redirection a properly const constructor.
+
+*   **Abstract methods may not unsoundly override a concrete method.** (Issue
+    [32014][].) Concrete methods must be valid implementations of their
+    interfaces:
+
+    ```dart
+    class A {
+      num get thing => 2.0;
+    }
+
+    abstract class B implements A {
+      int get thing;
+    }
+
+    class C extends A with B {}
+    // 'thing' from 'A' is not a valid override of 'thing' from 'B'.
+
+    main() {
+      print(new C().thing.isEven); // Expects an int but gets a double.
+    }
+    ```
+
+    Dart 2.0.0 allows unsound overrides like the above in some cases. Dart 2.1.0
+    rejects them.
+
+    *To fix:* Relax the type of the invalid override, or tighten the type of the
+    overridden method.
+
+*   **Classes can't implement FutureOr.** (Issue [33744][].) Dart doesn't allow
+    classes to implement the FutureOr type:
+
+    ```dart
+    class A implements FutureOr<Object> {}
+    ```
+
+    Dart 2.0.0 allows classes to implement FutureOr. Dart 2.1.0 does not.
+
+    *To fix:* Don't do this.
+
+*   **Type arguments to generic typedefs must satisfy their bounds.** (Issue
+    [33308][].) If a parameterized typedef specifies a bound, actual arguments
+    must be checked against it:
+
+    ```dart
+    class A<X extends int> {}
+
+    typedef F<Y extends int> = A<Y> Function();
+
+    F<num> f = null;
+    ```
+
+    Dart 2.0.0 allows bounds violations like `F<num>` above. Dart 2.1.0 rejects
+    them.
+
+    *To fix:* Either remove the bound on the typedef parameter, or pass a valid
+    argument to the typedef.
+
+*   **Constructor invocations must use valid syntax, even with optional `new`.**
+    (Issue [34403][].) Type arguments to generic named constructors go after the
+    class name, not the constructor name, even when used without an explicit
+    `new`:
+
+    ```dart
+    class A<T> {
+      A.foo() {}
+    }
+
+    main() {
+      A.foo<String>(); // Incorrect syntax, was accepted in 2.0.0.
+      A<String>.foo(); // Correct syntax.
+    }
+    ```
+
+    Dart 2.0.0 accepts the incorrect syntax when the `new` keyword is left out.
+    Dart 2.1.0 correctly rejects this code.
+
+    *To fix:* Move the type argument to the correct position after the class
+    name.
+
+*   **Instance members should shadow prefixes.** (Issue [34498][].) If the same
+    name is used as an import prefix and as a class member name, then the class
+    member name takes precedence in the class scope.
+
+    ```dart
+    import 'dart:core';
+    import 'dart:core' as core;
+
+    class A {
+      core.List get core => null; // "core" refers to field, not prefix.
+    }
+    ```
+
+    Dart 2.0.0 incorrectly resolves the use of `core` in `core.List` to the
+    prefix name. Dart 2.1.0 correctly resolves this to the field name.
+
+    *To fix:* Change the prefix name to something which does not clash with the
+    instance member.
+
+*   **Implicit type arguments in extends clauses must satisfy the class
+    bounds.** (Issue [34532][].) Implicit type arguments for generic classes are
+    computed if not passed explicitly, but when used in an `extends` clause they
+    must be checked for validity:
+
+    ```dart
+    class Foo<T> {}
+
+    class Bar<T extends Foo<T>> {}
+
+    class Baz extends Bar {} // Should error because Bar completes to Bar<Foo>
+    ```
+
+    Dart 2.0.0 accepts the broken code above. Dart 2.1.0 rejects it.
+
+    *To fix:* Provide explicit type arguments to the superclass that satisfy the
+    bound for the superclass.
+
+*   **Mixins must correctly override their superclasses.** (Issue [34235][].) In
+    some rare cases, combinations of uses of mixins could result in invalid
+    overrides not being caught:
+
+    ```dart
+    class A {
+      num get thing => 2.0;
+    }
+
+    class M1 {
+      int get thing => 2;
+    }
+
+    class B = A with M1;
+
+    class M2 {
+      num get thing => 2.0;
+    }
+
+    class C extends B with M2 {} // 'thing' from 'M2' not a valid override.
+
+    main() {
+      M1 a = new C();
+      print(a.thing.isEven); // Expects an int but gets a double.
+    }
+    ```
+
+    Dart 2.0.0 accepts the above example. Dart 2.1.0 rejects it.
+
+    *To fix:* Ensure that overriding methods are correct overrides of their
+    superclasses, either by relaxing the superclass type, or tightening the
+    subclass/mixin type.
+
+[32014]: https://github.com/dart-lang/sdk/issues/32014
+[33308]: https://github.com/dart-lang/sdk/issues/33308
+[33744]: https://github.com/dart-lang/sdk/issues/33744
+[34161]: https://github.com/dart-lang/sdk/issues/34161
+[34225]: https://github.com/dart-lang/sdk/issues/34225
+[34235]: https://github.com/dart-lang/sdk/issues/34235
+[34403]: https://github.com/dart-lang/sdk/issues/34403
+[34498]: https://github.com/dart-lang/sdk/issues/34498
+[34532]: https://github.com/dart-lang/sdk/issues/34532
+
+### Core libraries
+
+#### `dart:async`
+
+*   Fixed a bug where calling `stream.take(0).drain(value)` would not correctly
+    forward the `value` through the returned `Future`.
+*   Added a `StreamTransformer.fromBind` constructor.
+*   Updated `Stream.fromIterable` to send a done event after the error when the
+    iterator's `moveNext` throws, and handle if the `current` getter throws
+    (issue [33431][]).
+
+[33431]: http://dartbug.com/33431
+
+#### `dart:core`
+
+*   Added `HashMap.fromEntries` and `LinkedHashmap.fromEntries` constructors.
+*   Added `ArgumentError.checkNotNull` utility method.
+*   Made `Uri` parsing more permissive about `[` and `]` occurring in the path,
+    query or fragment, and `#` occurring in fragment.
+*   Exported `Future` and `Stream` from `dart:core`.
+*   Added operators `&`, `|` and `^` to `bool`.
+*   Added missing methods to `UnmodifiableMapMixin`. Some maps intended to
+    be unmodifiable incorrectly allowed new methods added in Dart 2 to
+    succeed.
+*   Deprecated the `provisional` annotation and the `Provisional`
+    annotation class. These should have been removed before releasing Dart 2.0,
+    and they have no effect.
+
+#### `dart:html`
+
+Fixed Service Workers and any Promise/Future API with a Dictionary parameter.
+
+APIs in dart:html (that take a Dictionary) will receive a Dart Map parameter.
+The Map parameter must be converted to a Dictionary before passing to the
+browser's API.  Before this change, any Promise/Future API with a
+Map/Dictionary parameter never called the Promise and didn't return a Dart
+Future - now it does.
+
+This caused a number of breaks especially in Service Workers (register, etc.).
+Here is a complete list of the fixed APIs:
+
+*   BackgroundFetchManager
+    *   `Future<BackgroundFetchRegistration> fetch(String id, Object requests,
+        [Map options])`
+*   CacheStorage
+    *   `Future match(/*RequestInfo*/ request, [Map options])`
+*   CanMakePayment
+    *   `Future<List<Client>> matchAll([Map options])`
+*   CookieStore
+    *   `Future getAll([Map options])`
+    *   `Future set(String name, String value, [Map options])`
+*   CredentialsContainer
+    *   `Future get([Map options])`
+    *   `Future create([Map options])`
+*   ImageCapture
+    *   `Future setOptions(Map photoSettings)`
+*   MediaCapabilities
+    *   `Future<MediaCapabilitiesInfo> decodingInfo(Map configuration)`
+    *   `Future<MediaCapabilitiesInfo> encodingInfo(Map configuration)`
+*   MediaStreamTrack
+    *   `Future applyConstraints([Map constraints])`
+*   Navigator
+    *   `Future requestKeyboardLock([List<String> keyCodes])`
+    *   `Future requestMidiAccess([Map options])`
+    *   `Future share([Map data])`
+*   OffscreenCanvas
+    *   `Future<Blob> convertToBlob([Map options])`
+*   PaymentInstruments
+    *   `Future set(String instrumentKey, Map details)`
+*   Permissions
+    *   `Future<PermissionStatus> query(Map permission)`
+    *   `Future<PermissionStatus> request(Map permissions)`
+    *   `Future<PermissionStatus> revoke(Map permission)`
+*   PushManager
+    *   `Future permissionState([Map options])`
+    *   `Future<PushSubscription> subscribe([Map options])`
+*   RtcPeerConnection
+    *   Changed:
+
+        ```dart
+        Future createAnswer([options_OR_successCallback,
+            RtcPeerConnectionErrorCallback failureCallback,
+            Map mediaConstraints])
+        ```
+
+        to:
+
+        ```dart
+        Future<RtcSessionDescription> createAnswer([Map options])
+        ```
+
+    *   Changed:
+
+        ```dart
+        Future createOffer([options_OR_successCallback,
+            RtcPeerConnectionErrorCallback failureCallback,
+            Map rtcOfferOptions])
+        ```
+
+        to:
+
+        ```dart
+        Future<RtcSessionDescription> createOffer([Map options])
+        ```
+
+    *   Changed:
+
+        ```dart
+        Future setLocalDescription(Map description,
+            VoidCallback successCallback,
+            [RtcPeerConnectionErrorCallback failureCallback])
+        ```
+
+        to:
+
+        ```dart
+        Future setLocalDescription(Map description)
+        ```
+
+    *   Changed:
+
+        ```dart
+        Future setLocalDescription(Map description,
+            VoidCallback successCallback,
+            [RtcPeerConnectionErrorCallback failureCallback])
+        ```
+
+        to:
+
+        ```dart
+        Future setRemoteDescription(Map description)
+        ```
+
+*   ServiceWorkerContainer
+    *   `Future<ServiceWorkerRegistration> register(String url, [Map options])`
+*   ServiceWorkerRegistration
+    *   `Future<List<Notification>> getNotifications([Map filter])`
+    *   `Future showNotification(String title, [Map options])`
+*   VRDevice
+    *   `Future requestSession([Map options])`
+    *   `Future supportsSession([Map options])`
+*   VRSession
+    *   `Future requestFrameOfReference(String type, [Map options])`
+*   Window
+    *   `Future fetch(/*RequestInfo*/ input, [Map init])`
+*   WorkerGlobalScope
+    *   `Future fetch(/*RequestInfo*/ input, [Map init])`
+
+In addition, exposed Service Worker "self" as a static getter named "instance".
+The instance is exposed on four different Service Worker classes and can throw
+a InstanceTypeError if the instance isn't of the class expected
+(WorkerGlobalScope.instance will always work and not throw):
+
+*   `SharedWorkerGlobalScope.instance`
+*   `DedicatedWorkerGlobalScope.instance`
+*   `ServiceWorkerGlobalScope.instance`
+*   `WorkerGlobalScope.instance`
+
+#### `dart:io`
+
+*   Added new HTTP status codes.
+
+### Dart for the Web
+
+#### dart2js
+
+*   **(Breaking)** Duplicate keys in a const map are not allowed and produce a
+    compile-time error. Dart2js used to report this as a warning before. This
+    was already an error in dartanalyzer and DDC and will be an error in other
+    tools in the future as well.
+
+*   Added `-O` flag to tune optimization levels.  For more details run `dart2js
+    -h -v`.
+
+    We recommend to enable optimizations using the `-O` flag instead of
+    individual flags for each optimization. This is because the `-O` flag is
+    intended to be stable and continue to work in future versions of dart2js,
+    while individual flags may come and go.
+
+    At this time we recommend to test and debug with `-O1` and to deploy with
+    `-O3`.
+
+### Tool Changes
+
+#### dartfmt
+
+*   Addressed several dartfmt issues when used with the new CFE parser.
+
+#### Linter
+
+Bumped the linter to `0.1.70` which includes the following new lints:
+
+*   `avoid_returning_null_for_void`
+*   `sort_pub_dependencies`
+*   `prefer_mixin`
+*   `avoid_implementing_value_types`
+*   `flutter_style_todos`
+*   `avoid_void_async`
+*   `prefer_void_to_null`
+
+and improvements:
+
+*   Fixed NPE in `prefer_iterable_whereType`.
+*   Improved message display for `await_only_futures`
+*   Performance improvements for `null_closures`
+*   Mixin support
+*   Updated `sort_constructors_first` to apply to all members.
+*   Updated `unnecessary_this` to work on field initializers.
+*   Updated `unawaited_futures` to ignore assignments within cascades.
+*   Improved handling of constant expressions with generic type params.
+*   NPE fix for `invariant_booleans`.
+*   Improved docs for `unawaited_futures`.
+*   Updated `unawaited_futures` to check cascades.
+*   Relaxed `void_checks` (allowing `T Function()` to be assigned to
+    `void Function()`).
+*   Fixed false positives in `lines_longer_than_80_chars`.
+
+#### Pub
+
+*   Renamed the `--checked` flag to `pub run` to `--enable-asserts`.
+*   Pub will no longer delete directories named "packages".
+*   The `--packages-dir` flag is now ignored.
+
+## 2.0.0 - 2018-08-07
+
+This is the first major version release of Dart since 1.0.0, so it contains many
+significant changes across all areas of the platform. Large changes include:
+
+*   **(Breaking)** The unsound optional static type system has been replaced
+    with a sound static type system using type inference and runtime checks.
+    This was formerly called "[strong mode][]" and only used by the Dart for web
+    products. Now it is the one official static type system for the entire
+    platform and replaces the previous "checked" and "production" modes.
+
+*   **(Breaking)** Functions marked `async` now run synchronously until the
+    first `await` statement. Previously, they would return to the event loop
+    once at the top of the function body before any code runs ([issue 30345][]).
+
+*   **(Breaking)** Constants in the core libraries have been renamed from
+    `SCREAMING_CAPS` to `lowerCamelCase`.
+
+*   **(Breaking)** Many new methods have been added to core library classes. If
+    you implement the interfaces of these classes, you will need to implement
+    the new methods.
+
+*   **(Breaking)** "dart:isolate" and "dart:mirrors" are no longer supported
+    when using Dart for the web. They are still supported in the command-line
+    VM.
+
+*   **(Breaking)** Pub's transformer-based build system has been [replaced by a
+    new build system][transformers].
+
+*   The `new` keyword is optional and can be omitted. Likewise, `const` can be
+    omitted inside a const context ([issue 30921][]).
+
+*   Dartium is no longer maintained or supported.
+
+[issue 30345]: https://github.com/dart-lang/sdk/issues/30345
+[issue 30921]: https://github.com/dart-lang/sdk/issues/30921
+[strong mode]: https://www.dartlang.org/guides/language/sound-dart
+[transformers]: https://www.dartlang.org/tools/pub/obsolete
+
+### Language
+
+*   "[Strong mode][]" is now the official type system of the language.
+
+*   The `new` keyword is optional and can be omitted. Likewise, `const` can be
+    omitted inside a const context.
+
+*   A string in a `part of` declaration may now be used to refer to the library
+    this file is part of. A library part can now declare its library as either:
+
+    ```dart
+    part of name.of.library;
+    ```
+
+    Or:
+
+    ```dart
+    part of "uriReferenceOfLibrary.dart";
+    ```
+
+    This allows libraries with no library declarations (and therefore no name)
+    to have parts, and it allows tools to easily find the library of a part
+    file. The Dart 1.0 syntax is supported but deprecated.
+
+*   Functions marked `async` now run synchronously until the first `await`
+    statement. Previously, they would return to the event loop once at the top
+    of the function body before any code runs ([issue 30345][]).
+
+*   The type `void` is now a Top type like `dynamic`, and `Object`. It also now
+    has new errors for being used where not allowed (such as being assigned to
+    any non-`void`-typed parameter). Some libraries (importantly, mockito) may
+    need to be updated to accept void values to keep their APIs working.
+
+*   Future flattening is now done only as specified in the Dart 2.0 spec, rather
+    than more broadly. This means that the following code has an error on the
+    assignment to `y`.
+
+    ```dart
+    test() {
+      Future<int> f;
+      var x = f.then<Future<List<int>>>((x) => []);
+      Future<List<int>> y = x;
+    }
+    ```
+
+*   Invocations of `noSuchMethod()` receive default values for optional args.
+    The following program used to print "No arguments passed", and now prints
+    "First argument is 3".
+
+    ```dart
+    abstract class B {
+      void m([int x = 3]);
+    }
+
+    class A implements B {
+      noSuchMethod(Invocation i) {
+        if (i.positionalArguments.length == 0) {
+          print("No arguments passed");
+        } else {
+          print("First argument is ${i.positionalArguments[0]}");
+        }
+      }
+    }
+
+    void main() {
+      A().m();
+    }
+    ```
+
+*   Bounds on generic functions are invariant. The following program now issues
+    an invalid override error ([issue 29014][sdk#29014]):
+
+    ```dart
+    class A {
+      void f<T extends int>() {}
+    }
+
+    class B extends A {
+      @override
+      void f<T extends num>() {}
+    }
+    ```
+
+*   Numerous corner case bugs around return statements in synchronous and
+    asynchronous functions fixed. Specifically:
+
+    *   Issues [31887][issue 31887], [32881][issue 32881]. Future flattening
+        should not be recursive.
+    *   Issues [30638][issue 30638], [32233][issue 32233]. Incorrect downcast
+        errors with `FutureOr`.
+    *   Issue [32233][issue 32233]. Errors when returning `FutureOr`.
+    *   Issue [33218][issue 33218]. Returns in functions with void related
+        types.
+    *   Issue [31278][issue 31278]. Incorrect hint on empty returns in async.
+        functions.
+
+*   An empty `return;` in an async function with return type `Future<Object>`
+    does not report an error.
+
+*   `return exp;` where `exp` has type `void` in an async function is now an
+    error unless the return type of the function is `void` or `dynamic`.
+
+*   Mixed return statements of the form `return;` and `return exp;` are now
+    allowed when `exp` has type `void`.
+
+*   A compile time error is emitted for any literal which cannot be exactly
+    represented on the target platform. As a result, dart2js and DDC report
+    errors if an integer literal cannot be represented exactly in JavaScript
+    ([issue 33282][]).
+
+*   New member conflict rules have been implemented. Most cases of conflicting
+    members with the same name are now static errors ([issue 33235][]).
+
+[sdk#29014]: https://github.com/dart-lang/sdk/issues/29014
+[issue 30638]: https://github.com/dart-lang/sdk/issues/30638
+[issue 31278]: https://github.com/dart-lang/sdk/issues/31278
+[issue 31887]: https://github.com/dart-lang/sdk/issues/31887
+[issue 32233]: https://github.com/dart-lang/sdk/issues/32233
+[issue 32881]: https://github.com/dart-lang/sdk/issues/32881
+[issue 33218]: https://github.com/dart-lang/sdk/issues/33218
+[issue 33235]: https://github.com/dart-lang/sdk/issues/33235
+[issue 33282]: https://github.com/dart-lang/sdk/issues/33282
+[issue 33341]: https://github.com/dart-lang/sdk/issues/33341
+
+### Core libraries
+
+*   Replaced `UPPER_CASE` constant names with `lowerCamelCase`. For example,
+    `HTML_ESCAPE` is now `htmlEscape`.
+
+*   The Web libraries were re-generated using Chrome 63 WebIDLs
+    ([details][idl]).
+
+[idl]: https://github.com/dart-lang/sdk/wiki/Chrome-63-Dart-Web-Libraries
+
+#### `dart:async`
+
+*   `Stream`:
+    *   Added `cast` and `castFrom`.
+    *   Changed `firstWhere`, `lastWhere`, and `singleWhere` to return
+        `Future<T>` and added an optional `T orElse()` callback.
+*   `StreamTransformer`: added `cast` and `castFrom`.
+*   `StreamTransformerBase`: new class.
+*   `Timer`: added `tick` property.
+*   `Zone`
+    *   changed to be strong-mode clean. This required some breaking API
+        changes. See https://goo.gl/y9mW2x for more information.
+    *   Added `bindBinaryCallbackGuarded`, `bindCallbackGuarded`, and
+        `bindUnaryCallbackGuarded`.
+    *   Renamed `Zone.ROOT` to `Zone.root`.
+*   Removed the deprecated `defaultValue` parameter on `Stream.firstWhere` and
+    `Stream.lastWhere`.
+*   Changed an internal lazily-allocated reusable "null future" to always belong
+    to the root zone. This avoids race conditions where the first access to the
+    future determined which zone it would belong to. The zone is only used for
+    *scheduling* the callback of listeners, the listeners themselves will run in
+    the correct zone in any case. Issue [#32556](http://dartbug.com/32556).
+
+#### `dart:cli`
+
+*   *New* "provisional" library for CLI-specific features.
+*   `waitFor`: function that suspends a stack to wait for a `Future` to
     complete.
 
-* `dart:collection`
+#### `dart:collection`
 
-  * `MapBase`: added `mapToString`.
-  * `LinkedHashMap` no longer implements `HashMap`
-  * `LinkedHashSet` no longer implements `HashSet`.
-  * Added `of` constructor to `Queue`, `ListQueue`,
-    `DoubleLinkedQueue`, `HashSet`, `LinkedHashSet`, `SplayTreeSet`,
-    `Map`, `HashMap`, `LinkedHashMap`, `SplayTreeMap`.
+*   `MapBase`: added `mapToString`.
+*   `LinkedHashMap` no longer implements `HashMap`
+*   `LinkedHashSet` no longer implements `HashSet`.
+*   Added `of` constructor to `Queue`, `ListQueue`, `DoubleLinkedQueue`,
+    `HashSet`, `LinkedHashSet`, `SplayTreeSet`, `Map`, `HashMap`,
+    `LinkedHashMap`, `SplayTreeMap`.
+*   Removed `Maps` class. Extend `MapBase` or mix in `MapMixin` instead to
+    provide map method implementations for a class.
+*   Removed experimental `Document` method `getCSSCanvasContext` and property
+    `supportsCssCanvasContext`.
+*   Removed obsolete `Element` property `xtag` no longer supported in browsers.
+*   Exposed `ServiceWorker` class.
+*   Added constructor to `MessageChannel` and `MessagePort` `addEventListener`
+    automatically calls `start` method to receive queued messages.
 
-* `dart:convert`
+#### `dart:convert`
 
-  * `Base64Codec.decode` return type is now `Uint8List`.
-  * `JsonUnsupportedObjectError`: added `partialResult` property
-  * `LineSplitter` now implements `StreamTransformer<String, String>` instead of
-    `Converter`.
-    It retains `Converter` methods `convert` and `startChunkedConversion`.
-  * `Utf8Decoder` when compiled with dart2js uses the browser's `TextDecoder` in
+*   `Base64Codec.decode` return type is now `Uint8List`.
+*   `JsonUnsupportedObjectError`: added `partialResult` property
+*   `LineSplitter` now implements `StreamTransformer<String, String>` instead of
+    `Converter`. It retains `Converter` methods `convert` and
+    `startChunkedConversion`.
+*   `Utf8Decoder` when compiled with dart2js uses the browser's `TextDecoder` in
     some common cases for faster decoding.
-  * Renamed `ASCII`, `BASE64`, `BASE64URI`, `JSON`, `LATIN1` and `UTF8` to
+*   Renamed `ASCII`, `BASE64`, `BASE64URI`, `JSON`, `LATIN1` and `UTF8` to
     `ascii`, `base64`, `base64Uri`, `json`, `latin1` and `utf8`.
-  * Renamed the `HtmlEscapeMode` constants `UNKNOWN`, `ATTRIBUTE`,
+*   Renamed the `HtmlEscapeMode` constants `UNKNOWN`, `ATTRIBUTE`,
     `SQ_ATTRIBUTE` and `ELEMENT` to `unknown`, `attribute`, `sqAttribute` and
     `elements`.
+*   Added `jsonEncode`, `jsonDecode`, `base64Encode`, `base64UrlEncode` and
+    `base64Decode` top-level functions.
+*   Changed return type of `encode` on `AsciiCodec` and `Latin1Codec`, and
+    `convert` on `AsciiEncoder`, `Latin1Encoder`, to `Uint8List`.
+*   Allow `utf8.decoder.fuse(json.decoder)` to ignore leading Unicode BOM.
 
-* `dart:core`
+#### `dart:core`
 
-  * `BigInt` class added to support integers greater than 64-bits.
-  * Deprecated the `proxy` annotation.
-  * Added `Provisional` class and `provisional` field.
-  * Added `pragma` annotation.
-  * `RegExp` added static `escape` function.
-  * The `Uri` class now correctly handles paths while running on Node.js on
+*   `BigInt` class added to support integers greater than 64-bits.
+*   Deprecated the `proxy` annotation.
+*   Added `Provisional` class and `provisional` field.
+*   Added `pragma` annotation.
+*   `RegExp` added static `escape` function.
+*   The `Uri` class now correctly handles paths while running on Node.js on
     Windows.
-  * Core collection changes
-      * `Iterable` added members `cast`, `castFrom`, `followedBy`, `retype` and
+*   Core collection changes:
+    *   `Iterable` added members `cast`, `castFrom`, `followedBy` and
         `whereType`.
-      * `Iterable.singleWhere` added `orElse` parameter.
-      * `List` added `+` operator, `first` and `last` setters, and `indexWhere`
+    *   `Iterable.singleWhere` added `orElse` parameter.
+    *   `List` added `+` operator, `first` and `last` setters, and `indexWhere`
         and `lastIndexWhere` methods, and static `copyRange` and `writeIterable`
         methods.
-      * `Map` added `fromEntries` constructor.
-      * `Map` added `addEntries`, `cast`, `entries`, `map`, `removeWhere`,
-        `retype`, `update` and `updateAll` members.
-      * `MapEntry`: new class used by `Map.entries`.
-      * *Note*: if a class extends `IterableBase`, `ListBase`, `SetBase` or
+    *   `Map` added `fromEntries` constructor.
+    *   `Map` added `addEntries`, `cast`, `entries`, `map`, `removeWhere`,
+        `update` and `updateAll` members.
+    *   `MapEntry`: new class used by `Map.entries`.
+    *   *Note*: if a class extends `IterableBase`, `ListBase`, `SetBase` or
         `MapBase` (or uses the corresponding mixins) from `dart:collection`, the
         new members are implemented automatically.
-      * Added `of` constructor to `List`, `Set`, `Map`.
-  * Renamed `double.INFINITY`, `double.NEGATIVE_INFINITY`, `double.NAN`,
-    `double.MAX_FINITE` and `double.MIN_POSITIVE`
-    to `double.infinity`, `double.negativeInfinity`, `double.nan`,
-    `double.maxFinite` and `double.minPositive`.
-  * Renamed the following constants in `DateTime` to lower case:
-    `MONDAY` through `SUNDAY`, `DAYS_PER_WEEK` (as `daysPerWeek`),
-    `JANUARY` through `DECEMBER` and `MONTHS_PER_YEAR` (as `monthsPerYear`).
-  * Renamed the following constants in `Duration` to lower case:
+    *   Added `of` constructor to `List`, `Set`, `Map`.
+*   Renamed `double.INFINITY`, `double.NEGATIVE_INFINITY`, `double.NAN`,
+    `double.MAX_FINITE` and `double.MIN_POSITIVE` to `double.infinity`,
+    `double.negativeInfinity`, `double.nan`, `double.maxFinite` and
+    `double.minPositive`.
+*   Renamed the following constants in `DateTime` to lower case: `MONDAY`
+    through `SUNDAY`, `DAYS_PER_WEEK` (as `daysPerWeek`), `JANUARY` through
+    `DECEMBER` and `MONTHS_PER_YEAR` (as `monthsPerYear`).
+*   Renamed the following constants in `Duration` to lower case:
     `MICROSECONDS_PER_MILLISECOND` to `microsecondsPerMillisecond`,
-    `MILLISECONDS_PER_SECOND` to `millisecondsPerSecond`,
-    `SECONDS_PER_MINUTE` to `secondsPerMinute`,
-    `MINUTES_PER_HOUR` to `minutesPerHour`,
-    `HOURS_PER_DAY` to `hoursPerDay`,
-    `MICROSECONDS_PER_SECOND` to `microsecondsPerSecond`,
-    `MICROSECONDS_PER_MINUTE` to `microsecondsPerMinute`,
-    `MICROSECONDS_PER_HOUR` to `microsecondsPerHour`,
-    `MICROSECONDS_PER_DAY` to `microsecondsPerDay`,
-    `MILLISECONDS_PER_MINUTE` to `millisecondsPerMinute`,
-    `MILLISECONDS_PER_HOUR` to `millisecondsPerHour`,
-    `MILLISECONDS_PER_DAY` to `millisecondsPerDay`,
-    `SECONDS_PER_HOUR` to `secondsPerHour`,
-    `SECONDS_PER_DAY` to `secondsPerDay`,
-    `MINUTES_PER_DAY` to `minutesPerDay`, and
-    `ZERO` to `zero`.
-  * Added `typeArguments` to `Invocation` class.
-  * Added constructors to invocation class that allows creation of
-    `Invocation` objects directly, without going through `noSuchMethod`.
-  * Added `unaryMinus` and `empty` constant symbols on the `Symbol` class.
+    `MILLISECONDS_PER_SECOND` to `millisecondsPerSecond`, `SECONDS_PER_MINUTE`
+    to `secondsPerMinute`, `MINUTES_PER_HOUR` to `minutesPerHour`,
+    `HOURS_PER_DAY` to `hoursPerDay`, `MICROSECONDS_PER_SECOND` to
+    `microsecondsPerSecond`, `MICROSECONDS_PER_MINUTE` to
+    `microsecondsPerMinute`, `MICROSECONDS_PER_HOUR` to `microsecondsPerHour`,
+    `MICROSECONDS_PER_DAY` to `microsecondsPerDay`, `MILLISECONDS_PER_MINUTE` to
+    `millisecondsPerMinute`, `MILLISECONDS_PER_HOUR` to `millisecondsPerHour`,
+    `MILLISECONDS_PER_DAY` to `millisecondsPerDay`, `SECONDS_PER_HOUR` to
+    `secondsPerHour`, `SECONDS_PER_DAY` to `secondsPerDay`, `MINUTES_PER_DAY` to
+    `minutesPerDay`, and `ZERO` to `zero`.
+*   Added `typeArguments` to `Invocation` class.
+*   Added constructors to invocation class that allows creation of `Invocation`
+    objects directly, without going through `noSuchMethod`.
+*   Added `unaryMinus` and `empty` constant symbols on the `Symbol` class.
+*   Changed return type of `UriData.dataAsBytes` to `Uint8List`.
+*   Added `tryParse` static method to `int`, `double`, `num`, `BigInt`, `Uri`
+    and `DateTime`.
+*   Deprecated `onError` parameter on `int.parse`, `double.parse` and
+    `num.parse`.
+*   Deprecated the `NoSuchMethodError` constructor.
+*   `int.parse` on the VM no longer accepts unsigned hexadecimal numbers greater
+    than or equal to `2**63` when not prefixed by `0x`. (SDK issue
+    [32858](https://github.com/dart-lang/sdk/issues/32858))
 
-* `dart:developer`
+#### `dart:developer`
 
-  * `Flow` class added.
-  * `Timeline.startSync` and `Timeline.timeSync` now accept an optional
+*   `Flow` class added.
+*   `Timeline.startSync` and `Timeline.timeSync` now accept an optional
     parameter `flow` of type `Flow`. The `flow` parameter is used to generate
     flow timeline events that are enclosed by the slice described by
     `Timeline.{start,finish}Sync` and `Timeline.timeSync`.
@@ -584,69 +1775,111 @@ the assignment to `y`.
 Still need entries for all changes to dart:html since 1.x
 -->
 
-* `dart:io`
+#### `dart:html`
 
-  * `HttpStatus` added `UPGRADE_REQUIRED`.
-  * `IOOverrides` and `HttpOverrides` added to aid in writing tests that wish to
+*   Removed deprecated `query` and `queryAll`. Use `querySelector` and
+    `querySelectorAll`.
+
+#### `dart:io`
+
+*   `HttpStatus` added `UPGRADE_REQUIRED`.
+*   `IOOverrides` and `HttpOverrides` added to aid in writing tests that wish to
     mock varios `dart:io` objects.
-  * `Platform.operatingSystemVersion` added  that gives a platform-specific
+*   `Platform.operatingSystemVersion` added  that gives a platform-specific
     String describing the version of the operating system.
-  * `ProcessStartMode.INHERIT_STDIO` added, which allows a child process to
+*   `ProcessStartMode.INHERIT_STDIO` added, which allows a child process to
     inherit the parent's stdio handles.
-  * `RawZLibFilter` added  for low-level access to compression and
-    decompression routines.
-  * Unified backends for `SecureSocket`, `SecurityContext`, and
-    `X509Certificate` to be consistent across all platforms. All
-    `SecureSocket`, `SecurityContext`, and `X509Certificate` properties and
-    methods are now supported on iOS and OSX.
-  * `SecurityContext.alpnSupported` deprecated as ALPN is now supported on all
+*   `RawZLibFilter` added  for low-level access to compression and decompression
+    routines.
+*   Unified backends for `SecureSocket`, `SecurityContext`, and
+    `X509Certificate` to be consistent across all platforms. All `SecureSocket`,
+    `SecurityContext`, and `X509Certificate` properties and methods are now
+    supported on iOS and OSX.
+*   `SecurityContext.alpnSupported` deprecated as ALPN is now supported on all
     platforms.
-  * `SecurityContext`: added `withTrustedRoots` named optional parameter
+*   `SecurityContext`: added `withTrustedRoots` named optional parameter
     constructor, which defaults to false.
-  * Added a `timeout` parameter to `Socket.connect`, `RawSocket.connect`,
-    `SecureSocket.connect` and `RawSecureSocket.connect`. If a connection attempt
-    takes longer than the duration specified in `timeout`, a `SocketException`
-    will be thrown. Note: if the duration specified in `timeout` is greater than
-    the OS level timeout, a timeout may occur sooner than specified in
-    `timeout`.
-  * `Stdin.hasTerminal` added, which is true if stdin is attached to a terminal.
-  * `WebSocket` added static `userAgent` property.
-  * `RandomAccessFile.close` returns `Future<void>`
+*   Added a `timeout` parameter to `Socket.connect`, `RawSocket.connect`,
+    `SecureSocket.connect` and `RawSecureSocket.connect`. If a connection
+    attempt takes longer than the duration specified in `timeout`, a
+    `SocketException` will be thrown. Note: if the duration specified in
+    `timeout` is greater than the OS level timeout, a timeout may occur sooner
+    than specified in `timeout`.
+*   `Stdin.hasTerminal` added, which is true if stdin is attached to a terminal.
+*   `WebSocket` added static `userAgent` property.
+*   `RandomAccessFile.close` returns `Future<void>`
+*   Added `IOOverrides.socketConnect`.
+*   Added Dart-styled constants to  `ZLibOptions`, `FileMode`, `FileLock`,
+    `FileSystemEntityType`, `FileSystemEvent`, `ProcessStartMode`,
+    `ProcessSignal`, `InternetAddressType`, `InternetAddress`,
+    `SocketDirection`, `SocketOption`, `RawSocketEvent`, and `StdioType`, and
+    deprecated the old `SCREAMING_CAPS` constants.
+*   Added the Dart-styled top-level constants `zlib`, `gzip`, and
+    `systemEncoding`, and deprecated the old `SCREAMING_CAPS` top-level
+    constants.
+*   Removed the top-level `FileMode` constants `READ`, `WRITE`, `APPEND`,
+    `WRITE_ONLY`, and `WRITE_ONLY_APPEND`. Please use e.g. `FileMode.read`
+    instead.
+*   Added `X509Certificate.der`, `X509Certificate.pem`, and
+    `X509Certificate.sha1`.
+*   Added `FileSystemEntity.fromRawPath` constructor to allow for the creation
+    of `FileSystemEntity` using `Uint8List` buffers.
+*   Dart-styled constants have been added for `HttpStatus`, `HttpHeaders`,
+    `ContentType`, `HttpClient`, `WebSocketStatus`, `CompressionOptions`, and
+    `WebSocket`. The `SCREAMING_CAPS` constants are marked deprecated. Note that
+    `HttpStatus.CONTINUE` is now `HttpStatus.continue_`, and that e.g.
+    `HttpHeaders.FIELD_NAME` is now `HttpHeaders.fieldNameHeader`.
+*   Deprecated `Platform.packageRoot`, which is only used for `packages/`
+    directory resolution which is no longer supported. It will now always return
+    null, which is a value that was always possible for it to return previously.
+*   Adds `HttpClient.connectionTimeout`.
+*   Adds `{Socket,RawSocket,SecureSocket}.startConnect`. These return a
+    `ConnectionTask`, which can be used to cancel an in-flight connection
+    attempt.
 
-* `dart:isolate`
+#### `dart:isolate`
 
-  * Make `Isolate.spawn` take a type parameter representing the argument type
-    of the provided function. This allows functions with arguments types other
-    than `Object` in strong mode.
-  * Rename `IMMEDIATE` and `BEFORE_NEXT_EVENT` on `Isolate` to `immediate` and
+*   Make `Isolate.spawn` take a type parameter representing the argument type of
+    the provided function. This allows functions with arguments types other than
+    `Object` in strong mode.
+*   Rename `IMMEDIATE` and `BEFORE_NEXT_EVENT` on `Isolate` to `immediate` and
     `beforeNextEvent`.
+*   Deprecated `Isolate.packageRoot`, which is only used for `packages/`
+    directory resolution which is no longer supported. It will now always return
+    null, which is a value that was always possible for it to return previously.
+*   Deprecated `packageRoot` parameter in `Isolate.spawnUri`, which is was
+    previously used only for `packages/` directory resolution. That style of
+    resolution is no longer supported in Dart 2.
 
 <!--
 Still need entries for all changes to dart:js since 1.x
 -->
 
-* `dart.math`
+#### `dart.math`
 
-  * Renamed `E`, `LN10`, `LN`, `LOG2E`, `LOG10E`, `PI`, `SQRT1_2` and `SQRT2`
-    to `e`, `ln10`, `ln`, `log2e`, `log10e`, `pi`, `sqrt1_2` and `sqrt2`.
+*   Renamed `E`, `LN10`, `LN`, `LOG2E`, `LOG10E`, `PI`, `SQRT1_2` and `SQRT2` to
+    `e`, `ln10`, `ln`, `log2e`, `log10e`, `pi`, `sqrt1_2` and `sqrt2`.
 
-* `dart.mirrors`
-  * Added `IsolateMirror.loadUri`, which allows dynamically loading additional
+#### `dart.mirrors`
+
+*   Added `IsolateMirror.loadUri`, which allows dynamically loading additional
     code.
+*   Marked `MirrorsUsed` as deprecated. The `MirrorsUsed` annotation was only
+    used to inform the dart2js compiler about how mirrors were used, but dart2js
+    no longer supports the mirrors library altogether.
 
 <!--
 Still need entries for all changes to dart:svg since 1.x
 -->
 
-* `dart:typed_data`
+#### `dart:typed_data`
 
-  * Added `Unmodifiable` view classes over all `List` types.
-  * Renamed `BYTES_PER_ELEMENT` to `bytesPerElement` on all typed data lists.
-  * Renamed constants `XXXX` through `WWWW` on `Float32x4` and `Int32x4` to
+*   Added `Unmodifiable` view classes over all `List` types.
+*   Renamed `BYTES_PER_ELEMENT` to `bytesPerElement` on all typed data lists.
+*   Renamed constants `XXXX` through `WWWW` on `Float32x4` and `Int32x4` to
     lower-case `xxxx` through `wwww`.
-  * Renamed `Endinanness` to `Endian` and its constants from
-    `BIG_ENDIAN`, `LITTLE_ENDIAN` and `HOST_ENDIAN` to
-    `little`, `big` and `host`.
+*   Renamed `Endinanness` to `Endian` and its constants from `BIG_ENDIAN`,
+    `LITTLE_ENDIAN` and `HOST_ENDIAN` to `little`, `big` and `host`.
 
 <!--
 Still need entries for all changes to dart:web_audio,web_gl,web_sql since 1.x
@@ -654,169 +1887,40 @@ Still need entries for all changes to dart:web_audio,web_gl,web_sql since 1.x
 
 ### Dart VM
 
-* Support for MIPS has been removed.
+*   Support for MIPS has been removed.
 
-* Dart `int` is now restricted to 64 bits. On overflow, arithmetic operations wrap
-  around, and integer literals larger than 64 bits are not allowed.
-  See https://github.com/dart-lang/sdk/blob/master/docs/language/informal/int64.md
-  for details.
+*   Dart `int` is now restricted to 64 bits. On overflow, arithmetic operations
+    wrap around, and integer literals larger than 64 bits are not allowed. See
+    https://github.com/dart-lang/sdk/blob/master/docs/language/informal/int64.md
+    for details.
 
-### Tool Changes
+*   The Dart VM no longer attempts to perform `packages/` directory resolution
+    (for loading scripts, and in `Isolate.resolveUri`). Users relying on
+    `packages/` directories should switch to `.packages` files.
 
-#### Analyzer
+### Dart for the Web
 
-* The analyzer will no longer issue a warning when a generic type parameter
-  is used as the type in an instance check. For example:
-
-  ```dart
-  test<T>() {
-    print(3 is T); // No warning
-  }
-  ```
-
-* New static checking of `@visibleForTesting` elements. Accessing a method,
-  function, class, etc. annotated with `@visibleForTesting` from a file _not_
-  in a `test/` directory will result in a new hint ([issue 28273]).
-* Static analysis now respects functions annotated with `@alwaysThrows`
-  ([issue 31384]).
-* New hints added:
-  * `NULL_AWARE_BEFORE_OPERATOR` when an operator is used after a null-aware
-    access. For example:
+*   Expose JavaScript Promise APIs using Dart futures. For example,
+    `BackgroundFetchManager.get` is defined as:
 
     ```dart
-    x?.a - ''; // HINT
+      Future<BackgroundFetchRegistration> get(String id)
     ```
 
-  * `NULL_AWARE_IN_LOGICAL_OPERATOR` when an expression with null-aware access
-    is used as a condition in logical operators. For example:
+    It can be used like:
 
     ```dart
-    x.a || x?.b; // HINT
+    BackgroundFetchRegistration result = await fetchMgr.get('abc');
     ```
 
-[issue 28273]: https://github.com/dart-lang/sdk/issues/28273
-[issue 31384]: https://github.com/dart-lang/sdk/issues/31384
+    The underlying JS Promise-to-Future mechanism will be exposed as a public
+    API in the future.
 
-#### Pub
+#### Dart Dev Compiler (DDC)
 
-##### SDK Constraints
+*   dartdevc will no longer throw an error from `is` checks that return a
+    different result in weak mode (SDK [issue 28988][sdk#28988]). For example:
 
-There is now a default SDK constraint of `<2.0.0` for any package with no
-existing upper bound. This allows us to move more safely to 2.0.0. All new
-packages published on pub will now require an upper bound SDK constraint so
-future major releases of Dart don't destabilize the package ecosystem.
-
-All SDK constraint exclusive upper bounds are now treated as though they allow
-pre-release versions of that upper bound. For example, the SDK constraint
-`>=1.8.0 <2.0.0` now allows pre-release SDK versions such as `2.0.0-beta.3.0`.
-This allows early adopters to try out packages that don't explicitly declare
-support for the new version yet. You can disable this functionality by setting
-the `PUB_ALLOW_PRERELEASE_SDK` environment variable to `false`.
-
-##### Other Features
-
-* Git dependencies may now include a `path` parameter, indicating that the
-  package exists in a subdirectory of the Git repository. For example:
-
-  ```yaml
-  dependencies:
-    foobar:
-      git:
-        url: git://github.com/dart-lang/multi_package_repo
-        path: pkg/foobar
-  ```
-
-* Added an `--executables` option to `pub deps` command. This will list all
-  available executables that can be run with `pub run`.
-
-* Added a `PUB_MAX_WORKERS_PER_TASK` environment variable which can be set to
-  configure the number of dartdevc/analyzer workers that are used when compiling
-  with `--web-compiler=dartdevc`.
-
-* The Flutter `sdk` source will now look for packages in
-  `flutter/bin/cache/pkg/` as well as `flutter/packages/`. In particular, this
-  means that packages can depend on the `sky_engine` package from the `sdk`
-  source ([issue 1775][pub#1775]).
-
-* Pub will now automatically retry HTTP requests that fail with a 502, 503, of
-  504 error code ([issue 1556][pub#1556]).
-
-* Pub now caches compiled packages and snapshots in the `.dart_tool/pub`
-  directory, rather than the `.pub` directory ([issue 1795][pub#1795]).
-
-* Emit exit code 66 when a path dependency doesn't exist ([issue 1747][pub#1747]).
-
-* `pub publish` throws a more explicit error if the `publish_to` field isn't an
-  absolute URL ([issue 1769][pub#1769]).
-
-* `pub publish` provides more detailed information if the package is too large
-  to upload.
-
-[pub#1556]: https://github.com/dart-lang/pub/issues/1556
-[pub#1747]: https://github.com/dart-lang/pub/issues/1747
-[pub#1769]: https://github.com/dart-lang/pub/issues/1769
-[pub#1775]: https://github.com/dart-lang/pub/issues/1775
-[pub#1795]: https://github.com/dart-lang/pub/issues/1795
-
-##### Bug Fixes
-
-* Added a `--build-delay` argument to `pub serve` which sets the amount of time
-  (in ms) to wait between file watcher events before scheduling a build.
-  Defaults to 50.
-
-* `pub get` and `pub upgrade` properly produce an error message and exit code
-  when no network is present.
-
-* `pub serve` now waits for file watcher events to stabilize before scheduling
-   new builds. This helps specifically with `safe-write` features in editors,
-   as well as other situations such as `save all` which cause many fast edits.
-
-* Removed the require.js module loading timeout for dartdevc, which resolves an
-  issue where the initial load of an app might give a timeout error.
-
-* Root package analysis options are no longer enforced for dependencies when
-  compiling with dartdevc ([issue 1684][pub#1684]).
-
-* Dart scripts can be included from subdirectories with dartdevc
-  ([issue 30246][]).
-
-* The `barback` infrastructure now supports `async` 2.0.0.
-
-* Print a more informative error message when the Flutter SDK isn't
-  available ([issue 1719][pub#1719]).
-
-* Don't crash when publishing a package that contains an empty submodule
-  ([issue 1679][pub#1679]).
-
-* Emit exit code 69 for TLS errors ([issue 1729][pub#1729]).
-
-* Fix `pub global run` for packages activated from a local path that also have
-  relative path dependencies ([issue 1751][pub#1751]).
-
-* `pub build` and `pub serve` support using the common front-end in the dart2js
-  transformer.
-
-[pub#1684]: https://github.com/dart-lang/pub/issues/1684
-[pub#1719]: https://github.com/dart-lang/pub/issues/1719
-[pub#1679]: https://github.com/dart-lang/pub/issues/1679
-[pub#1729]: https://github.com/dart-lang/pub/issues/1729
-[pub#1751]: https://github.com/dart-lang/pub/issues/1751
-[issue 30246]: https://github.com/dart-lang/sdk/issues/30246
-
-#### Other Tools
-
-* dartfmt
-
-    * Support assert in const constructor initializer lists.
-    * Better formatting for multi-line strings in argument lists.
-    wasn't in a Git repository.
-
-* Dart Dev Compiler
-
-  * dartdevc will no longer throw an error from `is` checks that return a
-    different result in weak mode
-    (SDK issue [28988](https://github.com/dart-lang/sdk/issues/28988)).
-    For example:
     ```dart
     main() {
       List l = [];
@@ -825,7 +1929,179 @@ the `PUB_ALLOW_PRERELEASE_SDK` environment variable to `false`.
     }
     ```
 
-## 1.24.3 - 14-12-2017
+*   Failed `as` casts on `Iterable<T>`, `Map<T>`, `Future<T>`, and `Stream<T>`
+    are no longer ignored. These failures were ignored to make it easier to
+    migrate Dart 1 code to strong mode, but ignoring them is a hole in the type
+    system. This closes part of that hole. (We still need to stop ignoring "as"
+    cast failures on function types, and implicit cast failures on the above
+    types and function types.)
+
+[sdk#28988]: https://github.com/dart-lang/sdk/issues/28988
+
+#### dart2js
+
+*   dart2js now compiles programs with Dart 2.0 semantics. Apps are expected to
+    be bigger than before, because Dart 2.0 has many more implicit checks
+    (similar to the `--checked` flag in Dart 1.0).
+
+    We exposed a `--omit-implicit-checks` flag which removes most of the extra
+    implicit checks. Only use this if you have enough test coverage to know that
+    the app will work well without the checks. If a check would have failed and
+    it is omitted, your app may crash or behave in unexpected ways. This flag is
+    similar to `--trust-type-annotations` in Dart 1.0.
+
+*   dart2js replaced its front-end with the common front-end (CFE). Thanks to
+    the CFE, dart2js errors are more consistent with all other Dart tools.
+
+*   dart2js replaced its source-map implementation.  There aren't any big
+    differences, but more data is emitted for synthetic code generated by the
+    compiler.
+
+*   `dart:mirrors` support was removed. Frameworks are encouraged to use
+    code-generation instead. Conditional imports indicate that mirrors are not
+    supported, and any API in the mirrors library will throw at runtime.
+
+*   The generated output of dart2js can now be run as a webworker.
+
+*   `dart:isolate` support was removed. To launch background tasks, please
+    use webworkers instead. APIs for webworkers can be accessed from `dart:html`
+    or JS-interop.
+
+*   dart2js no longer supports the `--package-root` flag. This flag was
+    deprecated in favor of `--packages` long ago.
+
+### Tool Changes
+
+#### Analyzer
+
+*   The analyzer will no longer issue a warning when a generic type parameter is
+    used as the type in an instance check. For example:
+
+    ```dart
+    test<T>() {
+      print(3 is T); // No warning
+    }
+    ```
+
+*   New static checking of `@visibleForTesting` elements. Accessing a method,
+    function, class, etc. annotated with `@visibleForTesting` from a file _not_
+    in a `test/` directory will result in a new hint ([issue 28273][]).
+
+*   Static analysis now respects functions annotated with `@alwaysThrows`
+    ([issue 31384][]).
+
+*   New hints added:
+
+    *   `NULL_AWARE_BEFORE_OPERATOR` when an operator is used after a null-aware
+        access. For example:
+
+        ```dart
+        x?.a - ''; // HINT
+        ```
+
+    *   `NULL_AWARE_IN_LOGICAL_OPERATOR` when an expression with null-aware
+        access is used as a condition in logical operators. For example:
+
+        ```dart
+        x.a || x?.b; // HINT
+        ```
+
+*   The command line analyzer (dartanalyzer) and the analysis server no longer
+    treat directories named `packages` specially. Previously they had ignored
+    these directories - and their contents - from the point of view of analysis.
+    Now they'll be treated just as regular directories. This special-casing of
+    `packages` directories was to support using symlinks for package:
+    resolution; that functionality is now handled by `.packages` files.
+
+*   New static checking of duplicate shown or hidden names in an export
+    directive ([issue 33182][]).
+
+*   The analysis server will now only analyze code in Dart 2 mode ('strong
+    mode'). It will emit warnings for analysis options files that have
+    `strong-mode: false` set (and will emit a hint for `strong-mode: true`,
+    which is no longer necessary).
+
+*   The dartanalyzer `--strong` flag is now deprecated and ignored. The
+    command-line analyzer now only analyzes code in strong mode.
+
+[issue 28273]: https://github.com/dart-lang/sdk/issues/28273
+[issue 31384]: https://github.com/dart-lang/sdk/issues/31384
+[issue 33182]: https://github.com/dart-lang/sdk/issues/33182
+
+#### dartfmt
+
+*   Support `assert()` in const constructor initializer lists.
+
+*   Better formatting for multi-line strings in argument lists.
+
+*   Force splitting an empty block as the then body of an if with an else.
+
+*   Support metadata annotations on enum cases.
+
+*   Add `--fix` to remove unneeded `new` and `const` keywords, and change `:` to
+    `=` before named parameter default values.
+
+*   Change formatting rules around static methods to uniformly format code with
+    and without `new` and `const`.
+
+*   Format expressions inside string interpolation.
+
+#### Pub
+
+*   Pub has a brand new version solver! It supports all the same features as the
+    old version solver, but it's much less likely to stall out on difficult
+    package graphs, and it's much clearer about why a solution can't be found
+    when version solving fails.
+
+*   Remove support for transformers, `pub build`, and `pub serve`. Use the
+    [new build system][transformers] instead.
+
+*   There is now a default SDK constraint of `<2.0.0` for any package with no
+    existing upper bound. This allows us to move more safely to 2.0.0. All new
+    packages published on pub will now require an upper bound SDK constraint so
+    future major releases of Dart don't destabilize the package ecosystem.
+
+    All SDK constraint exclusive upper bounds are now treated as though they
+    allow pre-release versions of that upper bound. For example, the SDK
+    constraint `>=1.8.0 <2.0.0` now allows pre-release SDK versions such as
+    `2.0.0-beta.3.0`. This allows early adopters to try out packages that don't
+    explicitly declare support for the new version yet. You can disable this
+    functionality by setting the `PUB_ALLOW_PRERELEASE_SDK` environment variable
+    to `false`.
+
+*   Allow depending on a package in a subdirectory of a Git repository. Git
+    dependencies may now include a `path` parameter, indicating that the package
+    exists in a subdirectory of the Git repository. For example:
+
+    ```yaml
+    dependencies:
+      foobar:
+        git:
+          url: git://github.com/dart-lang/multi_package_repo
+          path: pkg/foobar
+    ```
+
+*   Added an `--executables` option to `pub deps` command. This will list all
+    available executables that can be run with `pub run`.
+
+*   The Flutter `sdk` source will now look for packages in
+    `flutter/bin/cache/pkg/` as well as `flutter/packages/`. In particular, this
+    means that packages can depend on the `sky_engine` package from the `sdk`
+    source ([issue 1775][pub#1775]).
+
+*   Pub now caches compiled packages and snapshots in the `.dart_tool/pub`
+    directory, rather than the `.pub` directory ([issue 1795][pub#1795]).
+
+*   Other bug fixes and improvements.
+
+[issue 30246]: https://github.com/dart-lang/sdk/issues/30246
+[pub#1679]: https://github.com/dart-lang/pub/issues/1679
+[pub#1684]: https://github.com/dart-lang/pub/issues/1684
+[pub#1775]: https://github.com/dart-lang/pub/issues/1775
+[pub#1795]: https://github.com/dart-lang/pub/issues/1795
+[pub#1823]: https://github.com/dart-lang/pub/issues/1823
+
+## 1.24.3 - 2017-12-14
 
 * Fix for constructing a new SecurityContext that contains the built-in
   certificate authority roots
@@ -839,7 +2115,7 @@ the `PUB_ALLOW_PRERELEASE_SDK` environment variable to `false`.
     `SecureSocket`, `SecurityContext`, and `X509Certificate` properties and
     methods are now supported on iOS and OSX.
 
-## 1.24.2 - 22-06-2017
+## 1.24.2 - 2017-06-22
 
 * Fixes for debugging in Dartium.
   * Fix DevConsole crash with JS
@@ -847,7 +2123,7 @@ the `PUB_ALLOW_PRERELEASE_SDK` environment variable to `false`.
   * Fix debugging in WebStorm, NULL returned for JS objects
     ([issue 29854](https://github.com/dart-lang/sdk/issues/29854)).
 
-## 1.24.1 - 14-06-2017
+## 1.24.1 - 2017-06-14
 
 * Bug fixes for dartdevc support in `pub serve`.
   * Fixed module config invalidation logic so modules are properly
@@ -861,7 +2137,7 @@ the `PUB_ALLOW_PRERELEASE_SDK` environment variable to `false`.
 * Fix for a Dartium issue where there was no sound in checked mode
   ([issue 29810](https://github.com/dart-lang/sdk/issues/29810)).
 
-## 1.24.0 - 12-06-2017
+## 1.24.0 - 2017-06-12
 
 ### Language
 * During a dynamic type check, `void` is not required to be `null` anymore.
@@ -2242,7 +3518,7 @@ during isolate initialization.
     people in practice.
 
   * **Breaking:** Support for `barback` versions prior to 0.15.0 (released July
-    2014) has been dropped. Pub will no longer install these older barback
+    1)    has been dropped. Pub will no longer install these older barback
     versions.
 
   * `pub serve` now GZIPs the assets it serves to make load times more similar

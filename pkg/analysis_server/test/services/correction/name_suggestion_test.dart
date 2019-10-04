@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -100,6 +100,26 @@ main() {
         getVariableNameSuggestionsForExpression(
             expectedType, assignedExpression, new Set.from([])),
         unorderedEquals(['s']));
+  }
+
+  test_forExpression_inBuildMethod() async {
+    await resolveTestUnit('''
+class A {
+  void build() {
+    List l = new List();
+  }
+}
+''');
+    var excluded = new Set<String>.from([]);
+    var expr = findNodeAtString('new List');
+    expect(
+        getVariableNameSuggestionsForExpression(null, expr, excluded,
+            isMethod: false),
+        unorderedEquals(['list']));
+    expect(
+        getVariableNameSuggestionsForExpression(null, expr, excluded,
+            isMethod: true),
+        unorderedEquals(['buildList']));
   }
 
   test_forExpression_indexExpression_endsWithE() async {
@@ -224,26 +244,6 @@ main(p) {
     var expr = findNodeAtString('p.get', (node) => node is MethodInvocation);
     expect(getVariableNameSuggestionsForExpression(null, expr, excluded),
         unorderedEquals(['sortedNodes', 'nodes']));
-  }
-
-  test_forExpression_inBuildMethod() async {
-    await resolveTestUnit('''
-class A {
-  void build() {
-    List l = new List();
-  }
-}
-''');
-    var excluded = new Set<String>.from([]);
-    var expr = findNodeAtString('new List');
-    expect(
-        getVariableNameSuggestionsForExpression(null, expr, excluded,
-            isMethod: false),
-        unorderedEquals(['list']));
-    expect(
-        getVariableNameSuggestionsForExpression(null, expr, excluded,
-            isMethod: true),
-        unorderedEquals(['buildList']));
   }
 
   test_forExpression_methodInvocation_noPrefix() async {

@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -7,7 +7,11 @@ import 'dart:math';
 import 'package:analysis_server/src/protocol_server.dart'
     show doSourceChange_addElementEdit;
 import 'package:analysis_server/src/services/correction/strings.dart';
+import 'package:analyzer/dart/analysis/features.dart';
+import 'package:analyzer/dart/analysis/results.dart';
+import 'package:analyzer/dart/analysis/session.dart';
 import 'package:analyzer/dart/ast/ast.dart';
+import 'package:analyzer/dart/ast/precedence.dart';
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/element/element.dart';
@@ -15,7 +19,6 @@ import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer/src/dart/ast/utilities.dart';
 import 'package:analyzer/src/dart/scanner/reader.dart';
 import 'package:analyzer/src/dart/scanner/scanner.dart';
-import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer_plugin/protocol/protocol_common.dart'
     show SourceChange, SourceEdit;
@@ -27,16 +30,11 @@ import 'package:path/path.dart' as pathos;
  * Adds edits to the given [change] that ensure that all the [libraries] are
  * imported into the given [targetLibrary].
  */
-void addLibraryImports(pathos.Context pathContext, SourceChange change,
-    LibraryElement targetLibrary, Set<Source> libraries) {
-  CorrectionUtils libUtils;
-  try {
-    CompilationUnitElement unitElement = targetLibrary.definingCompilationUnit;
-    CompilationUnit unitAst = getParsedUnit(unitElement);
-    libUtils = new CorrectionUtils(unitAst);
-  } catch (e) {
-    throw new CancelCorrectionException(exception: e);
-  }
+Future<void> addLibraryImports(AnalysisSession session, SourceChange change,
+    LibraryElement targetLibrary, Set<Source> libraries) async {
+  var libraryPath = targetLibrary.source.fullName;
+  var resolveResult = await session.getResolvedUnit(libraryPath);
+  var libUtils = new CorrectionUtils(resolveResult);
   String eol = libUtils.endOfLine;
   // Prepare information about existing imports.
   LibraryDirective libraryDirective;
@@ -46,14 +44,14 @@ void addLibraryImports(pathos.Context pathContext, SourceChange change,
       libraryDirective = directive;
     } else if (directive is ImportDirective) {
       importDirectives.add(new _ImportDirectiveInfo(
-          directive.uriContent, directive.offset, directive.end));
+          directive.uri.stringValue, directive.offset, directive.end));
     }
   }
 
   // Prepare all URIs to import.
   List<String> uriList = libraries
-      .map((library) =>
-          getLibrarySourceUri(pathContext, targetLibrary, library.uri))
+      .map((library) => getLibrarySourceUri(
+          session.resourceProvider.pathContext, targetLibrary, library.uri))
       .toList();
   uriList.sort((a, b) => a.compareTo(b));
 
@@ -234,18 +232,10 @@ String getElementQualifiedName(Element element) {
   }
 }
 
-/**
- * If the given [AstNode] is in a [ClassDeclaration], returns the
- * [ClassElement]. Otherwise returns `null`.
- */
-ClassElement getEnclosingClassElement(AstNode node) {
-  ClassDeclaration enclosingClassNode =
-      node.getAncestor((node) => node is ClassDeclaration);
-  if (enclosingClassNode != null) {
-    return enclosingClassNode.element;
-  }
-  return null;
-}
+/// If the given [node] is in a class, enum or mixin declaration, return the
+/// declared [ClassElement]. Otherwise return `null`.
+ClassElement getEnclosingClassElement(AstNode node) =>
+    node.thisOrAncestorOfType<ClassOrMixinDeclaration>()?.declaredElement;
 
 /**
  * Returns a class or an unit member enclosing the given [node].
@@ -271,13 +261,13 @@ AstNode getEnclosingClassOrUnitMember(AstNode node) {
 ExecutableElement getEnclosingExecutableElement(AstNode node) {
   while (node != null) {
     if (node is FunctionDeclaration) {
-      return node.element;
+      return node.declaredElement;
     }
     if (node is ConstructorDeclaration) {
-      return node.element;
+      return node.declaredElement;
     }
     if (node is MethodDeclaration) {
-      return node.element;
+      return node.declaredElement;
     }
     node = node.parent;
   }
@@ -303,18 +293,23 @@ AstNode getEnclosingExecutableNode(AstNode node) {
   return null;
 }
 
+/// If the given [node] is in an extension, return the declared
+/// [ExtensionElement]. Otherwise return `null`.
+ExtensionElement getEnclosingExtensionElement(AstNode node) =>
+    node.thisOrAncestorOfType<ExtensionDeclaration>()?.declaredElement;
+
 /**
- * Returns [getExpressionPrecedence] for the parent of [node], or `0` if the
- * parent node is a [ParenthesizedExpression].
+ * Returns [getExpressionPrecedence] for the parent of [node], or
+ * ASSIGNMENT_PRECEDENCE if the parent node is a [ParenthesizedExpression].
  *
  * The reason is that `(expr)` is always executed after `expr`.
  */
-int getExpressionParentPrecedence(AstNode node) {
+Precedence getExpressionParentPrecedence(AstNode node) {
   AstNode parent = node.parent;
   if (parent is ParenthesizedExpression) {
-    return 0;
+    return Precedence.assignment;
   } else if (parent is IndexExpression && parent.index == node) {
-    return 0;
+    return Precedence.assignment;
   } else if (parent is AssignmentExpression &&
       node == parent.rightHandSide &&
       parent.parent is CascadeExpression) {
@@ -323,19 +318,20 @@ int getExpressionParentPrecedence(AstNode node) {
     // expressions are equal it sometimes means that we don't need parentheses
     // (such as replacing the `b` in `a + b` with `c + d`) and sometimes do
     // (such as replacing the `v` in `..f = v` with `a..b`).
-    return 3;
+    return Precedence.conditional;
   }
   return getExpressionPrecedence(parent);
 }
 
 /**
- * Returns the precedence of [node] it is an [Expression], negative otherwise.
+ * Returns the precedence of [node] it is an [Expression], NO_PRECEDENCE
+ * otherwise.
  */
-int getExpressionPrecedence(AstNode node) {
+Precedence getExpressionPrecedence(AstNode node) {
   if (node is Expression) {
     return node.precedence;
   }
-  return -1000;
+  return Precedence.none;
 }
 
 /**
@@ -467,40 +463,6 @@ List<AstNode> getParents(AstNode node) {
     current = current.parent;
   }
   return parents;
-}
-
-/**
- * Returns a parsed [AstNode] for the given [classElement].
- *
- * The resulting AST structure may or may not be resolved.
- */
-AstNode getParsedClassElementNode(ClassElement classElement) {
-  CompilationUnitElement unitElement = getCompilationUnitElement(classElement);
-  CompilationUnit unit = getParsedUnit(unitElement);
-  int offset = classElement.nameOffset;
-  AstNode classNameNode = new NodeLocator(offset).searchWithin(unit);
-  if (classElement.isEnum) {
-    return classNameNode.getAncestor((node) => node is EnumDeclaration);
-  } else {
-    return classNameNode.getAncestor(
-        (node) => node is ClassDeclaration || node is ClassTypeAlias);
-  }
-}
-
-/**
- * Returns a parsed [CompilationUnit] for the given [unitElement].
- *
- * The resulting AST structure may or may not be resolved.
- * If it is not resolved, then at least the given [unitElement] will be set.
- */
-CompilationUnit getParsedUnit(CompilationUnitElement unitElement) {
-  AnalysisContext context = unitElement.context;
-  Source source = unitElement.source;
-  CompilationUnit unit = context.parseCompilationUnit(source);
-  if (unit.element == null) {
-    unit.element = unitElement;
-  }
-  return unit;
 }
 
 /**
@@ -641,6 +603,8 @@ class ClassMemberLocation {
 
 class CorrectionUtils {
   final CompilationUnit unit;
+  final LibraryElement _library;
+  final String _buffer;
 
   /**
    * The [ClassElement] the generated code is inserted to, so we can decide if
@@ -650,19 +614,12 @@ class CorrectionUtils {
 
   ExecutableElement targetExecutableElement;
 
-  LibraryElement _library;
-  String _buffer;
   String _endOfLine;
 
-  CorrectionUtils(this.unit, {String buffer}) {
-    CompilationUnitElement unitElement = unit.element;
-    AnalysisContext context = unitElement.context;
-    if (context == null) {
-      throw new CancelCorrectionException();
-    }
-    this._library = unitElement.library;
-    this._buffer = buffer ?? context.getContents(unitElement.source).data;
-  }
+  CorrectionUtils(ResolvedUnitResult result)
+      : unit = result.unit,
+        _library = result.libraryElement,
+        _buffer = result.content;
 
   /**
    * Returns the EOL to use for this [CompilationUnit].
@@ -690,7 +647,7 @@ class CorrectionUtils {
   Set<String> findPossibleLocalVariableConflicts(int offset) {
     Set<String> conflicts = new Set<String>();
     AstNode enclosingNode = findNode(offset);
-    Block enclosingBlock = enclosingNode.getAncestor((node) => node is Block);
+    Block enclosingBlock = enclosingNode.thisOrAncestorOfType<Block>();
     if (enclosingBlock != null) {
       _CollectReferencedUnprefixedNames visitor =
           new _CollectReferencedUnprefixedNames();
@@ -751,7 +708,7 @@ class CorrectionUtils {
     // determine if empty line is required after
     int nextLineOffset = getLineNext(offset);
     String insertLine = source.substring(offset, nextLineOffset);
-    if (!insertLine.trim().isEmpty) {
+    if (insertLine.trim().isNotEmpty) {
       insertEmptyLineAfter = true;
     }
     // fill InsertDesc
@@ -862,7 +819,7 @@ class CorrectionUtils {
    * to cover whole lines.
    */
   SourceRange getLinesRange(SourceRange sourceRange,
-      {bool skipLeadingEmptyLines: false}) {
+      {bool skipLeadingEmptyLines = false}) {
     // start
     int startOffset = sourceRange.offset;
     int startLineOffset = getLineContentStart(startOffset);
@@ -1057,7 +1014,7 @@ class CorrectionUtils {
   /**
    * Indents given source left or right.
    */
-  String indentSourceLeftRight(String source, {bool indentLeft: true}) {
+  String indentSourceLeftRight(String source, {bool indentLeft = true}) {
     StringBuffer sb = new StringBuffer();
     String indent = getIndent(1);
     String eol = endOfLine;
@@ -1082,22 +1039,22 @@ class CorrectionUtils {
   }
 
   /**
-   * @return the source of the inverted condition for the given logical expression.
+   * Return the source of the inverted condition for the given logical expression.
    */
   String invertCondition(Expression expression) =>
       _invertCondition0(expression)._source;
 
   /**
-   * Return `true` if the given [classDeclaration] has open '{' and close '}'
-   * at the same line, e.g. `class X {}`.
+   * Return `true` if the given class, mixin, enum or extension [declaration]
+   * has open '{' and close '}' on the same line, e.g. `class X {}`.
    */
-  bool isClassWithEmptyBody(ClassDeclaration classDeclaration) {
-    return getLineThis(classDeclaration.leftBracket.offset) ==
-        getLineThis(classDeclaration.rightBracket.offset);
+  bool isClassWithEmptyBody(CompilationUnitMember declaration) {
+    return getLineThis(_getLeftBracket(declaration).offset) ==
+        getLineThis(_getRightBracket(declaration).offset);
   }
 
   /**
-   * @return <code>true</code> if selection range contains only whitespace or comments
+   * Return <code>true</code> if [range] contains only whitespace or comments.
    */
   bool isJustWhitespaceOrComment(SourceRange range) {
     String trimmedText = getRangeText(range).trim();
@@ -1106,16 +1063,19 @@ class CorrectionUtils {
       return true;
     }
     // may be comment
-    return TokenUtils.getTokens(trimmedText).isEmpty;
+    return TokenUtils.getTokens(trimmedText, unit.featureSet).isEmpty;
   }
 
   ClassMemberLocation prepareNewClassMemberLocation(
-      ClassDeclaration classDeclaration,
+      CompilationUnitMember declaration,
       bool shouldSkip(ClassMember existingMember)) {
     String indent = getIndent(1);
     // Find the last target member.
     ClassMember targetMember = null;
-    List<ClassMember> members = classDeclaration.members;
+    List<ClassMember> members = _getMembers(declaration);
+    if (members == null) {
+      return null;
+    }
     for (ClassMember member in members) {
       if (shouldSkip(member)) {
         targetMember = member;
@@ -1129,11 +1089,11 @@ class CorrectionUtils {
           endOfLine + endOfLine + indent, targetMember.end, '');
     }
     // At the beginning of the class.
-    String suffix = members.isNotEmpty || isClassWithEmptyBody(classDeclaration)
+    String suffix = members.isNotEmpty || isClassWithEmptyBody(declaration)
         ? endOfLine
         : '';
     return new ClassMemberLocation(
-        endOfLine + indent, classDeclaration.leftBracket.end, suffix);
+        endOfLine + indent, _getLeftBracket(declaration).end, suffix);
   }
 
   ClassMemberLocation prepareNewConstructorLocation(
@@ -1145,15 +1105,15 @@ class CorrectionUtils {
   }
 
   ClassMemberLocation prepareNewFieldLocation(
-      ClassDeclaration classDeclaration) {
+      CompilationUnitMember declaration) {
     return prepareNewClassMemberLocation(
-        classDeclaration, (member) => member is FieldDeclaration);
+        declaration, (member) => member is FieldDeclaration);
   }
 
   ClassMemberLocation prepareNewGetterLocation(
-      ClassDeclaration classDeclaration) {
+      CompilationUnitMember declaration) {
     return prepareNewClassMemberLocation(
-        classDeclaration,
+        declaration,
         (member) =>
             member is FieldDeclaration ||
             member is ConstructorDeclaration ||
@@ -1161,9 +1121,9 @@ class CorrectionUtils {
   }
 
   ClassMemberLocation prepareNewMethodLocation(
-      ClassDeclaration classDeclaration) {
+      CompilationUnitMember declaration) {
     return prepareNewClassMemberLocation(
-        classDeclaration,
+        declaration,
         (member) =>
             member is FieldDeclaration ||
             member is ConstructorDeclaration ||
@@ -1179,7 +1139,7 @@ class CorrectionUtils {
     // prepare STRING token ranges
     List<SourceRange> lineRanges = [];
     {
-      List<Token> tokens = TokenUtils.getTokens(source);
+      List<Token> tokens = TokenUtils.getTokens(source, unit.featureSet);
       for (Token token in tokens) {
         if (token.type == TokenType.STRING) {
           lineRanges.add(range.token(token));
@@ -1276,6 +1236,33 @@ class CorrectionUtils {
     return null;
   }
 
+  Token _getLeftBracket(CompilationUnitMember declaration) {
+    if (declaration is ClassOrMixinDeclaration) {
+      return declaration.leftBracket;
+    } else if (declaration is ExtensionDeclaration) {
+      return declaration.leftBracket;
+    }
+    return null;
+  }
+
+  List<ClassMember> _getMembers(CompilationUnitMember declaration) {
+    if (declaration is ClassOrMixinDeclaration) {
+      return declaration.members;
+    } else if (declaration is ExtensionDeclaration) {
+      return declaration.members;
+    }
+    return null;
+  }
+
+  Token _getRightBracket(CompilationUnitMember declaration) {
+    if (declaration is ClassOrMixinDeclaration) {
+      return declaration.rightBracket;
+    } else if (declaration is ExtensionDeclaration) {
+      return declaration.rightBracket;
+    }
+    return null;
+  }
+
   /**
    * @return the [InvertedCondition] for the given logical expression.
    */
@@ -1339,7 +1326,7 @@ class CorrectionUtils {
     } else if (expression is ParenthesizedExpression) {
       return _invertCondition0(expression.unParenthesized);
     }
-    DartType type = expression.bestType;
+    DartType type = expression.staticType;
     if (type.displayName == "bool") {
       return _InvertedCondition._simple("!${getNodeText(expression)}");
     }
@@ -1398,40 +1385,26 @@ class CorrectionUtils_InsertDesc {
  * Utilities to work with [Token]s.
  */
 class TokenUtils {
-  /**
-   * Return the first token in the list of [tokens] representing the given
-   * [keyword], or `null` if there is no such token.
-   */
-  static Token findKeywordToken(List<Token> tokens, Keyword keyword) {
-    for (Token token in tokens) {
-      if (token.keyword == keyword) {
-        return token;
+  static List<Token> getNodeTokens(AstNode node) {
+    var result = <Token>[];
+    for (var token = node.beginToken;; token = token.next) {
+      result.add(token);
+      if (token == node.endToken) {
+        break;
       }
     }
-    return null;
-  }
-
-  /**
-   * @return the first [Token] with given [TokenType], may be <code>null</code> if not
-   *         found.
-   */
-  static Token findToken(List<Token> tokens, TokenType type) {
-    for (Token token in tokens) {
-      if (token.type == type) {
-        return token;
-      }
-    }
-    return null;
+    return result;
   }
 
   /**
    * @return [Token]s of the given Dart source, not <code>null</code>, may be empty if no
    *         tokens or some exception happens.
    */
-  static List<Token> getTokens(String s) {
+  static List<Token> getTokens(String s, FeatureSet featureSet) {
     try {
       List<Token> tokens = [];
-      Scanner scanner = new Scanner(null, new CharSequenceReader(s), null);
+      Scanner scanner = new Scanner(null, new CharSequenceReader(s), null)
+        ..configureFeatures(featureSet);
       Token token = scanner.tokenize();
       while (token.type != TokenType.EOF) {
         tokens.add(token);
@@ -1442,13 +1415,6 @@ class TokenUtils {
       return [];
     }
   }
-
-  /**
-   * @return <code>true</code> if given [Token]s contain only single [Token] with given
-   *         [TokenType].
-   */
-  static bool hasOnly(List<Token> tokens, TokenType type) =>
-      tokens.length == 1 && tokens[0].type == type;
 }
 
 class _CollectReferencedUnprefixedNames extends RecursiveAstVisitor {

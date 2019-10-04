@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -19,7 +19,7 @@ String computePlatformBinariesPath(String sdkPath) {
 
   // The given SDK path does not work.
   // Then we're probably running on bots, in 'xcodebuild/ReleaseX64'.
-  // In this case 'vm_platform.dill' is next to the 'dart'.
+  // In this case 'vm_platform_strong.dill' is next to the 'dart'.
   return path.dirname(Platform.resolvedExecutable);
 }
 

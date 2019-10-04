@@ -1,9 +1,8 @@
-// Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2016, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analyzer/dart/ast/ast.dart';
-import 'package:analyzer/dart/ast/standard_resolution_map.dart';
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/element/element.dart';
@@ -78,6 +77,13 @@ class IndexElementInfo {
               ? IndexSyntheticElementKind.getter
               : IndexSyntheticElementKind.setter;
           element = accessor.variable;
+        }
+      } else if (elementKind == ElementKind.METHOD) {
+        Element enclosing = element.enclosingElement;
+        bool isEnumMethod = enclosing is ClassElement && enclosing.isEnum;
+        if (isEnumMethod && element.name == 'toString') {
+          kind = IndexSyntheticElementKind.enumToString;
+          element = enclosing;
         }
       } else if (elementKind == ElementKind.TOP_LEVEL_VARIABLE) {
         TopLevelVariableElement property = element;
@@ -212,7 +218,7 @@ class _IndexAssembler {
   /**
    * All subtypes declared in the unit.
    */
-  final List<AnalysisDriverSubtypeBuilder> subtypes = [];
+  final List<_SubtypeInfo> subtypes = [];
 
   /**
    * The [_StringInfo] to use for `null` strings.
@@ -236,12 +242,25 @@ class _IndexAssembler {
     nameRelations.add(new _NameRelationInfo(nameId, kind, offset, isQualified));
   }
 
+  void addSubtype(String name, List<String> members, List<String> supertypes) {
+    for (var supertype in supertypes) {
+      subtypes.add(
+        new _SubtypeInfo(
+          _getStringInfo(supertype),
+          _getStringInfo(name),
+          members.map(_getStringInfo).toList(),
+        ),
+      );
+    }
+  }
+
   /**
    * Index the [unit] and assemble a new [AnalysisDriverUnitIndexBuilder].
    */
   AnalysisDriverUnitIndexBuilder assemble(CompilationUnit unit) {
     unit.accept(new _IndexContributor(this));
-    // sort strings end set IDs
+
+    // Sort strings and set IDs.
     List<_StringInfo> stringInfoList = stringMap.values.toList();
     stringInfoList.sort((a, b) {
       return a.value.compareTo(b.value);
@@ -249,16 +268,17 @@ class _IndexAssembler {
     for (int i = 0; i < stringInfoList.length; i++) {
       stringInfoList[i].id = i;
     }
-    // sort elements and set IDs
+
+    // Sort elements and set IDs.
     List<_ElementInfo> elementInfoList = elementMap.values.toList();
     elementInfoList.sort((a, b) {
       int delta;
       delta = a.nameIdUnitMember.id - b.nameIdUnitMember.id;
-      if (delta != null) {
+      if (delta != 0) {
         return delta;
       }
       delta = a.nameIdClassMember.id - b.nameIdClassMember.id;
-      if (delta != null) {
+      if (delta != 0) {
         return delta;
       }
       return a.nameIdParameter.id - b.nameIdParameter.id;
@@ -266,6 +286,7 @@ class _IndexAssembler {
     for (int i = 0; i < elementInfoList.length; i++) {
       elementInfoList[i].id = i;
     }
+
     // Sort element and name relations.
     elementRelations.sort((a, b) {
       return a.elementInfo.id - b.elementInfo.id;
@@ -273,6 +294,12 @@ class _IndexAssembler {
     nameRelations.sort((a, b) {
       return a.nameInfo.id - b.nameInfo.id;
     });
+
+    // Sort subtypes by supertypes.
+    subtypes.sort((a, b) {
+      return a.supertype.id - b.supertype.id;
+    });
+
     return new AnalysisDriverUnitIndexBuilder(
         strings: stringInfoList.map((s) => s.value).toList(),
         nullStringId: nullString.id,
@@ -297,7 +324,13 @@ class _IndexAssembler {
         usedNameOffsets: nameRelations.map((r) => r.offset).toList(),
         usedNameIsQualifiedFlags:
             nameRelations.map((r) => r.isQualified).toList(),
-        subtypes: subtypes);
+        supertypes: subtypes.map((subtype) => subtype.supertype.id).toList(),
+        subtypes: subtypes.map((subtype) {
+          return new AnalysisDriverSubtypeBuilder(
+            name: subtype.name.id,
+            members: subtype.members.map((member) => member.id).toList(),
+          );
+        }).toList());
   }
 
   /**
@@ -364,7 +397,8 @@ class _IndexAssembler {
       nameIdParameter = _getStringInfo(element.name);
       element = element.enclosingElement;
     }
-    if (element?.enclosingElement is ClassElement) {
+    if (element?.enclosingElement is ClassElement ||
+        element?.enclosingElement is ExtensionElement) {
       nameIdClassMember = _getStringInfo(element.name);
       element = element.enclosingElement;
     }
@@ -434,6 +468,7 @@ class _IndexContributor extends GeneralizingAstVisitor {
         elementKind == ElementKind.ERROR ||
         elementKind == ElementKind.LABEL ||
         elementKind == ElementKind.LOCAL_VARIABLE ||
+        elementKind == ElementKind.NEVER ||
         elementKind == ElementKind.PREFIX ||
         elementKind == ElementKind.TYPE_PARAMETER ||
         elementKind == ElementKind.FUNCTION &&
@@ -451,6 +486,14 @@ class _IndexContributor extends GeneralizingAstVisitor {
         element is ParameterElement &&
         (element.enclosingElement == null ||
             element.enclosingElement.isSynthetic)) {
+      return;
+    }
+    // Elements for generic function types are enclosed by the compilation
+    // units, but don't have names. So, we cannot index references to their
+    // named parameters. Ignore them.
+    if (elementKind == ElementKind.PARAMETER &&
+        element is ParameterElement &&
+        element.enclosingElement is GenericFunctionTypeElement) {
       return;
     }
     // Add the relation.
@@ -491,20 +534,19 @@ class _IndexContributor extends GeneralizingAstVisitor {
     }
   }
 
-  void recordUriReference(Element element, UriBasedDirective directive) {
-    recordRelation(
-        element, IndexRelationKind.IS_REFERENCED_BY, directive.uri, true);
+  void recordUriReference(Element element, StringLiteral uri) {
+    recordRelation(element, IndexRelationKind.IS_REFERENCED_BY, uri, true);
   }
 
   @override
   visitAssignmentExpression(AssignmentExpression node) {
-    recordOperatorReference(node.operator, node.bestElement);
+    recordOperatorReference(node.operator, node.staticElement);
     super.visitAssignmentExpression(node);
   }
 
   @override
   visitBinaryExpression(BinaryExpression node) {
-    recordOperatorReference(node.operator, node.bestElement);
+    recordOperatorReference(node.operator, node.staticElement);
     super.visitBinaryExpression(node);
   }
 
@@ -512,21 +554,18 @@ class _IndexContributor extends GeneralizingAstVisitor {
   visitClassDeclaration(ClassDeclaration node) {
     _addSubtypeForClassDeclaration(node);
     if (node.extendsClause == null) {
-      ClassElement objectElement = resolutionMap
-          .elementDeclaredByClassDeclaration(node)
-          .supertype
-          ?.element;
+      ClassElement objectElement = node.declaredElement.supertype?.element;
       recordRelationOffset(objectElement, IndexRelationKind.IS_EXTENDED_BY,
           node.name.offset, 0, true);
     }
-    recordIsAncestorOf(node.element);
+    recordIsAncestorOf(node.declaredElement);
     super.visitClassDeclaration(node);
   }
 
   @override
   visitClassTypeAlias(ClassTypeAlias node) {
     _addSubtypeForClassTypeAlis(node);
-    recordIsAncestorOf(node.element);
+    recordIsAncestorOf(node.declaredElement);
     super.visitClassTypeAlias(node);
   }
 
@@ -559,6 +598,13 @@ class _IndexContributor extends GeneralizingAstVisitor {
   }
 
   @override
+  visitExportDirective(ExportDirective node) {
+    ExportElement element = node.element;
+    recordUriReference(element?.exportedLibrary, node.uri);
+    super.visitExportDirective(node);
+  }
+
+  @override
   visitExpression(Expression node) {
     ParameterElement parameterElement = node.staticParameterElement;
     if (parameterElement != null && parameterElement.isOptionalPositional) {
@@ -566,13 +612,6 @@ class _IndexContributor extends GeneralizingAstVisitor {
           node.offset, 0, true);
     }
     super.visitExpression(node);
-  }
-
-  @override
-  visitExportDirective(ExportDirective node) {
-    ExportElement element = node.element;
-    recordUriReference(element?.exportedLibrary, node);
-    super.visitExportDirective(node);
   }
 
   @override
@@ -590,13 +629,13 @@ class _IndexContributor extends GeneralizingAstVisitor {
   @override
   visitImportDirective(ImportDirective node) {
     ImportElement element = node.element;
-    recordUriReference(element?.importedLibrary, node);
+    recordUriReference(element?.importedLibrary, node.uri);
     super.visitImportDirective(node);
   }
 
   @override
   visitIndexExpression(IndexExpression node) {
-    MethodElement element = node.bestElement;
+    MethodElement element = node.staticElement;
     if (element is MethodElement) {
       Token operator = node.leftBracket;
       recordRelationToken(element, IndexRelationKind.IS_INVOKED_BY, operator);
@@ -610,7 +649,7 @@ class _IndexContributor extends GeneralizingAstVisitor {
   @override
   visitMethodInvocation(MethodInvocation node) {
     SimpleIdentifier name = node.methodName;
-    Element element = name.bestElement;
+    Element element = name.staticElement;
     // unresolved name invocation
     bool isQualified = node.realTarget != null;
     if (element == null) {
@@ -627,23 +666,37 @@ class _IndexContributor extends GeneralizingAstVisitor {
   }
 
   @override
+  visitMixinDeclaration(MixinDeclaration node) {
+    _addSubtypeForMixinDeclaration(node);
+    recordIsAncestorOf(node.declaredElement);
+    super.visitMixinDeclaration(node);
+  }
+
+  @override
+  visitOnClause(OnClause node) {
+    for (TypeName typeName in node.superclassConstraints) {
+      recordSuperType(typeName, IndexRelationKind.IS_IMPLEMENTED_BY);
+    }
+  }
+
+  @override
   visitPartDirective(PartDirective node) {
     CompilationUnitElement element = node.element;
     if (element?.source != null) {
-      recordUriReference(element, node);
+      recordUriReference(element, node.uri);
     }
     super.visitPartDirective(node);
   }
 
   @override
   visitPostfixExpression(PostfixExpression node) {
-    recordOperatorReference(node.operator, node.bestElement);
+    recordOperatorReference(node.operator, node.staticElement);
     super.visitPostfixExpression(node);
   }
 
   @override
   visitPrefixExpression(PrefixExpression node) {
-    recordOperatorReference(node.operator, node.bestElement);
+    recordOperatorReference(node.operator, node.staticElement);
     super.visitPrefixExpression(node);
   }
 
@@ -669,7 +722,7 @@ class _IndexContributor extends GeneralizingAstVisitor {
     if (node.inDeclarationContext()) {
       return;
     }
-    Element element = node.bestElement;
+    Element element = node.staticElement;
     // record unresolved name reference
     bool isQualified = _isQualified(node);
     if (element == null) {
@@ -740,8 +793,12 @@ class _IndexContributor extends GeneralizingAstVisitor {
   /**
    * Record the given class as a subclass of its direct superclasses.
    */
-  void _addSubtype(String name, TypeName superclass, WithClause withClause,
-      ImplementsClause implementsClause, List<ClassMember> memberNodes) {
+  void _addSubtype(String name,
+      {TypeName superclass,
+      WithClause withClause,
+      OnClause onClause,
+      ImplementsClause implementsClause,
+      List<ClassMember> memberNodes}) {
     List<String> supertypes = [];
     List<String> members = [];
 
@@ -763,6 +820,7 @@ class _IndexContributor extends GeneralizingAstVisitor {
 
     addSupertype(superclass);
     withClause?.mixinTypes?.forEach(addSupertype);
+    onClause?.superclassConstraints?.forEach(addSupertype);
     implementsClause?.interfaces?.forEach(addSupertype);
 
     void addMemberName(SimpleIdentifier identifier) {
@@ -787,24 +845,39 @@ class _IndexContributor extends GeneralizingAstVisitor {
     supertypes.sort();
     members.sort();
 
-    assembler.subtypes.add(new AnalysisDriverSubtypeBuilder(
-        name: name, supertypes: supertypes, members: members));
+    assembler.addSubtype(name, members, supertypes);
   }
 
   /**
    * Record the given class as a subclass of its direct superclasses.
    */
   void _addSubtypeForClassDeclaration(ClassDeclaration node) {
-    _addSubtype(node.name.name, node.extendsClause?.superclass, node.withClause,
-        node.implementsClause, node.members);
+    _addSubtype(node.name.name,
+        superclass: node.extendsClause?.superclass,
+        withClause: node.withClause,
+        implementsClause: node.implementsClause,
+        memberNodes: node.members);
   }
 
   /**
    * Record the given class as a subclass of its direct superclasses.
    */
   void _addSubtypeForClassTypeAlis(ClassTypeAlias node) {
-    _addSubtype(node.name.name, node.superclass, node.withClause,
-        node.implementsClause, const []);
+    _addSubtype(node.name.name,
+        superclass: node.superclass,
+        withClause: node.withClause,
+        implementsClause: node.implementsClause,
+        memberNodes: const []);
+  }
+
+  /**
+   * Record the given mixin as a subclass of its direct superclasses.
+   */
+  void _addSubtypeForMixinDeclaration(MixinDeclaration node) {
+    _addSubtype(node.name.name,
+        onClause: node.onClause,
+        implementsClause: node.implementsClause,
+        memberNodes: node.members);
   }
 
   /**
@@ -864,6 +937,9 @@ class _IndexContributor extends GeneralizingAstVisitor {
     for (InterfaceType mixinType in ancestor.mixins) {
       _recordIsAncestorOf(descendant, mixinType.element, true, visitedElements);
     }
+    for (InterfaceType type in ancestor.superclassConstraints) {
+      _recordIsAncestorOf(descendant, type.element, true, visitedElements);
+    }
     for (InterfaceType implementedType in ancestor.interfaces) {
       _recordIsAncestorOf(
           descendant, implementedType.element, true, visitedElements);
@@ -899,4 +975,26 @@ class _StringInfo {
   int id;
 
   _StringInfo(this.value);
+}
+
+/**
+ * Information about a subtype in the index.
+ */
+class _SubtypeInfo {
+  /**
+   * The identifier of a direct supertype.
+   */
+  final _StringInfo supertype;
+
+  /**
+   * The name of the class.
+   */
+  final _StringInfo name;
+
+  /**
+   * The names of defined instance members.
+   */
+  final List<_StringInfo> members;
+
+  _SubtypeInfo(this.supertype, this.name, this.members);
 }

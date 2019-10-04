@@ -8,14 +8,13 @@ import 'package:compiler/src/common_elements.dart';
 import 'package:compiler/src/compiler.dart';
 import 'package:compiler/src/elements/entities.dart';
 import 'package:compiler/src/js/js.dart' as js;
+import 'package:compiler/src/js_model/js_strategy.dart';
 import 'package:compiler/src/world.dart';
 import 'package:expect/expect.dart';
 import '../helpers/d8_helper.dart';
 
 const String SOURCE = r'''
-import 'package:meta/dart2js.dart';
-
-@noInline
+@pragma('dart2js:noInline')
 method1<T>(T t) {
   print('method1:');
   print('$t is $T = ${t is T}');
@@ -23,7 +22,7 @@ method1<T>(T t) {
   print('');
 }
 
-@noInline
+@pragma('dart2js:noInline')
 method2<T, S>(S s, T t) {
   print('method2:');
   print('$t is $T = ${t is T}');
@@ -33,7 +32,7 @@ method2<T, S>(S s, T t) {
   print('');
 }
 
-@tryInline
+@pragma('dart2js:tryInline')
 method3<T, S>(T t, S s) {
   print('method3:');
   print('$t is $T = ${t is T}');
@@ -65,7 +64,7 @@ testMethod4() {
 }
 
 class Class2 {
-  @tryInline
+  @pragma('dart2js:tryInline')
   method5<T>(T t) {
     print('Class2.method5:');
     print('$t is $T = ${t is T}');
@@ -73,7 +72,7 @@ class Class2 {
     print('');
   }
 
-  @noInline
+  @pragma('dart2js:noInline')
   method6(o) {
     print('Class2.method6:');
     print('$o is int = ${o is int}');
@@ -83,7 +82,7 @@ class Class2 {
 }
 
 class Class3 {
-  @noInline
+  @pragma('dart2js:noInline')
   method6<T>(T t) {
     print('Class3.method6:');
     print('$t is $T = ${t is T}');
@@ -113,8 +112,6 @@ main(args) {
   new Class2().method5<int>(0);
   new Class3().method6<int>(0);
   dynamic c3 = args != null ? new Class3() : new Class2();
-  // TODO(johnniwinther): Expected bounds should be `dynamic` when CFE supports
-  // instantiate-to-bound.
   c3.method6(0); // Missing type arguments.
   try {
     dynamic c2 = args == null ? new Class3() : new Class2();
@@ -162,8 +159,8 @@ Class3.method6:
 "foo" is int = false
 
 Class3.method6:
-0 is Object = true
-"foo" is Object = true
+0 is dynamic = true
+"foo" is dynamic = true
 
 Class2.method6:
 0 is int = true
@@ -176,12 +173,13 @@ noSuchMethod: Class2.method6<int>
 
 main(List<String> args) {
   asyncTest(() async {
-    Compiler compiler = await runWithD8(memorySourceFiles: {
+    D8Result result = await runWithD8(memorySourceFiles: {
       'main.dart': SOURCE
     }, options: [
-      Flags.strongMode,
       Flags.disableRtiOptimization,
     ], expectedOutput: OUTPUT, printJs: args.contains('-v'));
+    Compiler compiler = result.compilationResult.compiler;
+    JsBackendStrategy backendStrategy = compiler.backendStrategy;
     JClosedWorld closedWorld = compiler.backendClosedWorldForTesting;
     ElementEnvironment elementEnvironment = closedWorld.elementEnvironment;
 
@@ -199,7 +197,7 @@ main(List<String> args) {
             elementEnvironment.mainLibrary, methodName);
         Expect.isNotNull(method, "Method '$methodName' not found.");
       }
-      js.Fun fun = compiler.backend.generatedCode[method];
+      js.Fun fun = backendStrategy.generatedCode[method];
       Expect.equals(expectedParameterCount, fun.params.length,
           "Unexpected parameter count for $method:\n${js.nodeToString(fun)}");
     }

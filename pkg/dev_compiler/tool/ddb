@@ -12,71 +12,150 @@
 // Saves the output in the same directory as the sources for convenient
 // inspection, modification or rerunning the code.
 
-import 'dart:async';
 import 'dart:io';
 
 import 'package:args/args.dart' show ArgParser;
-import 'package:path/path.dart' as path;
+import 'package:path/path.dart' as p;
 
-// TODO(vsm): Remove this once we stop ignoring.  It's off here, but
-// configurable for manual testing.
-const ignoreWhitelistedErrors = false;
+void main(List<String> args) async {
+  void printUsage() {
+    print('Usage: ddb [options] <dart-script-file>\n');
+    print('Compiles <dart-script-file> with the dev_compiler and runs it on a '
+        'JS platform.\n');
+  }
 
-void main(List<String> args) {
   // Parse flags.
-  var parser = new ArgParser()
+  var parser = ArgParser()
+    ..addFlag('help', abbr: 'h', help: 'Display this message.')
     ..addFlag('kernel',
         abbr: 'k', help: 'Compile with the new kernel-based front end.')
+    ..addMultiOption('summary',
+        abbr: 's',
+        help: 'summary file(s) of imported libraries, optionally\n'
+            'with module import path: -s path.sum=js/import/path')
     ..addFlag('debug',
         abbr: 'd',
         help: 'Use current source instead of built SDK.',
+        defaultsTo: false)
+    ..addFlag('observe',
+        help:
+            'Run the compiler in the Dart VM with --observe. Implies --debug.',
+        defaultsTo: false)
+    ..addOption('vm-service-port',
+        help: 'Specify the observatory port. Implied --observe.')
+    ..addFlag('summarize-text',
+        help: 'Emit API summary in a .js.txt file.\n'
+            'Ignored when not passed with --kernel.',
         defaultsTo: false)
     ..addOption('runtime',
         abbr: 'r',
         help: 'Platform to run on (node|d8|chrome).  Default is node.',
         allowed: ['node', 'd8', 'chrome'],
         defaultsTo: 'node')
-    ..addOption('binary', abbr: 'b', help: 'Runtime binary path.');
+    ..addOption('port',
+        abbr: 'p',
+        help: 'Run with the corresponding chrome/V8 debugging port open.',
+        defaultsTo: '9222')
+    ..addMultiOption('enable-experiment',
+        help: 'Run with specified experiments enabled.')
+    ..addOption('binary', abbr: 'b', help: 'Runtime binary path.')
+    ..addOption('mode',
+        help: 'Option to (compile|run|all).  Default is all (compile and run).',
+        allowed: ['compile', 'run', 'all'],
+        defaultsTo: 'all')
+    ..addOption('compile-vm-options',
+        help: 'DART_VM_OPTIONS for the compilation VM.')
+    ..addOption('packages',
+        help: 'Where to find a package spec file.')
+    ..addOption('out',
+        help: 'Output file.');
 
   var options = parser.parse(args);
-  if (options.rest.length != 1) {
-    throw 'Expected a single dart entrypoint.';
+  if (options['help'] as bool) {
+    printUsage();
+    print('Available options:');
+    print(parser.usage);
+    exit(0);
   }
-  var entry = options.rest.first;
-  var libRoot = path.dirname(entry);
-  var basename = path.basenameWithoutExtension(entry);
-
-  var debug = options['debug'] as bool;
+  if (options.rest.length != 1) {
+    print('Dart script file required.\n');
+    printUsage();
+    exit(1);
+  }
+  var debug = options['debug'] as bool ||
+      options['observe'] as bool ||
+      options.wasParsed('vm-service-port');
   var kernel = options['kernel'] as bool;
+  var summarizeText = options['summarize-text'] as bool;
   var binary = options['binary'] as String;
+  var experiments = options['enable-experiment'] as List;
+  var summaries = options['summary'] as List;
+  var port = int.parse(options['port'] as String);
+  var mode = options['mode'] as String;
+  var compile = mode == 'compile' || mode == 'all';
+  var run = mode == 'run' || mode == 'all';
 
+  var entry = p.canonicalize(options.rest.first);
+  var out = (options['out'] as String) ?? p.setExtension(entry, '.js');
+  var libRoot = p.dirname(entry);
+  var basename = p.basenameWithoutExtension(entry);
+  var libname = kernel
+      ? p.relative(p.withoutExtension(entry)).replaceAll('/', '__')
+      : basename;
+  libname = libname.replaceAll('-', '_');
+
+  // By default (no `-d`), we use the `dartdevc` binary on the user's path to
+  // compute the SDK we use for execution.  I.e., we assume that `dart` is
+  // under `$DART_SDK/bin/dart` and use that to find `dartdevc` and related
+  // artifacts.  In this mode, this script can run against any installed SDK.
+  // If you want to run against a freshly built SDK, that must be first on
+  // your path.
   var dartBinary = Platform.resolvedExecutable;
-  var dartPath = path.dirname(dartBinary);
-  var dartSdk = path.dirname(dartPath);
-  var toolPath = Platform.script.normalizePath().toFilePath();
-  var ddcPath = path.dirname(path.dirname(toolPath));
+  var dartSdk = p.dirname(p.dirname(dartBinary));
 
-  ProcessResult runDdc(String command, List<String> args) {
+  // In debug mode (`-d`), we run from the `pkg/dev_compiler` sources.  We
+  // determine the location via this actual script (i.e., `-d` assumes
+  // this script remains under to `tool` sub-directory).
+  var toolPath =
+      Platform.script.normalizePath().toFilePath(windows: Platform.isWindows);
+  var ddcPath = p.dirname(p.dirname(toolPath));
+  var dartCheckoutPath = p.dirname(p.dirname(ddcPath));
+
+  Future<void> runDdc(String command, List<String> args) async {
     if (debug) {
       // Use unbuilt script.  This only works from a source checkout.
+      var vmServicePort = options.wasParsed('vm-service-port')
+          ? '=${options['vm-service-port']}'
+          : '';
+      var observe =
+          options.wasParsed('vm-service-port') || options['observe'] as bool;
       args.insertAll(0, [
-        '--preview-dart-2',
+        if (observe) ...[
+          '--enable-vm-service$vmServicePort',
+          '--pause-isolates-on-start',
+        ],
         '--enable-asserts',
-        path.join(ddcPath, 'bin', '${command}.dart')
+        p.join(ddcPath, 'bin', '$command.dart')
       ]);
       command = dartBinary;
     } else {
       // Use built snapshot.
-      command = path.join(dartPath, command);
+      command = p.join(dartSdk, 'bin', command);
     }
-    return Process.runSync(command, args);
+    var process = await Process.start(command, args,
+        mode: ProcessStartMode.inheritStdio,
+        environment: <String, String>{
+          if (options['compile-vm-options'] != null)
+            'DART_VM_OPTIONS': options['compile-vm-options']
+        });
+    if (await process.exitCode != 0) exit(await process.exitCode);
   }
 
   String mod;
   bool chrome = false;
   bool node = false;
   bool d8 = false;
-  switch (options['runtime']) {
+  switch (options['runtime'] as String) {
     case 'node':
       node = true;
       mod = 'common';
@@ -92,61 +171,60 @@ void main(List<String> args) {
   }
 
   String sdkJsPath;
+  String requirePath;
+  String ddcSdk;
   if (debug) {
-    var sdkRoot = path.dirname(path.dirname(ddcPath));
-    var buildDir = path.join(sdkRoot, Platform.isMacOS ? 'xcodebuild' : 'out');
-    var genDir = path.join(buildDir, 'ReleaseX64', 'gen', 'utils', 'dartdevc');
-    sdkJsPath = path.join(genDir, kernel ? 'kernel' : 'js', mod);
-  } else {
-    var suffix = kernel ? path.join('kernel', mod) : mod;
-    sdkJsPath = path.join(dartSdk, 'lib', 'dev_compiler', suffix);
+    var sdkRoot = p.dirname(p.dirname(ddcPath));
+    var buildDir = p.join(sdkRoot, Platform.isMacOS ? 'xcodebuild' : 'out');
+    dartSdk = p.join(buildDir, 'ReleaseX64', 'dart-sdk');
   }
-  ProcessResult result;
-  if (kernel) {
-    var ddcSdk = path.join(dartSdk, 'lib', '_internal', 'ddc_sdk.dill');
-    result = runDdc('dartdevk', [
+  var suffix = kernel ? p.join('kernel', mod) : mod;
+  sdkJsPath = p.join(dartSdk, 'lib', 'dev_compiler', suffix);
+  requirePath = sdkJsPath;
+  ddcSdk = p.join(
+      dartSdk, 'lib', '_internal', kernel ? 'ddc_sdk.dill' : 'ddc_sdk.sum');
+
+  if (compile) {
+    var ddcArgs = [
+      if (kernel) '--kernel',
+      if (kernel && summarizeText)
+        '--summarize-text',
       '--modules=$mod',
       '--dart-sdk-summary=$ddcSdk',
+      // TODO(nshahan) Cleanup when we settle on using or removing library-root.
+      if (!kernel)
+        '--library-root=$libRoot',
+      for (var summary in summaries) '--summary=$summary',
+      for (var experiment in experiments) '--enable-experiment=$experiment',
+      if (options['packages'] != null) '--packages=${options['packages']}',
       '-o',
-      '$libRoot/$basename.js',
+      out,
       entry
-    ]);
-  } else {
-    result = runDdc('dartdevc', [
-      '--modules=$mod',
-      '--library-root=$libRoot',
-      '-o',
-      '$libRoot/$basename.js',
-      entry
-    ]);
+    ];
+
+    await runDdc('dartdevc', ddcArgs);
   }
 
-  print(result.stdout);
-  if (result.exitCode != 0) {
-    print(result.stderr);
-    exit(result.exitCode);
-  }
+  if (run) {
+    if (chrome) {
+      String chromeBinary;
+      if (binary != null) {
+        chromeBinary = binary;
+      } else if (Platform.isWindows) {
+        chromeBinary =
+            'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe';
+      } else if (Platform.isMacOS) {
+        chromeBinary =
+            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+      } else {
+        // Assume Linux
+        chromeBinary = 'google-chrome';
+      }
 
-  if (chrome) {
-    String chromeBinary;
-    if (binary != null) {
-      chromeBinary = binary;
-    } else if (Platform.isWindows) {
-      chromeBinary =
-          'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe';
-    } else if (Platform.isMacOS) {
-      chromeBinary =
-          '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-    } else {
-      // Assume Linux
-      chromeBinary = 'google-chrome';
-    }
-
-    var html = """
-<script src='$sdkJsPath/require.js'></script>
+      var html = '''
+<script src='$requirePath/require.js'></script>
 <script>
   require.config({
-    baseUrl: '$libRoot',
     paths: {
         'dart_sdk': '$sdkJsPath/dart_sdk'
     },
@@ -156,71 +234,92 @@ void main(List<String> args) {
         function(sdk, app) {
     'use strict';
     sdk._debugger.registerDevtoolsFormatter();
-    sdk.dart.ignoreWhitelistedErrors($ignoreWhitelistedErrors);
-    sdk._isolate_helper.startRootIsolate(() => {}, []);
-    app.$basename.main();
+    app.$libname.main();
   });
 </script>
-""";
-    var htmlFile = '$libRoot/$basename.html';
-    new File(htmlFile).writeAsStringSync(html);
-    var tmp = path.join(Directory.systemTemp.path, 'ddc');
+''';
+      var htmlFile = p.setExtension(out, '.html');
+      File(htmlFile).writeAsStringSync(html);
+      var tmp = p.join(Directory.systemTemp.path, 'ddc');
 
-    result = Process.runSync(chromeBinary,
-        ['--auto-open-devtools-for-tabs', '--user-data-dir=$tmp', htmlFile]);
-  } else if (node) {
-    var nodePath = '$sdkJsPath:$libRoot';
-    var runjs = '''
-    let source_maps;
-    try {
-      source_maps = require('source-map-support');
-      source_maps.install();
-    } catch(e) {
-    }
-    let sdk = require(\"dart_sdk\");
-    let main = require(\"./$basename\").$basename.main;
-    sdk.dart.ignoreWhitelistedErrors($ignoreWhitelistedErrors);
-    try {
-      sdk._isolate_helper.startRootIsolate(main, []);
-    } catch(e) {
-      if (!source_maps) {
-        console.log('For Dart source maps: npm install source-map-support');
-      }
-      console.error(e.toString(), sdk.dart.stackTrace(e).toString());
-      process.exit(1);
-    }
-    ''';
-    var nodeFile = '$libRoot/$basename.run.js';
-    new File(nodeFile).writeAsStringSync(runjs);
-    var nodeBinary = binary ?? 'node';
-    result = Process
-        .runSync(nodeBinary, [nodeFile], environment: {'NODE_PATH': nodePath});
-    stdout
-      ..write(result.stdout)
-      ..flush();
-  } else if (d8) {
-    var runjs = '''
-    import { dart, _isolate_helper } from '$sdkJsPath/dart_sdk.js';
-    import { $basename } from '$basename.js';
-    let main = $basename.main;
-    dart.ignoreWhitelistedErrors($ignoreWhitelistedErrors);
-    try {
-      _isolate_helper.startRootIsolate(() => {}, []);
-      main();
-    } catch(e) {
-      console.error(e.toString(), dart.stackTrace(e).toString());
-    }
-    ''';
-    var d8File = '$libRoot/$basename.d8.js';
-    new File(d8File).writeAsStringSync(runjs);
-    var d8Binary = binary ?? 'd8';
-    result = Process.runSync(binary, ['--module', d8File]);
-    stdout
-      ..write(result.stdout)
-      ..flush();
+      var process = await Process.start(
+          chromeBinary,
+          [
+            '--auto-open-devtools-for-tabs',
+            '--allow-file-access-from-files',
+            '--remote-debugging-port=$port',
+            '--user-data-dir=$tmp',
+            htmlFile
+          ],
+          mode: ProcessStartMode.inheritStdio);
+      if (await process.exitCode != 0) exit(await process.exitCode);
+    } else if (node) {
+      var nodePath = '$sdkJsPath:$libRoot';
+      var runjs = '''
+let source_maps;
+try {
+  source_maps = require('source-map-support');
+  source_maps.install();
+} catch(e) {
+}
+let sdk = require(\"dart_sdk\");
+let main = require(\"./$basename\").$libname.main;
+try {
+  sdk._isolate_helper.startRootIsolate(main, []);
+} catch(e) {
+  if (!source_maps) {
+    console.log('For Dart source maps: npm install source-map-support');
   }
-  if (result.exitCode != 0) {
-    print(result.stderr);
-    exit(result.exitCode);
+  sdk.core.print(sdk.dart.stackTrace(e));
+  process.exit(1);
+}
+''';
+      var nodeFile = p.setExtension(out, '.run.js');
+      File(nodeFile).writeAsStringSync(runjs);
+      var nodeBinary = binary ?? 'node';
+      var process = await Process.start(
+          nodeBinary, ['--inspect=localhost:$port', nodeFile],
+          environment: {'NODE_PATH': nodePath},
+          mode: ProcessStartMode.inheritStdio);
+      if (await process.exitCode != 0) exit(await process.exitCode);
+    } else if (d8) {
+      // Fix SDK import.  `d8` doesn't let us set paths, so we need a full path
+      // to the SDK.
+
+      var jsFile = File(out);
+      var jsContents = jsFile.readAsStringSync();
+      jsContents = jsContents.replaceFirst(
+          "from 'dart_sdk.js'", "from '$sdkJsPath/dart_sdk.js'");
+      jsFile.writeAsStringSync(jsContents);
+
+      var runjs = '''
+import { dart, _isolate_helper } from '$sdkJsPath/dart_sdk.js';
+import { $libname } from '$basename.js';
+let main = $libname.main;
+try {
+  _isolate_helper.startRootIsolate(() => {}, []);
+  main();
+} catch(e) {
+  console.error(e);
+}
+''';
+      var d8File = p.setExtension(out, '.d8.js');
+      File(d8File).writeAsStringSync(runjs);
+      var d8Binary = binary ?? p.join(dartCheckoutPath, _d8executable);
+      var process = await Process.start(d8Binary, ['--module', d8File],
+          mode: ProcessStartMode.inheritStdio);
+      if (await process.exitCode != 0) exit(await process.exitCode);
+    }
   }
+}
+
+String get _d8executable {
+  if (Platform.isWindows) {
+    return p.join('third_party', 'd8', 'windows', 'd8.exe');
+  } else if (Platform.isLinux) {
+    return p.join('third_party', 'd8', 'linux', 'd8');
+  } else if (Platform.isMacOS) {
+    return p.join('third_party', 'd8', 'macos', 'd8');
+  }
+  throw UnsupportedError('Unsupported platform.');
 }

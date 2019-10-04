@@ -3,30 +3,78 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:collection';
+
 import 'package:analyzer/dart/element/element.dart';
-import 'package:analyzer/src/dart/element/member.dart' show TypeParameterMember;
+import 'package:analyzer/dart/element/nullability_suffix.dart';
 import 'package:analyzer/dart/element/type.dart';
+import 'package:analyzer/src/dart/element/element.dart';
+import 'package:analyzer/src/dart/element/member.dart' show TypeParameterMember;
 
 import '../analyzer/element_helpers.dart';
-import '../compiler/js_names.dart' as JS;
-import '../js_ast/js_ast.dart' as JS;
+import '../compiler/js_names.dart' as js_ast;
+import '../js_ast/js_ast.dart' as js_ast;
 import '../js_ast/js_ast.dart' show js;
 
+/// Return the [InterfaceType] that itself has the legacy nullability, and for
+/// every type parameter a [TypeParameterType] instance with the legacy
+/// nullability is used as the corresponding type argument.
+InterfaceType getLegacyRawClassType(ClassElement element) {
+  var typeParameters = element.typeParameters;
+  var typeArguments = typeParameters.map(getLegacyTypeParameterType).toList();
+  return element.instantiate(
+    typeArguments: typeArguments,
+    nullabilitySuffix: NullabilitySuffix.star,
+  );
+}
+
+/// Return the [TypeParameterType] with the legacy nullability for the given
+/// type parameter [element].
+TypeParameterType getLegacyTypeParameterType(TypeParameterElement element) {
+  return element.instantiate(nullabilitySuffix: NullabilitySuffix.star);
+}
+
+/// Return the raw type (i.e. the type where type parameters are replaced with
+/// the corresponding [TypeParameterType]) for the given [element]. The type
+/// returned, and every [TypeParameterType] instance will have the legacy
+/// nullability suffix.
+DartType getLegacyElementType(TypeDefiningElement element) {
+  if (element is ClassElement) {
+    return getLegacyRawClassType(element);
+  } else if (element is DynamicElementImpl) {
+    return element.type;
+  } else if (element is TypeParameterElement) {
+    return getLegacyTypeParameterType(element);
+  } else {
+    throw StateError('Unsupported element: (${element.runtimeType}) $element');
+  }
+}
+
 Set<TypeParameterElement> freeTypeParameters(DartType t) {
-  var result = new Set<TypeParameterElement>();
+  var result = Set<TypeParameterElement>();
   void find(DartType t) {
     if (t is TypeParameterType) {
       result.add(t.element);
     } else if (t is FunctionType) {
-      // Visit type arguments of typedefs, because we use these when we're
-      // emitting the type.
       if (t.name != '' && t.name != null) {
+        // For a typedef type like `Foo<T>`, we only need to check if the
+        // type argument `T` has or is a free type parameter.
+        //
+        // For example, if `Foo` is a typedef type and `S` is a type parameter,
+        // then the type `Foo<List<S>>` has `S` as its free type parameter,
+        // regardless of what function is declared by the typedef.
+        //
+        // Also we need to find free type parameters whether or not they're
+        // actually used by the typedef's function type (for example,
+        // `typedef Foo<T> = int Function()` does not use `T`). So we must visit
+        // the type arguments, instead of the substituted parameter and return
+        // types.
         t.typeArguments.forEach(find);
+      } else {
+        find(t.returnType);
+        t.parameters.forEach((p) => find(p.type));
+        t.typeFormals.forEach((p) => find(p.bound));
+        t.typeFormals.forEach(result.remove);
       }
-      find(t.returnType);
-      t.parameters.forEach((p) => find(p.type));
-      t.typeFormals.forEach((p) => find(p.bound));
-      t.typeFormals.forEach(result.remove);
     } else if (t is InterfaceType) {
       t.typeArguments.forEach(find);
     }
@@ -43,11 +91,11 @@ class _CacheTable {
   // Use a LinkedHashMap to maintain key insertion order so the generated code
   // is stable under slight perturbation.  (If this is not good enough we could
   // sort by name to canonicalize order.)
-  final _names = new LinkedHashMap<DartType, JS.TemporaryId>(
+  final _names = LinkedHashMap<DartType, js_ast.TemporaryId>(
       equals: typesAreEqual, hashCode: typeHashCode);
   Iterable<DartType> get keys => _names.keys.toList();
 
-  JS.Statement _dischargeType(DartType type) {
+  js_ast.Statement _dischargeType(DartType type) {
     var name = _names.remove(type);
     if (name != null) {
       return js.statement('let #;', [name]);
@@ -58,8 +106,8 @@ class _CacheTable {
   /// Emit a list of statements declaring the cache variables for
   /// types tracked by this table.  If [typeFilter] is given,
   /// only emit the types listed in the filter.
-  List<JS.Statement> discharge([Iterable<DartType> typeFilter]) {
-    var decls = <JS.Statement>[];
+  List<js_ast.Statement> discharge([Iterable<DartType> typeFilter]) {
+    var decls = <js_ast.Statement>[];
     var types = typeFilter ?? keys;
     for (var t in types) {
       var stmt = _dischargeType(t);
@@ -75,7 +123,7 @@ class _CacheTable {
     return name;
   }
 
-  String _typeString(DartType type, {bool flat: false}) {
+  String _typeString(DartType type, {bool flat = false}) {
     if (type is ParameterizedType && type.name != null) {
       var clazz = type.name;
       var params = type.typeArguments;
@@ -108,25 +156,26 @@ class _CacheTable {
 
   /// Heuristically choose a good name for the cache and generator
   /// variables.
-  JS.TemporaryId chooseTypeName(DartType type) {
-    return new JS.TemporaryId(_typeString(type));
+  js_ast.TemporaryId chooseTypeName(DartType type) {
+    return js_ast.TemporaryId(_typeString(type));
   }
 }
 
 /// _GeneratorTable tracks types which have been
 /// named and hoisted.
 class _GeneratorTable extends _CacheTable {
-  final _defs = new LinkedHashMap<DartType, JS.Expression>(
+  final _defs = LinkedHashMap<DartType, js_ast.Expression>(
       equals: typesAreEqual, hashCode: typeHashCode);
 
-  final JS.Identifier _runtimeModule;
+  final js_ast.Identifier _runtimeModule;
 
   _GeneratorTable(this._runtimeModule);
 
-  JS.Statement _dischargeType(DartType t) {
+  @override
+  js_ast.Statement _dischargeType(DartType t) {
     var name = _names.remove(t);
     if (name != null) {
-      JS.Expression init = _defs.remove(t);
+      js_ast.Expression init = _defs.remove(t);
       assert(init != null);
       return js.statement('let # = () => ((# = #.constFn(#))());',
           [name, name, _runtimeModule, init]);
@@ -137,7 +186,7 @@ class _GeneratorTable extends _CacheTable {
   /// If [type] does not already have a generator name chosen for it,
   /// assign it one, using [typeRep] as the initializer for it.
   /// Emit the generator name.
-  JS.TemporaryId _nameType(DartType type, JS.Expression typeRep) {
+  js_ast.TemporaryId _nameType(DartType type, js_ast.Expression typeRep) {
     var temp = _names[type];
     if (temp == null) {
       _names[type] = temp = chooseTypeName(type);
@@ -157,12 +206,12 @@ class TypeTable {
   /// parameter.
   final _scopeDependencies = <TypeParameterElement, List<DartType>>{};
 
-  TypeTable(JS.Identifier runtime) : _generators = new _GeneratorTable(runtime);
+  TypeTable(js_ast.Identifier runtime) : _generators = _GeneratorTable(runtime);
 
   /// Emit a list of statements declaring the cache variables and generator
   /// definitions tracked by the table.  If [formals] is present, only
   /// emit the definitions which depend on the formals.
-  List<JS.Statement> discharge([List<TypeParameterElement> formals]) {
+  List<js_ast.Statement> discharge([List<TypeParameterElement> formals]) {
     var filter = formals?.expand((p) => _scopeDependencies[p] ?? <DartType>[]);
     var stmts = [_generators].expand((c) => c.discharge(filter)).toList();
     formals?.forEach(_scopeDependencies.remove);
@@ -177,7 +226,12 @@ class TypeTable {
     // readability to little or no benefit.  It would be good to do this
     // when we know that we can hoist it to an outer scope, but for
     // now we just disable it.
-    if (freeVariables.any((i) => i.enclosingElement is FunctionTypedElement)) {
+    if (freeVariables.any((i) =>
+        i.enclosingElement is FunctionTypedElement ||
+        // Strict function types don't have element, so their type parameters
+        // don't have any enclosing element. Analyzer started returning
+        // strict function types for generic methods.
+        i.enclosingElement == null)) {
       return true;
     }
 
@@ -193,7 +247,8 @@ class TypeTable {
   /// Given a type [type], and a JS expression [typeRep] which implements it,
   /// add the type and its representation to the table, returning an
   /// expression which implements the type (but which caches the value).
-  JS.Expression nameType(ParameterizedType type, JS.Expression typeRep) {
+  js_ast.Expression nameType(
+      ParameterizedType type, js_ast.Expression typeRep) {
     if (!_generators.isNamed(type) && recordScopeDependencies(type)) {
       return typeRep;
     }
@@ -211,10 +266,11 @@ class TypeTable {
   /// should be a function that is invoked to compute the type, rather than the
   /// type itself. This allows better integration with `lazyFn`, avoiding an
   /// extra level of indirection.
-  JS.Expression nameFunctionType(FunctionType type, JS.Expression typeRep,
-      {bool lazy: false}) {
+  js_ast.Expression nameFunctionType(
+      FunctionType type, js_ast.Expression typeRep,
+      {bool lazy = false}) {
     if (!_generators.isNamed(type) && recordScopeDependencies(type)) {
-      return lazy ? new JS.ArrowFun([], typeRep) : typeRep;
+      return lazy ? js_ast.ArrowFun([], typeRep) : typeRep;
     }
 
     var name = _generators._nameType(type, typeRep);

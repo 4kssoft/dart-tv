@@ -12,8 +12,8 @@ library foo;
 import 'package:expect/expect.dart';
 import 'package:js/js.dart';
 
-/*kernel.class: A:checkedTypeArgument,checks=[],typeArgument*/
 /*strong.class: A:checkedInstance,checkedTypeArgument,checks=[],typeArgument*/
+/*omit.class: A:checkedTypeArgument,checks=[],typeArgument*/
 @JS()
 @anonymous
 class A<T> {

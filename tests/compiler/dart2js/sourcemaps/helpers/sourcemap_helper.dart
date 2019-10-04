@@ -17,10 +17,10 @@ import 'package:compiler/src/io/position_information.dart';
 import 'package:compiler/src/js/js.dart' as js;
 import 'package:compiler/src/js/js_debug.dart';
 import 'package:compiler/src/js/js_source_mapping.dart';
-import 'package:compiler/src/js_backend/js_backend.dart';
+import 'package:compiler/src/js_model/js_strategy.dart';
 import 'package:compiler/src/source_file_provider.dart';
-import '../../memory_compiler.dart';
-import '../../output_collector.dart';
+import '../../helpers/memory_compiler.dart';
+import '../../helpers/output_collector.dart';
 
 class SourceFileSink implements OutputSink {
   final String filename;
@@ -64,6 +64,10 @@ class OutputProvider implements CompilerOutput {
   OutputSink createOutputSink(String name, String extension, OutputType type) {
     return createSourceFileSink(name, extension, type);
   }
+
+  @override
+  BinaryOutputSink createBinarySink(Uri uri) =>
+      throw new UnsupportedError("OutputProvider.createBinarySink");
 }
 
 class CloningOutputProvider extends OutputProvider {
@@ -78,6 +82,10 @@ class CloningOutputProvider extends OutputProvider {
     return new CloningOutputSink(
         [output, createSourceFileSink(name, extension, type)]);
   }
+
+  @override
+  BinaryOutputSink createBinarySink(Uri uri) =>
+      throw new UnsupportedError("CloningOutputProvider.createBinarySink");
 }
 
 abstract class SourceFileManager {
@@ -143,6 +151,17 @@ class RecordingSourceMapper implements SourceMapper {
   void register(js.Node node, int codeOffset, SourceLocation sourceLocation) {
     nodeToSourceLocationsMap.register(node, codeOffset, sourceLocation);
     sourceMapper.register(node, codeOffset, sourceLocation);
+  }
+
+  @override
+  void registerPush(
+      int codeOffset, SourceLocation sourceLocation, String inlinedMethodName) {
+    sourceMapper.registerPush(codeOffset, sourceLocation, inlinedMethodName);
+  }
+
+  @override
+  void registerPop(int codeOffset, {bool isEmpty: false}) {
+    sourceMapper.registerPop(codeOffset, isEmpty: isEmpty);
   }
 }
 
@@ -243,6 +262,7 @@ class RecordingSourceInformationStrategy
         }
         return null;
       }
+      return null;
     });
   }
 }
@@ -258,6 +278,7 @@ class FindVisitor extends js.BaseVisitor {
 
   FindVisitor(this.soughtNode);
 
+  @override
   visitNode(js.Node node) {
     if (node == soughtNode) {
       found = true;
@@ -321,29 +342,29 @@ class SourceMapProcessor {
         options: ['--out=$targetUri', '--source-map=$sourceMapFileUri']
           ..addAll(options),
         beforeRun: (compiler) {
-          JavaScriptBackend backend = compiler.backend;
+          JsBackendStrategy backendStrategy = compiler.backendStrategy;
           dynamic handler = compiler.handler;
           SourceFileProvider sourceFileProvider = handler.provider;
           sourceFileManager =
               new ProviderSourceFileManager(sourceFileProvider, outputProvider);
           RecordingSourceInformationStrategy strategy =
               new RecordingSourceInformationStrategy(
-                  backend.sourceInformationStrategy);
-          backend.sourceInformationStrategy = strategy;
+                  backendStrategy.sourceInformationStrategy);
+          backendStrategy.sourceInformationStrategy = strategy;
         });
     if (!result.isSuccess) {
       throw "Compilation failed.";
     }
 
     api.CompilerImpl compiler = result.compiler;
-    JavaScriptBackend backend = compiler.backend;
+    JsBackendStrategy backendStrategy = compiler.backendStrategy;
     RecordingSourceInformationStrategy strategy =
-        backend.sourceInformationStrategy;
+        backendStrategy.sourceInformationStrategy;
     SourceMapInfo mainSourceMapInfo;
     Map<MemberEntity, SourceMapInfo> elementSourceMapInfos =
         <MemberEntity, SourceMapInfo>{};
     if (perElement) {
-      backend.generatedCode.forEach((_element, js.Expression node) {
+      backendStrategy.generatedCode.forEach((_element, js.Expression node) {
         MemberEntity element = _element;
         RecordedSourceInformationProcess subProcess =
             strategy.subProcessForNode(node);
@@ -418,6 +439,7 @@ class SourceMapInfo {
             element != null ? computeElementNameForSourceMaps(element) : '',
         this.element = element;
 
+  @override
   String toString() {
     return '$name:$element';
   }
@@ -447,8 +469,17 @@ class _LocationRecorder implements SourceMapper, LocationMap {
         .add(sourceLocation);
   }
 
+  @override
+  void registerPush(int codeOffset, SourceLocation sourceLocation,
+      String inlinedMethodName) {}
+
+  @override
+  void registerPop(int codeOffset, {bool isEmpty: false}) {}
+
+  @override
   Iterable<js.Node> get nodes => _nodeMap.keys;
 
+  @override
   Map<int, List<SourceLocation>> operator [](js.Node node) {
     return _nodeMap[node];
   }
@@ -460,8 +491,10 @@ class _FilteredLocationMap implements LocationMap {
 
   _FilteredLocationMap(this._nodes, this.map);
 
+  @override
   Iterable<js.Node> get nodes => map.nodes.where((n) => _nodes.contains(n));
 
+  @override
   Map<int, List<SourceLocation>> operator [](js.Node node) {
     return map[node];
   }
@@ -496,7 +529,9 @@ class CodePointComputer extends TraceListener {
 
   /// Called when [node] defines a step of the given [kind] at the given
   /// [offset] when the generated JavaScript code.
+  @override
   void onStep(js.Node node, Offset offset, StepKind kind) {
+    if (kind == StepKind.ACCESS) return;
     register(kind, node);
   }
 
@@ -561,6 +596,7 @@ class CodePoint {
       this.dartCode,
       {this.isMissing: false});
 
+  @override
   String toString() {
     return 'CodePoint[kind=$kind,js=$jsCode,dart=$dartCode,'
         'location=$sourceLocation]';
@@ -574,6 +610,7 @@ class IOSourceFileManager implements SourceFileManager {
 
   IOSourceFileManager(this.base);
 
+  @override
   SourceFile getSourceFile(var uri) {
     Uri absoluteUri;
     if (uri is Uri) {

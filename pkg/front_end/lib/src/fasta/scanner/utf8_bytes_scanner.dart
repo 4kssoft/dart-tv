@@ -12,15 +12,17 @@ import '../../scanner/token.dart' as analyzer show StringToken;
 
 import '../scanner.dart' show unicodeReplacementCharacter;
 
-import 'token.dart' show CommentToken, DartDocToken, StringToken;
+import 'abstract_scanner.dart'
+    show AbstractScanner, LanguageVersionChanged, ScannerConfiguration;
 
-import 'array_based_scanner.dart' show ArrayBasedScanner;
+import 'token.dart'
+    show CommentToken, DartDocToken, LanguageVersionToken, StringToken;
 
 /**
  * Scanner that reads from a UTF-8 encoded list of bytes and creates tokens
  * that points to substrings.
  */
-class Utf8BytesScanner extends ArrayBasedScanner {
+class Utf8BytesScanner extends AbstractScanner {
   /**
    * The file content.
    *
@@ -82,8 +84,10 @@ class Utf8BytesScanner extends ArrayBasedScanner {
    * is not the case, the entire array is copied before scanning.
    */
   Utf8BytesScanner(this.bytes,
-      {bool includeComments: false, bool scanGenericMethodComments: false})
-      : super(includeComments, scanGenericMethodComments,
+      {ScannerConfiguration configuration,
+      bool includeComments: false,
+      LanguageVersionChanged languageVersionChanged})
+      : super(configuration, includeComments, languageVersionChanged,
             numberOfBytesHint: bytes.length) {
     assert(bytes.last == 0);
     // Skip a leading BOM.
@@ -91,7 +95,7 @@ class Utf8BytesScanner extends ArrayBasedScanner {
   }
 
   bool containsBomAt(int offset) {
-    const BOM_UTF8 = const [0xEF, 0xBB, 0xBF];
+    const List<int> BOM_UTF8 = const [0xEF, 0xBB, 0xBF];
 
     return offset + 3 < bytes.length &&
         bytes[offset] == BOM_UTF8[0] &&
@@ -153,9 +157,9 @@ class Utf8BytesScanner extends ArrayBasedScanner {
       stringOffsetSlackOffset = byteOffset;
       // In case of a surrogate pair, return a single code point.
       // Gracefully degrade given invalid UTF-8.
-      var runes = codePoint.runes.iterator;
+      RuneIterator runes = codePoint.runes.iterator;
       if (!runes.moveNext()) return unicodeReplacementCharacter;
-      var codeUnit = runes.current;
+      int codeUnit = runes.current;
       return !runes.moveNext() ? codeUnit : unicodeReplacementCharacter;
     } else {
       return unicodeReplacementCharacter;
@@ -232,6 +236,13 @@ class Utf8BytesScanner extends ArrayBasedScanner {
       [int extraOffset = 0]) {
     return new DartDocToken.fromUtf8Bytes(
         type, bytes, start, byteOffset + extraOffset, asciiOnly, tokenStart);
+  }
+
+  @override
+  LanguageVersionToken createLanguageVersionToken(
+      int start, int major, int minor) {
+    return new LanguageVersionToken.fromUtf8Bytes(
+        bytes, start, byteOffset, tokenStart, major, minor);
   }
 
   bool atEndOfFile() => byteOffset >= bytes.length - 1;

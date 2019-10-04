@@ -3,28 +3,28 @@ import self as self;
 import "dart:core" as core;
 
 class A extends core::Object {
-  field self::B b;
-  synthetic constructor •() → void
+  field self::B* b;
+  synthetic constructor •() → self::A*
     ;
 }
 class B extends core::Object {
-  synthetic constructor •() → void
+  synthetic constructor •() → self::B*
     ;
-  get c() → self::C
+  get c() → self::C*
     ;
-  set c(self::C value) → void
+  set c(self::C* value) → void
     ;
 }
 class C extends core::Object {
-  synthetic constructor •() → void
+  synthetic constructor •() → self::C*
     ;
 }
 class D extends self::C {
-  synthetic constructor •() → void
+  synthetic constructor •() → self::D*
     ;
 }
-static field dynamic a;
-static field dynamic x;
-static field dynamic y;
+static field self::A* a;
+static field self::C* x;
+static field self::C* y;
 static method main() → dynamic
   ;

@@ -10,7 +10,7 @@ import 'package:async_helper/async_helper.dart';
 import 'package:compiler/src/compiler.dart';
 import 'package:compiler/src/deferred_load.dart';
 import 'package:expect/expect.dart';
-import '../memory_compiler.dart';
+import '../helpers/memory_compiler.dart';
 
 void main() {
   asyncTest(() async {
@@ -18,18 +18,18 @@ void main() {
         await runCompiler(memorySourceFiles: MEMORY_SOURCE_FILES);
     Compiler compiler = result.compiler;
 
-    var env = compiler.backendClosedWorldForTesting.elementEnvironment;
+    var closedWorld = compiler.backendClosedWorldForTesting;
+    var env = closedWorld.elementEnvironment;
     lookupLibrary(name) => env.lookupLibrary(Uri.parse(name));
     var main = env.mainFunction;
     Expect.isNotNull(main, "Could not find 'main'");
 
-    var outputUnitForMember =
-        compiler.backend.outputUnitData.outputUnitForMember;
-    var outputUnitForClass = compiler.backend.outputUnitData.outputUnitForClass;
+    var outputUnitForMember = closedWorld.outputUnitData.outputUnitForMember;
+    var outputUnitForClass = closedWorld.outputUnitData.outputUnitForClass;
 
-    var mainOutputUnit = compiler.backend.outputUnitData.mainOutputUnit;
-    var backend = compiler.backend;
-    var classes = backend.emitter.neededClasses;
+    var mainOutputUnit = closedWorld.outputUnitData.mainOutputUnit;
+    var backendStrategy = compiler.backendStrategy;
+    var classes = backendStrategy.emitterTask.neededClasses;
     var inputElement = classes.where((e) => e.name == 'InputElement').single;
     dynamic lib1 = lookupLibrary("memory:lib1.dart");
     var foo1 = env.lookupLibraryMember(lib1, "foo1");
@@ -57,7 +57,7 @@ void main() {
     // InputElement is native, so it should be in the mainOutputUnit.
     Expect.equals(mainOutputUnit, outputUnitForClass(inputElement));
 
-    var hunksToLoad = compiler.deferredLoadTask.hunksToLoad;
+    var hunksToLoad = closedWorld.outputUnitData.hunksToLoad;
 
     var hunksLib1 = hunksToLoad["lib1"];
     var hunksLib2 = hunksToLoad["lib2"];
@@ -82,7 +82,7 @@ void main() {
 // lib1 and lib2 also import lib4 deferred, but lib1 uses lib4.bar1 and lib2
 // uses lib4.bar2.  So two output units should be created for lib4, one for each
 // import.
-const Map MEMORY_SOURCE_FILES = const {
+const Map<String, String> MEMORY_SOURCE_FILES = const {
   "main.dart": """
 import "dart:async";
 import 'lib1.dart' deferred as lib1;

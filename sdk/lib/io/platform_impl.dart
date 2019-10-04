@@ -30,7 +30,7 @@ class _Platform {
    */
   external static _environment();
   external static List<String> _executableArguments();
-  external static String _packageRoot();
+  external static String _packageRoot(); // TODO(mfairhurst): remove this
   external static String _packageConfig();
   external static String _version();
   external static String _localeName();
@@ -38,9 +38,10 @@ class _Platform {
 
   static String executable = _executable();
   static String resolvedExecutable = _resolvedExecutable();
-  static String packageRoot = _packageRoot();
+  static String packageRoot; // TODO(mfairhurst): remove this
   static String packageConfig = _packageConfig();
 
+  @pragma("vm:entry-point")
   static String Function() _localeClosure;
   static String localeName() {
     final result = (_localeClosure == null) ? _localeName() : _localeClosure();

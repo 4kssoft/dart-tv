@@ -6,12 +6,17 @@
 
 #include "platform/assert.h"
 #include "vm/compiler/backend/code_statistics.h"
+#include "vm/compiler/runtime_api.h"
 #include "vm/dwarf.h"
+#include "vm/elf.h"
 #include "vm/hash.h"
 #include "vm/hash_map.h"
-#include "vm/heap.h"
+#include "vm/heap/heap.h"
+#include "vm/instructions.h"
 #include "vm/json_writer.h"
 #include "vm/object.h"
+#include "vm/object_store.h"
+#include "vm/program_visitor.h"
 #include "vm/stub_code.h"
 #include "vm/timeline.h"
 #include "vm/type_testing_stubs.h"
@@ -30,12 +35,17 @@ DEFINE_FLAG(charp,
             "Print sizes of all instruction objects to the given file");
 #endif
 
+DEFINE_FLAG(bool,
+            trace_reused_instructions,
+            false,
+            "Print code that lacks reusable instructions");
+
 intptr_t ObjectOffsetTrait::Hashcode(Key key) {
   RawObject* obj = key;
   ASSERT(!obj->IsSmi());
 
   uword body = RawObject::ToAddr(obj) + sizeof(RawObject);
-  uword end = RawObject::ToAddr(obj) + obj->Size();
+  uword end = RawObject::ToAddr(obj) + obj->HeapSize();
 
   uint32_t hash = obj->GetClassId();
   // Don't include the header. Objects in the image are pre-marked, but objects
@@ -57,8 +67,8 @@ bool ObjectOffsetTrait::IsKeyEqual(Pair pair, Key key) {
     return false;
   }
 
-  intptr_t heap_size = a->Size();
-  if (b->Size() != heap_size) {
+  intptr_t heap_size = a->HeapSize();
+  if (b->HeapSize() != heap_size) {
     return false;
   }
 
@@ -71,12 +81,53 @@ bool ObjectOffsetTrait::IsKeyEqual(Pair pair, Key key) {
                      reinterpret_cast<const void*>(body_b), body_size);
 }
 
-ImageWriter::ImageWriter(const void* shared_objects,
-                         const void* shared_instructions)
-    : next_data_offset_(0), next_text_offset_(0), objects_(), instructions_() {
+#if !defined(DART_PRECOMPILED_RUNTIME)
+ImageWriter::ImageWriter(Heap* heap,
+                         const void* shared_objects,
+                         const void* shared_instructions,
+                         const void* reused_instructions)
+    : heap_(heap),
+      next_data_offset_(0),
+      next_text_offset_(0),
+      objects_(),
+      instructions_() {
   ResetOffsets();
   SetupShared(&shared_objects_, shared_objects);
   SetupShared(&shared_instructions_, shared_instructions);
+  SetupShared(&reuse_instructions_, reused_instructions);
+}
+
+void ImageWriter::PrepareForSerialization(
+    GrowableArray<ImageWriterCommand>* commands) {
+  if (commands != nullptr) {
+    const intptr_t initial_offset = next_text_offset_;
+    for (auto& inst : *commands) {
+      ASSERT((initial_offset + inst.expected_offset) == next_text_offset_);
+      switch (inst.op) {
+        case ImageWriterCommand::InsertInstructionOfCode: {
+          RawCode* code = inst.insert_instruction_of_code.code;
+          RawInstructions* instructions = Code::InstructionsOf(code);
+          const intptr_t offset = next_text_offset_;
+          instructions_.Add(InstructionsData(instructions, code, offset));
+          next_text_offset_ += SizeInSnapshot(instructions);
+          ASSERT(heap_->GetObjectId(instructions) == 0);
+          heap_->SetObjectId(instructions, offset);
+          break;
+        }
+        case ImageWriterCommand::InsertBytesOfTrampoline: {
+          auto trampoline_bytes = inst.insert_trampoline_bytes.buffer;
+          auto trampoline_length = inst.insert_trampoline_bytes.buffer_length;
+          const intptr_t offset = next_text_offset_;
+          instructions_.Add(
+              InstructionsData(trampoline_bytes, trampoline_length, offset));
+          next_text_offset_ += trampoline_length;
+          break;
+        }
+        default:
+          UNREACHABLE();
+      }
+    }
+  }
 }
 
 void ImageWriter::SetupShared(ObjectOffsetMap* map, const void* shared_image) {
@@ -93,27 +144,128 @@ void ImageWriter::SetupShared(ObjectOffsetMap* map, const void* shared_image) {
     pair.object = raw_obj;
     pair.offset = offset;
     map->Insert(pair);
-    obj_addr += raw_obj->Size();
+    obj_addr += SizeInSnapshot(raw_obj);
   }
   ASSERT(obj_addr == end_addr);
 }
 
 int32_t ImageWriter::GetTextOffsetFor(RawInstructions* instructions,
                                       RawCode* code) {
+  intptr_t offset = heap_->GetObjectId(instructions);
+  if (offset != 0) {
+    return offset;
+  }
+
+  if (!reuse_instructions_.IsEmpty()) {
+    ObjectOffsetPair* pair = reuse_instructions_.Lookup(instructions);
+    if (pair == NULL) {
+      // Code should have been removed by DropCodeWithoutReusableInstructions.
+      return 0;
+    }
+    ASSERT(pair->offset != 0);
+    return pair->offset;
+  }
+
   ObjectOffsetPair* pair = shared_instructions_.Lookup(instructions);
   if (pair != NULL) {
     // Negative offsets tell the reader the offset is w/r/t the shared
     // instructions image instead of the app-specific instructions image.
     // Compare ImageReader::GetInstructionsAt.
+    ASSERT(pair->offset != 0);
     return -pair->offset;
   }
 
-  intptr_t heap_size = instructions->Size();
-  intptr_t offset = next_text_offset_;
-  next_text_offset_ += heap_size;
+  offset = next_text_offset_;
+  heap_->SetObjectId(instructions, offset);
+  next_text_offset_ += SizeInSnapshot(instructions);
   instructions_.Add(InstructionsData(instructions, code, offset));
+
+  ASSERT(offset != 0);
   return offset;
 }
+
+#if defined(IS_SIMARM_X64)
+static intptr_t StackMapSizeInSnapshot(intptr_t len_in_bits) {
+  const intptr_t len_in_bytes =
+      Utils::RoundUp(len_in_bits, kBitsPerByte) / kBitsPerByte;
+  const intptr_t unrounded_size_in_bytes =
+      2 * compiler::target::kWordSize + len_in_bytes;
+  return Utils::RoundUp(unrounded_size_in_bytes,
+                        compiler::target::ObjectAlignment::kObjectAlignment);
+}
+
+static intptr_t StringPayloadSize(intptr_t len, bool isOneByteString) {
+  return len * (isOneByteString ? OneByteString::kBytesPerElement
+                                : TwoByteString::kBytesPerElement);
+}
+
+static intptr_t StringSizeInSnapshot(intptr_t len, bool isOneByteString) {
+  const intptr_t unrounded_size_in_bytes =
+      (String::kSizeofRawString / 2) + StringPayloadSize(len, isOneByteString);
+  return Utils::RoundUp(unrounded_size_in_bytes,
+                        compiler::target::ObjectAlignment::kObjectAlignment);
+}
+
+static intptr_t CodeSourceMapSizeInSnapshot(intptr_t len) {
+  const intptr_t unrounded_size_in_bytes =
+      2 * compiler::target::kWordSize + len;
+  return Utils::RoundUp(unrounded_size_in_bytes,
+                        compiler::target::ObjectAlignment::kObjectAlignment);
+}
+
+static intptr_t PcDescriptorsSizeInSnapshot(intptr_t len) {
+  const intptr_t unrounded_size_in_bytes =
+      2 * compiler::target::kWordSize + len;
+  return Utils::RoundUp(unrounded_size_in_bytes,
+                        compiler::target::ObjectAlignment::kObjectAlignment);
+}
+
+static constexpr intptr_t kSimarmX64InstructionsAlignment =
+    2 * compiler::target::ObjectAlignment::kObjectAlignment;
+static intptr_t InstructionsSizeInSnapshot(intptr_t len) {
+  const intptr_t header_size = Utils::RoundUp(3 * compiler::target::kWordSize,
+                                              kSimarmX64InstructionsAlignment);
+  return header_size + Utils::RoundUp(len, kSimarmX64InstructionsAlignment);
+}
+
+intptr_t ImageWriter::SizeInSnapshot(RawObject* raw_object) {
+  const classid_t cid = raw_object->GetClassId();
+
+  switch (cid) {
+    case kStackMapCid: {
+      RawStackMap* raw_map = static_cast<RawStackMap*>(raw_object);
+      return StackMapSizeInSnapshot(raw_map->ptr()->length_);
+    }
+    case kOneByteStringCid:
+    case kTwoByteStringCid: {
+      RawString* raw_str = static_cast<RawString*>(raw_object);
+      return StringSizeInSnapshot(Smi::Value(raw_str->ptr()->length_),
+                                  cid == kOneByteStringCid);
+    }
+    case kCodeSourceMapCid: {
+      RawCodeSourceMap* raw_map = static_cast<RawCodeSourceMap*>(raw_object);
+      return CodeSourceMapSizeInSnapshot(raw_map->ptr()->length_);
+    }
+    case kPcDescriptorsCid: {
+      RawPcDescriptors* raw_desc = static_cast<RawPcDescriptors*>(raw_object);
+      return PcDescriptorsSizeInSnapshot(raw_desc->ptr()->length_);
+    }
+    case kInstructionsCid: {
+      RawInstructions* raw_insns = static_cast<RawInstructions*>(raw_object);
+      return InstructionsSizeInSnapshot(Instructions::Size(raw_insns));
+    }
+    default: {
+      const Class& clazz = Class::Handle(Object::Handle(raw_object).clazz());
+      FATAL1("Unsupported class %s in rodata section.\n", clazz.ToCString());
+      return 0;
+    }
+  }
+}
+#else   // defined(IS_SIMARM_X64)
+intptr_t ImageWriter::SizeInSnapshot(RawObject* raw_object) {
+  return raw_object->HeapSize();
+}
+#endif  // defined(IS_SIMARM_X64)
 
 bool ImageWriter::GetSharedDataOffsetFor(RawObject* raw_object,
                                          uint32_t* offset) {
@@ -126,9 +278,9 @@ bool ImageWriter::GetSharedDataOffsetFor(RawObject* raw_object,
 }
 
 uint32_t ImageWriter::GetDataOffsetFor(RawObject* raw_object) {
-  intptr_t heap_size = raw_object->Size();
+  intptr_t snap_size = SizeInSnapshot(raw_object);
   intptr_t offset = next_data_offset_;
-  next_data_offset_ += heap_size;
+  next_data_offset_ += snap_size;
   objects_.Add(ObjectData(raw_object));
   return offset;
 }
@@ -171,7 +323,7 @@ void ImageWriter::DumpInstructionsSizes() {
       js.PrintPropertyStr("c", name);
     }
     js.PrintProperty("n", data.code_->QualifiedName());
-    js.PrintProperty("s", data.insns_->Size());
+    js.PrintProperty("s", SizeInSnapshot(data.insns_->raw()));
     js.CloseObject();
   }
   js.CloseArray();
@@ -213,13 +365,15 @@ void ImageWriter::Write(WriteStream* clustered_stream, bool vm) {
   Thread* thread = Thread::Current();
   Zone* zone = thread->zone();
   Heap* heap = thread->isolate()->heap();
-  NOT_IN_PRODUCT(TimelineDurationScope tds(thread, Timeline::GetIsolateStream(),
-                                           "WriteInstructions"));
+  TIMELINE_DURATION(thread, Isolate, "WriteInstructions");
 
   // Handlify collected raw pointers as building the names below
   // will allocate on the Dart heap.
   for (intptr_t i = 0; i < instructions_.length(); i++) {
     InstructionsData& data = instructions_[i];
+    const bool is_trampoline = data.trampoline_bytes != nullptr;
+    if (is_trampoline) continue;
+
     data.insns_ = &Instructions::Handle(zone, data.raw_insns_);
     ASSERT(data.raw_code_ != NULL);
     data.code_ = &Code::Handle(zone, data.raw_code_);
@@ -234,8 +388,12 @@ void ImageWriter::Write(WriteStream* clustered_stream, bool vm) {
   }
 
   // Append the direct-mapped RO data objects after the clustered snapshot.
+  offset_space_ = vm ? V8SnapshotProfileWriter::kVmData
+                     : V8SnapshotProfileWriter::kIsolateData;
   WriteROData(clustered_stream);
 
+  offset_space_ = vm ? V8SnapshotProfileWriter::kVmText
+                     : V8SnapshotProfileWriter::kIsolateText;
   WriteText(clustered_stream, vm);
 }
 
@@ -244,45 +402,116 @@ void ImageWriter::WriteROData(WriteStream* stream) {
 
   // Heap page starts here.
 
+  intptr_t section_start = stream->Position();
+
   stream->WriteWord(next_data_offset_);  // Data length.
   COMPILE_ASSERT(OS::kMaxPreferredCodeAlignment >= kObjectAlignment);
   stream->Align(OS::kMaxPreferredCodeAlignment);
+
+  ASSERT(stream->Position() - section_start == Image::kHeaderSize);
 
   // Heap page objects start here.
 
   for (intptr_t i = 0; i < objects_.length(); i++) {
     const Object& obj = *objects_[i].obj_;
+    AutoTraceImage(obj, section_start, stream);
 
     NoSafepointScope no_safepoint;
     uword start = reinterpret_cast<uword>(obj.raw()) - kHeapObjectTag;
-    uword end = start + obj.raw()->Size();
+    uword end = start + obj.raw()->HeapSize();
 
-    // Write object header with the mark and VM heap bits set.
+    // Write object header with the mark and read-only bits set.
     uword marked_tags = obj.raw()->ptr()->tags_;
-    marked_tags = RawObject::VMHeapObjectTag::update(true, marked_tags);
-    marked_tags = RawObject::MarkBit::update(true, marked_tags);
+    marked_tags = RawObject::OldBit::update(true, marked_tags);
+    marked_tags = RawObject::OldAndNotMarkedBit::update(false, marked_tags);
+    marked_tags = RawObject::OldAndNotRememberedBit::update(true, marked_tags);
+    marked_tags = RawObject::NewBit::update(false, marked_tags);
 #if defined(HASH_IN_OBJECT_HEADER)
     marked_tags |= static_cast<uword>(obj.raw()->ptr()->hash_) << 32;
 #endif
+
+#if defined(IS_SIMARM_X64)
+    if (obj.IsStackMap()) {
+      const StackMap& map = StackMap::Cast(obj);
+
+      // Header layout is the same between 32-bit and 64-bit architecture, but
+      // we need to recalcuate the size in words.
+      const intptr_t len_in_bits = map.Length();
+      const intptr_t len_in_bytes =
+          Utils::RoundUp(len_in_bits, kBitsPerByte) / kBitsPerByte;
+      const intptr_t size_in_bytes = StackMapSizeInSnapshot(len_in_bits);
+      marked_tags = RawObject::SizeTag::update(size_in_bytes * 2, marked_tags);
+
+      stream->WriteTargetWord(marked_tags);
+      stream->WriteFixed<uint16_t>(map.Length());
+      stream->WriteFixed<uint16_t>(map.SlowPathBitCount());
+      stream->WriteBytes(map.raw()->ptr()->data(), len_in_bytes);
+      stream->Align(compiler::target::ObjectAlignment::kObjectAlignment);
+
+    } else if (obj.IsString()) {
+      const String& str = String::Cast(obj);
+      RELEASE_ASSERT(String::GetCachedHash(str.raw()) != 0);
+      RELEASE_ASSERT(str.IsOneByteString() || str.IsTwoByteString());
+      const intptr_t size_in_bytes =
+          StringSizeInSnapshot(str.Length(), str.IsOneByteString());
+      marked_tags = RawObject::SizeTag::update(size_in_bytes * 2, marked_tags);
+
+      stream->WriteTargetWord(marked_tags);
+      stream->WriteTargetWord(
+          reinterpret_cast<uword>(str.raw()->ptr()->length_));
+      stream->WriteTargetWord(reinterpret_cast<uword>(str.raw()->ptr()->hash_));
+      stream->WriteBytes(
+          reinterpret_cast<const void*>(start + String::kSizeofRawString),
+          StringPayloadSize(str.Length(), str.IsOneByteString()));
+      stream->Align(compiler::target::ObjectAlignment::kObjectAlignment);
+    } else if (obj.IsCodeSourceMap()) {
+      const CodeSourceMap& map = CodeSourceMap::Cast(obj);
+
+      const intptr_t size_in_bytes = CodeSourceMapSizeInSnapshot(map.Length());
+      marked_tags = RawObject::SizeTag::update(size_in_bytes * 2, marked_tags);
+
+      stream->WriteTargetWord(marked_tags);
+      stream->WriteTargetWord(map.Length());
+      stream->WriteBytes(map.Data(), map.Length());
+      stream->Align(compiler::target::ObjectAlignment::kObjectAlignment);
+    } else if (obj.IsPcDescriptors()) {
+      const PcDescriptors& desc = PcDescriptors::Cast(obj);
+
+      const intptr_t size_in_bytes = PcDescriptorsSizeInSnapshot(desc.Length());
+      marked_tags = RawObject::SizeTag::update(size_in_bytes * 2, marked_tags);
+
+      stream->WriteTargetWord(marked_tags);
+      stream->WriteTargetWord(desc.Length());
+      stream->WriteBytes(desc.raw()->ptr()->data(), desc.Length());
+      stream->Align(compiler::target::ObjectAlignment::kObjectAlignment);
+    } else {
+      const Class& clazz = Class::Handle(obj.clazz());
+      FATAL1("Unsupported class %s in rodata section.\n", clazz.ToCString());
+    }
+    USE(start);
+    USE(end);
+#else   // defined(IS_SIMARM_X64)
     stream->WriteWord(marked_tags);
     start += sizeof(uword);
     for (uword* cursor = reinterpret_cast<uword*>(start);
          cursor < reinterpret_cast<uword*>(end); cursor++) {
       stream->WriteWord(*cursor);
     }
+#endif  // defined(IS_SIMARM_X64)
   }
 }
 
-AssemblyImageWriter::AssemblyImageWriter(Dart_StreamingWriteCallback callback,
+AssemblyImageWriter::AssemblyImageWriter(Thread* thread,
+                                         Dart_StreamingWriteCallback callback,
                                          void* callback_data,
                                          const void* shared_objects,
                                          const void* shared_instructions)
-    : ImageWriter(shared_objects, shared_instructions),
+    : ImageWriter(thread->heap(), shared_objects, shared_instructions, nullptr),
       assembly_stream_(512 * KB, callback, callback_data),
-      dwarf_(NULL) {
+      dwarf_(nullptr) {
 #if defined(DART_PRECOMPILER)
   Zone* zone = Thread::Current()->zone();
-  dwarf_ = new (zone) Dwarf(zone, &assembly_stream_);
+  dwarf_ = new (zone) Dwarf(zone, &assembly_stream_, /* elf= */ nullptr);
 #endif
 }
 
@@ -292,7 +521,7 @@ void AssemblyImageWriter::Finalize() {
 #endif
 }
 
-static void EnsureIdentifier(char* label) {
+static void EnsureAssemblerIdentifier(char* label) {
   for (char c = *label; c != '\0'; c = *++label) {
     if (((c >= 'a') && (c <= 'z')) || ((c >= 'A') && (c <= 'Z')) ||
         ((c >= '0') && (c <= '9'))) {
@@ -302,8 +531,36 @@ static void EnsureIdentifier(char* label) {
   }
 }
 
+const char* NameOfStubIsolateSpecificStub(ObjectStore* object_store,
+                                          const Code& code) {
+  if (code.raw() == object_store->build_method_extractor_code()) {
+    return "_iso_stub_BuildMethodExtractorStub";
+  } else if (code.raw() == object_store->null_error_stub_with_fpu_regs_stub()) {
+    return "_iso_stub_NullErrorSharedWithFPURegsStub";
+  } else if (code.raw() ==
+             object_store->null_error_stub_without_fpu_regs_stub()) {
+    return "_iso_stub_NullErrorSharedWithoutFPURegsStub";
+  } else if (code.raw() ==
+             object_store->stack_overflow_stub_with_fpu_regs_stub()) {
+    return "_iso_stub_StackOverflowStubWithFPURegsStub";
+  } else if (code.raw() ==
+             object_store->stack_overflow_stub_without_fpu_regs_stub()) {
+    return "_iso_stub_StackOverflowStubWithoutFPURegsStub";
+  } else if (code.raw() == object_store->write_barrier_wrappers_stub()) {
+    return "_iso_stub_WriteBarrierWrappersStub";
+  } else if (code.raw() == object_store->array_write_barrier_stub()) {
+    return "_iso_stub_ArrayWriteBarrierStub";
+  }
+  return nullptr;
+}
+
 void AssemblyImageWriter::WriteText(WriteStream* clustered_stream, bool vm) {
   Zone* zone = Thread::Current()->zone();
+
+#if defined(DART_PRECOMPILER)
+  const char* bss_symbol =
+      vm ? "_kDartVmSnapshotBss" : "_kDartIsolateSnapshotBss";
+#endif
 
   const char* instructions_symbol =
       vm ? "_kDartVmSnapshotInstructions" : "_kDartIsolateSnapshotInstructions";
@@ -319,8 +576,16 @@ void AssemblyImageWriter::WriteText(WriteStream* clustered_stream, bool vm) {
   // look like a HeapPage.
   intptr_t instructions_length = next_text_offset_;
   WriteWordLiteralText(instructions_length);
-  intptr_t header_words = Image::kHeaderSize / sizeof(uword);
-  for (intptr_t i = 1; i < header_words; i++) {
+
+#if defined(DART_PRECOMPILER)
+  assembly_stream_.Print("%s %s - %s\n", kLiteralPrefix, bss_symbol,
+                         instructions_symbol);
+#else
+  WriteWordLiteralText(0);  // No relocations.
+#endif
+
+  intptr_t header_words = Image::kHeaderSize / sizeof(compiler::target::uword);
+  for (intptr_t i = Image::kHeaderFields; i < header_words; i++) {
     WriteWordLiteralText(0);
   }
 
@@ -328,71 +593,130 @@ void AssemblyImageWriter::WriteText(WriteStream* clustered_stream, bool vm) {
 
   Object& owner = Object::Handle(zone);
   String& str = String::Handle(zone);
+  PcDescriptors& descriptors = PcDescriptors::Handle(zone);
 
-  TypeTestingStubFinder tts;
+  ObjectStore* object_store = Isolate::Current()->object_store();
+
+  TypeTestingStubNamer tts;
+  intptr_t text_offset = 0;
+
+  ASSERT(offset_space_ != V8SnapshotProfileWriter::kSnapshot);
   for (intptr_t i = 0; i < instructions_.length(); i++) {
-    const Instructions& insns = *instructions_[i].insns_;
-    const Code& code = *instructions_[i].code_;
+    auto& data = instructions_[i];
+    const bool is_trampoline = data.trampoline_bytes != nullptr;
+    ASSERT((data.text_offset_ - instructions_[0].text_offset_) == text_offset);
 
-    ASSERT(insns.raw()->Size() % sizeof(uint64_t) == 0);
+    if (is_trampoline) {
+      if (profile_writer_ != nullptr) {
+        const intptr_t offset = Image::kHeaderSize + text_offset;
+        profile_writer_->SetObjectTypeAndName({offset_space_, offset},
+                                              "Trampolines",
+                                              /*name=*/nullptr);
+        profile_writer_->AttributeBytesTo({offset_space_, offset},
+                                          data.trampline_length);
+      }
+
+      const auto start = reinterpret_cast<uword>(data.trampoline_bytes);
+      const auto end = start + data.trampline_length;
+      text_offset += WriteByteSequence(start, end);
+      delete[] data.trampoline_bytes;
+      data.trampoline_bytes = nullptr;
+      continue;
+    }
+
+    const intptr_t instr_start = text_offset;
+
+    const Instructions& insns = *data.insns_;
+    const Code& code = *data.code_;
+    descriptors = data.code_->pc_descriptors();
+
+    if (profile_writer_ != nullptr) {
+      const intptr_t offset = Image::kHeaderSize + text_offset;
+      profile_writer_->SetObjectTypeAndName({offset_space_, offset},
+                                            "Instructions",
+                                            /*name=*/nullptr);
+      profile_writer_->AttributeBytesTo({offset_space_, offset},
+                                        SizeInSnapshot(insns.raw()));
+    }
+
+    ASSERT(insns.raw()->HeapSize() % sizeof(uint64_t) == 0);
 
     // 1. Write from the header to the entry point.
     {
       NoSafepointScope no_safepoint;
 
-      uword beginning = reinterpret_cast<uword>(insns.raw_ptr());
-      uword entry = beginning + Instructions::HeaderSize();
-
-      // Write Instructions with the mark and VM heap bits set.
+      // Write Instructions with the mark and read-only bits set.
       uword marked_tags = insns.raw_ptr()->tags_;
-      marked_tags = RawObject::VMHeapObjectTag::update(true, marked_tags);
-      marked_tags = RawObject::MarkBit::update(true, marked_tags);
+      marked_tags = RawObject::OldBit::update(true, marked_tags);
+      marked_tags = RawObject::OldAndNotMarkedBit::update(false, marked_tags);
+      marked_tags =
+          RawObject::OldAndNotRememberedBit::update(true, marked_tags);
+      marked_tags = RawObject::NewBit::update(false, marked_tags);
 #if defined(HASH_IN_OBJECT_HEADER)
       // Can't use GetObjectTagsAndHash because the update methods discard the
       // high bits.
       marked_tags |= static_cast<uword>(insns.raw_ptr()->hash_) << 32;
 #endif
 
+#if defined(IS_SIMARM_X64)
+      const intptr_t size_in_bytes = InstructionsSizeInSnapshot(insns.Size());
+      marked_tags = RawObject::SizeTag::update(size_in_bytes * 2, marked_tags);
+      WriteWordLiteralText(marked_tags);
+      text_offset += sizeof(compiler::target::uword);
+      WriteWordLiteralText(insns.raw_ptr()->size_and_flags_);
+      text_offset += sizeof(compiler::target::uword);
+      WriteWordLiteralText(insns.raw_ptr()->unchecked_entrypoint_pc_offset_);
+      text_offset += sizeof(compiler::target::uword);
+      WriteWordLiteralText(0);
+      text_offset += sizeof(compiler::target::uword);
+#else   // defined(IS_SIMARM_X64)
+      uword beginning = reinterpret_cast<uword>(insns.raw_ptr());
+      uword entry = beginning + Instructions::HeaderSize();
       WriteWordLiteralText(marked_tags);
       beginning += sizeof(uword);
+      text_offset += sizeof(uword);
+      text_offset += WriteByteSequence(beginning, entry);
+#endif  // defined(IS_SIMARM_X64)
 
-      WriteByteSequence(beginning, entry);
+      ASSERT((text_offset - instr_start) ==
+             compiler::target::Instructions::HeaderSize());
     }
 
     // 2. Write a label at the entry point.
     // Linux's perf uses these labels.
-    if (code.IsNull()) {
-      const char* name = tts.StubNameFromAddresss(insns.UncheckedEntryPoint());
-      assembly_stream_.Print("Precompiled_%s:\n", name);
-    } else {
-      owner = code.owner();
-      if (owner.IsNull()) {
-        const char* name = StubCode::NameOfStub(insns.UncheckedEntryPoint());
-        if (name != NULL) {
-          assembly_stream_.Print("Precompiled_Stub_%s:\n", name);
-        } else {
-          const char* name =
-              tts.StubNameFromAddresss(insns.UncheckedEntryPoint());
-          assembly_stream_.Print("Precompiled__%s:\n", name);
-        }
-      } else if (owner.IsClass()) {
-        str = Class::Cast(owner).Name();
-        const char* name = str.ToCString();
-        EnsureIdentifier(const_cast<char*>(name));
-        assembly_stream_.Print("Precompiled_AllocationStub_%s_%" Pd ":\n", name,
-                               i);
-      } else if (owner.IsFunction()) {
-        const char* name = Function::Cast(owner).ToQualifiedCString();
-        EnsureIdentifier(const_cast<char*>(name));
-        assembly_stream_.Print("Precompiled_%s_%" Pd ":\n", name, i);
+    ASSERT(!code.IsNull());
+    owner = code.owner();
+    if (owner.IsNull()) {
+      const char* name = StubCode::NameOfStub(insns.EntryPoint());
+      if (name != nullptr) {
+        assembly_stream_.Print("Precompiled_Stub_%s:\n", name);
       } else {
-        UNREACHABLE();
+        if (name == nullptr) {
+          name = NameOfStubIsolateSpecificStub(object_store, code);
+        }
+        ASSERT(name != nullptr);
+        assembly_stream_.Print("Precompiled__%s:\n", name);
       }
+    } else if (owner.IsClass()) {
+      str = Class::Cast(owner).Name();
+      const char* name = str.ToCString();
+      EnsureAssemblerIdentifier(const_cast<char*>(name));
+      assembly_stream_.Print("Precompiled_AllocationStub_%s_%" Pd ":\n", name,
+                             i);
+    } else if (owner.IsAbstractType()) {
+      const char* name = tts.StubNameForType(AbstractType::Cast(owner));
+      assembly_stream_.Print("Precompiled_%s:\n", name);
+    } else if (owner.IsFunction()) {
+      const char* name = Function::Cast(owner).ToQualifiedCString();
+      EnsureAssemblerIdentifier(const_cast<char*>(name));
+      assembly_stream_.Print("Precompiled_%s_%" Pd ":\n", name, i);
+    } else {
+      UNREACHABLE();
     }
 
 #ifdef DART_PRECOMPILER
     // Create a label for use by DWARF.
-    if (!code.IsNull()) {
+    if ((dwarf_ != nullptr) && !code.IsNull()) {
       const intptr_t dwarf_index = dwarf_->AddCode(code);
       assembly_stream_.Print(".Lcode%" Pd ":\n", dwarf_index);
     }
@@ -401,21 +725,52 @@ void AssemblyImageWriter::WriteText(WriteStream* clustered_stream, bool vm) {
     {
       // 3. Write from the entry point to the end.
       NoSafepointScope no_safepoint;
-      uword beginning = reinterpret_cast<uword>(insns.raw()) - kHeapObjectTag;
+      uword beginning = reinterpret_cast<uword>(insns.raw_ptr());
       uword entry = beginning + Instructions::HeaderSize();
-      uword payload_size = insns.Size();
-      payload_size = Utils::RoundUp(payload_size, OS::PreferredCodeAlignment());
+      uword payload_size = insns.raw()->HeapSize() - insns.HeaderSize();
       uword end = entry + payload_size;
 
       ASSERT(Utils::IsAligned(beginning, sizeof(uword)));
       ASSERT(Utils::IsAligned(entry, sizeof(uword)));
       ASSERT(Utils::IsAligned(end, sizeof(uword)));
 
-      WriteByteSequence(entry, end);
+#if defined(DART_PRECOMPILER)
+      PcDescriptors::Iterator iterator(descriptors,
+                                       RawPcDescriptors::kBSSRelocation);
+      uword next_reloc_offset = iterator.MoveNext() ? iterator.PcOffset() : -1;
+
+      for (uword cursor = entry; cursor < end;
+           cursor += sizeof(compiler::target::uword)) {
+        compiler::target::uword data =
+            *reinterpret_cast<compiler::target::uword*>(cursor);
+        if ((cursor - entry) == next_reloc_offset) {
+          assembly_stream_.Print("%s %s - (.) + %" Pd "\n", kLiteralPrefix,
+                                 bss_symbol, /*addend=*/data);
+          next_reloc_offset = iterator.MoveNext() ? iterator.PcOffset() : -1;
+        } else {
+          WriteWordLiteralText(data);
+        }
+      }
+      text_offset += end - entry;
+#else
+      text_offset += WriteByteSequence(entry, end);
+#endif
+      ASSERT(kWordSize != compiler::target::kWordSize ||
+             (text_offset - instr_start) == insns.raw()->HeapSize());
     }
   }
 
   FrameUnwindEpilogue();
+
+#if defined(DART_PRECOMPILER)
+  assembly_stream_.Print(".bss\n");
+  assembly_stream_.Print("%s:\n", bss_symbol);
+
+  // Currently we only put one symbol in the data section, the address of
+  // DLRT_GetThreadForNativeCallback, which is populated when the snapshot is
+  // loaded.
+  WriteWordLiteralText(0);
+#endif
 
 #if defined(TARGET_OS_LINUX) || defined(TARGET_OS_ANDROID) ||                  \
     defined(TARGET_OS_FUCHSIA)
@@ -514,35 +869,99 @@ void AssemblyImageWriter::FrameUnwindEpilogue() {
   assembly_stream_.Print(".cfi_endproc\n");
 }
 
-void AssemblyImageWriter::WriteByteSequence(uword start, uword end) {
-  for (uword* cursor = reinterpret_cast<uword*>(start);
-       cursor < reinterpret_cast<uword*>(end); cursor++) {
+intptr_t AssemblyImageWriter::WriteByteSequence(uword start, uword end) {
+  for (auto* cursor = reinterpret_cast<compiler::target::uword*>(start);
+       cursor < reinterpret_cast<compiler::target::uword*>(end); cursor++) {
     WriteWordLiteralText(*cursor);
   }
+  return end - start;
 }
 
-BlobImageWriter::BlobImageWriter(uint8_t** instructions_blob_buffer,
+BlobImageWriter::BlobImageWriter(Thread* thread,
+                                 uint8_t** instructions_blob_buffer,
                                  ReAlloc alloc,
                                  intptr_t initial_size,
                                  const void* shared_objects,
-                                 const void* shared_instructions)
-    : ImageWriter(shared_objects, shared_instructions),
-      instructions_blob_stream_(instructions_blob_buffer, alloc, initial_size) {
+                                 const void* shared_instructions,
+                                 const void* reused_instructions,
+                                 Elf* elf,
+                                 Dwarf* dwarf)
+    : ImageWriter(thread->heap(),
+                  shared_objects,
+                  shared_instructions,
+                  reused_instructions),
+      instructions_blob_stream_(instructions_blob_buffer, alloc, initial_size),
+      elf_(elf),
+      dwarf_(dwarf) {
+#ifndef DART_PRECOMPILER
+  RELEASE_ASSERT(elf_ == nullptr);
+  RELEASE_ASSERT(dwarf_ == nullptr);
+#endif
+}
+
+intptr_t BlobImageWriter::WriteByteSequence(uword start, uword end) {
+  const uword size = end - start;
+  instructions_blob_stream_.WriteBytes(reinterpret_cast<const void*>(start),
+                                       size);
+  return size;
 }
 
 void BlobImageWriter::WriteText(WriteStream* clustered_stream, bool vm) {
+  const intptr_t instructions_length = next_text_offset_;
+#ifdef DART_PRECOMPILER
+  intptr_t segment_base = 0;
+  if (elf_ != nullptr) {
+    segment_base = elf_->NextMemoryOffset();
+  }
+
+  // Calculate the start of the BSS section based on the known size of the
+  // text section and page alignment.
+  intptr_t bss_base = 0;
+  if (elf_ != nullptr) {
+    bss_base =
+        Utils::RoundUp(segment_base + instructions_length, Elf::kPageSize);
+  }
+#endif
+
   // This header provides the gap to make the instructions snapshot look like a
   // HeapPage.
-  intptr_t instructions_length = next_text_offset_;
   instructions_blob_stream_.WriteWord(instructions_length);
+#if defined(DART_PRECOMPILER)
+  instructions_blob_stream_.WriteWord(elf_ != nullptr ? bss_base - segment_base
+                                                      : 0);
+#else
+  instructions_blob_stream_.WriteWord(0);  // No relocations.
+#endif
   intptr_t header_words = Image::kHeaderSize / sizeof(uword);
-  for (intptr_t i = 1; i < header_words; i++) {
+  for (intptr_t i = Image::kHeaderFields; i < header_words; i++) {
     instructions_blob_stream_.WriteWord(0);
   }
 
+  intptr_t text_offset = 0;
+
+#if defined(DART_PRECOMPILER)
+  PcDescriptors& descriptors = PcDescriptors::Handle();
+#endif
+
   NoSafepointScope no_safepoint;
   for (intptr_t i = 0; i < instructions_.length(); i++) {
+    auto& data = instructions_[i];
+    const bool is_trampoline = data.trampoline_bytes != nullptr;
+    ASSERT((data.text_offset_ - instructions_[0].text_offset_) == text_offset);
+
+    if (is_trampoline) {
+      const auto start = reinterpret_cast<uword>(data.trampoline_bytes);
+      const auto end = start + data.trampline_length;
+      text_offset += WriteByteSequence(start, end);
+      delete[] data.trampoline_bytes;
+      data.trampoline_bytes = nullptr;
+      continue;
+    }
+
+    const intptr_t instr_start = text_offset;
+
     const Instructions& insns = *instructions_[i].insns_;
+    AutoTraceImage(insns, 0, &this->instructions_blob_stream_);
 
     uword beginning = reinterpret_cast<uword>(insns.raw_ptr());
     uword entry = beginning + Instructions::HeaderSize();
@@ -553,25 +972,118 @@ void BlobImageWriter::WriteText(WriteStream* clustered_stream, bool vm) {
     ASSERT(Utils::IsAligned(beginning, sizeof(uword)));
     ASSERT(Utils::IsAligned(entry, sizeof(uword)));
 
-    // Write Instructions with the mark and VM heap bits set.
+#ifdef DART_PRECOMPILER
+    const Code& code = *instructions_[i].code_;
+    if ((elf_ != nullptr) && (dwarf_ != nullptr) && !code.IsNull()) {
+      intptr_t segment_offset = instructions_blob_stream_.bytes_written() +
+                                Instructions::HeaderSize();
+      dwarf_->AddCode(code, segment_base + segment_offset);
+    }
+#endif
+
+    // Write Instructions with the mark and read-only bits set.
     uword marked_tags = insns.raw_ptr()->tags_;
-    marked_tags = RawObject::VMHeapObjectTag::update(true, marked_tags);
-    marked_tags = RawObject::MarkBit::update(true, marked_tags);
+    marked_tags = RawObject::OldBit::update(true, marked_tags);
+    marked_tags = RawObject::OldAndNotMarkedBit::update(false, marked_tags);
+    marked_tags = RawObject::OldAndNotRememberedBit::update(true, marked_tags);
+    marked_tags = RawObject::NewBit::update(false, marked_tags);
 #if defined(HASH_IN_OBJECT_HEADER)
     // Can't use GetObjectTagsAndHash because the update methods discard the
     // high bits.
     marked_tags |= static_cast<uword>(insns.raw_ptr()->hash_) << 32;
 #endif
 
-    instructions_blob_stream_.WriteWord(marked_tags);
-    beginning += sizeof(uword);
+    intptr_t payload_stream_start = 0;
 
-    for (uword* cursor = reinterpret_cast<uword*>(beginning);
-         cursor < reinterpret_cast<uword*>(end); cursor++) {
-      instructions_blob_stream_.WriteWord(*cursor);
+#if defined(IS_SIMARM_X64)
+    const intptr_t start_offset = instructions_blob_stream_.bytes_written();
+    const intptr_t size_in_bytes = InstructionsSizeInSnapshot(insns.Size());
+    marked_tags = RawObject::SizeTag::update(size_in_bytes * 2, marked_tags);
+    instructions_blob_stream_.WriteTargetWord(marked_tags);
+    instructions_blob_stream_.WriteFixed<uint32_t>(
+        insns.raw_ptr()->size_and_flags_);
+    instructions_blob_stream_.WriteFixed<uint32_t>(
+        insns.raw_ptr()->unchecked_entrypoint_pc_offset_);
+    instructions_blob_stream_.Align(kSimarmX64InstructionsAlignment);
+    payload_stream_start = instructions_blob_stream_.Position();
+    instructions_blob_stream_.WriteBytes(
+        reinterpret_cast<const void*>(insns.PayloadStart()), insns.Size());
+    instructions_blob_stream_.Align(kSimarmX64InstructionsAlignment);
+    const intptr_t end_offset = instructions_blob_stream_.bytes_written();
+    text_offset += (end_offset - start_offset);
+    USE(end);
+#else   // defined(IS_SIMARM_X64)
+    payload_stream_start = instructions_blob_stream_.Position() +
+                           (insns.PayloadStart() - beginning);
+
+    instructions_blob_stream_.WriteWord(marked_tags);
+    text_offset += sizeof(uword);
+    beginning += sizeof(uword);
+    text_offset += WriteByteSequence(beginning, end);
+#endif  // defined(IS_SIMARM_X64)
+
+#if defined(DART_PRECOMPILER)
+    // Don't patch the relocation if we're not generating ELF. The regular blobs
+    // format does not yet support these relocations. Use
+    // Code::VerifyBSSRelocations to check whether the relocations are patched
+    // or not after loading.
+    if (elf_ != nullptr) {
+      const intptr_t current_stream_position =
+          instructions_blob_stream_.Position();
+
+      descriptors = data.code_->pc_descriptors();
+
+      PcDescriptors::Iterator iterator(
+          descriptors, /*kind_mask=*/RawPcDescriptors::kBSSRelocation);
+
+      while (iterator.MoveNext()) {
+        const intptr_t reloc_offset = iterator.PcOffset();
+
+        // The instruction stream at the relocation position holds an offset
+        // into BSS corresponding to the symbol being resolved. This addend is
+        // factored into the relocation.
+        const auto addend = *reinterpret_cast<compiler::target::word*>(
+            insns.PayloadStart() + reloc_offset);
+
+        // Overwrite the relocation position in the instruction stream with the
+        // (positive) offset of the start of the payload from the start of the
+        // BSS segment plus the addend in the relocation.
+        instructions_blob_stream_.SetPosition(payload_stream_start +
+                                              reloc_offset);
+
+        const uword offset =
+            bss_base - (segment_base + payload_stream_start + reloc_offset) +
+            addend;
+        instructions_blob_stream_.WriteTargetWord(offset);
+      }
+
+      // Restore stream position after the relocation was patched.
+      instructions_blob_stream_.SetPosition(current_stream_position);
     }
+#endif
+
+    ASSERT((text_offset - instr_start) ==
+           ImageWriter::SizeInSnapshot(insns.raw()));
   }
+
+  ASSERT(instructions_blob_stream_.bytes_written() == instructions_length);
+
+#ifdef DART_PRECOMPILER
+  if (elf_ != nullptr) {
+    const char* instructions_symbol = vm ? "_kDartVmSnapshotInstructions"
+                                         : "_kDartIsolateSnapshotInstructions";
+    intptr_t segment_base2 =
+        elf_->AddText(instructions_symbol, instructions_blob_stream_.buffer(),
+                      instructions_blob_stream_.bytes_written());
+    ASSERT(segment_base == segment_base2);
+
+    const intptr_t real_bss_base =
+        elf_->AddBSSData("_kDartVMBSSData", sizeof(compiler::target::uword));
+    ASSERT(bss_base == real_bss_base);
+  }
+#endif
 }
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
 ImageReader::ImageReader(const uint8_t* data_image,
                          const uint8_t* instructions_image,
@@ -634,5 +1146,107 @@ RawObject* ImageReader::GetSharedObjectAt(uint32_t offset) const {
 
   return result;
 }
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+void DropCodeWithoutReusableInstructions(const void* reused_instructions) {
+  class DropCodeVisitor : public FunctionVisitor, public ClassVisitor {
+   public:
+    explicit DropCodeVisitor(const void* reused_instructions)
+        : code_(Code::Handle()),
+          instructions_(Instructions::Handle()),
+          pool_(ObjectPool::Handle()),
+          table_(Array::Handle()),
+          entry_(Object::Handle()) {
+      ImageWriter::SetupShared(&reused_instructions_, reused_instructions);
+      if (FLAG_trace_reused_instructions) {
+        OS::PrintErr("%" Pd " reusable instructions\n",
+                     reused_instructions_.Size());
+      }
+    }
+
+    void Visit(const Class& cls) {
+      code_ = cls.allocation_stub();
+      if (!code_.IsNull()) {
+        if (!CanKeep(code_)) {
+          if (FLAG_trace_reused_instructions) {
+            OS::PrintErr("No reusable instructions for %s\n", cls.ToCString());
+          }
+          cls.DisableAllocationStub();
+        }
+      }
+    }
+
+    void Visit(const Function& func) {
+      if (func.HasCode()) {
+        code_ = func.CurrentCode();
+        if (!CanKeep(code_)) {
+          if (FLAG_trace_reused_instructions) {
+            OS::PrintErr("No reusable instructions for %s\n", func.ToCString());
+          }
+          func.ClearCode();
+          func.ClearICDataArray();
+          return;
+        }
+      }
+      code_ = func.unoptimized_code();
+      if (!code_.IsNull() && !CanKeep(code_)) {
+        if (FLAG_trace_reused_instructions) {
+          OS::PrintErr("No reusable instructions for %s\n", func.ToCString());
+        }
+        func.ClearCode();
+        func.ClearICDataArray();
+      }
+    }
+
+    bool CanKeep(const Code& code) {
+      if (!IsAvailable(code)) {
+        return false;
+      }
+
+      pool_ = code.object_pool();
+      for (intptr_t i = 0; i < pool_.Length(); i++) {
+        if (pool_.TypeAt(i) == ObjectPool::EntryType::kTaggedObject) {
+          entry_ = pool_.ObjectAt(i);
+          if (entry_.IsCode() && !IsAvailable(Code::Cast(entry_))) {
+            return false;
+          }
+        }
+      }
+
+      table_ = code.static_calls_target_table();
+      if (!table_.IsNull()) {
+        StaticCallsTable static_calls(table_);
+        for (auto& view : static_calls) {
+          entry_ = view.Get<Code::kSCallTableCodeTarget>();
+          if (entry_.IsCode() && !IsAvailable(Code::Cast(entry_))) {
+            return false;
+          }
+        }
+      }
+
+      return true;
+    }
+
+   private:
+    bool IsAvailable(const Code& code) {
+      ObjectOffsetPair* pair = reused_instructions_.Lookup(code.instructions());
+      return pair != NULL;
+    }
+
+    ObjectOffsetMap reused_instructions_;
+    Code& code_;
+    Instructions& instructions_;
+    ObjectPool& pool_;
+    Array& table_;
+    Object& entry_;
+
+    DISALLOW_COPY_AND_ASSIGN(DropCodeVisitor);
+  };
+
+  DropCodeVisitor visitor(reused_instructions);
+  ProgramVisitor::VisitClasses(&visitor);
+  ProgramVisitor::VisitFunctions(&visitor);
+}
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
 }  // namespace dart

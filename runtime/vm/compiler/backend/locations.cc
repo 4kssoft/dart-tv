@@ -23,6 +23,23 @@ intptr_t RegisterSet::RegisterCount(intptr_t registers) {
   return count;
 }
 
+void RegisterSet::DebugPrint() {
+  for (intptr_t i = 0; i < kNumberOfCpuRegisters; i++) {
+    Register r = static_cast<Register>(i);
+    if (ContainsRegister(r)) {
+      THR_Print("%s %s\n", RegisterNames::RegisterName(r),
+                IsTagged(r) ? "tagged" : "untagged");
+    }
+  }
+
+  for (intptr_t i = 0; i < kNumberOfFpuRegisters; i++) {
+    FpuRegister r = static_cast<FpuRegister>(i);
+    if (ContainsFpuRegister(r)) {
+      THR_Print("%s\n", RegisterNames::FpuRegisterName(r));
+    }
+  }
+}
+
 LocationSummary::LocationSummary(Zone* zone,
                                  intptr_t input_count,
                                  intptr_t temp_count,
@@ -53,85 +70,101 @@ LocationSummary* LocationSummary::Make(
   return summary;
 }
 
-Location Location::Pair(Location first, Location second) {
-  PairLocation* pair_location = new PairLocation();
+template <class Register, class FpuRegister>
+TemplateLocation<Register, FpuRegister>
+TemplateLocation<Register, FpuRegister>::Pair(
+    TemplateLocation<Register, FpuRegister> first,
+    TemplateLocation<Register, FpuRegister> second) {
+  TemplatePairLocation<TemplateLocation<Register, FpuRegister>>* pair_location =
+      new TemplatePairLocation<TemplateLocation<Register, FpuRegister>>();
   ASSERT((reinterpret_cast<intptr_t>(pair_location) & kLocationTagMask) == 0);
   pair_location->SetAt(0, first);
   pair_location->SetAt(1, second);
-  Location loc(reinterpret_cast<uword>(pair_location) | kPairLocationTag);
+  TemplateLocation<Register, FpuRegister> loc(
+      reinterpret_cast<uword>(pair_location) | kPairLocationTag);
   return loc;
 }
 
-PairLocation* Location::AsPairLocation() const {
+template <class Register, class FpuRegister>
+TemplatePairLocation<TemplateLocation<Register, FpuRegister>>*
+TemplateLocation<Register, FpuRegister>::AsPairLocation() const {
   ASSERT(IsPairLocation());
-  return reinterpret_cast<PairLocation*>(value_ & ~kLocationTagMask);
+  return reinterpret_cast<
+      TemplatePairLocation<TemplateLocation<Register, FpuRegister>>*>(
+      value_ & ~kLocationTagMask);
 }
 
-Location Location::RegisterOrConstant(Value* value) {
+Location LocationRegisterOrConstant(Value* value) {
   ConstantInstr* constant = value->definition()->AsConstant();
-  return ((constant != NULL) && Assembler::IsSafe(constant->value()))
+  return ((constant != NULL) && compiler::Assembler::IsSafe(constant->value()))
              ? Location::Constant(constant)
              : Location::RequiresRegister();
 }
 
-Location Location::RegisterOrSmiConstant(Value* value) {
+Location LocationRegisterOrSmiConstant(Value* value) {
   ConstantInstr* constant = value->definition()->AsConstant();
-  return ((constant != NULL) && Assembler::IsSafeSmi(constant->value()))
+  return ((constant != NULL) &&
+          compiler::Assembler::IsSafeSmi(constant->value()))
              ? Location::Constant(constant)
              : Location::RequiresRegister();
 }
 
-Location Location::WritableRegisterOrSmiConstant(Value* value) {
+Location LocationWritableRegisterOrSmiConstant(Value* value) {
   ConstantInstr* constant = value->definition()->AsConstant();
-  return ((constant != NULL) && Assembler::IsSafeSmi(constant->value()))
+  return ((constant != NULL) &&
+          compiler::Assembler::IsSafeSmi(constant->value()))
              ? Location::Constant(constant)
              : Location::WritableRegister();
 }
 
-Location Location::FixedRegisterOrConstant(Value* value, Register reg) {
+Location LocationFixedRegisterOrConstant(Value* value, Register reg) {
   ConstantInstr* constant = value->definition()->AsConstant();
-  return ((constant != NULL) && Assembler::IsSafe(constant->value()))
+  return ((constant != NULL) && compiler::Assembler::IsSafe(constant->value()))
              ? Location::Constant(constant)
              : Location::RegisterLocation(reg);
 }
 
-Location Location::FixedRegisterOrSmiConstant(Value* value, Register reg) {
+Location LocationFixedRegisterOrSmiConstant(Value* value, Register reg) {
   ConstantInstr* constant = value->definition()->AsConstant();
-  return ((constant != NULL) && Assembler::IsSafeSmi(constant->value()))
+  return ((constant != NULL) &&
+          compiler::Assembler::IsSafeSmi(constant->value()))
              ? Location::Constant(constant)
              : Location::RegisterLocation(reg);
 }
 
-Location Location::AnyOrConstant(Value* value) {
+Location LocationAnyOrConstant(Value* value) {
   ConstantInstr* constant = value->definition()->AsConstant();
-  return ((constant != NULL) && Assembler::IsSafe(constant->value()))
+  return ((constant != NULL) && compiler::Assembler::IsSafe(constant->value()))
              ? Location::Constant(constant)
              : Location::Any();
 }
 
 // DBC does not have an notion of 'address' in its instruction set.
 #if !defined(TARGET_ARCH_DBC)
-Address Location::ToStackSlotAddress() const {
-  return Address(base_reg(), ToStackSlotOffset());
+compiler::Address LocationToStackSlotAddress(Location loc) {
+  return compiler::Address(loc.base_reg(), loc.ToStackSlotOffset());
 }
 #endif
 
-intptr_t Location::ToStackSlotOffset() const {
-  return stack_index() * kWordSize;
+template <class Register, class FpuRegister>
+intptr_t TemplateLocation<Register, FpuRegister>::ToStackSlotOffset() const {
+  return stack_index() * compiler::target::kWordSize;
 }
 
-const Object& Location::constant() const {
+template <class Register, class FpuRegister>
+const Object& TemplateLocation<Register, FpuRegister>::constant() const {
   return constant_instruction()->value();
 }
 
-const char* Location::Name() const {
+template <class Register, class FpuRegister>
+const char* TemplateLocation<Register, FpuRegister>::Name() const {
   switch (kind()) {
     case kInvalid:
       return "?";
     case kRegister:
-      return Assembler::RegisterName(reg());
+      return RegisterNames::RegisterName(reg());
     case kFpuRegister:
-      return Assembler::FpuRegisterName(fpu_reg());
+      return RegisterNames::FpuRegisterName(fpu_reg());
     case kStackSlot:
       return "S";
     case kDoubleStackSlot:
@@ -178,7 +211,9 @@ const char* Location::Name() const {
   return "?";
 }
 
-void Location::PrintTo(BufferFormatter* f) const {
+template <class Register, class FpuRegister>
+void TemplateLocation<Register, FpuRegister>::PrintTo(
+    BufferFormatter* f) const {
   if (!FLAG_support_il_printer) {
     return;
   }
@@ -199,14 +234,16 @@ void Location::PrintTo(BufferFormatter* f) const {
   }
 }
 
-const char* Location::ToCString() const {
+template <class Register, class FpuRegister>
+const char* TemplateLocation<Register, FpuRegister>::ToCString() const {
   char buffer[1024];
   BufferFormatter bf(buffer, 1024);
   PrintTo(&bf);
   return Thread::Current()->zone()->MakeCopyOfString(buffer);
 }
 
-void Location::Print() const {
+template <class Register, class FpuRegister>
+void TemplateLocation<Register, FpuRegister>::Print() const {
   if (kind() == kStackSlot) {
     THR_Print("S%+" Pd "", stack_index());
   } else {
@@ -214,70 +251,104 @@ void Location::Print() const {
   }
 }
 
-Location Location::Copy() const {
+template <class Register, class FpuRegister>
+TemplateLocation<Register, FpuRegister>
+TemplateLocation<Register, FpuRegister>::Copy() const {
   if (IsPairLocation()) {
-    PairLocation* pair = AsPairLocation();
+    TemplatePairLocation<TemplateLocation<Register, FpuRegister>>* pair =
+        AsPairLocation();
     ASSERT(!pair->At(0).IsPairLocation());
     ASSERT(!pair->At(1).IsPairLocation());
-    return Location::Pair(pair->At(0).Copy(), pair->At(1).Copy());
+    return TemplateLocation::Pair(pair->At(0).Copy(), pair->At(1).Copy());
   } else {
     // Copy by value.
     return *this;
   }
 }
 
-Location Location::RemapForSlowPath(Definition* def,
-                                    intptr_t* cpu_reg_slots,
-                                    intptr_t* fpu_reg_slots) const {
-  if (IsRegister()) {
-    intptr_t index = cpu_reg_slots[reg()];
+Location LocationArgumentsDescriptorLocation() {
+#ifdef TARGET_ARCH_DBC
+  return Location(Location::kSpecialDbcRegister, Location::kArgsDescriptorReg);
+#else
+  return Location::RegisterLocation(ARGS_DESC_REG);
+#endif
+}
+
+Location LocationExceptionLocation() {
+#ifdef TARGET_ARCH_DBC
+  return Location(Location::kSpecialDbcRegister, Location::kExceptionReg);
+#else
+  return Location::RegisterLocation(kExceptionObjectReg);
+#endif
+}
+
+Location LocationStackTraceLocation() {
+#ifdef TARGET_ARCH_DBC
+  return Location(Location::kSpecialDbcRegister, Location::kStackTraceReg);
+#else
+  return Location::RegisterLocation(kStackTraceObjectReg);
+#endif
+}
+
+Location LocationRemapForSlowPath(Location loc,
+                                  Definition* def,
+                                  intptr_t* cpu_reg_slots,
+                                  intptr_t* fpu_reg_slots) {
+  if (loc.IsRegister()) {
+    intptr_t index = cpu_reg_slots[loc.reg()];
     ASSERT(index >= 0);
-    return Location::StackSlot(FrameSlotForVariableIndex(-index));
-  } else if (IsFpuRegister()) {
-    intptr_t index = fpu_reg_slots[fpu_reg()];
+    return Location::StackSlot(
+        compiler::target::frame_layout.FrameSlotForVariableIndex(-index),
+        FPREG);
+  } else if (loc.IsFpuRegister()) {
+    intptr_t index = fpu_reg_slots[loc.fpu_reg()];
     ASSERT(index >= 0);
     switch (def->representation()) {
       case kUnboxedDouble:
-        return Location::DoubleStackSlot(FrameSlotForVariableIndex(-index));
+        return Location::DoubleStackSlot(
+            compiler::target::frame_layout.FrameSlotForVariableIndex(-index),
+            FPREG);
 
       case kUnboxedFloat32x4:
       case kUnboxedInt32x4:
       case kUnboxedFloat64x2:
-        return Location::QuadStackSlot(FrameSlotForVariableIndex(-index));
+        return Location::QuadStackSlot(
+            compiler::target::frame_layout.FrameSlotForVariableIndex(-index),
+            FPREG);
 
       default:
         UNREACHABLE();
     }
-  } else if (IsPairLocation()) {
+  } else if (loc.IsPairLocation()) {
     ASSERT(def->representation() == kUnboxedInt64);
-    PairLocation* value_pair = AsPairLocation();
+    PairLocation* value_pair = loc.AsPairLocation();
     intptr_t index_lo;
     intptr_t index_hi;
 
     if (value_pair->At(0).IsRegister()) {
-      index_lo =
-          FrameSlotForVariableIndex(-cpu_reg_slots[value_pair->At(0).reg()]);
+      index_lo = compiler::target::frame_layout.FrameSlotForVariableIndex(
+          -cpu_reg_slots[value_pair->At(0).reg()]);
     } else {
       ASSERT(value_pair->At(0).IsStackSlot());
       index_lo = value_pair->At(0).stack_index();
     }
 
     if (value_pair->At(1).IsRegister()) {
-      index_hi =
-          FrameSlotForVariableIndex(-cpu_reg_slots[value_pair->At(1).reg()]);
+      index_hi = compiler::target::frame_layout.FrameSlotForVariableIndex(
+          -cpu_reg_slots[value_pair->At(1).reg()]);
     } else {
       ASSERT(value_pair->At(1).IsStackSlot());
       index_hi = value_pair->At(1).stack_index();
     }
 
-    return Location::Pair(Location::StackSlot(index_lo),
-                          Location::StackSlot(index_hi));
-  } else if (IsInvalid() && def->IsMaterializeObject()) {
+    return Location::Pair(Location::StackSlot(index_lo, FPREG),
+                          Location::StackSlot(index_hi, FPREG));
+  } else if (loc.IsInvalid() && def->IsMaterializeObject()) {
     def->AsMaterializeObject()->RemapRegisters(cpu_reg_slots, fpu_reg_slots);
-    return *this;
+    return loc;
   }
 
-  return *this;
+  return loc;
 }
 
 void LocationSummary::PrintTo(BufferFormatter* f) const {
@@ -337,6 +408,14 @@ void LocationSummary::CheckWritableInputs() {
   }
 }
 #endif
+
+template class TemplateLocation<dart::Register, dart::FpuRegister>;
+template class TemplatePairLocation<Location>;
+
+#if !defined(HOST_ARCH_EQUALS_TARGET_ARCH)
+template class TemplateLocation<dart::host::Register, dart::host::FpuRegister>;
+template class TemplatePairLocation<HostLocation>;
+#endif  // !defined(HOST_ARCH_EQUALS_TARGET_ARCH)
 
 }  // namespace dart
 

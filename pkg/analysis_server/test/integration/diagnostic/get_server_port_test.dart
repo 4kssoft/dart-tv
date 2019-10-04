@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -14,7 +14,6 @@ import '../support/integration_tests.dart';
 main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(GetServerPortTest);
-    defineReflectiveTests(GetServerPortTest_UseCFE);
   });
 }
 
@@ -32,13 +31,7 @@ class GetServerPortTest extends AbstractAnalysisServerIntegrationTest {
     HttpClientRequest request = await client
         .getUrl(Uri.parse('http://localhost:${result.port}/status'));
     HttpClientResponse response = await request.close();
-    String responseBody = await utf8.decodeStream(response);
+    String responseBody = await utf8.decodeStream(response.cast<List<int>>());
     expect(responseBody, contains('<title>Analysis Server</title>'));
   }
-}
-
-@reflectiveTest
-class GetServerPortTest_UseCFE extends GetServerPortTest {
-  @override
-  bool get useCFE => true;
 }

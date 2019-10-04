@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -10,12 +10,13 @@ import 'package:analysis_server/src/protocol_server.dart';
 import 'package:analyzer/dart/element/element.dart' as engine;
 import 'package:analyzer/src/generated/utilities_dart.dart' as engine;
 import 'package:analyzer_plugin/protocol/protocol_common.dart';
+import 'package:path/path.dart' as pathos;
 
 /**
  * Return a protocol [Element] corresponding to the given [engine.Element].
  */
 Element convertElement(engine.Element element) {
-  String name = element.displayName;
+  String name = getElementDisplayName(element);
   String elementTypeParameters = _getTypeParametersString(element);
   String elementParameters = _getParametersString(element);
   String elementReturnType = getReturnTypeString(element);
@@ -54,6 +55,9 @@ ElementKind convertElementKind(engine.ElementKind kind) {
   if (kind == engine.ElementKind.CONSTRUCTOR) {
     return ElementKind.CONSTRUCTOR;
   }
+  if (kind == engine.ElementKind.EXTENSION) {
+    return ElementKind.EXTENSION;
+  }
   if (kind == engine.ElementKind.FIELD) {
     return ElementKind.FIELD;
   }
@@ -61,6 +65,9 @@ ElementKind convertElementKind(engine.ElementKind kind) {
     return ElementKind.FUNCTION;
   }
   if (kind == engine.ElementKind.FUNCTION_TYPE_ALIAS) {
+    return ElementKind.FUNCTION_TYPE_ALIAS;
+  }
+  if (kind == engine.ElementKind.GENERIC_FUNCTION_TYPE) {
     return ElementKind.FUNCTION_TYPE_ALIAS;
   }
   if (kind == engine.ElementKind.GETTER) {
@@ -100,8 +107,13 @@ ElementKind convertElementKind(engine.ElementKind kind) {
  * Return an [ElementKind] corresponding to the given [engine.Element].
  */
 ElementKind convertElementToElementKind(engine.Element element) {
-  if (element is engine.ClassElement && element.isEnum) {
-    return ElementKind.ENUM;
+  if (element is engine.ClassElement) {
+    if (element.isEnum) {
+      return ElementKind.ENUM;
+    }
+    if (element.isMixin) {
+      return ElementKind.MIXIN;
+    }
   }
   if (element is engine.FieldElement &&
       element.isEnumConstant &&
@@ -118,6 +130,14 @@ ElementKind convertElementToElementKind(engine.Element element) {
     return ElementKind.ENUM_CONSTANT;
   }
   return convertElementKind(element.kind);
+}
+
+String getElementDisplayName(engine.Element element) {
+  if (element is engine.CompilationUnitElement) {
+    return pathos.basename(element.source.fullName);
+  } else {
+    return element.displayName;
+  }
 }
 
 String _getParametersString(engine.Element element) {
@@ -222,7 +242,7 @@ bool _isStatic(engine.Element element) {
 // Sort @required named parameters before optional ones.
 int _preferRequiredParams(
     engine.ParameterElement e1, engine.ParameterElement e2) {
-  int rank1 = e1.hasRequired ? 0 : !e1.isNamed ? -1 : 1;
-  int rank2 = e2.hasRequired ? 0 : !e2.isNamed ? -1 : 1;
+  int rank1 = (e1.isRequiredNamed || e1.hasRequired) ? 0 : !e1.isNamed ? -1 : 1;
+  int rank2 = (e2.isRequiredNamed || e2.hasRequired) ? 0 : !e2.isNamed ? -1 : 1;
   return rank1 - rank2;
 }

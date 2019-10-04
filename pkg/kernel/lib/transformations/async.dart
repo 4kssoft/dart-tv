@@ -80,7 +80,9 @@ class ExpressionLifter extends Transformer {
 
   ExpressionLifter(this.continuationRewriter);
 
-  Block blockOf(List<Statement> stmts) => new Block(stmts.reversed.toList());
+  Block blockOf(List<Statement> statements) {
+    return new Block(statements.reversed.toList());
+  }
 
   /// Rewrite a toplevel expression (toplevel wrt. a statement).
   ///
@@ -90,12 +92,12 @@ class ExpressionLifter extends Transformer {
   /// surrounding context.
   Expression rewrite(Expression expression, List<Statement> outer) {
     assert(statements.isEmpty);
-    assert(nameIndex == 0);
+    var saved = seenAwait;
     seenAwait = false;
-    Expression result = expression.accept(this);
+    Expression result = expression.accept<TreeNode>(this);
     outer.addAll(statements.reversed);
     statements.clear();
-    nameIndex = 0;
+    seenAwait = seenAwait || saved;
     return result;
   }
 
@@ -181,8 +183,12 @@ class ExpressionLifter extends Transformer {
 
     // 4. If the expression was named then the variables used for children are
     // no longer live but the variable used for the expression is.
+    // On the other hand, a sibling to the left (yet to be processed) cannot
+    // reuse any of the variables used here, as the assignments in the children
+    // (here) would overwrite assignments in the siblings to the left,
+    // possibly before the use of the overwritten values.
     if (shouldName) {
-      nameIndex = index + 1;
+      if (index + 1 > nameIndex) nameIndex = index + 1;
       seenAwait = true;
     }
     return result;
@@ -207,25 +213,25 @@ class ExpressionLifter extends Transformer {
 
   TreeNode visitPropertySet(PropertySet expr) {
     return transform(expr, () {
-      expr.value = expr.value.accept(this)..parent = expr;
-      expr.receiver = expr.receiver.accept(this)..parent = expr;
+      expr.value = expr.value.accept<TreeNode>(this)..parent = expr;
+      expr.receiver = expr.receiver.accept<TreeNode>(this)..parent = expr;
     });
   }
 
   TreeNode visitDirectPropertySet(DirectPropertySet expr) {
     return transform(expr, () {
-      expr.value = expr.value.accept(this)..parent = expr;
-      expr.receiver = expr.receiver.accept(this)..parent = expr;
+      expr.value = expr.value.accept<TreeNode>(this)..parent = expr;
+      expr.receiver = expr.receiver.accept<TreeNode>(this)..parent = expr;
     });
   }
 
   TreeNode visitArguments(Arguments args) {
     for (var named in args.named.reversed) {
-      named.value = named.value.accept(this)..parent = named;
+      named.value = named.value.accept<TreeNode>(this)..parent = named;
     }
     var positional = args.positional;
     for (var i = positional.length - 1; i >= 0; --i) {
-      positional[i] = positional[i].accept(this)..parent = args;
+      positional[i] = positional[i].accept<TreeNode>(this)..parent = args;
     }
     // Returns the arguments, which is assumed at the call sites because they do
     // not replace the arguments or set parent pointers.
@@ -235,14 +241,14 @@ class ExpressionLifter extends Transformer {
   TreeNode visitMethodInvocation(MethodInvocation expr) {
     return transform(expr, () {
       visitArguments(expr.arguments);
-      expr.receiver = expr.receiver.accept(this)..parent = expr;
+      expr.receiver = expr.receiver.accept<TreeNode>(this)..parent = expr;
     });
   }
 
   TreeNode visitDirectMethodInvocation(DirectMethodInvocation expr) {
     return transform(expr, () {
       visitArguments(expr.arguments);
-      expr.receiver = expr.receiver.accept(this)..parent = expr;
+      expr.receiver = expr.receiver.accept<TreeNode>(this)..parent = expr;
     });
   }
 
@@ -268,7 +274,7 @@ class ExpressionLifter extends Transformer {
     return transform(expr, () {
       var expressions = expr.expressions;
       for (var i = expressions.length - 1; i >= 0; --i) {
-        expressions[i] = expressions[i].accept(this)..parent = expr;
+        expressions[i] = expressions[i].accept<TreeNode>(this)..parent = expr;
       }
     });
   }
@@ -277,7 +283,8 @@ class ExpressionLifter extends Transformer {
     return transform(expr, () {
       var expressions = expr.expressions;
       for (var i = expressions.length - 1; i >= 0; --i) {
-        expressions[i] = expr.expressions[i].accept(this)..parent = expr;
+        expressions[i] = expr.expressions[i].accept<TreeNode>(this)
+          ..parent = expr;
       }
     });
   }
@@ -285,8 +292,8 @@ class ExpressionLifter extends Transformer {
   TreeNode visitMapLiteral(MapLiteral expr) {
     return transform(expr, () {
       for (var entry in expr.entries.reversed) {
-        entry.value = entry.value.accept(this)..parent = entry;
-        entry.key = entry.key.accept(this)..parent = entry;
+        entry.value = entry.value.accept<TreeNode>(this)..parent = entry;
+        entry.key = entry.key.accept<TreeNode>(this)..parent = entry;
       }
     });
   }
@@ -298,15 +305,16 @@ class ExpressionLifter extends Transformer {
     // Right is delimited because it is conditionally evaluated.
     var rightStatements = <Statement>[];
     seenAwait = false;
-    expr.right = delimit(() => expr.right.accept(this), rightStatements)
-      ..parent = expr;
+    expr.right =
+        delimit(() => expr.right.accept<TreeNode>(this), rightStatements)
+          ..parent = expr;
     var rightAwait = seenAwait;
 
     if (rightStatements.isEmpty) {
       // Easy case: right did not emit any statements.
       seenAwait = shouldName;
       return transform(expr, () {
-        expr.left = expr.left.accept(this)..parent = expr;
+        expr.left = expr.left.accept<TreeNode>(this)..parent = expr;
         seenAwait = seenAwait || rightAwait;
       });
     }
@@ -344,7 +352,7 @@ class ExpressionLifter extends Transformer {
     statements.add(new ExpressionStatement(new VariableSet(result, test)));
 
     seenAwait = false;
-    test.receiver = test.receiver.accept(this)..parent = test;
+    test.receiver = test.receiver.accept<TreeNode>(this)..parent = test;
 
     ++nameIndex;
     seenAwait = seenAwait || rightAwait;
@@ -358,22 +366,22 @@ class ExpressionLifter extends Transformer {
 
     var thenStatements = <Statement>[];
     seenAwait = false;
-    expr.then = delimit(() => expr.then.accept(this), thenStatements)
+    expr.then = delimit(() => expr.then.accept<TreeNode>(this), thenStatements)
       ..parent = expr;
     var thenAwait = seenAwait;
 
     var otherwiseStatements = <Statement>[];
     seenAwait = false;
-    expr.otherwise =
-        delimit(() => expr.otherwise.accept(this), otherwiseStatements)
-          ..parent = expr;
+    expr.otherwise = delimit(
+        () => expr.otherwise.accept<TreeNode>(this), otherwiseStatements)
+      ..parent = expr;
     var otherwiseAwait = seenAwait;
 
     if (thenStatements.isEmpty && otherwiseStatements.isEmpty) {
       // Easy case: neither then nor otherwise emitted any statements.
       seenAwait = shouldName;
       return transform(expr, () {
-        expr.condition = expr.condition.accept(this)..parent = expr;
+        expr.condition = expr.condition.accept<TreeNode>(this)..parent = expr;
         seenAwait = seenAwait || thenAwait || otherwiseAwait;
       });
     }
@@ -397,7 +405,7 @@ class ExpressionLifter extends Transformer {
     statements.add(branch);
 
     seenAwait = false;
-    branch.condition = branch.condition.accept(this)..parent = branch;
+    branch.condition = branch.condition.accept<TreeNode>(this)..parent = branch;
 
     ++nameIndex;
     seenAwait = seenAwait || thenAwait || otherwiseAwait;
@@ -441,9 +449,10 @@ class ExpressionLifter extends Transformer {
 
     seenAwait = false;
     var index = nameIndex;
-    arguments.positional[0] = expr.operand.accept(this)..parent = arguments;
+    arguments.positional[0] = expr.operand.accept<TreeNode>(this)
+      ..parent = arguments;
 
-    if (shouldName) nameIndex = index + 1;
+    if (shouldName && index + 1 > nameIndex) nameIndex = index + 1;
     seenAwait = true;
     return result;
   }
@@ -454,7 +463,7 @@ class ExpressionLifter extends Transformer {
   }
 
   TreeNode visitLet(Let expr) {
-    var body = expr.body.accept(this);
+    var body = expr.body.accept<TreeNode>(this);
 
     VariableDeclaration variable = expr.variable;
     if (seenAwait) {
@@ -475,11 +484,11 @@ class ExpressionLifter extends Transformer {
       statements.add(variable);
       var index = nameIndex;
       seenAwait = false;
-      variable.initializer = variable.initializer.accept(this)
+      variable.initializer = variable.initializer.accept<TreeNode>(this)
         ..parent = variable;
       // Temporaries used in the initializer or the body are not live but the
       // temporary used for the body is.
-      nameIndex = index + 1;
+      if (index + 1 > nameIndex) nameIndex = index + 1;
       seenAwait = true;
       return body;
     } else {
@@ -488,15 +497,53 @@ class ExpressionLifter extends Transformer {
       return transform(expr, () {
         // The body has already been translated.
         expr.body = body..parent = expr;
-        variable.initializer = variable.initializer.accept(this)
+        variable.initializer = variable.initializer.accept<TreeNode>(this)
           ..parent = variable;
       });
     }
   }
 
   visitFunctionNode(FunctionNode node) {
-    var nestedRewriter = new RecursiveContinuationRewriter(
-        continuationRewriter.helper, continuationRewriter.syncAsync);
+    var nestedRewriter =
+        new RecursiveContinuationRewriter(continuationRewriter.helper);
     return node.accept(nestedRewriter);
+  }
+
+  TreeNode visitBlockExpression(BlockExpression expr) {
+    return transform(expr, () {
+      expr.value = expr.value.accept<TreeNode>(this)..parent = expr;
+      List<Statement> body = <Statement>[];
+      for (Statement stmt in expr.body.statements.reversed) {
+        Statement translation = stmt.accept<TreeNode>(this);
+        if (translation != null) body.add(translation);
+      }
+      expr.body = new Block(body.reversed.toList())..parent = expr;
+    });
+  }
+
+  TreeNode defaultStatement(Statement stmt) {
+    // This method translates a statement nested in an expression (e.g., in a
+    // block expression).  It produces a translated statement, a list of
+    // statements which are side effects necessary for any await, and a flag
+    // indicating whether there was an await in the statement or to its right.
+    // The translated statement can be null in the case where there was already
+    // an await to the right.
+
+    // The translation is accumulating two lists of statements, an inner list
+    // which is a reversed list of effects needed for the current expression and
+    // an outer list which represents the block containing the current
+    // statement.  We need to preserve both of those from side effects.
+    List<Statement> savedInner = statements;
+    List<Statement> savedOuter = continuationRewriter.statements;
+    statements = <Statement>[];
+    continuationRewriter.statements = <Statement>[];
+    stmt.accept(continuationRewriter);
+
+    List<Statement> results = continuationRewriter.statements;
+    statements = savedInner;
+    continuationRewriter.statements = savedOuter;
+    if (!seenAwait && results.length == 1) return results.first;
+    statements.addAll(results.reversed);
+    return null;
   }
 }

@@ -8,18 +8,20 @@ import 'package:kernel/ast.dart'
     show
         AsExpression,
         Class,
+        Component,
+        DartType,
         ExpressionStatement,
         Field,
-        InvalidInitializer,
+        FunctionType,
         Library,
         Member,
         Procedure,
-        Component,
         StaticInvocation,
         SuperMethodInvocation,
         SuperPropertyGet,
         SuperPropertySet,
-        TreeNode;
+        TreeNode,
+        TypeParameter;
 
 import 'package:kernel/transformations/flags.dart' show TransformerFlag;
 
@@ -28,11 +30,11 @@ import 'package:kernel/verifier.dart' show VerifyingVisitor;
 import '../compiler_context.dart' show CompilerContext;
 
 import '../fasta_codes.dart'
-    show LocatedMessage, noLength, templateInternalVerificationError;
+    show LocatedMessage, noLength, templateInternalProblemVerificationError;
 
 import '../severity.dart' show Severity;
 
-import '../type_inference/type_schema.dart' show TypeSchemaVisitor, UnknownType;
+import '../type_inference/type_schema.dart' show UnknownType;
 
 import 'redirecting_factory_body.dart'
     show RedirectingFactoryBody, getRedirectingFactoryBody;
@@ -45,8 +47,7 @@ List<LocatedMessage> verifyComponent(Component component,
   return verifier.errors;
 }
 
-class FastaVerifyingVisitor extends VerifyingVisitor
-    implements TypeSchemaVisitor {
+class FastaVerifyingVisitor extends VerifyingVisitor {
   final List<LocatedMessage> errors = <LocatedMessage>[];
 
   Uri fileUri;
@@ -81,7 +82,7 @@ class FastaVerifyingVisitor extends VerifyingVisitor
   }
 
   void checkSuperInvocation(TreeNode node) {
-    var containingMember = getContainingMember(node);
+    Member containingMember = getContainingMember(node);
     if (containingMember == null) {
       problem(node, 'Super call outside of any member');
     } else {
@@ -106,7 +107,7 @@ class FastaVerifyingVisitor extends VerifyingVisitor
     int offset = node?.fileOffset ?? -1;
     Uri file = node?.location?.file ?? fileUri;
     Uri uri = file == null ? null : file;
-    LocatedMessage message = templateInternalVerificationError
+    LocatedMessage message = templateInternalProblemVerificationError
         .withArguments(details)
         .withLocation(uri, offset, noLength);
     CompilerContext.current.report(message, Severity.error);
@@ -117,7 +118,12 @@ class FastaVerifyingVisitor extends VerifyingVisitor
   visitAsExpression(AsExpression node) {
     super.visitAsExpression(node);
     if (node.fileOffset == -1) {
-      problem(node, "No offset for $node");
+      TreeNode parent = node.parent;
+      while (parent != null) {
+        if (parent.fileOffset != -1) break;
+        parent = parent.parent;
+      }
+      problem(parent, "No offset for $node", context: node);
     }
   }
 
@@ -159,14 +165,26 @@ class FastaVerifyingVisitor extends VerifyingVisitor
   }
 
   @override
-  visitInvalidInitializer(InvalidInitializer node) {
-    problem(node, "Invalid initializer.");
+  defaultDartType(DartType node) {
+    if (node is UnknownType) {
+      // Note: we can't pass [node] to [problem] because it's not a [TreeNode].
+      problem(null, "Unexpected appearance of the unknown type.");
+    }
+    super.defaultDartType(node);
   }
 
   @override
-  visitUnknownType(UnknownType node) {
-    // Note: we can't pass [node] to [problem] because it's not a [TreeNode].
-    problem(null, "Unexpected appearance of the unknown type.");
+  visitFunctionType(FunctionType node) {
+    if (node.typeParameters.isNotEmpty) {
+      for (TypeParameter typeParameter in node.typeParameters) {
+        if (typeParameter.parent != null) {
+          problem(
+              null,
+              "Type parameters of function types shouldn't have parents: "
+              "$node.");
+        }
+      }
+    }
   }
 
   @override

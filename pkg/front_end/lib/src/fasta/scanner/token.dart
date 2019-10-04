@@ -27,7 +27,7 @@ class StringToken extends analyzer.SimpleToken implements analyzer.StringToken {
    */
   static const int LAZY_THRESHOLD = 4;
 
-  var /* String | LazySubtring */ valueOrLazySubstring;
+  dynamic /* String | LazySubstring */ valueOrLazySubstring;
 
   /**
    * Creates a non-lazy string token. If [canonicalize] is true, the string
@@ -83,7 +83,7 @@ class StringToken extends analyzer.SimpleToken implements analyzer.StringToken {
       return valueOrLazySubstring;
     } else {
       assert(valueOrLazySubstring is _LazySubstring);
-      var data = valueOrLazySubstring.data;
+      dynamic data = valueOrLazySubstring.data;
       int start = valueOrLazySubstring.start;
       int end = start + valueOrLazySubstring.length;
       if (data is String) {
@@ -187,11 +187,43 @@ class CommentToken extends StringToken implements analyzer.CommentToken {
   }
 }
 
+/**
+ * A specialized comment token representing a language version
+ * (e.g. '// @dart = 2.1').
+ */
+class LanguageVersionToken extends CommentToken {
+  /**
+   * The major language version.
+   */
+  int major;
+
+  /**
+   * The minor language version.
+   */
+  int minor;
+
+  LanguageVersionToken.from(String text, int offset, this.major, this.minor)
+      : super.fromString(TokenType.SINGLE_LINE_COMMENT, text, offset);
+
+  LanguageVersionToken.fromSubstring(
+      String string, int start, int end, int tokenStart, this.major, this.minor,
+      {bool canonicalize})
+      : super.fromSubstring(
+            TokenType.SINGLE_LINE_COMMENT, string, start, end, tokenStart,
+            canonicalize: canonicalize);
+
+  LanguageVersionToken.fromUtf8Bytes(List<int> bytes, int start, int end,
+      int tokenStart, this.major, this.minor)
+      : super.fromUtf8Bytes(
+            TokenType.SINGLE_LINE_COMMENT, bytes, start, end, true, tokenStart);
+
+  @override
+  LanguageVersionToken copy() =>
+      new LanguageVersionToken.from(lexeme, offset, major, minor);
+}
+
 class DartDocToken extends CommentToken
     implements analyzer.DocumentationCommentToken {
-  @override
-  final List<Token> references = <Token>[];
-
   /**
    * Creates a lazy comment token. If [canonicalize] is true, the string
    * is canonicalized before the token is created.
@@ -214,12 +246,8 @@ class DartDocToken extends CommentToken
       : super._(type, valueOrLazySubstring, charOffset);
 
   @override
-  DartDocToken copy() {
-    DartDocToken copy =
-        new DartDocToken._(type, valueOrLazySubstring, charOffset);
-    references.forEach((ref) => copy.references.add(ref.copy()));
-    return copy;
-  }
+  DartDocToken copy() =>
+      new DartDocToken._(type, valueOrLazySubstring, charOffset);
 }
 
 /**
@@ -235,7 +263,7 @@ abstract class _LazySubstring {
   int get length;
 
   /**
-   * If this substring is based on a String, the [boolValue] indicates wheter
+   * If this substring is based on a String, the [boolValue] indicates whether
    * the resulting substring should be canonicalized.
    *
    * For substrings based on a byte array, the [boolValue] is true if the
@@ -268,7 +296,7 @@ abstract class _LazySubstring {
  * The file html_dart2js.dart is currently around 1MB.
  */
 class _CompactLazySubstring extends _LazySubstring {
-  final data;
+  final dynamic data;
   final int fields;
 
   _CompactLazySubstring(this.data, this.fields) : super.internal();
@@ -279,7 +307,7 @@ class _CompactLazySubstring extends _LazySubstring {
 }
 
 class _FullLazySubstring extends _LazySubstring {
-  final data;
+  final dynamic data;
   final int start;
   final int length;
   final bool boolValue;
@@ -306,6 +334,7 @@ bool isBinaryOperator(String value) {
       identical(value, "+") ||
       identical(value, "<<") ||
       identical(value, ">>") ||
+      identical(value, ">>>") ||
       identical(value, ">=") ||
       identical(value, ">") ||
       identical(value, "<=") ||

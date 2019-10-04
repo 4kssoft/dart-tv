@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -7,7 +7,7 @@
  */
 import 'dart:io';
 
-import 'package:analyzer/src/codegen/html.dart';
+import 'package:analysis_tool/html.dart';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as parser;
 import 'package:path/path.dart';
@@ -119,7 +119,7 @@ class ApiReader {
    */
   void checkAttributes(
       dom.Element element, List<String> requiredAttributes, String context,
-      {List<String> optionalAttributes: const []}) {
+      {List<String> optionalAttributes = const []}) {
     Set<String> attributesFound = new Set<String>();
     element.attributes.forEach((name, value) {
       if (!requiredAttributes.contains(name) &&
@@ -131,8 +131,8 @@ class ApiReader {
     });
     for (String expectedAttribute in requiredAttributes) {
       if (!attributesFound.contains(expectedAttribute)) {
-        throw new Exception('$context: ${element
-            .localName} must contain attribute $expectedAttribute');
+        throw new Exception(
+            '$context: ${element.localName} must contain attribute $expectedAttribute');
       }
     }
   }
@@ -214,7 +214,7 @@ class ApiReader {
     checkAttributes(html, ['event'], context,
         optionalAttributes: ['experimental']);
     bool experimental = html.attributes['experimental'] == 'true';
-    TypeDecl params;
+    TypeObject params;
     recurse(html, context, {
       'params': (dom.Element child) {
         params = typeObjectFromHtml(child, '$context.params');
@@ -368,8 +368,8 @@ class ApiReader {
     String kind = html.attributes['kind'];
     String context = kind != null ? kind : 'refactoring';
     checkAttributes(html, ['kind'], context);
-    TypeDecl feedback;
-    TypeDecl options;
+    TypeObject feedback;
+    TypeObject options;
     recurse(html, context, {
       'feedback': (dom.Element child) {
         feedback = typeObjectFromHtml(child, '$context.feedback');
@@ -425,8 +425,8 @@ class ApiReader {
         optionalAttributes: ['experimental', 'deprecated']);
     bool experimental = html.attributes['experimental'] == 'true';
     bool deprecated = html.attributes['deprecated'] == 'true';
-    TypeDecl params;
-    TypeDecl result;
+    TypeObject params;
+    TypeObject result;
     recurse(html, context, {
       'params': (dom.Element child) {
         params = typeObjectFromHtml(child, '$context.params');
@@ -526,8 +526,14 @@ class ApiReader {
     String name = html.attributes['name'];
     context = '$context.${name != null ? name : 'field'}';
     checkAttributes(html, ['name'], context,
-        optionalAttributes: ['optional', 'value', 'deprecated']);
+        optionalAttributes: [
+          'optional',
+          'value',
+          'deprecated',
+          'experimental'
+        ]);
     bool deprecated = html.attributes['deprecated'] == 'true';
+    bool experimental = html.attributes['experimental'] == 'true';
     bool optional = false;
     String optionalString = html.attributes['optional'];
     if (optionalString != null) {
@@ -546,7 +552,10 @@ class ApiReader {
     String value = html.attributes['value'];
     TypeDecl type = processContentsAsType(html, context);
     return new TypeObjectField(name, type, html,
-        optional: optional, value: value, deprecated: deprecated);
+        optional: optional,
+        value: value,
+        deprecated: deprecated,
+        experimental: experimental);
   }
 
   /**

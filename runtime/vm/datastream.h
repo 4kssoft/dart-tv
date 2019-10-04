@@ -80,10 +80,16 @@ class ReadStream : public ValueObject {
     current_ = buffer_ + value;
   }
 
+  void Align(intptr_t alignment) {
+    intptr_t position_before = Position();
+    intptr_t position_after = Utils::RoundUp(position_before, alignment);
+    Advance(position_after - position_before);
+  }
+
   const uint8_t* AddressOfCurrentPosition() const { return current_; }
 
   void Advance(intptr_t value) {
-    ASSERT((end_ - current_) > value);
+    ASSERT((end_ - current_) >= value);
     current_ = current_ + value;
   }
 
@@ -366,7 +372,7 @@ class WriteStream : public ValueObject {
     WriteByte(static_cast<uint8_t>(value + kEndUnsignedByteMarker));
   }
 
-  void WriteBytes(const uint8_t* addr, intptr_t len) {
+  void WriteBytes(const void* addr, intptr_t len) {
     if ((end_ - current_) < len) {
       Resize(len);
     }
@@ -383,6 +389,21 @@ class WriteStream : public ValueObject {
     ASSERT((end_ - current_) >= len);
     *reinterpret_cast<uword*>(current_) = value;
     current_ += len;
+  }
+
+  void WriteTargetWord(uword value) {
+#if defined(IS_SIMARM_X64)
+    RELEASE_ASSERT(Utils::IsInt(32, static_cast<word>(value)));
+    const intptr_t len = sizeof(uint32_t);
+    if ((end_ - current_) < len) {
+      Resize(len);
+    }
+    ASSERT((end_ - current_) >= len);
+    *reinterpret_cast<uint32_t*>(current_) = static_cast<uint32_t>(value);
+    current_ += len;
+#else   // defined(IS_SIMARM_X64)
+    WriteWord(value);
+#endif  // defined(IS_SIMARM_X64)
   }
 
   void Print(const char* format, ...) {
@@ -422,6 +443,17 @@ class WriteStream : public ValueObject {
       v = v >> kDataBitsPerByte;
     }
     WriteByte(static_cast<uint8_t>(v + kEndByteMarker));
+  }
+
+  template <typename T>
+  void WriteFixed(T value) {
+    const intptr_t len = sizeof(T);
+    if ((end_ - current_) < len) {
+      Resize(len);
+    }
+    ASSERT((end_ - current_) >= len);
+    *reinterpret_cast<T*>(current_) = static_cast<T>(value);
+    current_ += len;
   }
 
  private:

@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -57,9 +57,18 @@ class TopLevelDeclarationsTest extends AbstractSearchDomainTest {
     return null;
   }
 
+  test_extensionDeclaration() async {
+    createAnalysisOptionsFile(experiments: ['extension-methods']);
+    addTestFile('''
+extension MyExtension on int {}
+''');
+    await findTopLevelDeclarations('My*');
+    assertHasDeclaration(ElementKind.EXTENSION, 'MyExtension');
+  }
+
   test_invalidRegex() async {
     var result = await findTopLevelDeclarations('[A');
-    expect(result, new isInstanceOf<RequestError>());
+    expect(result, const TypeMatcher<RequestError>());
   }
 
   test_startEndPattern() async {
@@ -67,16 +76,18 @@ class TopLevelDeclarationsTest extends AbstractSearchDomainTest {
 class A {} // A
 class B = Object with A;
 typedef C();
-D() {}
-var E = null;
+typedef D();
+E() {}
+var F = null;
 class ABC {}
 ''');
-    await findTopLevelDeclarations('^[A-E]\$');
+    await findTopLevelDeclarations('^[A-F]\$');
     assertHasDeclaration(ElementKind.CLASS, 'A');
     assertHasDeclaration(ElementKind.CLASS, 'B');
     assertHasDeclaration(ElementKind.FUNCTION_TYPE_ALIAS, 'C');
-    assertHasDeclaration(ElementKind.FUNCTION, 'D');
-    assertHasDeclaration(ElementKind.TOP_LEVEL_VARIABLE, 'E');
+    assertHasDeclaration(ElementKind.FUNCTION_TYPE_ALIAS, 'D');
+    assertHasDeclaration(ElementKind.FUNCTION, 'E');
+    assertHasDeclaration(ElementKind.TOP_LEVEL_VARIABLE, 'F');
     assertNoDeclaration(ElementKind.CLASS, 'ABC');
   }
 }

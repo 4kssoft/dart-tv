@@ -4,11 +4,9 @@
 
 part of dart.collection;
 
-/**
- * This [Iterable] mixin implements all [Iterable] members except `iterator`.
- *
- * All other methods are implemented in terms of `iterator`.
- */
+/// This [Iterable] mixin implements all [Iterable] members except `iterator`.
+///
+/// All other methods are implemented in terms of `iterator`.
 abstract class IterableMixin<E> implements Iterable<E> {
   // This class has methods copied verbatim into:
   // - IterableBase
@@ -16,31 +14,23 @@ abstract class IterableMixin<E> implements Iterable<E> {
   // If changing a method here, also change the other copies.
 
   Iterable<R> cast<R>() => Iterable.castFrom<E, R>(this);
+  Iterable<T> map<T>(T f(E element)) => MappedIterable<E, T>(this, f);
 
-  @Deprecated("Use cast instead.")
-  Iterable<R> retype<R>() => cast<R>();
+  Iterable<E> where(bool f(E element)) => WhereIterable<E>(this, f);
 
-  Iterable<T> map<T>(T f(E element)) => new MappedIterable<E, T>(this, f);
-
-  Iterable<E> where(bool f(E element)) => new WhereIterable<E>(this, f);
-
-  // TODO(leafp): Restore this functionality once generic methods are enabled
-  // in the VM and dart2js.
-  // https://github.com/dart-lang/sdk/issues/32463
-  Iterable<T> whereType<T>() =>
-      throw new UnimplementedError("whereType is not yet supported");
+  Iterable<T> whereType<T>() => WhereTypeIterable<T>(this);
 
   Iterable<T> expand<T>(Iterable<T> f(E element)) =>
-      new ExpandIterable<E, T>(this, f);
+      ExpandIterable<E, T>(this, f);
 
   Iterable<E> followedBy(Iterable<E> other) {
     // Type workaround because IterableMixin<E> doesn't promote
     // to EfficientLengthIterable<E>.
     Iterable<E> self = this;
     if (self is EfficientLengthIterable<E>) {
-      return new FollowedByIterable<E>.firstEfficient(self, other);
+      return FollowedByIterable<E>.firstEfficient(self, other);
     }
-    return new FollowedByIterable<E>(this, other);
+    return FollowedByIterable<E>(this, other);
   }
 
   bool contains(Object element) {
@@ -82,7 +72,7 @@ abstract class IterableMixin<E> implements Iterable<E> {
   String join([String separator = ""]) {
     Iterator<E> iterator = this.iterator;
     if (!iterator.moveNext()) return "";
-    StringBuffer buffer = new StringBuffer();
+    StringBuffer buffer = StringBuffer();
     if (separator == null || separator == "") {
       do {
         buffer.write("${iterator.current}");
@@ -104,10 +94,10 @@ abstract class IterableMixin<E> implements Iterable<E> {
     return false;
   }
 
-  List<E> toList({bool growable: true}) =>
-      new List<E>.from(this, growable: growable);
+  List<E> toList({bool growable = true}) =>
+      List<E>.from(this, growable: growable);
 
-  Set<E> toSet() => new Set<E>.from(this);
+  Set<E> toSet() => Set<E>.from(this);
 
   int get length {
     assert(this is! EfficientLengthIterable);
@@ -124,19 +114,19 @@ abstract class IterableMixin<E> implements Iterable<E> {
   bool get isNotEmpty => !isEmpty;
 
   Iterable<E> take(int count) {
-    return new TakeIterable<E>(this, count);
+    return TakeIterable<E>(this, count);
   }
 
   Iterable<E> takeWhile(bool test(E value)) {
-    return new TakeWhileIterable<E>(this, test);
+    return TakeWhileIterable<E>(this, test);
   }
 
   Iterable<E> skip(int count) {
-    return new SkipIterable<E>(this, count);
+    return SkipIterable<E>(this, count);
   }
 
   Iterable<E> skipWhile(bool test(E value)) {
-    return new SkipWhileIterable<E>(this, test);
+    return SkipWhileIterable<E>(this, test);
   }
 
   E get first {
@@ -176,7 +166,7 @@ abstract class IterableMixin<E> implements Iterable<E> {
   }
 
   E lastWhere(bool test(E value), {E orElse()}) {
-    E result = null;
+    E result;
     bool foundMatching = false;
     for (E element in this) {
       if (test(element)) {
@@ -190,7 +180,7 @@ abstract class IterableMixin<E> implements Iterable<E> {
   }
 
   E singleWhere(bool test(E element), {E orElse()}) {
-    E result = null;
+    E result;
     bool foundMatching = false;
     for (E element in this) {
       if (test(element)) {
@@ -207,36 +197,32 @@ abstract class IterableMixin<E> implements Iterable<E> {
   }
 
   E elementAt(int index) {
-    if (index is! int) throw new ArgumentError.notNull("index");
+    ArgumentError.checkNotNull(index, "index");
     RangeError.checkNotNegative(index, "index");
     int elementIndex = 0;
     for (E element in this) {
       if (index == elementIndex) return element;
       elementIndex++;
     }
-    throw new RangeError.index(index, this, "index", null, elementIndex);
+    throw RangeError.index(index, this, "index", null, elementIndex);
   }
 
   String toString() => IterableBase.iterableToShortString(this, '(', ')');
 }
 
-/**
- * Base class for implementing [Iterable].
- *
- * This class implements all methods of [Iterable], except [Iterable.iterator],
- * in terms of `iterator`.
- */
+/// Base class for implementing [Iterable].
+///
+/// This class implements all methods of [Iterable], except [Iterable.iterator],
+/// in terms of `iterator`.
 abstract class IterableBase<E> extends Iterable<E> {
   const IterableBase();
 
-  /**
-   * Convert an `Iterable` to a string like [IterableBase.toString].
-   *
-   * Allows using other delimiters than '(' and ')'.
-   *
-   * Handles circular references where converting one of the elements
-   * to a string ends up converting [iterable] to a string again.
-   */
+  /// Convert an `Iterable` to a string like [IterableBase.toString].
+  ///
+  /// Allows using other delimiters than '(' and ')'.
+  ///
+  /// Handles circular references where converting one of the elements
+  /// to a string ends up converting [iterable] to a string again.
   static String iterableToShortString(Iterable iterable,
       [String leftDelimiter = '(', String rightDelimiter = ')']) {
     if (_isToStringVisiting(iterable)) {
@@ -246,7 +232,7 @@ abstract class IterableBase<E> extends Iterable<E> {
       }
       return "$leftDelimiter...$rightDelimiter";
     }
-    List parts = [];
+    List<String> parts = <String>[];
     _toStringVisiting.add(iterable);
     try {
       _iterablePartsToStrings(iterable, parts);
@@ -254,30 +240,28 @@ abstract class IterableBase<E> extends Iterable<E> {
       assert(identical(_toStringVisiting.last, iterable));
       _toStringVisiting.removeLast();
     }
-    return (new StringBuffer(leftDelimiter)
+    return (StringBuffer(leftDelimiter)
           ..writeAll(parts, ", ")
           ..write(rightDelimiter))
         .toString();
   }
 
-  /**
-   * Converts an `Iterable` to a string.
-   *
-   * Converts each elements to a string, and separates the results by ", ".
-   * Then wraps the result in [leftDelimiter] and [rightDelimiter].
-   *
-   * Unlike [iterableToShortString], this conversion doesn't omit any
-   * elements or puts any limit on the size of the result.
-   *
-   * Handles circular references where converting one of the elements
-   * to a string ends up converting [iterable] to a string again.
-   */
+  /// Converts an `Iterable` to a string.
+  ///
+  /// Converts each elements to a string, and separates the results by ", ".
+  /// Then wraps the result in [leftDelimiter] and [rightDelimiter].
+  ///
+  /// Unlike [iterableToShortString], this conversion doesn't omit any
+  /// elements or puts any limit on the size of the result.
+  ///
+  /// Handles circular references where converting one of the elements
+  /// to a string ends up converting [iterable] to a string again.
   static String iterableToFullString(Iterable iterable,
       [String leftDelimiter = '(', String rightDelimiter = ')']) {
     if (_isToStringVisiting(iterable)) {
       return "$leftDelimiter...$rightDelimiter";
     }
-    StringBuffer buffer = new StringBuffer(leftDelimiter);
+    StringBuffer buffer = StringBuffer(leftDelimiter);
     _toStringVisiting.add(iterable);
     try {
       buffer.writeAll(iterable, ", ");
@@ -290,10 +274,10 @@ abstract class IterableBase<E> extends Iterable<E> {
   }
 }
 
-/** A collection used to identify cyclic lists during toString() calls. */
+/// A collection used to identify cyclic lists during toString() calls.
 final List _toStringVisiting = [];
 
-/** Check if we are currently visiting `o` in a toString call. */
+/// Check if we are currently visiting `o` in a toString call.
 bool _isToStringVisiting(Object o) {
   for (int i = 0; i < _toStringVisiting.length; i++) {
     if (identical(o, _toStringVisiting[i])) return true;
@@ -301,10 +285,8 @@ bool _isToStringVisiting(Object o) {
   return false;
 }
 
-/**
- * Convert elements of [iterable] to strings and store them in [parts].
- */
-void _iterablePartsToStrings(Iterable iterable, List parts) {
+/// Convert elements of [iterable] to strings and store them in [parts].
+void _iterablePartsToStrings(Iterable iterable, List<String> parts) {
   /*
    * This is the complicated part of [iterableToShortString].
    * It is extracted as a separate function to avoid having too much code
@@ -345,8 +327,8 @@ void _iterablePartsToStrings(Iterable iterable, List parts) {
 
   // Find last two elements. One or more of them may already be in the
   // parts array. Include their length in `length`.
-  var penultimate = null;
-  var ultimate = null;
+  Object penultimate;
+  Object ultimate;
   if (!it.moveNext()) {
     if (count <= headCount + tailCount) return;
     ultimateString = parts.removeLast();
@@ -396,7 +378,7 @@ void _iterablePartsToStrings(Iterable iterable, List parts) {
 
   // If there is a gap between the initial run and the last two,
   // prepare to add an ellipsis.
-  String elision = null;
+  String elision;
   if (count > parts.length + tailCount) {
     elision = "...";
     length += ellipsisSize + overhead;

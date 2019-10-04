@@ -1,11 +1,14 @@
 // Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-#ifndef PRODUCT
+#include "vm/globals.h"
+#if !defined(PRODUCT) && !defined(DART_PRECOMPILED_RUNTIME)
 #include "vm/source_report.h"
 
+#include "vm/bit_vector.h"
 #include "vm/compiler/jit/compiler.h"
 #include "vm/isolate.h"
+#include "vm/kernel_loader.h"
 #include "vm/object.h"
 #include "vm/object_store.h"
 #include "vm/profiler.h"
@@ -55,8 +58,7 @@ void SourceReport::Init(Thread* thread,
     // Build the profile.
     SampleFilter samplesForIsolate(thread_->isolate()->main_port(),
                                    Thread::kMutatorTask, -1, -1);
-    profile_.Build(thread, &samplesForIsolate, Profiler::sample_buffer(),
-                   Profile::kNoTags);
+    profile_.Build(thread, &samplesForIsolate, Profiler::sample_buffer());
   }
 }
 
@@ -86,10 +88,15 @@ bool SourceReport::ShouldSkipFunction(const Function& func) {
     }
   }
 
+  // These don't have unoptimized code and are only used for synthetic stubs.
+  if (func.ForceOptimize()) return true;
+
   switch (func.kind()) {
     case RawFunction::kRegularFunction:
     case RawFunction::kClosureFunction:
     case RawFunction::kImplicitClosureFunction:
+    case RawFunction::kImplicitStaticGetter:
+    case RawFunction::kFieldInitializer:
     case RawFunction::kGetterFunction:
     case RawFunction::kSetterFunction:
     case RawFunction::kConstructor:
@@ -98,10 +105,14 @@ bool SourceReport::ShouldSkipFunction(const Function& func) {
       return true;
   }
   if (func.is_abstract() || func.IsImplicitConstructor() ||
-      func.IsRedirectingFactory()) {
+      func.IsRedirectingFactory() || func.is_no_such_method_forwarder()) {
     return true;
   }
-  if (func.IsNonImplicitClosureFunction() &&
+  // Note that context_scope() remains null for closures declared in bytecode,
+  // because the same information is retrieved from the parent's local variable
+  // descriptors.
+  // See IsLocalFunction() case in BytecodeReader::ComputeLocalVarDescriptors.
+  if (!func.is_declared_in_bytecode() && func.IsNonImplicitClosureFunction() &&
       (func.context_scope() == ContextScope::null())) {
     // TODO(iposva): This can arise if we attempt to compile an inner function
     // before we have compiled its enclosing function or if the enclosing
@@ -111,16 +122,41 @@ bool SourceReport::ShouldSkipFunction(const Function& func) {
   return false;
 }
 
+bool SourceReport::ShouldSkipField(const Field& field) {
+  if (!field.token_pos().IsReal() || !field.end_token_pos().IsReal()) {
+    // At least one of the token positions is not known.
+    return true;
+  }
+
+  if (script_ != NULL && !script_->IsNull()) {
+    if (field.Script() != script_->raw()) {
+      // The field is from the wrong script.
+      return true;
+    }
+    if (((start_pos_ > TokenPosition::kMinSource) &&
+         (field.end_token_pos() < start_pos_)) ||
+        ((end_pos_ > TokenPosition::kMinSource) &&
+         (field.token_pos() > end_pos_))) {
+      // The field does not intersect with the requested token range.
+      return true;
+    }
+  }
+  return false;
+}
+
 intptr_t SourceReport::GetScriptIndex(const Script& script) {
+  ScriptTableEntry wrapper;
   const String& url = String::Handle(zone(), script.url());
-  ScriptTableEntry* pair = script_table_.LookupValue(&url);
+  wrapper.key = &url;
+  wrapper.script = &Script::Handle(zone(), script.raw());
+  ScriptTableEntry* pair = script_table_.LookupValue(&wrapper);
   if (pair != NULL) {
     return pair->index;
   }
   ScriptTableEntry* tmp = new ScriptTableEntry();
   tmp->key = &url;
   tmp->index = next_script_index_++;
-  tmp->script = &Script::Handle(zone(), script.raw());
+  tmp->script = wrapper.script;
   script_table_entries_.Add(tmp);
   script_table_.Insert(tmp);
   ASSERT(script_table_entries_.length() == next_script_index_);
@@ -139,7 +175,10 @@ void SourceReport::VerifyScriptTable() {
     ASSERT(i == index);
     const String& url2 = String::Handle(zone(), script->url());
     ASSERT(url2.Equals(*url));
-    ScriptTableEntry* pair = script_table_.LookupValue(&url2);
+    ScriptTableEntry wrapper;
+    wrapper.key = &url2;
+    wrapper.script = &Script::Handle(zone(), script->raw());
+    ScriptTableEntry* pair = script_table_.LookupValue(&wrapper);
     ASSERT(i == pair->index);
   }
 }
@@ -159,6 +198,10 @@ bool SourceReport::ScriptIsLoadedByLibrary(const Script& script,
 void SourceReport::PrintCallSitesData(JSONObject* jsobj,
                                       const Function& function,
                                       const Code& code) {
+  if (code.IsNull()) {
+    // TODO(regis): implement for bytecode.
+    return;
+  }
   const TokenPosition begin_pos = function.token_pos();
   const TokenPosition end_pos = function.end_token_pos();
 
@@ -198,6 +241,10 @@ void SourceReport::PrintCallSitesData(JSONObject* jsobj,
 void SourceReport::PrintCoverageData(JSONObject* jsobj,
                                      const Function& function,
                                      const Code& code) {
+  if (code.IsNull()) {
+    // TODO(regis): implement for bytecode.
+    return;
+  }
   const TokenPosition begin_pos = function.token_pos();
   const TokenPosition end_pos = function.end_token_pos();
 
@@ -280,36 +327,74 @@ void SourceReport::PrintCoverageData(JSONObject* jsobj,
 void SourceReport::PrintPossibleBreakpointsData(JSONObject* jsobj,
                                                 const Function& func,
                                                 const Code& code) {
-  const uint8_t kSafepointKind =
-      (RawPcDescriptors::kIcCall | RawPcDescriptors::kUnoptStaticCall |
-       RawPcDescriptors::kRuntimeCall);
   const TokenPosition begin_pos = func.token_pos();
   const TokenPosition end_pos = func.end_token_pos();
-
-  const PcDescriptors& descriptors =
-      PcDescriptors::Handle(zone(), code.pc_descriptors());
-
   intptr_t func_length = (end_pos.Pos() - begin_pos.Pos()) + 1;
-  GrowableArray<char> possible(func_length);
-  possible.SetLength(func_length);
-  for (int i = 0; i < func_length; i++) {
-    possible[i] = false;
-  }
 
-  PcDescriptors::Iterator iter(descriptors, kSafepointKind);
-  while (iter.MoveNext()) {
-    const TokenPosition token_pos = iter.TokenPos();
-    if ((token_pos < begin_pos) || (token_pos > end_pos)) {
-      // Does not correspond to a valid source position.
-      continue;
+  BitVector possible(zone(), func_length);
+
+  if (code.IsNull()) {
+    const Bytecode& bytecode = Bytecode::Handle(func.bytecode());
+    ASSERT(!bytecode.IsNull());
+    kernel::BytecodeSourcePositionsIterator iter(zone(), bytecode);
+    intptr_t token_offset = -1;
+    uword pc_offset = kUwordMax;
+    // Ignore all possible breakpoint positions until the first DebugCheck
+    // opcode of the function.
+    const uword debug_check_pc = bytecode.GetFirstDebugCheckOpcodePc();
+    if (debug_check_pc != 0) {
+      const uword debug_check_pc_offset =
+          debug_check_pc - bytecode.PayloadStart();
+      while (iter.MoveNext()) {
+        if (pc_offset != kUwordMax) {
+          // Check that there is at least one 'debug checked' opcode in the last
+          // source position range.
+          if (bytecode.GetDebugCheckedOpcodeReturnAddress(
+                  pc_offset, iter.PcOffset()) != 0) {
+            possible.Add(token_offset);
+          }
+          pc_offset = kUwordMax;
+        }
+        const TokenPosition token_pos = iter.TokenPos();
+        if ((token_pos < begin_pos) || (token_pos > end_pos)) {
+          // Does not correspond to a valid source position.
+          continue;
+        }
+        if (iter.PcOffset() < debug_check_pc_offset) {
+          // No breakpoints in prologue.
+          continue;
+        }
+        pc_offset = iter.PcOffset();
+        token_offset = token_pos.Pos() - begin_pos.Pos();
+      }
     }
-    intptr_t token_offset = token_pos.Pos() - begin_pos.Pos();
-    possible[token_offset] = true;
+    if (pc_offset != kUwordMax && bytecode.GetDebugCheckedOpcodeReturnAddress(
+                                      pc_offset, bytecode.Size()) != 0) {
+      possible.Add(token_offset);
+    }
+  } else {
+    const uint8_t kSafepointKind =
+        (RawPcDescriptors::kIcCall | RawPcDescriptors::kUnoptStaticCall |
+         RawPcDescriptors::kRuntimeCall);
+
+    const PcDescriptors& descriptors =
+        PcDescriptors::Handle(zone(), code.pc_descriptors());
+
+    PcDescriptors::Iterator iter(descriptors, kSafepointKind);
+    while (iter.MoveNext()) {
+      const TokenPosition token_pos = iter.TokenPos();
+      if ((token_pos < begin_pos) || (token_pos > end_pos)) {
+        // Does not correspond to a valid source position.
+        continue;
+      }
+      intptr_t token_offset = token_pos.Pos() - begin_pos.Pos();
+      possible.Add(token_offset);
+    }
   }
 
   JSONArray bpts(jsobj, "possibleBreakpoints");
   for (int i = 0; i < func_length; i++) {
-    if (possible[i]) {
+    if (possible.Contains(i)) {
       // Add the token position.
       bpts.AddValue(begin_pos.Pos() + i);
     }
@@ -383,7 +468,16 @@ void SourceReport::VisitFunction(JSONArray* jsarr, const Function& func) {
   const TokenPosition end_pos = func.end_token_pos();
 
   Code& code = Code::Handle(zone(), func.unoptimized_code());
-  if (code.IsNull()) {
+  Bytecode& bytecode = Bytecode::Handle(zone());
+  if (FLAG_enable_interpreter && !func.HasCode() && func.HasBytecode()) {
+    // When the bytecode of a function is loaded, the function code is not null,
+    // but pointing to the stub to interpret the bytecode. The various Print
+    // functions below take code as an argument and know to process the bytecode
+    // if code is null.
+    code = Code::null();  // Ignore installed stub to interpret bytecode.
+    bytecode = func.bytecode();
+  }
+  if (code.IsNull() && bytecode.IsNull()) {
     if (func.HasCode() || (compile_mode_ == kForceCompile)) {
       const Error& err =
           Error::Handle(Compiler::EnsureUnoptimizedCode(thread(), func));
@@ -398,6 +492,10 @@ void SourceReport::VisitFunction(JSONArray* jsarr, const Function& func) {
         return;
       }
       code = func.unoptimized_code();
+      if (FLAG_enable_interpreter && !func.HasCode() && func.HasBytecode()) {
+        code = Code::null();  // Ignore installed stub to interpret bytecode.
+        bytecode = func.bytecode();
+      }
     } else {
       // This function has not been compiled yet.
       JSONObject range(jsarr);
@@ -408,69 +506,77 @@ void SourceReport::VisitFunction(JSONArray* jsarr, const Function& func) {
       return;
     }
   }
-  ASSERT(!code.IsNull());
+  ASSERT(!code.IsNull() || !bytecode.IsNull());
 
   // We skip compiled async functions.  Once an async function has
   // been compiled, there is another function with the same range which
   // actually contains the user code.
-  if (func.IsAsyncFunction() || func.IsAsyncGenerator() ||
-      func.IsSyncGenerator()) {
-    return;
-  }
+  if (!func.IsAsyncFunction() && !func.IsAsyncGenerator() &&
+      !func.IsSyncGenerator()) {
+    JSONObject range(jsarr);
+    range.AddProperty("scriptIndex", GetScriptIndex(script));
+    range.AddProperty("startPos", begin_pos);
+    range.AddProperty("endPos", end_pos);
+    range.AddProperty("compiled", true);  // bytecode or code.
 
-  JSONObject range(jsarr);
-  range.AddProperty("scriptIndex", GetScriptIndex(script));
-  range.AddProperty("startPos", begin_pos);
-  range.AddProperty("endPos", end_pos);
-  range.AddProperty("compiled", true);
-
-  if (IsReportRequested(kCallSites)) {
-    PrintCallSitesData(&range, func, code);
-  }
-  if (IsReportRequested(kCoverage)) {
-    PrintCoverageData(&range, func, code);
-  }
-  if (IsReportRequested(kPossibleBreakpoints)) {
-    PrintPossibleBreakpointsData(&range, func, code);
-  }
-  if (IsReportRequested(kProfile)) {
-    ProfileFunction* profile_function = profile_.FindFunction(func);
-    if ((profile_function != NULL) &&
-        (profile_function->NumSourcePositions() > 0)) {
-      PrintProfileData(&range, profile_function);
+    if (IsReportRequested(kCallSites)) {
+      PrintCallSitesData(&range, func, code);
+    }
+    if (IsReportRequested(kCoverage)) {
+      PrintCoverageData(&range, func, code);
+    }
+    if (IsReportRequested(kPossibleBreakpoints)) {
+      PrintPossibleBreakpointsData(&range, func, code);
+    }
+    if (IsReportRequested(kProfile)) {
+      ProfileFunction* profile_function = profile_.FindFunction(func);
+      if ((profile_function != NULL) &&
+          (profile_function->NumSourcePositions() > 0)) {
+        PrintProfileData(&range, profile_function);
+      }
     }
   }
+}
+
+void SourceReport::VisitField(JSONArray* jsarr, const Field& field) {
+  if (ShouldSkipField(field) || !field.HasInitializerFunction()) return;
+  const Function& func = Function::Handle(field.InitializerFunction());
+  VisitFunction(jsarr, func);
 }
 
 void SourceReport::VisitLibrary(JSONArray* jsarr, const Library& lib) {
   Class& cls = Class::Handle(zone());
   Array& functions = Array::Handle(zone());
+  Array& fields = Array::Handle(zone());
   Function& func = Function::Handle(zone());
+  Field& field = Field::Handle(zone());
   Script& script = Script::Handle(zone());
   ClassDictionaryIterator it(lib, ClassDictionaryIterator::kIteratePrivate);
   while (it.HasNext()) {
     cls = it.GetNextClass();
     if (!cls.is_finalized()) {
       if (compile_mode_ == kForceCompile) {
-        const Error& err = Error::Handle(cls.EnsureIsFinalized(thread()));
+        Error& err = Error::Handle(cls.EnsureIsFinalized(thread()));
         if (!err.IsNull()) {
           // Emit an uncompiled range for this class with error information.
           JSONObject range(jsarr);
           script = cls.script();
           range.AddProperty("scriptIndex", GetScriptIndex(script));
           range.AddProperty("startPos", cls.token_pos());
-          range.AddProperty("endPos", cls.ComputeEndTokenPos());
+          range.AddProperty("endPos", cls.end_token_pos());
           range.AddProperty("compiled", false);
           range.AddProperty("error", err);
           continue;
         }
+        ASSERT(cls.is_finalized());
       } else {
+        cls.EnsureDeclarationLoaded();
         // Emit one range for the whole uncompiled class.
         JSONObject range(jsarr);
         script = cls.script();
         range.AddProperty("scriptIndex", GetScriptIndex(script));
         range.AddProperty("startPos", cls.token_pos());
-        range.AddProperty("endPos", cls.ComputeEndTokenPos());
+        range.AddProperty("endPos", cls.end_token_pos());
         range.AddProperty("compiled", false);
         continue;
       }
@@ -479,12 +585,27 @@ void SourceReport::VisitLibrary(JSONArray* jsarr, const Library& lib) {
     functions = cls.functions();
     for (int i = 0; i < functions.Length(); i++) {
       func ^= functions.At(i);
+      // Skip getter functions of static const field.
+      if (func.kind() == RawFunction::kImplicitStaticGetter) {
+        field ^= func.accessor_field();
+        if (field.is_const() && field.is_static()) {
+          continue;
+        }
+      }
       VisitFunction(jsarr, func);
+    }
+
+    fields = cls.fields();
+    for (intptr_t i = 0; i < fields.Length(); i++) {
+      field ^= fields.At(i);
+      VisitField(jsarr, field);
     }
   }
 }
 
 void SourceReport::VisitClosures(JSONArray* jsarr) {
+  // Note that closures declared in bytecode are not visited here, but in
+  // VisitFunction while traversing the object pool of their owner functions.
   const GrowableObjectArray& closures = GrowableObjectArray::Handle(
       thread()->isolate()->object_store()->closure_functions());
 
@@ -530,4 +651,4 @@ void SourceReport::PrintJSON(JSONStream* js,
 }
 
 }  // namespace dart
-#endif  // PRODUCT
+#endif  // !defined(PRODUCT) && !defined(DART_PRECOMPILED_RUNTIME)

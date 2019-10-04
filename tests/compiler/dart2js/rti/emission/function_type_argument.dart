@@ -3,27 +3,28 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:expect/expect.dart';
-import 'package:meta/dart2js.dart';
 
-/*class: C:checks=[],functionType,instance,typeArgument*/
+/*strong.class: C:checkedInstance,checks=[],instance,typeArgument*/
+/*omit.class: C:checks=[],instance,typeArgument*/
 class C {
   call(int i) {}
 }
 
-/*class: D:checks=[],functionType,instance,typeArgument*/
+/*strong.class: D:checkedInstance,checks=[],instance,typeArgument*/
+/*omit.class: D:checks=[],instance,typeArgument*/
 class D {
   call(double i) {}
 }
 
-@noInline
+@pragma('dart2js:noInline')
 test1(o) => o is Function(int);
 
-@noInline
+@pragma('dart2js:noInline')
 test2(o) => o is List<Function(int)>;
 
 main() {
-  Expect.isTrue(test1(new C()));
+  Expect.isFalse(test1(new C()));
   Expect.isFalse(test1(new D()));
-  Expect.isTrue(test2(<C>[]));
+  Expect.isFalse(test2(<C>[]));
   Expect.isFalse(test2(<D>[]));
 }

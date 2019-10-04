@@ -64,7 +64,8 @@ class RangeBoundary : public ValueObject {
   static RangeBoundary FromDefinition(Definition* defn, int64_t offs = 0);
 
   static bool IsValidOffsetForSymbolicRangeBoundary(int64_t offset) {
-    if ((offset > (kMaxInt64 - kSmiMax)) || (offset < (kMinInt64 - kSmiMin))) {
+    if ((offset > (kMaxInt64 - compiler::target::kSmiMax)) ||
+        (offset < (kMinInt64 - compiler::target::kSmiMin))) {
       // Avoid creating symbolic range boundaries which can wrap around.
       return false;
     }
@@ -72,16 +73,20 @@ class RangeBoundary : public ValueObject {
   }
 
   // Construct a RangeBoundary for the constant MinSmi value.
-  static RangeBoundary MinSmi() { return FromConstant(Smi::kMinValue); }
+  static RangeBoundary MinSmi() {
+    return FromConstant(compiler::target::kSmiMin);
+  }
 
   // Construct a RangeBoundary for the constant MaxSmi value.
-  static RangeBoundary MaxSmi() { return FromConstant(Smi::kMaxValue); }
+  static RangeBoundary MaxSmi() {
+    return FromConstant(compiler::target::kSmiMax);
+  }
 
   // Construct a RangeBoundary for the constant kMin value.
   static RangeBoundary MinConstant(RangeSize size) {
     switch (size) {
       case kRangeBoundarySmi:
-        return FromConstant(Smi::kMinValue);
+        return FromConstant(compiler::target::kSmiMin);
       case kRangeBoundaryInt32:
         return FromConstant(kMinInt32);
       case kRangeBoundaryInt64:
@@ -94,7 +99,7 @@ class RangeBoundary : public ValueObject {
   static RangeBoundary MaxConstant(RangeSize size) {
     switch (size) {
       case kRangeBoundarySmi:
-        return FromConstant(Smi::kMaxValue);
+        return FromConstant(compiler::target::kSmiMax);
       case kRangeBoundaryInt32:
         return FromConstant(kMaxInt32);
       case kRangeBoundaryInt64:
@@ -138,7 +143,8 @@ class RangeBoundary : public ValueObject {
 
   // Returns true when this is a constant that is outside of Smi range.
   bool OverflowedSmi() const {
-    return (IsConstant() && !Smi::IsValid(ConstantValue())) || IsInfinity();
+    return (IsConstant() && !compiler::target::IsSmi(ConstantValue())) ||
+           IsInfinity();
   }
 
   bool Overflowed(RangeBoundary::RangeSize size) const {
@@ -244,8 +250,10 @@ class RangeBoundary : public ValueObject {
                            int64_t shift_count) {
     ASSERT(value_boundary.IsConstant());
     ASSERT(shift_count >= 0);
-    int64_t value = static_cast<int64_t>(value_boundary.ConstantValue());
-    int64_t result = value >> shift_count;
+    const int64_t value = static_cast<int64_t>(value_boundary.ConstantValue());
+    const int64_t result = (shift_count <= 63)
+                               ? (value >> shift_count)
+                               : (value >= 0 ? 0 : -1);  // Dart semantics
     return RangeBoundary(result);
   }
 
@@ -436,6 +444,16 @@ class Range : public ZoneAllocated {
                   const Range* right_range,
                   RangeBoundary* min,
                   RangeBoundary* max);
+
+  static void TruncDiv(const Range* left_range,
+                       const Range* right_range,
+                       RangeBoundary* min,
+                       RangeBoundary* max);
+
+  static void Mod(const Range* right_range,
+                  RangeBoundary* min,
+                  RangeBoundary* max);
+
   static void Shr(const Range* left_range,
                   const Range* right_range,
                   RangeBoundary* min,
@@ -538,8 +556,8 @@ class RangeAnalysis : public ValueObject {
   enum JoinOperator { NONE, WIDEN, NARROW };
   static char OpPrefix(JoinOperator op);
 
-  // Collect all values that were proven to be smi in smi_values_ array and all
-  // CheckSmi instructions in smi_check_ array.
+  // Collect all integer values (smi or int), all 64-bit binary
+  // and shift operations, and all check bounds.
   void CollectValues();
 
   // Iterate over smi values and constrain them at branch successors.
@@ -560,7 +578,9 @@ class RangeAnalysis : public ValueObject {
                                        Instruction* after);
 
   bool ConstrainValueAfterBranch(Value* use, Definition* defn);
-  void ConstrainValueAfterCheckArrayBound(Value* use, Definition* defn);
+  void ConstrainValueAfterCheckBound(Value* use,
+                                     CheckBoundBase* check,
+                                     Definition* defn);
 
   // Infer ranges for integer (smi or mint) definitions.
   void InferRanges();
@@ -583,8 +603,6 @@ class RangeAnalysis : public ValueObject {
   // Convert mint operations that stay within int32 range into Int32 operations.
   void NarrowMintToInt32();
 
-  void DiscoverSimpleInductionVariables();
-
   // Remove artificial Constraint instructions and replace them with actual
   // unconstrained definitions.
   void RemoveConstraints();
@@ -600,15 +618,15 @@ class RangeAnalysis : public ValueObject {
 
   Range int64_range_;
 
-  // Value that are known to be smi or mint.
+  // All values that are known to be smi or mint.
   GrowableArray<Definition*> values_;
 
+  // All 64-bit binary and shift operations.
   GrowableArray<BinaryInt64OpInstr*> binary_int64_ops_;
+  GrowableArray<ShiftIntegerOpInstr*> shift_int64_ops_;
 
-  GrowableArray<ShiftInt64OpInstr*> shift_int64_ops_;
-
-  // All CheckArrayBound instructions.
-  GrowableArray<CheckArrayBoundInstr*> bounds_checks_;
+  // All CheckArrayBound/GenericCheckBound instructions.
+  GrowableArray<CheckBoundBase*> bounds_checks_;
 
   // All Constraints inserted during InsertConstraints phase. They are treated
   // as smi values.

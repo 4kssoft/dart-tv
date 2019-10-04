@@ -10,7 +10,7 @@ class I<T> {}
 /*class: J:checkedInstance*/
 class J<T> {}
 
-/*class: S:checkedInstance,checks=[]*/
+/*class: S:checkedInstance,checks=[],indirectInstance*/
 class S<T> {}
 
 /*class: M:checkedInstance,checks=[]*/
@@ -26,7 +26,7 @@ class A<U, V> = Object with M<Map<U, V>> implements I<V>;
 /*class: C:checks=[$asA,$asI,$asJ,$asM,$asS,$isA,$isI,$isJ],instance*/
 class C<T, K> = S<T> with A<T, List<K>> implements J<K>;
 
-@NoInline()
+@pragma('dart2js:noInline')
 test(c) {
   Expect.equals("Map<int, List<bool>>", c.t().toString());
   Expect.isTrue(c is I<List<bool>>);

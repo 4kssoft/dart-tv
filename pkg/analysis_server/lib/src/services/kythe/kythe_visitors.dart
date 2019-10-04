@@ -1,21 +1,22 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:convert';
 
+import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/ast/ast.dart';
-import 'package:analyzer/dart/ast/standard_resolution_map.dart';
 import 'package:analyzer/dart/ast/syntactic_entity.dart';
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/element/element.dart';
+import 'package:analyzer/dart/element/nullability_suffix.dart';
 import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer/dart/element/visitor.dart';
 import 'package:analyzer/file_system/file_system.dart';
-import 'package:analyzer/src/dart/resolver/inheritance_manager.dart';
-import 'package:analyzer/src/generated/bazel.dart';
-import 'package:analyzer/src/generated/gn.dart';
+import 'package:analyzer/src/dart/element/inheritance_manager3.dart';
+import 'package:analyzer/src/workspace/bazel.dart';
+import 'package:analyzer/src/workspace/gn.dart';
 import 'package:analyzer_plugin/protocol/protocol_common.dart'
     show KytheEntry, KytheVName;
 
@@ -30,7 +31,7 @@ String _computeConstructorElementName(ConstructorElement element) {
   assert(element != null);
   var name = element.enclosingElement.name;
   var constructorName = element.name;
-  if (!constructorName.isEmpty) {
+  if (constructorName.isNotEmpty) {
     name = name + '.' + constructorName;
   }
   return name;
@@ -83,6 +84,7 @@ String _getSignature(ResourceProvider provider, Element element,
 
 class CodedBufferWriter {
   CodedBufferWriter(var v);
+
   toBuffer() {}
 }
 
@@ -93,12 +95,14 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
   final ResourceProvider resourceProvider;
   final List<KytheEntry> entries;
   final String corpus;
-  final InheritanceManager _inheritanceManager;
+  final InheritanceManager3 _inheritanceManager;
   final String _contents;
 
   String _enclosingFilePath = '';
+  FeatureSet _enclosingUnitFeatureSet;
   Element _enclosingElement;
   ClassElement _enclosingClassElement;
+  InterfaceType _enclosingClassThisType;
   KytheVName _enclosingVName;
   KytheVName _enclosingFileVName;
   KytheVName _enclosingClassVName;
@@ -128,7 +132,7 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
     if (refVName != null) {
       var parentNode = node.parent;
       if (parentNode is Declaration) {
-        Element parentElement = parentNode.element;
+        Element parentElement = parentNode.declaredElement;
         if (parentNode is TopLevelVariableDeclaration) {
           _handleVariableDeclarationListAnnotations(
               parentNode.variables, refVName);
@@ -164,7 +168,7 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
     // we are looking for an operator such as +=, -=, *=, /=
     //
     Token operator = node.operator;
-    MethodElement element = node.bestElement;
+    MethodElement element = node.staticElement;
     if (operator.type != TokenType.EQ && element != null) {
       // method
       _vNameFromElement(element, schema.FUNCTION_KIND);
@@ -185,7 +189,7 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
     //
     // operators such as +, -, *, /
     //
-    MethodElement element = node.bestElement;
+    MethodElement element = node.staticElement;
     if (element != null) {
       // method
       _vNameFromElement(element, schema.FUNCTION_KIND);
@@ -203,7 +207,7 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
 
   @override
   visitClassDeclaration(ClassDeclaration node) {
-    return _withEnclosingElement(node.element, () {
+    return _withEnclosingElement(node.declaredElement, () {
       // record/ class node
       addNodeAndFacts(schema.RECORD_KIND,
           nodeVName: _enclosingClassVName,
@@ -273,7 +277,7 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
 
   @override
   visitClassTypeAlias(ClassTypeAlias node) {
-    return _withEnclosingElement(node.element, () {
+    return _withEnclosingElement(node.declaredElement, () {
       // record/ class node
       addNodeAndFacts(schema.RECORD_KIND,
           nodeVName: _enclosingClassVName,
@@ -295,7 +299,7 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
       // ClassDeclarations) and super.visitClassTypeAlias is not sufficient.
       //
       _handleRefEdge(
-        node.superclass.name.bestElement,
+        node.superclass.name.staticElement,
         const <String>[schema.REF_EDGE],
         syntacticEntity: node.superclass,
       );
@@ -303,7 +307,7 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
       // by visitClassDeclaration()
       // extends
       var recordSupertypeVName = _vNameFromElement(
-          node.superclass.name.bestElement, schema.RECORD_KIND);
+          node.superclass.name.staticElement, schema.RECORD_KIND);
       addEdge(_enclosingClassVName, schema.EXTENDS_EDGE, recordSupertypeVName);
 
       // implements
@@ -338,8 +342,9 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
 
   @override
   visitCompilationUnit(CompilationUnit node) {
-    _enclosingFilePath = _getPath(resourceProvider, node.element);
-    return _withEnclosingElement(node.element, () {
+    _enclosingFilePath = _getPath(resourceProvider, node.declaredElement);
+    _enclosingUnitFeatureSet = node.featureSet;
+    return _withEnclosingElement(node.declaredElement, () {
       addFact(_enclosingFileVName, schema.NODE_KIND_FACT,
           _encode(schema.FILE_KIND));
       addFact(_enclosingFileVName, schema.TEXT_FACT, _encode(_contents));
@@ -352,9 +357,8 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
 
       // Don't use visitLibraryDirective as this won't generate a package
       // VName for libraries that don't have a library directive.
-      var libraryElement =
-          resolutionMap.elementDeclaredByCompilationUnit(node).library;
-      if (libraryElement.definingCompilationUnit == node.element) {
+      var libraryElement = node.declaredElement.library;
+      if (libraryElement.definingCompilationUnit == node.declaredElement) {
         LibraryDirective libraryDirective;
         for (var directive in node.directives) {
           if (directive is LibraryDirective) {
@@ -391,10 +395,10 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
 
   @override
   visitConstructorDeclaration(ConstructorDeclaration node) {
-    return _withEnclosingElement(node.element, () {
+    return _withEnclosingElement(node.declaredElement, () {
       // function/ constructor node
       var constructorVName = addNodeAndFacts(schema.FUNCTION_KIND,
-          element: node.element,
+          element: node.declaredElement,
           subKind: schema.CONSTRUCTOR_SUBKIND,
           completeFact: schema.DEFINITION);
 
@@ -414,7 +418,7 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
           enclosingTarget: _enclosingClassVName);
 
       // function type
-      addFunctionType(node.element, node.parameters, constructorVName,
+      addFunctionType(node.declaredElement, node.parameters, constructorVName,
           returnNode: node.returnType);
 
       // TODO(jwren) handle implicit constructor case
@@ -431,9 +435,8 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
 
   @override
   visitDeclaredIdentifier(DeclaredIdentifier node) {
-    _handleVariableDeclaration(node.element, node.identifier,
-        subKind: schema.LOCAL_SUBKIND,
-        type: resolutionMap.elementDeclaredByDeclaredIdentifier(node).type);
+    _handleVariableDeclaration(node.declaredElement, node.identifier,
+        subKind: schema.LOCAL_SUBKIND, type: node.declaredElement.type);
 
     // no children
   }
@@ -442,7 +445,7 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
   visitEnumConstantDeclaration(EnumConstantDeclaration node) {
     // constant node
     var constDeclVName =
-        addNodeAndFacts(schema.CONSTANT_KIND, element: node.element);
+        addNodeAndFacts(schema.CONSTANT_KIND, element: node.declaredElement);
 
     // anchor- defines/binding, defines
     addAnchorEdgesContainingEdge(
@@ -459,7 +462,7 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
 
   @override
   visitEnumDeclaration(EnumDeclaration node) {
-    return _withEnclosingElement(node.element, () {
+    return _withEnclosingElement(node.declaredElement, () {
       // record/ enum node
       addNodeAndFacts(schema.RECORD_KIND,
           nodeVName: _enclosingClassVName,
@@ -493,7 +496,7 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
     // identifier
     // Specified as Element, not var, so that the type can be changed in the
     // if-block.
-    Element element = node.element;
+    Element element = node.declaredElement;
     if (element is FieldFormalParameterElement) {
       element = (element as FieldFormalParameterElement).field;
     }
@@ -513,10 +516,10 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
 
   @override
   visitFunctionDeclaration(FunctionDeclaration node) {
-    return _withEnclosingElement(node.element, () {
+    return _withEnclosingElement(node.declaredElement, () {
       // function node
       var functionVName = addNodeAndFacts(schema.FUNCTION_KIND,
-          element: node.element, completeFact: schema.DEFINITION);
+          element: node.declaredElement, completeFact: schema.DEFINITION);
 
       // anchor- defines/binding
       addAnchorEdgesContainingEdge(
@@ -536,8 +539,8 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
           target: functionVName);
 
       // function type
-      addFunctionType(
-          node.element, node.functionExpression.parameters, functionVName,
+      addFunctionType(node.declaredElement, node.functionExpression.parameters,
+          functionVName,
           returnNode: node.returnType);
 
       _safelyVisit(node.documentationComment);
@@ -550,7 +553,7 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
   @override
   visitFunctionExpression(FunctionExpression node) {
     return _withEnclosingElement(
-        node.element, () => super.visitFunctionExpression(node));
+        node.declaredElement, () => super.visitFunctionExpression(node));
   }
 
   @override
@@ -561,7 +564,7 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
     var returnType = node.returnType;
     if (returnType is TypeName) {
       _handleRefEdge(
-        returnType.name?.bestElement,
+        returnType.name?.staticElement,
         const <String>[schema.REF_EDGE],
         syntacticEntity: returnType.name,
       );
@@ -618,7 +621,7 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
     //
     // index method ref/call
     //
-    var element = node.bestElement;
+    var element = node.staticElement;
     var start = node.leftBracket.offset;
     var end = node.rightBracket.end;
 
@@ -637,8 +640,7 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
     // constructorName
     //
     var constructorName = node.constructorName;
-    var constructorElement =
-        resolutionMap.staticElementForConstructorReference(constructorName);
+    var constructorElement = constructorName.staticElement;
     if (constructorElement != null) {
       // anchor- ref/call
       _handleRefCallEdge(constructorElement,
@@ -667,10 +669,10 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
 
   @override
   visitMethodDeclaration(MethodDeclaration node) {
-    return _withEnclosingElement(node.element, () {
+    return _withEnclosingElement(node.declaredElement, () {
       // function node
       var methodVName = addNodeAndFacts(schema.FUNCTION_KIND,
-          element: node.element, completeFact: schema.DEFINITION);
+          element: node.declaredElement, completeFact: schema.DEFINITION);
 
       // anchor- defines/binding
       addAnchorEdgesContainingEdge(
@@ -690,23 +692,23 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
           target: methodVName);
 
       // function type
-      addFunctionType(node.element, node.parameters, methodVName,
+      addFunctionType(node.declaredElement, node.parameters, methodVName,
           returnNode: node.returnType);
 
       // override edges
-      List<ExecutableElement> overriddenList =
-          _inheritanceManager.lookupOverrides(_enclosingClassElement,
-              resolutionMap.elementDeclaredByMethodDeclaration(node).name);
+      var overriddenList = _inheritanceManager.getOverridden(
+        _enclosingClassThisType,
+        new Name(
+          _enclosingClassElement.library.source.uri,
+          node.declaredElement.name,
+        ),
+      );
       for (ExecutableElement overridden in overriddenList) {
-        if (overridden is MultiplyInheritedExecutableElement) {
-          for (ExecutableElement elt in overridden.inheritedElements) {
-            addEdge(methodVName, schema.OVERRIDES_EDGE,
-                _vNameFromElement(elt, schema.FUNCTION_KIND));
-          }
-        } else {
-          addEdge(methodVName, schema.OVERRIDES_EDGE,
-              _vNameFromElement(overridden, schema.FUNCTION_KIND));
-        }
+        addEdge(
+          methodVName,
+          schema.OVERRIDES_EDGE,
+          _vNameFromElement(overridden, schema.FUNCTION_KIND),
+        );
       }
 
       // visit children
@@ -721,7 +723,7 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
 
   @override
   visitMethodInvocation(MethodInvocation node) {
-    var element = node.methodName?.bestElement;
+    var element = node.methodName?.staticElement;
 
     // anchor- ref/call
     _handleRefCallEdge(element, syntacticEntity: node.methodName);
@@ -736,7 +738,7 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
   visitSimpleFormalParameter(SimpleFormalParameter node) {
     // parameter node
     var paramVName = addNodeAndFacts(schema.VARIABLE_KIND,
-        element: node.element,
+        element: node.declaredElement,
         subKind: schema.LOCAL_PARAMETER_SUBKIND,
         completeFact: schema.DEFINITION);
 
@@ -785,11 +787,8 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
     }
 
     // type
-    addEdge(
-        paramVName,
-        schema.TYPED_EDGE,
-        _vNameFromType(
-            resolutionMap.elementDeclaredByFormalParameter(node).type));
+    addEdge(paramVName, schema.TYPED_EDGE,
+        _vNameFromType(node.declaredElement.type));
 
     // visit children
     _safelyVisit(node.documentationComment);
@@ -802,10 +801,10 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
     // Most simple identifiers are "ref" edges.  In cases some cases, there may
     // be other ref/* edges.
 
-    if (node.getAncestor((node) => node is CommentReference) != null) {
+    if (node.thisOrAncestorOfType<CommentReference>() != null) {
       // The identifier is in a comment, add just the "ref" edge.
       _handleRefEdge(
-        node.bestElement,
+        node.staticElement,
         const <String>[schema.REF_EDGE],
         syntacticEntity: node,
       );
@@ -813,12 +812,12 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
       // The node is in a declaration context, and should have
       // "ref/defines/binding" edge as well as the default "ref" edge.
       _handleRefEdge(
-        node.bestElement,
+        node.staticElement,
         const <String>[schema.DEFINES_BINDING_EDGE, schema.REF_EDGE],
         syntacticEntity: node,
       );
     } else {
-      _handleRefCallEdge(node.bestElement, syntacticEntity: node);
+      _handleRefCallEdge(node.staticElement, syntacticEntity: node);
     }
 
     // no children to visit
@@ -848,9 +847,9 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
         _enclosingVName != _enclosingFileVName;
 
     // variable
-    _handleVariableDeclaration(node.element, node.name,
+    _handleVariableDeclaration(node.declaredElement, node.name,
         subKind: isLocal ? schema.LOCAL_SUBKIND : schema.FIELD_SUBKIND,
-        type: resolutionMap.elementDeclaredByVariableDeclaration(node).type);
+        type: node.declaredElement.type);
 
     // visit children
     _safelyVisit(node.initializer);
@@ -893,10 +892,10 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
 
   _handleRefCallEdge(
     Element element, {
-    SyntacticEntity syntacticEntity: null,
-    start: _notFound,
-    end: _notFound,
-    KytheVName enclosingTarget: null,
+    SyntacticEntity syntacticEntity = null,
+    int start = _notFound,
+    int end = _notFound,
+    KytheVName enclosingTarget = null,
   }) {
     if (element is ExecutableElement &&
         _enclosingVName != _enclosingFileVName) {
@@ -930,11 +929,11 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
   KytheVName _handleRefEdge(
     Element element,
     List<String> refEdgeTypes, {
-    SyntacticEntity syntacticEntity: null,
-    start: _notFound,
-    end: _notFound,
-    KytheVName enclosingTarget: null,
-    KytheVName enclosingAnchor: null,
+    SyntacticEntity syntacticEntity = null,
+    int start = _notFound,
+    int end = _notFound,
+    KytheVName enclosingTarget = null,
+    KytheVName enclosingAnchor = null,
   }) {
     assert(refEdgeTypes.isNotEmpty);
     element = _findNonSyntheticElement(element);
@@ -1048,9 +1047,9 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
       VariableDeclarationList variableDeclarationList, KytheVName refVName) {
     assert(refVName != null);
     for (var varDecl in variableDeclarationList.variables) {
-      if (varDecl.element != null) {
+      if (varDecl.declaredElement != null) {
         var parentVName =
-            _vNameFromElement(varDecl.element, schema.VARIABLE_KIND);
+            _vNameFromElement(varDecl.declaredElement, schema.VARIABLE_KIND);
         addEdge(parentVName, schema.ANNOTATED_BY_EDGE, refVName);
       } else {
         // The element out of the VarDeclarationList is null
@@ -1086,6 +1085,17 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
         _enclosingClassElement = element;
         _enclosingClassVName = _enclosingVName =
             _vNameFromElement(_enclosingClassElement, schema.RECORD_KIND);
+        _enclosingClassThisType = element.instantiate(
+          typeArguments: element.typeParameters.map((t) {
+            return t.instantiate(
+              nullabilitySuffix:
+                  _enclosingUnitFeatureSet.isEnabled(Feature.non_nullable)
+                      ? NullabilitySuffix.none
+                      : NullabilitySuffix.star,
+            );
+          }).toList(),
+          nullabilitySuffix: NullabilitySuffix.none,
+        );
       } else if (element is MethodElement ||
           element is FunctionElement ||
           element is ConstructorElement) {
@@ -1105,7 +1115,7 @@ class KytheDartVisitor extends GeneralizingAstVisitor with OutputUtils {
 /// This class is meant to be a mixin to concrete visitor methods to walk the
 /// [Element] or [AstNode]s produced by the Dart Analyzer to output Kythe
 /// [KytheEntry] protos.
-abstract class OutputUtils {
+mixin OutputUtils {
   /// A set of [String]s which have already had a name [KytheVName] created.
   final Set<String> nameNodes = new Set<String>();
 
@@ -1139,13 +1149,13 @@ abstract class OutputUtils {
   /// Finally, for all anchors, a childof edge with a target of the enclosing
   /// file is written out.
   KytheVName addAnchorEdgesContainingEdge({
-    SyntacticEntity syntacticEntity: null,
-    int start: _notFound,
-    int end: _notFound,
-    List<String> edges: const [],
-    KytheVName target: null,
-    KytheVName enclosingTarget: null,
-    KytheVName enclosingAnchor: null,
+    SyntacticEntity syntacticEntity = null,
+    int start = _notFound,
+    int end = _notFound,
+    List<String> edges = const [],
+    KytheVName target = null,
+    KytheVName enclosingTarget = null,
+    KytheVName enclosingAnchor = null,
   }) {
     if (start == _notFound && end == _notFound) {
       if (syntacticEntity != null) {
@@ -1191,7 +1201,7 @@ abstract class OutputUtils {
   /// of logic as [addNameFact] to prevent the edge from being written out.
   /// This is a convenience method for visitors to add an edge Entry.
   KytheEntry addEdge(KytheVName source, String edgeKind, KytheVName target,
-      {int ordinalIntValue: _notFound}) {
+      {int ordinalIntValue = _notFound}) {
     if (ordinalIntValue == _notFound) {
       return addEntry(source, edgeKind, target, "/", new List<int>());
     } else {
@@ -1227,7 +1237,7 @@ abstract class OutputUtils {
     Element functionElement,
     FormalParameterList paramNodes,
     KytheVName functionVName, {
-    AstNode returnNode: null,
+    AstNode returnNode = null,
   }) {
     var i = 0;
     var funcTypeVName =
@@ -1238,19 +1248,19 @@ abstract class OutputUtils {
     if (returnNode is TypeName) {
       // MethodDeclaration and FunctionDeclaration both return a TypeName from
       // returnType
-      if (resolutionMap.typeForTypeName(returnNode).isVoid) {
+      if (returnNode.type.isVoid) {
         returnTypeVName = voidBuiltin;
       } else {
         returnTypeVName =
-            _vNameFromElement(returnNode.name.bestElement, schema.TAPP_KIND);
+            _vNameFromElement(returnNode.name.staticElement, schema.TAPP_KIND);
       }
     } else if (returnNode is Identifier) {
       // ConstructorDeclaration returns an Identifier from returnType
-      if (resolutionMap.bestTypeForExpression(returnNode).isVoid) {
+      if (returnNode.staticType.isVoid) {
         returnTypeVName = voidBuiltin;
       } else {
         returnTypeVName =
-            _vNameFromElement(returnNode.bestElement, schema.TAPP_KIND);
+            _vNameFromElement(returnNode.staticElement, schema.TAPP_KIND);
       }
     }
     // else: return type is null, void, unresolved.
@@ -1263,16 +1273,9 @@ abstract class OutputUtils {
     if (paramNodes != null) {
       for (FormalParameter paramNode in paramNodes.parameters) {
         var paramTypeVName = dynamicBuiltin;
-        if (!resolutionMap
-            .elementDeclaredByFormalParameter(paramNode)
-            .type
-            .isDynamic) {
+        if (!paramNode.declaredElement.type.isDynamic) {
           paramTypeVName = _vNameFromElement(
-              resolutionMap
-                  .elementDeclaredByFormalParameter(paramNode)
-                  .type
-                  .element,
-              schema.TAPP_KIND);
+              paramNode.declaredElement.type.element, schema.TAPP_KIND);
         }
         addEdge(funcTypeVName, schema.PARAM_EDGE, paramTypeVName,
             ordinalIntValue: i++);
@@ -1290,10 +1293,10 @@ abstract class OutputUtils {
   /// currently guarantee that the inputs to these fact kinds are valid for the
   /// associated nodeKind- if a non-null, then it will set.
   KytheVName addNodeAndFacts(String nodeKind,
-      {Element element: null,
-      KytheVName nodeVName: null,
-      String subKind: null,
-      String completeFact: null}) {
+      {Element element = null,
+      KytheVName nodeVName = null,
+      String subKind = null,
+      String completeFact = null}) {
     if (nodeVName == null) {
       nodeVName = _vNameFromElement(element, nodeKind);
     }

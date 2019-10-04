@@ -1,12 +1,12 @@
-// Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2016, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:async';
+import 'dart:isolate';
 
 import 'package:analyzer/src/plugin/resolver_provider.dart';
 import 'package:analyzer_cli/src/driver.dart';
-import 'package:plugin/plugin.dart';
 
 /**
  * An object that can be used to start a command-line analysis. This class
@@ -29,12 +29,10 @@ abstract class CommandLineStarter {
   void set packageResolverProvider(ResolverProvider provider);
 
   /**
-   * Set the [plugins] that are defined outside the analyzer_cli package.
-   */
-  void set userDefinedPlugins(List<Plugin> plugins);
-
-  /**
    * Use the given command-line [arguments] to start this analyzer.
+   *
+   * If [sendPort] is provided it is used for bazel worker communication
+   * instead of stdin/stdout.
    */
-  Future<Null> start(List<String> arguments);
+  Future<void> start(List<String> arguments, {SendPort sendPort});
 }

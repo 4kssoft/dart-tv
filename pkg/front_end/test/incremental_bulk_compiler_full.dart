@@ -7,7 +7,7 @@ import 'dart:async' show Future;
 import 'package:expect/expect.dart' show Expect;
 
 import 'package:front_end/src/api_prototype/compiler_options.dart'
-    show CompilerOptions;
+    show CompilerOptions, DiagnosticMessage;
 
 import 'package:front_end/src/api_prototype/incremental_kernel_generator.dart'
     show IncrementalKernelGenerator;
@@ -15,12 +15,8 @@ import 'package:front_end/src/api_prototype/incremental_kernel_generator.dart'
 import 'package:front_end/src/compute_platform_binaries_location.dart'
     show computePlatformBinariesLocation;
 
-import 'package:front_end/src/fasta/fasta_codes.dart' show FormattedMessage;
-
 import 'package:front_end/src/fasta/incremental_compiler.dart'
     show IncrementalCompiler;
-
-import 'package:front_end/src/fasta/severity.dart' show Severity;
 
 import 'package:kernel/kernel.dart' show Component;
 
@@ -33,7 +29,7 @@ import 'package:testing/testing.dart'
 import 'incremental_utils.dart' as util;
 
 main([List<String> arguments = const []]) =>
-    runMe(arguments, createContext, "../testing.json");
+    runMe(arguments, createContext, configurationPath: "../testing.json");
 
 Future<Context> createContext(
     Chain suite, Map<String, String> environment) async {
@@ -55,23 +51,16 @@ class Context extends ChainContext {
   IncrementalCompiler compiler;
 }
 
-CompilerOptions getOptions(bool strong) {
-  final Uri sdkRoot = computePlatformBinariesLocation();
+CompilerOptions getOptions() {
+  final Uri sdkRoot = computePlatformBinariesLocation(forceBuildDir: true);
   var options = new CompilerOptions()
     ..sdkRoot = sdkRoot
     ..librariesSpecificationUri = Uri.base.resolve("sdk/lib/libraries.json")
-    ..onProblem = (FormattedMessage problem, Severity severity,
-        List<FormattedMessage> context) {
-      // ignore
-    }
-    ..strongMode = strong;
-  if (strong) {
-    options.sdkSummary =
-        computePlatformBinariesLocation().resolve("vm_platform_strong.dill");
-  } else {
-    options.sdkSummary =
-        computePlatformBinariesLocation().resolve("vm_platform.dill");
-  }
+    ..omitPlatform = true
+    ..onDiagnostic = (DiagnosticMessage message) {
+      // Ignored.
+    };
+  options.sdkSummary = sdkRoot.resolve("vm_platform_strong.dill");
   return options;
 }
 
@@ -89,7 +78,7 @@ class RunTest extends Step<TestDescription, TestDescription, Context> {
     List<int> oneShotSerialized;
     try {
       IncrementalCompiler compiler =
-          new IncrementalKernelGenerator(getOptions(true), uri);
+          new IncrementalKernelGenerator(getOptions(), uri);
       oneShotSerialized = util.postProcess(await compiler.computeDelta());
     } catch (e) {
       oneShotFailed = true;
@@ -101,11 +90,10 @@ class RunTest extends Step<TestDescription, TestDescription, Context> {
     try {
       globalDebuggingNames = new NameSystem();
       if (context.compiler == null) {
-        context.compiler =
-            new IncrementalKernelGenerator(getOptions(true), uri);
+        context.compiler = new IncrementalKernelGenerator(getOptions(), uri);
       }
       Component bulkCompiledComponent = await context.compiler
-          .computeDelta(entryPoint: uri, fullComponent: true);
+          .computeDelta(entryPoints: [uri], fullComponent: true);
       bulkSerialized = util.postProcess(bulkCompiledComponent);
     } catch (e) {
       bulkFailed = true;
@@ -117,11 +105,10 @@ class RunTest extends Step<TestDescription, TestDescription, Context> {
     try {
       globalDebuggingNames = new NameSystem();
       if (context.compiler == null) {
-        context.compiler =
-            new IncrementalKernelGenerator(getOptions(true), uri);
+        context.compiler = new IncrementalKernelGenerator(getOptions(), uri);
       }
       Component bulkCompiledComponent = await context.compiler
-          .computeDelta(entryPoint: uri, fullComponent: true);
+          .computeDelta(entryPoints: [uri], fullComponent: true);
       bulkSerialized2 = util.postProcess(bulkCompiledComponent);
     } catch (e) {
       bulk2Failed = true;
@@ -139,7 +126,7 @@ class RunTest extends Step<TestDescription, TestDescription, Context> {
     if (bulkFailed || bulk2Failed) {
       if (bulkFailed != bulk2Failed) {
         throw "Bulk-compiler failed: $bulkFailed; "
-            "second bulk-comile failed: $bulk2Failed";
+            "second bulk-compile failed: $bulk2Failed";
       }
     } else {
       checkIsEqual(bulkSerialized, bulkSerialized2);
@@ -155,7 +142,7 @@ class RunTest extends Step<TestDescription, TestDescription, Context> {
     }
     for (int i = 0; i < length; ++i) {
       if (a[i] != b[i]) {
-        Expect.fail("Data differs at byte ${i+1}.");
+        Expect.fail("Data differs at byte ${i + 1}.");
       }
     }
     Expect.equals(a.length, b.length);

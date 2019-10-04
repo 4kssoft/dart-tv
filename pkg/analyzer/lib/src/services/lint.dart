@@ -1,8 +1,6 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
-library analyzer.src.services.lint;
 
 import 'dart:collection';
 
@@ -13,6 +11,9 @@ import 'package:analyzer/src/generated/engine.dart';
 
 /// Shared lint registry.
 LintRegistry lintRegistry = new LintRegistry();
+
+/// Current linter version.
+String linterVersion;
 
 /// Return lints associated with this [context], or an empty list if there are
 /// none.

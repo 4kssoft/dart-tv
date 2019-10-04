@@ -62,7 +62,9 @@ class FileRequest {
   FileRequest(this.sp, this.tag, this.uri, this.resolvedUri, this.libraryUrl);
 }
 
+@pragma("vm:entry-point")
 bool _traceLoading = false;
+@pragma("vm:entry-point")
 bool _deterministic = false;
 
 // State associated with the isolate that is used for loading.
@@ -279,7 +281,7 @@ class IsolateLoaderState extends IsolateEmbedderData {
       // Explicitly specified .packages path.
       _handlePackagesRequest(sp, _traceLoading, -2, packageConfig);
     } else {
-      // Search for .packages or packages/ starting at the root script.
+      // Search for .packages starting at the root script.
       _handlePackagesRequest(sp, _traceLoading, -1, _rootScript);
     }
 
@@ -806,24 +808,6 @@ _findPackagesFile(SendPort sp, bool traceLoading, Uri base) async {
         _loadPackagesFile(sp, traceLoading, packagesFile);
         return;
       }
-      // On the first loop try whether there is a packages/ directory instead.
-      if (prev == null) {
-        var packageRoot = dirUri.resolve("packages/");
-        if (traceLoading) {
-          _log("Checking for $packageRoot directory.");
-        }
-        exists = await new Directory.fromUri(packageRoot).exists();
-        if (traceLoading) {
-          _log("$packageRoot exists: $exists");
-        }
-        if (exists) {
-          if (traceLoading) {
-            _log("Found a package root at: $packageRoot");
-          }
-          sp.send([packageRoot.toString()]);
-          return;
-        }
-      }
       // Move up one level.
       prev = dir;
       dir = dir.parent;
@@ -911,10 +895,8 @@ _handlePackagesRequest(
         var packagesUri = resource.resolve(".packages");
         var exists = await _loadHttpPackagesFile(sp, traceLoading, packagesUri);
         if (!exists) {
-          // If the loading of the .packages file failed for http/https based
-          // scripts then setup the package root.
-          var packageRoot = resource.resolve('packages/');
-          sp.send([packageRoot.toString()]);
+          // Loading of the .packages file failed for http/https based scripts
+          sp.send([null]);
         }
       } else {
         sp.send("Unsupported scheme used to locate .packages file: "
@@ -1010,26 +992,6 @@ _processLoadRequest(request) {
 
   // Handle the request specified in the tag.
   switch (tag) {
-    case _Dart_kScriptTag:
-      {
-        Uri uri = Uri.parse(request[4]);
-        // Remember the root script.
-        loaderState._rootScript = uri;
-        _handleResourceRequest(
-            loaderState, sp, traceLoading, tag, uri, uri, null);
-      }
-      break;
-    case _Dart_kSourceTag:
-    case _Dart_kImportTag:
-      {
-        // The url of the file being loaded.
-        var uri = Uri.parse(request[4]);
-        // The library that is importing/parting the file.
-        String libraryUrl = request[5];
-        _handleResourceRequest(
-            loaderState, sp, traceLoading, tag, uri, uri, libraryUrl);
-      }
-      break;
     case _Dart_kInitLoader:
       {
         String packageRoot = request[4];
@@ -1058,8 +1020,8 @@ _processLoadRequest(request) {
       break;
     case _Dart_kGetPackageRootUri:
       loaderState._triggerPackageResolution(() {
-        // Respond with the package root (if any) after package resolution.
-        sp.send(loaderState._packageRoot);
+        // The package root is deprecated and now always returns null.
+        sp.send(null);
       });
       break;
     case _Dart_kGetPackageConfigUri:

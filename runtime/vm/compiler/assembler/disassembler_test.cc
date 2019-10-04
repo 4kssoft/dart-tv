@@ -13,8 +13,10 @@ namespace dart {
 // method on DBC assembler.
 #if !defined(PRODUCT) && !defined(TARGET_ARCH_DBC)
 
-TEST_CASE(Disassembler) {
-  Assembler assembler;
+ISOLATE_UNIT_TEST_CASE(Disassembler) {
+  compiler::ObjectPoolBuilder object_pool_builder;
+  compiler::Assembler assembler(&object_pool_builder);
+
   // The used instructions work on all platforms.
   Register reg = static_cast<Register>(0);
   assembler.PopRegister(reg);

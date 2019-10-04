@@ -51,8 +51,8 @@ Future main() async {
 }
 
 Future runCompiler(Uri input, Uri output) async {
-  final Uri platformDill =
-      computePlatformBinariesLocation().resolve("vm_platform.dill");
+  final Uri platformDill = computePlatformBinariesLocation(forceBuildDir: true)
+      .resolve("vm_platform_strong.dill");
 
   final List<String> arguments = <String>[
     '--packages=${packagesFile.toFilePath()}',
@@ -91,7 +91,7 @@ Future dumpDillFile(Uri dillFile, Uri txtFile) async {
 }
 
 Future runHelloWorld(Uri dillFile) async {
-  final List<String> arguments = <String>['-c', dillFile.toFilePath()];
+  final List<String> arguments = <String>[dillFile.toFilePath()];
   await run('Running hello.dart', arguments, 'hello world!\n');
 }
 

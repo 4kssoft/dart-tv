@@ -9,9 +9,15 @@
 
 #include "vm/allocation.h"
 #include "vm/bitfield.h"
+#include "vm/globals.h"
 #include "vm/growable_array.h"
 #include "vm/os.h"
 #include "vm/os_thread.h"
+
+#if defined(HOST_OS_FUCHSIA) && !defined(FUCHSIA_SDK)
+#include <trace-engine/context.h>
+#include <trace-engine/instrumentation.h>
+#endif
 
 namespace dart {
 
@@ -30,29 +36,45 @@ class TimelineStream;
 class VirtualMemory;
 class Zone;
 
-// (name, enabled by default for isolate).
+#define CALLBACK_RECORDER_NAME "Callback"
+#define ENDLESS_RECORDER_NAME "Endless"
+#define FUCHSIA_RECORDER_NAME "Fuchsia"
+#define RING_RECORDER_NAME "Ring"
+#define STARTUP_RECORDER_NAME "Startup"
+#define SYSTRACE_RECORDER_NAME "Systrace"
+
+// (name, fuchsia_name).
 #define TIMELINE_STREAM_LIST(V)                                                \
-  V(API, false)                                                                \
-  V(Compiler, false)                                                           \
-  V(Dart, false)                                                               \
-  V(Debugger, false)                                                           \
-  V(Embedder, false)                                                           \
-  V(GC, false)                                                                 \
-  V(Isolate, false)                                                            \
-  V(VM, false)                                                                 \
-  V(Zone, false)
+  V(API, "dart:api")                                                           \
+  V(Compiler, "dart:compiler")                                                 \
+  V(CompilerVerbose, "dart:compiler.verbose")                                  \
+  V(Dart, "dart:dart")                                                         \
+  V(Debugger, "dart:debugger")                                                 \
+  V(Embedder, "dart:embedder")                                                 \
+  V(GC, "dart:gc")                                                             \
+  V(Isolate, "dart:isolate")                                                   \
+  V(VM, "dart:vm")
 
 // A stream of timeline events. A stream has a name and can be enabled or
 // disabled (globally and per isolate).
 class TimelineStream {
  public:
-  TimelineStream();
-
-  void Init(const char* name, bool enabled);
+  TimelineStream(const char* name, const char* fuchsia_name, bool enabled);
 
   const char* name() const { return name_; }
+  const char* fuchsia_name() const { return fuchsia_name_; }
 
-  bool enabled() const { return enabled_ != 0; }
+  bool enabled() {
+#if defined(HOST_OS_FUCHSIA) && !defined(FUCHSIA_SDK)
+#ifdef PRODUCT
+    return trace_is_category_enabled(fuchsia_name_);
+#else
+    return trace_is_category_enabled(fuchsia_name_) || enabled_ != 0;
+#endif  // PRODUCT
+#else
+    return enabled_ != 0;
+#endif  // defined(HOST_OS_FUCHSIA) && !defined(FUCHSIA_SDK)
+  }
 
   void set_enabled(bool enabled) { enabled_ = enabled ? 1 : 0; }
 
@@ -66,21 +88,30 @@ class TimelineStream {
     return OFFSET_OF(TimelineStream, enabled_);
   }
 
+#if defined(HOST_OS_FUCHSIA) && !defined(FUCHSIA_SDK)
+  trace_site_t* trace_site() { return &trace_site_; }
+#endif
+
  private:
-  const char* name_;
+  const char* const name_;
+  const char* const fuchsia_name_;
 
   // This field is accessed by generated code (intrinsic) and expects to see
   // 0 or 1. If this becomes a BitField, the generated code must be updated.
   uintptr_t enabled_;
+
+#if defined(HOST_OS_FUCHSIA) && !defined(FUCHSIA_SDK)
+  trace_site_t trace_site_ = {};
+#endif
 };
 
 class Timeline : public AllStatic {
  public:
   // Initialize timeline system. Not thread safe.
-  static void InitOnce();
+  static void Init();
 
-  // Shutdown timeline system. Not thread safe.
-  static void Shutdown();
+  // Cleanup timeline system. Not thread safe.
+  static void Cleanup();
 
   // Access the global recorder. Not thread safe.
   static TimelineEventRecorder* recorder();
@@ -90,49 +121,28 @@ class Timeline : public AllStatic {
 
   static void Clear();
 
+#ifndef PRODUCT
   // Print information about streams to JSON.
   static void PrintFlagsToJSON(JSONStream* json);
+#endif
 
-#define TIMELINE_STREAM_ACCESSOR(name, not_used)                               \
+#define TIMELINE_STREAM_ACCESSOR(name, fuchsia_name)                           \
   static TimelineStream* Get##name##Stream() { return &stream_##name##_; }
   TIMELINE_STREAM_LIST(TIMELINE_STREAM_ACCESSOR)
 #undef TIMELINE_STREAM_ACCESSOR
 
-#define TIMELINE_STREAM_FLAGS(name, not_used)                                  \
+#define TIMELINE_STREAM_FLAGS(name, fuchsia_name)                              \
   static void SetStream##name##Enabled(bool enabled) {                         \
-    StreamStateChange(#name, stream_##name##_.enabled(), enabled);             \
     stream_##name##_.set_enabled(enabled);                                     \
   }
   TIMELINE_STREAM_LIST(TIMELINE_STREAM_FLAGS)
 #undef TIMELINE_STREAM_FLAGS
 
-  static void set_start_recording_cb(
-      Dart_EmbedderTimelineStartRecording start_recording_cb) {
-    start_recording_cb_ = start_recording_cb;
-  }
-
-  static Dart_EmbedderTimelineStartRecording get_start_recording_cb() {
-    return start_recording_cb_;
-  }
-
-  static void set_stop_recording_cb(
-      Dart_EmbedderTimelineStopRecording stop_recording_cb) {
-    stop_recording_cb_ = stop_recording_cb;
-  }
-
-  static Dart_EmbedderTimelineStopRecording get_stop_recording_cb() {
-    return stop_recording_cb_;
-  }
-
  private:
-  static void StreamStateChange(const char* stream_name, bool prev, bool curr);
   static TimelineEventRecorder* recorder_;
   static MallocGrowableArray<char*>* enabled_streams_;
-  static Dart_EmbedderTimelineStartRecording start_recording_cb_;
-  static Dart_EmbedderTimelineStopRecording stop_recording_cb_;
 
-#define TIMELINE_STREAM_DECLARE(name, not_used)                                \
-  static bool stream_##name##_enabled_;                                        \
+#define TIMELINE_STREAM_DECLARE(name, fuchsia_name)                            \
   static TimelineStream stream_##name##_;
   TIMELINE_STREAM_LIST(TIMELINE_STREAM_DECLARE)
 #undef TIMELINE_STREAM_DECLARE
@@ -312,13 +322,15 @@ class TimelineEvent {
   // The highest time value stored in this event.
   int64_t HighTime() const;
 
+#ifndef PRODUCT
   void PrintJSON(JSONStream* stream) const;
+#endif
 
   ThreadId thread() const { return thread_; }
+
   void set_thread(ThreadId tid) { thread_ = tid; }
 
   Dart_Port isolate_id() const { return isolate_id_; }
-  void set_isolate_id(Dart_Port id) { isolate_id_ = id; }
 
   const char* label() const { return label_; }
 
@@ -376,7 +388,7 @@ class TimelineEvent {
   intptr_t arguments_length() const { return arguments_.length(); }
 
  private:
-  void StreamInit(TimelineStream* stream);
+  void StreamInit(TimelineStream* stream) { stream_ = stream; }
   void Init(EventType event_type, const char* label);
 
   void set_event_type(EventType event_type) {
@@ -433,7 +445,7 @@ class TimelineEvent {
   TimelineEventArguments arguments_;
   uword state_;
   const char* label_;
-  const char* category_;
+  TimelineStream* stream_;
   ThreadId thread_;
   Dart_Port isolate_id_;
 
@@ -448,13 +460,14 @@ class TimelineEvent {
   DISALLOW_COPY_AND_ASSIGN(TimelineEvent);
 };
 
-#ifndef PRODUCT
+#ifdef SUPPORT_TIMELINE
+#define TIMELINE_DURATION(thread, stream, name)                                \
+  TimelineDurationScope tds(thread, Timeline::Get##stream##Stream(), name);
 #define TIMELINE_FUNCTION_COMPILATION_DURATION(thread, name, function)         \
   TimelineDurationScope tds(thread, Timeline::GetCompilerStream(), name);      \
   if (tds.enabled()) {                                                         \
     tds.SetNumArguments(1);                                                    \
-    tds.CopyArgument(0, "function",                                            \
-                     function.ToLibNamePrefixedQualifiedCString());            \
+    tds.CopyArgument(0, "function", function.ToQualifiedCString());            \
   }
 
 #define TIMELINE_FUNCTION_GC_DURATION(thread, name)                            \
@@ -464,6 +477,7 @@ class TimelineEvent {
   tds.SetNumArguments(1);                                                      \
   tds.CopyArgument(0, "mode", "basic");
 #else
+#define TIMELINE_DURATION(thread, stream, name)
 #define TIMELINE_FUNCTION_COMPILATION_DURATION(thread, name, function)
 #define TIMELINE_FUNCTION_GC_DURATION(thread, name)
 #define TIMELINE_FUNCTION_GC_DURATION_BASIC(thread, name)
@@ -599,7 +613,9 @@ class TimelineEventBlock {
   ThreadId thread_id() const { return thread_id_; }
 
  protected:
+#ifndef PRODUCT
   void PrintJSON(JSONStream* stream) const;
+#endif
 
   TimelineEvent* StartEvent();
 
@@ -690,15 +706,19 @@ class TimelineEventRecorder {
   TimelineEventBlock* GetNewBlock();
 
   // Interface method(s) which must be implemented.
+#ifndef PRODUCT
   virtual void PrintJSON(JSONStream* js, TimelineEventFilter* filter) = 0;
   virtual void PrintTraceEvent(JSONStream* js, TimelineEventFilter* filter) = 0;
+#endif
   virtual const char* name() const = 0;
   int64_t GetNextAsyncId();
 
   void FinishBlock(TimelineEventBlock* block);
 
  protected:
+#ifndef PRODUCT
   void WriteTo(const char* directory);
+#endif
 
   // Interface method(s) which must be implemented.
   virtual TimelineEvent* StartEvent() = 0;
@@ -708,7 +728,9 @@ class TimelineEventRecorder {
   virtual void Clear() = 0;
 
   // Utility method(s).
+#ifndef PRODUCT
   void PrintJSONMeta(JSONArray* array) const;
+#endif
   TimelineEvent* ThreadBlockStartEvent();
   void ThreadBlockCompleteEvent(TimelineEvent* event);
 
@@ -740,8 +762,10 @@ class TimelineEventFixedBufferRecorder : public TimelineEventRecorder {
   explicit TimelineEventFixedBufferRecorder(intptr_t capacity);
   virtual ~TimelineEventFixedBufferRecorder();
 
+#ifndef PRODUCT
   void PrintJSON(JSONStream* js, TimelineEventFilter* filter);
   void PrintTraceEvent(JSONStream* js, TimelineEventFilter* filter);
+#endif
 
  protected:
   TimelineEvent* StartEvent();
@@ -750,7 +774,9 @@ class TimelineEventFixedBufferRecorder : public TimelineEventRecorder {
   intptr_t FindOldestBlockIndex() const;
   void Clear();
 
+#ifndef PRODUCT
   void PrintJSONEvents(JSONArray* array, TimelineEventFilter* filter);
+#endif
 
   VirtualMemory* memory_;
   TimelineEventBlock* blocks_;
@@ -767,7 +793,7 @@ class TimelineEventRingRecorder : public TimelineEventFixedBufferRecorder {
       : TimelineEventFixedBufferRecorder(capacity) {}
   virtual ~TimelineEventRingRecorder() {}
 
-  const char* name() const { return "Ring"; }
+  const char* name() const { return RING_RECORDER_NAME; }
 
  protected:
   TimelineEventBlock* GetNewBlockLocked();
@@ -781,7 +807,7 @@ class TimelineEventStartupRecorder : public TimelineEventFixedBufferRecorder {
       : TimelineEventFixedBufferRecorder(capacity) {}
   virtual ~TimelineEventStartupRecorder() {}
 
-  const char* name() const { return "Startup"; }
+  const char* name() const { return STARTUP_RECORDER_NAME; }
 
  protected:
   TimelineEventBlock* GetNewBlockLocked();
@@ -794,14 +820,16 @@ class TimelineEventCallbackRecorder : public TimelineEventRecorder {
   TimelineEventCallbackRecorder();
   virtual ~TimelineEventCallbackRecorder();
 
+#ifndef PRODUCT
   void PrintJSON(JSONStream* js, TimelineEventFilter* filter);
   void PrintTraceEvent(JSONStream* js, TimelineEventFilter* filter);
+#endif
 
   // Called when |event| is completed. It is unsafe to keep a reference to
   // |event| as it may be freed as soon as this function returns.
   virtual void OnEvent(TimelineEvent* event) = 0;
 
-  const char* name() const { return "Callback"; }
+  const char* name() const { return CALLBACK_RECORDER_NAME; }
 
  protected:
   TimelineEventBlock* GetNewBlockLocked() { return NULL; }
@@ -819,10 +847,12 @@ class TimelineEventEndlessRecorder : public TimelineEventRecorder {
   TimelineEventEndlessRecorder();
   virtual ~TimelineEventEndlessRecorder();
 
+#ifndef PRODUCT
   void PrintJSON(JSONStream* js, TimelineEventFilter* filter);
   void PrintTraceEvent(JSONStream* js, TimelineEventFilter* filter);
+#endif
 
-  const char* name() const { return "Endless"; }
+  const char* name() const { return ENDLESS_RECORDER_NAME; }
 
  protected:
   TimelineEvent* StartEvent();
@@ -831,7 +861,9 @@ class TimelineEventEndlessRecorder : public TimelineEventRecorder {
   TimelineEventBlock* GetHeadBlockLocked();
   void Clear();
 
+#ifndef PRODUCT
   void PrintJSONEvents(JSONArray* array, TimelineEventFilter* filter);
+#endif
 
   TimelineEventBlock* head_;
   intptr_t block_index_;
@@ -866,8 +898,10 @@ class TimelineEventPlatformRecorder : public TimelineEventRecorder {
   TimelineEventPlatformRecorder();
   virtual ~TimelineEventPlatformRecorder();
 
+#ifndef PRODUCT
   void PrintJSON(JSONStream* js, TimelineEventFilter* filter);
   void PrintTraceEvent(JSONStream* js, TimelineEventFilter* filter);
+#endif
 
   // Called when |event| is completed. It is unsafe to keep a reference to
   // |event| as it may be freed as soon as this function returns.
@@ -883,15 +917,14 @@ class TimelineEventPlatformRecorder : public TimelineEventRecorder {
   void CompleteEvent(TimelineEvent* event);
 };
 
-#if defined(HOST_OS_FUCHSIA)
-// A recorder that sends events to Fuchsia's tracing app. See:
-// https://fuchsia.googlesource.com/garnet/+/master/docs/tracing_usage_guide.md
+#if defined(HOST_OS_FUCHSIA) && !defined(FUCHSIA_SDK)
+// A recorder that sends events to Fuchsia's tracing app.
 class TimelineEventFuchsiaRecorder : public TimelineEventPlatformRecorder {
  public:
   TimelineEventFuchsiaRecorder() {}
   virtual ~TimelineEventFuchsiaRecorder() {}
 
-  const char* name() const { return "Fuchsia"; }
+  const char* name() const { return FUCHSIA_RECORDER_NAME; }
 
  private:
   void OnEvent(TimelineEvent* event);
@@ -911,7 +944,7 @@ class TimelineEventSystraceRecorder : public TimelineEventPlatformRecorder {
                                 char* buffer,
                                 intptr_t buffer_size);
 
-  const char* name() const { return "Systrace"; }
+  const char* name() const { return SYSTRACE_RECORDER_NAME; }
 
  private:
   void OnEvent(TimelineEvent* event);

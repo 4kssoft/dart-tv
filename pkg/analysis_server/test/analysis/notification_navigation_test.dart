@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -363,6 +363,19 @@ class BBB {}
     assertHasRegionTarget('BBB p', 'BBB {}');
   }
 
+  test_extension_on() async {
+    createAnalysisOptionsFile(experiments: ['extension-methods']);
+    addTestFile('''
+class C //1
+{}
+extension E on C //2
+{}
+''');
+    await prepareNavigation();
+    assertHasRegion('C //2');
+    assertHasTarget('C //1');
+  }
+
   test_factoryRedirectingConstructor_implicit() async {
     addTestFile('''
 class A {
@@ -696,7 +709,7 @@ library my.lib;
     assertHasTargetString('my.lib');
   }
 
-  test_multiplyDefinedElement() async {
+  Future<void> test_multiplyDefinedElement() async {
     newFile('$projectPath/bin/libA.dart', content: 'library A; int TEST = 1;');
     newFile('$projectPath/bin/libB.dart', content: 'library B; int TEST = 2;');
     addTestFile('''
@@ -815,7 +828,7 @@ class A {
     assertHasFileTarget(libFile, libCode.indexOf('lib;'), 'lib'.length);
   }
 
-  test_string_export_unresolvedUri() async {
+  Future<void> test_string_export_unresolvedUri() async {
     addTestFile('export "no.dart";');
     await prepareNavigation();
     assertNoRegionString('"no.dart"');
@@ -836,7 +849,7 @@ class A {
     assertNoRegionAt('import ;');
   }
 
-  test_string_import_unresolvedUri() async {
+  Future<void> test_string_import_unresolvedUri() async {
     addTestFile('import "no.dart";');
     await prepareNavigation();
     assertNoRegionString('"no.dart"');
@@ -855,7 +868,15 @@ part "test_unit.dart";
     assertHasFileTarget(unitFile, 0, 0);
   }
 
-  test_string_part_unresolvedUri() async {
+  test_string_part_invalidUri() async {
+    addTestFile('''
+part ":[invalid]";
+''');
+    await prepareNavigation();
+    assertNoRegionString('":[invalid]"');
+  }
+
+  Future<void> test_string_part_unresolvedUri() async {
     addTestFile('''
 library lib;
 part "test_unit.dart";

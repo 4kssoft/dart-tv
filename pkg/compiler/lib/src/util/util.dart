@@ -4,8 +4,8 @@
 
 library dart2js.util;
 
-import 'package:front_end/src/fasta/scanner/characters.dart';
-import 'package:front_end/src/fasta/util/link.dart';
+import 'package:front_end/src/api_unstable/dart2js.dart'
+    show $BACKSLASH, $CR, $DEL, $DQ, $LF, $LS, $PS, $TAB, Link, LinkBuilder;
 
 export 'emptyset.dart';
 export 'maplet.dart';
@@ -64,14 +64,32 @@ class Hashing {
     return h;
   }
 
+  /// Mix the bits of the element hash codes of [iterable] with [existing].
+  static int setHash<E>(Iterable<E> iterable, [int existing = 0]) {
+    int h = existing;
+    if (iterable != null) {
+      for (E e in iterable) {
+        h += objectsHash(e);
+      }
+    }
+    return h & SMI_MASK;
+  }
+
   /// Mix the bits of the hash codes of the unordered key/value from [map] with
   /// [existing].
   static int unorderedMapHash(Map map, [int existing = 0]) {
-    int h = 0;
-    for (var key in map.keys) {
-      h ^= objectHash(key, objectHash(map[key]));
+    if (map.length == 0) return existing;
+    List<int> hashCodes = List(map.length);
+    int i = 0;
+    for (var entry in map.entries) {
+      hashCodes[i++] = objectHash(entry.key, objectHash(entry.value));
     }
-    return mixHashCodeBits(h, existing);
+    hashCodes.sort();
+    int h = existing;
+    for (int hashCode in hashCodes) {
+      h = mixHashCodeBits(h, hashCode);
+    }
+    return h;
   }
 
   /// Mix the bits of the key/value hash codes from [map] with [existing].
@@ -97,10 +115,24 @@ bool equalElements<E>(List<E> a, List<E> b) {
   return true;
 }
 
-/**
- * File name prefix used to shorten the file name in stack traces printed by
- * [trace].
- */
+bool equalSets<E>(Set<E> a, Set<E> b) {
+  if (identical(a, b)) return true;
+  if (a == null || b == null) return false;
+  return a.length == b.length && a.containsAll(b) && b.containsAll(a);
+}
+
+bool equalMaps<K, V>(Map<K, V> a, Map<K, V> b) {
+  if (identical(a, b)) return true;
+  if (a == null || b == null) return false;
+  if (a.length != b.length) return false;
+  for (K key in a.keys) {
+    if (a[key] != b[key]) return false;
+  }
+  return true;
+}
+
+/// File name prefix used to shorten the file name in stack traces printed by
+/// [trace].
 String stackTraceFilePrefix = null;
 
 /// Writes the characters of [string] on [buffer].  The characters
@@ -219,14 +251,17 @@ class Pair<A, B> {
 
   Pair(this.a, this.b);
 
+  @override
   int get hashCode => 13 * a.hashCode + 17 * b.hashCode;
 
+  @override
   bool operator ==(var other) {
     if (identical(this, other)) return true;
     if (other is! Pair) return false;
     return a == other.a && b == other.b;
   }
 
+  @override
   String toString() => '($a,$b)';
 }
 

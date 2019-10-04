@@ -2,21 +2,21 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-/*element: method:[exact=JSUInt31]*/
+/*member: method:[exact=JSUInt31]*/
 // Called only via [foo] with a small integer.
 method(/*[exact=JSUInt31]*/ a) {
   return a;
 }
 
-/*element: foo:[null|subclass=Closure]*/
+/*member: foo:[subclass=Closure]*/
 var foo = method;
 
-/*element: returnInt:[null|subclass=Object]*/
+/*member: returnInt:[null|subclass=Object]*/
 returnInt() {
   return foo(54);
 }
 
-/*element: main:[null]*/
+/*member: main:[null]*/
 main() {
   returnInt();
 }

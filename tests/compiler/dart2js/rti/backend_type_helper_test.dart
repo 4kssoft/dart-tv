@@ -11,7 +11,7 @@ import 'package:compiler/src/js_emitter/program_builder/program_builder.dart';
 import 'package:compiler/src/world.dart';
 import 'package:expect/expect.dart';
 import '../helpers/program_lookup.dart';
-import '../memory_compiler.dart';
+import '../helpers/memory_compiler.dart';
 
 main() {
   runTest() async {
@@ -20,7 +20,7 @@ main() {
     Expect.isTrue(result.isSuccess);
     Compiler compiler = result.compiler;
     JClosedWorld closedWorld = compiler.backendClosedWorldForTesting;
-    ProgramLookup programLookup = new ProgramLookup(compiler);
+    ProgramLookup programLookup = new ProgramLookup(compiler.backendStrategy);
 
     List<ClassEntity> found = <ClassEntity>[];
     for (ClassEntity element

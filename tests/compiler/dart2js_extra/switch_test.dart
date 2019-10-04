@@ -60,7 +60,7 @@ switcher2(val) {
 
 var x = 0;
 
-@NoInline()
+@pragma('dart2js:noInline')
 switcher3(val) {
   switch (val) {
     case 1:
@@ -75,8 +75,10 @@ switcher4(val) {
   switch (val) {
     case 1:
       return 100;
-    case 2:
+    case 2: _throw(); //# 00: compile-time error
+    case 3:
       _throw();
+      break;
     default:
       return 300;
   }

@@ -7,6 +7,8 @@
 
 #ifndef DART_PRECOMPILED_RUNTIME
 
+#include <initializer_list>
+
 #include "vm/growable_array.h"
 #include "vm/token_position.h"
 #include "vm/zone.h"
@@ -15,6 +17,7 @@ namespace dart {
 
 #define COMPILER_PASS_LIST(V)                                                  \
   V(AllocateRegisters)                                                         \
+  V(AllocateRegistersForGraphIntrinsic)                                        \
   V(AllocationSinking_DetachMaterializations)                                  \
   V(AllocationSinking_Sink)                                                    \
   V(ApplyClassIds)                                                             \
@@ -34,15 +37,18 @@ namespace dart {
   V(LICM)                                                                      \
   V(OptimisticallySpecializeSmiPhis)                                           \
   V(OptimizeBranches)                                                          \
+  V(OptimizeTypedDataAccesses)                                                 \
   V(RangeAnalysis)                                                             \
   V(ReorderBlocks)                                                             \
-  V(ReplaceArrayBoundChecksForAOT)                                             \
+  V(RoundTripSerialization)                                                    \
   V(SelectRepresentations)                                                     \
+  V(SerializeGraph)                                                            \
   V(SetOuterInliningId)                                                        \
   V(TryCatchOptimization)                                                      \
   V(TryOptimizePatterns)                                                       \
   V(TypePropagation)                                                           \
-  V(WidenSmiToInt32)
+  V(WidenSmiToInt32)                                                           \
+  V(WriteBarrierElimination)
 
 class AllocationSinking;
 class BlockScheduler;
@@ -51,6 +57,8 @@ class FlowGraph;
 class Function;
 class Precompiler;
 class SpeculativeInliningPolicy;
+class TimelineStream;
+class Thread;
 
 struct CompilerPassState {
   CompilerPassState(Thread* thread,
@@ -62,23 +70,17 @@ struct CompilerPassState {
         precompiler(precompiler),
         inlining_depth(0),
         sinking(NULL),
-#ifndef PRODUCT
-        compiler_timeline(NULL),
-#endif
         call_specializer(NULL),
         speculative_policy(speculative_policy),
         reorder_blocks(false),
-        block_scheduler(NULL),
         sticky_flags(0) {
   }
 
   Thread* const thread;
-  FlowGraph* const flow_graph;
+  FlowGraph* flow_graph;
   Precompiler* const precompiler;
   int inlining_depth;
   AllocationSinking* sinking;
-
-  NOT_IN_PRODUCT(TimelineStream* compiler_timeline);
 
   // Maps inline_id_to_function[inline_id] -> function. Top scope
   // function has inline_id 0. The map is populated by the inliner.
@@ -93,7 +95,6 @@ struct CompilerPassState {
   SpeculativeInliningPolicy* speculative_policy;
 
   bool reorder_blocks;
-  BlockScheduler* block_scheduler;
 
   intptr_t sticky_flags;
 };
@@ -142,7 +143,30 @@ class CompilerPass {
 
   enum PipelineMode { kJIT, kAOT };
 
-  static void RunPipeline(PipelineMode mode, CompilerPassState* state);
+  static void RunGraphIntrinsicPipeline(CompilerPassState* state);
+
+  static void RunInliningPipeline(PipelineMode mode, CompilerPassState* state);
+
+  // RunPipeline(WithPasses) may have the side effect of changing the FlowGraph
+  // stored in the CompilerPassState. However, existing callers may depend on
+  // the old invariant that the FlowGraph stored in the CompilerPassState was
+  // always updated, never entirely replaced.
+  //
+  // To make sure callers are updated properly, these methods also return
+  // the final FlowGraph and we add a check that callers use this result.
+  DART_WARN_UNUSED_RESULT
+  static FlowGraph* RunPipeline(PipelineMode mode, CompilerPassState* state);
+  DART_WARN_UNUSED_RESULT
+  static FlowGraph* RunPipelineWithPasses(
+      CompilerPassState* state,
+      std::initializer_list<CompilerPass::Id> passes);
+
+  // Pipeline which is used for "force-optimized" functions.
+  //
+  // Must not include speculative or inter-procedural optimizations.
+  DART_WARN_UNUSED_RESULT
+  static FlowGraph* RunForceOptimizedPipeline(PipelineMode mode,
+                                              CompilerPassState* state);
 
  protected:
   // This function executes the pass. If it returns true then

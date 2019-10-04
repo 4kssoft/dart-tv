@@ -12,7 +12,7 @@
 
 namespace dart {
 
-#ifndef PRODUCT
+#if !defined(PRODUCT) || defined(FORCE_INCLUDE_DISASSEMBLER)
 
 class ARM64Decoder : public ValueObject {
  public:
@@ -395,29 +395,28 @@ int ARM64Decoder::FormatOption(Instr* instr, const char* format) {
       }
     }
     case 'd': {
+      int64_t off;
       if (format[4] == '2') {
         ASSERT(STRING_STARTS_WITH(format, "dest26"));
-        int64_t off = instr->SImm26Field() << 2;
+        off = instr->SImm26Field() << 2;
+      } else {
+        if (format[5] == '4') {
+          ASSERT(STRING_STARTS_WITH(format, "dest14"));
+          off = instr->SImm14Field() << 2;
+        } else {
+          ASSERT(STRING_STARTS_WITH(format, "dest19"));
+          off = instr->SImm19Field() << 2;
+        }
+      }
+      if (FLAG_disassemble_relative) {
+        buffer_pos_ +=
+            Utils::SNPrint(current_position_in_buffer(),
+                           remaining_size_in_buffer(), "%+" Pd64 "", off);
+      } else {
         uword destination = reinterpret_cast<uword>(instr) + off;
         buffer_pos_ +=
             Utils::SNPrint(current_position_in_buffer(),
                            remaining_size_in_buffer(), "%#" Px "", destination);
-      } else {
-        if (format[5] == '4') {
-          ASSERT(STRING_STARTS_WITH(format, "dest14"));
-          int64_t off = instr->SImm14Field() << 2;
-          uword destination = reinterpret_cast<uword>(instr) + off;
-          buffer_pos_ += Utils::SNPrint(current_position_in_buffer(),
-                                        remaining_size_in_buffer(), "%#" Px "",
-                                        destination);
-        } else {
-          ASSERT(STRING_STARTS_WITH(format, "dest19"));
-          int64_t off = instr->SImm19Field() << 2;
-          uword destination = reinterpret_cast<uword>(instr) + off;
-          buffer_pos_ += Utils::SNPrint(current_position_in_buffer(),
-                                        remaining_size_in_buffer(), "%#" Px "",
-                                        destination);
-        }
       }
       return 6;
     }
@@ -885,16 +884,6 @@ void ARM64Decoder::DecodeExceptionGen(Instr* instr) {
   } else if ((instr->Bits(0, 2) == 0) && (instr->Bits(2, 3) == 0) &&
              (instr->Bits(21, 3) == 1)) {
     Format(instr, "brk 'imm16");
-    if (instr->Imm16Field() == Instr::kStopMessageCode) {
-      const char* message = "Stop messages not enabled";
-      if (FLAG_print_stop_message) {
-        message = *reinterpret_cast<const char**>(
-            reinterpret_cast<intptr_t>(instr) - 2 * Instr::kInstrSize);
-      }
-      buffer_pos_ +=
-          Utils::SNPrint(current_position_in_buffer(),
-                         remaining_size_in_buffer(), " ; \"%s\"", message);
-    }
   } else if ((instr->Bits(0, 2) == 0) && (instr->Bits(2, 3) == 0) &&
              (instr->Bits(21, 3) == 2)) {
     Format(instr, "hlt 'imm16");
@@ -1574,7 +1563,7 @@ void Disassembler::DecodeInstruction(char* hex_buffer,
   }
 }
 
-#endif  // !PRODUCT
+#endif  // !defined(PRODUCT) || defined(FORCE_INCLUDE_DISASSEMBLER)
 
 }  // namespace dart
 

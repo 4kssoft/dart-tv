@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -15,12 +15,12 @@ import '../analysis_abstract.dart';
 
 main() {
   defineReflectiveSuite(() {
-    defineReflectiveTests(_AnalysisNotificationOutlineTest);
+    defineReflectiveTests(AnalysisNotificationOutlineTest);
   });
 }
 
 @reflectiveTest
-class _AnalysisNotificationOutlineTest extends AbstractAnalysisTest {
+class AnalysisNotificationOutlineTest extends AbstractAnalysisTest {
   FileKind fileKind;
   String libraryName;
   Outline outline;
@@ -83,7 +83,7 @@ library my.lib;
   }
 
   @failingTest
-  test_libraryName_hasLibraryPartOfDirectives() async {
+  Future<void> test_libraryName_hasLibraryPartOfDirectives() async {
     // This appears to have broken with the move to the new analysis driver.
     addTestFile('''
 part of lib.in.part.of;
@@ -94,7 +94,7 @@ library my.lib;
     expect(libraryName, 'my.lib');
   }
 
-  test_libraryName_hasPartOfDirective() async {
+  Future<void> test_libraryName_hasPartOfDirective() async {
     addTestFile('''
 part of my.lib;
 ''');

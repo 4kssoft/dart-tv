@@ -7,6 +7,10 @@
 
 #include "vm/allocation.h"
 #include "vm/compiler/assembler/assembler.h"
+#include "vm/compiler/runtime_api.h"
+#include "vm/compiler/stub_code_compiler.h"
+#include "vm/object.h"
+#include "vm/stub_code_list.h"
 
 namespace dart {
 
@@ -18,129 +22,20 @@ class RawCode;
 class SnapshotReader;
 class SnapshotWriter;
 
-// List of stubs created in the VM isolate, these stubs are shared by different
-// isolates running in this dart process.
-#if !defined(TARGET_ARCH_DBC)
-#define VM_STUB_CODE_LIST(V)                                                   \
-  V(GetCStackPointer)                                                          \
-  V(JumpToFrame)                                                               \
-  V(RunExceptionHandler)                                                       \
-  V(DeoptForRewind)                                                            \
-  V(UpdateStoreBuffer)                                                         \
-  V(PrintStopMessage)                                                          \
-  V(AllocateArray)                                                             \
-  V(AllocateContext)                                                           \
-  V(CallToRuntime)                                                             \
-  V(LazyCompile)                                                               \
-  V(InterpretCall)                                                             \
-  V(CallBootstrapNative)                                                       \
-  V(CallNoScopeNative)                                                         \
-  V(CallAutoScopeNative)                                                       \
-  V(FixCallersTarget)                                                          \
-  V(CallStaticFunction)                                                        \
-  V(OptimizeFunction)                                                          \
-  V(InvokeDartCode)                                                            \
-  V(InvokeDartCodeFromBytecode)                                                \
-  V(DebugStepCheck)                                                            \
-  V(UnlinkedCall)                                                              \
-  V(MonomorphicMiss)                                                           \
-  V(SingleTargetCall)                                                          \
-  V(ICCallThroughFunction)                                                     \
-  V(ICCallThroughCode)                                                         \
-  V(MegamorphicCall)                                                           \
-  V(FixAllocationStubTarget)                                                   \
-  V(Deoptimize)                                                                \
-  V(DeoptimizeLazyFromReturn)                                                  \
-  V(DeoptimizeLazyFromThrow)                                                   \
-  V(UnoptimizedIdenticalWithNumberCheck)                                       \
-  V(OptimizedIdenticalWithNumberCheck)                                         \
-  V(ICCallBreakpoint)                                                          \
-  V(RuntimeCallBreakpoint)                                                     \
-  V(OneArgCheckInlineCache)                                                    \
-  V(TwoArgsCheckInlineCache)                                                   \
-  V(SmiAddInlineCache)                                                         \
-  V(SmiSubInlineCache)                                                         \
-  V(SmiEqualInlineCache)                                                       \
-  V(OneArgOptimizedCheckInlineCache)                                           \
-  V(TwoArgsOptimizedCheckInlineCache)                                          \
-  V(ZeroArgsUnoptimizedStaticCall)                                             \
-  V(OneArgUnoptimizedStaticCall)                                               \
-  V(TwoArgsUnoptimizedStaticCall)                                              \
-  V(Subtype1TestCache)                                                         \
-  V(Subtype2TestCache)                                                         \
-  V(Subtype4TestCache)                                                         \
-  V(DefaultTypeTest)                                                           \
-  V(TopTypeTypeTest)                                                           \
-  V(TypeRefTypeTest)                                                           \
-  V(UnreachableTypeTest)                                                       \
-  V(SlowTypeTest)                                                              \
-  V(LazySpecializeTypeTest)                                                    \
-  V(CallClosureNoSuchMethod)                                                   \
-  V(FrameAwaitingMaterialization)                                              \
-  V(AsynchronousGapMarker)
-
-#else
-#define VM_STUB_CODE_LIST(V)                                                   \
-  V(LazyCompile)                                                               \
-  V(OptimizeFunction)                                                          \
-  V(CallClosureNoSuchMethod)                                                   \
-  V(RunExceptionHandler)                                                       \
-  V(DeoptForRewind)                                                            \
-  V(FixCallersTarget)                                                          \
-  V(Deoptimize)                                                                \
-  V(DeoptimizeLazyFromReturn)                                                  \
-  V(DeoptimizeLazyFromThrow)                                                   \
-  V(DefaultTypeTest)                                                           \
-  V(TopTypeTypeTest)                                                           \
-  V(TypeRefTypeTest)                                                           \
-  V(UnreachableTypeTest)                                                       \
-  V(SlowTypeTest)                                                              \
-  V(LazySpecializeTypeTest)                                                    \
-  V(FrameAwaitingMaterialization)                                              \
-  V(AsynchronousGapMarker)
-
-#endif  // !defined(TARGET_ARCH_DBC)
-
 // Is it permitted for the stubs above to refer to Object::null(), which is
 // allocated in the VM isolate and shared across all isolates.
 // However, in cases where a simple GC-safe placeholder is needed on the stack,
 // using Smi 0 instead of Object::null() is slightly more efficient, since a Smi
 // does not require relocation.
 
-// class StubEntry is used to describe stub methods generated in dart to
-// abstract out common code executed from generated dart code.
-class StubEntry {
- public:
-  explicit StubEntry(const Code& code);
-  ~StubEntry() {}
-
-  const ExternalLabel& label() const { return label_; }
-  uword EntryPoint() const { return entry_point_; }
-  uword CheckedEntryPoint() const { return checked_entry_point_; }
-  RawCode* code() const { return code_; }
-  intptr_t Size() const { return size_; }
-
-  // Visit all object pointers.
-  void VisitObjectPointers(ObjectPointerVisitor* visitor);
-
- private:
-  RawCode* code_;
-  uword entry_point_;
-  uword checked_entry_point_;
-  intptr_t size_;
-  ExternalLabel label_;
-
-  DISALLOW_COPY_AND_ASSIGN(StubEntry);
-};
-
 // class StubCode is used to maintain the lifecycle of stubs.
 class StubCode : public AllStatic {
  public:
   // Generate all stubs which are shared across all isolates, this is done
   // only once and the stub code resides in the vm_isolate heap.
-  static void InitOnce();
+  static void Init();
 
-  static void VisitObjectPointers(ObjectPointerVisitor* visitor);
+  static void Cleanup();
 
   // Returns true if stub code has been initialized.
   static bool HasBeenInitialized();
@@ -157,28 +52,52 @@ class StubCode : public AllStatic {
 
 // Define the shared stub code accessors.
 #define STUB_CODE_ACCESSOR(name)                                               \
-  static const StubEntry* name##_entry() { return entries_[k##name##Index]; }  \
-  static intptr_t name##Size() { return name##_entry()->Size(); }
+  static const Code& name() { return *entries_[k##name##Index]; }              \
+  static intptr_t name##Size() { return name().Size(); }
   VM_STUB_CODE_LIST(STUB_CODE_ACCESSOR);
 #undef STUB_CODE_ACCESSOR
 
   static RawCode* GetAllocationStubForClass(const Class& cls);
 
-  static const StubEntry* UnoptimizedStaticCallEntry(intptr_t num_args_tested);
+#if !defined(TARGET_ARCH_DBC) && !defined(TARGET_ARCH_IA32)
+  static RawCode* GetBuildMethodExtractorStub(
+      compiler::ObjectPoolBuilder* pool);
+#endif
+
+  // Generate the stub and finalize the generated code into the stub
+  // code executable area.
+  static RawCode* Generate(
+      const char* name,
+      compiler::ObjectPoolBuilder* object_pool_builder,
+      void (*GenerateStub)(compiler::Assembler* assembler));
+
+  static const Code& UnoptimizedStaticCallEntry(intptr_t num_args_tested);
 
   static const intptr_t kNoInstantiator = 0;
   static const intptr_t kInstantiationSizeInWords = 3;
 
-  static StubEntry* EntryAt(intptr_t index) { return entries_[index]; }
-  static void EntryAtPut(intptr_t index, StubEntry* entry) {
+  static const Code& EntryAt(intptr_t index) { return *entries_[index]; }
+  static void EntryAtPut(intptr_t index, Code* entry) {
+    ASSERT(entry->IsReadOnlyHandle());
+    ASSERT(entries_[index] == nullptr);
     entries_[index] = entry;
   }
   static intptr_t NumEntries() { return kNumStubEntries; }
 
+#if !defined(DART_PRECOMPILED_RUNTIME)
+#define GENERATE_STUB(name)                                                    \
+  static RawCode* BuildIsolateSpecific##name##Stub(                            \
+      compiler::ObjectPoolBuilder* opw) {                                      \
+    return StubCode::Generate(                                                 \
+        "_iso_stub_" #name, opw,                                               \
+        compiler::StubCodeCompiler::Generate##name##Stub);                     \
+  }
+  VM_STUB_CODE_LIST(GENERATE_STUB);
+#undef GENERATE_STUB
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+
  private:
   friend class MegamorphicCacheTable;
-
-  static const intptr_t kStubCodeSize = 4 * KB;
 
   enum {
 #define STUB_CODE_ENTRY(name) k##name##Index,
@@ -187,58 +106,8 @@ class StubCode : public AllStatic {
         kNumStubEntries
   };
 
-  static StubEntry* entries_[kNumStubEntries];
-
-#if !defined(DART_PRECOMPILED_RUNTIME)
-#define STUB_CODE_GENERATE(name)                                               \
-  static void Generate##name##Stub(Assembler* assembler);
-  VM_STUB_CODE_LIST(STUB_CODE_GENERATE)
-#undef STUB_CODE_GENERATE
-
-  // Generate the stub and finalize the generated code into the stub
-  // code executable area.
-  static RawCode* Generate(const char* name,
-                           void (*GenerateStub)(Assembler* assembler));
-
-  static void GenerateMegamorphicMissStub(Assembler* assembler);
-  static void GenerateAllocationStubForClass(Assembler* assembler,
-                                             const Class& cls);
-  static void GenerateNArgsCheckInlineCacheStub(
-      Assembler* assembler,
-      intptr_t num_args,
-      const RuntimeEntry& handle_ic_miss,
-      Token::Kind kind,
-      bool optimized = false);
-  static void GenerateUsageCounterIncrement(Assembler* assembler,
-                                            Register temp_reg);
-  static void GenerateOptimizedUsageCounterIncrement(Assembler* assembler);
-#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+  static Code* entries_[kNumStubEntries];
 };
-
-enum DeoptStubKind { kLazyDeoptFromReturn, kLazyDeoptFromThrow, kEagerDeopt };
-
-// Invocation mode for TypeCheck runtime entry that describes
-// where we are calling it from.
-enum TypeCheckMode {
-  // TypeCheck is invoked from LazySpecializeTypeTest stub.
-  // It should replace stub on the type with a specialized version.
-  kTypeCheckFromLazySpecializeStub,
-
-  // TypeCheck is invoked from the SlowTypeTest stub.
-  // This means that cache can be lazily created (if needed)
-  // and dst_name can be fetched from the pool.
-  kTypeCheckFromSlowStub,
-
-  // TypeCheck is invoked from normal inline AssertAssignable.
-  // Both cache and dst_name must be already populated.
-  kTypeCheckFromInline
-};
-
-// Zap value used to indicate unused CODE_REG in deopt.
-static const uword kZapCodeReg = 0xf1f1f1f1;
-
-// Zap value used to indicate unused return address in deopt.
-static const uword kZapReturnAddress = 0xe1e1e1e1;
 
 }  // namespace dart
 

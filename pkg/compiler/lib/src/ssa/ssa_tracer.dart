@@ -6,23 +6,21 @@ library ssa.tracer;
 
 import '../../compiler_new.dart' show OutputSink;
 import '../diagnostics/invariant.dart' show DEBUG_MODE;
-import '../js_backend/namer.dart' show Namer;
-import '../types/abstract_value_domain.dart';
+import '../inferrer/abstract_value_domain.dart';
+import '../js_backend/namer.dart' show suffixForGetInterceptor;
 import '../tracer.dart';
 import '../world.dart' show JClosedWorld;
 import 'nodes.dart';
 
-/**
- * Outputs SSA code in a format readable by Hydra IR.
- * Tracing is disabled by default, see ../tracer.dart for how
- * to enable it.
- */
+/// Outputs SSA code in a format readable by Hydra IR.
+/// Tracing is disabled by default, see ../tracer.dart for how
+/// to enable it.
 class HTracer extends HGraphVisitor with TracerUtil {
   final JClosedWorld closedWorld;
-  final Namer namer;
+  @override
   final OutputSink output;
 
-  HTracer(this.output, this.closedWorld, this.namer);
+  HTracer(this.output, this.closedWorld);
 
   void traceGraph(String name, HGraph graph) {
     DEBUG_MODE = true;
@@ -74,9 +72,10 @@ class HTracer extends HGraphVisitor with TracerUtil {
     }
   }
 
+  @override
   void visitBasicBlock(HBasicBlock block) {
     HInstructionStringifier stringifier =
-        new HInstructionStringifier(block, closedWorld, namer);
+        new HInstructionStringifier(block, closedWorld);
     assert(block.id != null);
     tag("block", () {
       printProperty("name", "B${block.id}");
@@ -114,10 +113,9 @@ class HTracer extends HGraphVisitor with TracerUtil {
 
 class HInstructionStringifier implements HVisitor<String> {
   final JClosedWorld closedWorld;
-  final Namer namer;
   final HBasicBlock currentBlock;
 
-  HInstructionStringifier(this.currentBlock, this.closedWorld, this.namer);
+  HInstructionStringifier(this.currentBlock, this.closedWorld);
 
   AbstractValueDomain get _abstractValueDomain =>
       closedWorld.abstractValueDomain;
@@ -126,31 +124,43 @@ class HInstructionStringifier implements HVisitor<String> {
 
   String temporaryId(HInstruction instruction) {
     String prefix;
-    if (instruction.isNull(_abstractValueDomain)) {
+    if (instruction.isNull(_abstractValueDomain).isDefinitelyTrue) {
       prefix = 'u';
-    } else if (instruction.isConflicting(_abstractValueDomain)) {
+    } else if (instruction
+        .isConflicting(_abstractValueDomain)
+        .isDefinitelyTrue) {
       prefix = 'c';
-    } else if (instruction.isExtendableArray(_abstractValueDomain)) {
+    } else if (instruction
+        .isExtendableArray(_abstractValueDomain)
+        .isDefinitelyTrue) {
       prefix = 'e';
-    } else if (instruction.isFixedArray(_abstractValueDomain)) {
+    } else if (instruction
+        .isFixedArray(_abstractValueDomain)
+        .isDefinitelyTrue) {
       prefix = 'f';
-    } else if (instruction.isMutableArray(_abstractValueDomain)) {
+    } else if (instruction
+        .isMutableArray(_abstractValueDomain)
+        .isDefinitelyTrue) {
       prefix = 'm';
-    } else if (instruction.isArray(_abstractValueDomain)) {
+    } else if (instruction.isArray(_abstractValueDomain).isDefinitelyTrue) {
       prefix = 'a';
-    } else if (instruction.isString(_abstractValueDomain)) {
+    } else if (instruction.isString(_abstractValueDomain).isDefinitelyTrue) {
       prefix = 's';
-    } else if (instruction.isIndexablePrimitive(_abstractValueDomain)) {
+    } else if (instruction
+        .isIndexablePrimitive(_abstractValueDomain)
+        .isDefinitelyTrue) {
       prefix = 'r';
-    } else if (instruction.isBoolean(_abstractValueDomain)) {
+    } else if (instruction.isBoolean(_abstractValueDomain).isDefinitelyTrue) {
       prefix = 'b';
-    } else if (instruction.isInteger(_abstractValueDomain)) {
+    } else if (instruction.isInteger(_abstractValueDomain).isDefinitelyTrue) {
       prefix = 'i';
-    } else if (instruction.isDouble(_abstractValueDomain)) {
+    } else if (instruction.isDouble(_abstractValueDomain).isDefinitelyTrue) {
       prefix = 'd';
-    } else if (instruction.isNumber(_abstractValueDomain)) {
+    } else if (instruction.isNumber(_abstractValueDomain).isDefinitelyTrue) {
       prefix = 'n';
-    } else if (_abstractValueDomain.containsAll(instruction.instructionType)) {
+    } else if (_abstractValueDomain
+        .containsAll(instruction.instructionType)
+        .isPotentiallyTrue) {
       prefix = 'v';
     } else {
       prefix = 'U';
@@ -158,8 +168,9 @@ class HInstructionStringifier implements HVisitor<String> {
     return "$prefix${instruction.id}";
   }
 
-  String visitBoolify(HBoolify node) {
-    return "Boolify: ${temporaryId(node.inputs[0])}";
+  @override
+  String visitLateValue(HLateValue node) {
+    return "LateValue: ${temporaryId(node.inputs[0])}";
   }
 
   String handleInvokeBinary(HInvokeBinary node, String opcode) {
@@ -168,30 +179,38 @@ class HInstructionStringifier implements HVisitor<String> {
     return '$opcode: $left $right';
   }
 
+  @override
   String visitAbs(HAbs node) {
     String operand = temporaryId(node.operand);
     return "Abs: $operand";
   }
 
+  @override
   String visitAdd(HAdd node) => handleInvokeBinary(node, 'Add');
 
+  @override
   String visitBitAnd(HBitAnd node) => handleInvokeBinary(node, 'BitAnd');
 
+  @override
   String visitBitNot(HBitNot node) {
     String operand = temporaryId(node.operand);
     return "BitNot: $operand";
   }
 
+  @override
   String visitBitOr(HBitOr node) => handleInvokeBinary(node, 'BitOr');
 
+  @override
   String visitBitXor(HBitXor node) => handleInvokeBinary(node, 'BitXor');
 
+  @override
   String visitBoundsCheck(HBoundsCheck node) {
     String lengthId = temporaryId(node.length);
     String indexId = temporaryId(node.index);
     return "BoundsCheck: length = $lengthId, index = $indexId";
   }
 
+  @override
   String visitBreak(HBreak node) {
     HBasicBlock target = currentBlock.successors[0];
     if (node.label != null) {
@@ -200,8 +219,10 @@ class HInstructionStringifier implements HVisitor<String> {
     return "Break: (B${target.id})";
   }
 
+  @override
   String visitConstant(HConstant constant) => "Constant: ${constant.constant}";
 
+  @override
   String visitContinue(HContinue node) {
     HBasicBlock target = currentBlock.successors[0];
     if (node.label != null) {
@@ -210,18 +231,23 @@ class HInstructionStringifier implements HVisitor<String> {
     return "Continue: (B${target.id})";
   }
 
+  @override
   String visitCreate(HCreate node) {
     return handleGenericInvoke("Create", "${node.element.name}", node.inputs);
   }
 
+  @override
   String visitCreateBox(HCreateBox node) {
     return handleGenericInvoke("CreateBox", "", node.inputs);
   }
 
+  @override
   String visitDivide(HDivide node) => handleInvokeBinary(node, 'Divide');
 
+  @override
   String visitExit(HExit node) => "Exit";
 
+  @override
   String visitFieldGet(HFieldGet node) {
     if (node.isNullCheck) {
       return 'FieldGet: NullCheck ${temporaryId(node.receiver)}';
@@ -230,12 +256,14 @@ class HInstructionStringifier implements HVisitor<String> {
     return 'FieldGet: ${temporaryId(node.receiver)}.$fieldName';
   }
 
+  @override
   String visitFieldSet(HFieldSet node) {
     String valueId = temporaryId(node.value);
     String fieldName = node.element.name;
     return 'FieldSet: ${temporaryId(node.receiver)}.$fieldName to $valueId';
   }
 
+  @override
   String visitReadModifyWrite(HReadModifyWrite node) {
     String fieldName = node.element.name;
     String receiverId = temporaryId(node.receiver);
@@ -250,33 +278,41 @@ class HInstructionStringifier implements HVisitor<String> {
     }
   }
 
+  @override
   String visitGetLength(HGetLength node) {
     return 'GetLength: ${temporaryId(node.receiver)}';
   }
 
+  @override
   String visitLocalGet(HLocalGet node) {
     String localName = node.variable.name;
     return 'LocalGet: ${temporaryId(node.local)}.$localName';
   }
 
+  @override
   String visitLocalSet(HLocalSet node) {
     String valueId = temporaryId(node.value);
     String localName = node.variable.name;
     return 'LocalSet: ${temporaryId(node.local)}.$localName to $valueId';
   }
 
+  @override
   String visitGoto(HGoto node) {
     HBasicBlock target = currentBlock.successors[0];
     return "Goto: (B${target.id})";
   }
 
+  @override
   String visitGreater(HGreater node) => handleInvokeBinary(node, 'Greater');
+  @override
   String visitGreaterEqual(HGreaterEqual node) {
     return handleInvokeBinary(node, 'GreaterEqual');
   }
 
+  @override
   String visitIdentity(HIdentity node) => handleInvokeBinary(node, 'Identity');
 
+  @override
   String visitIf(HIf node) {
     HBasicBlock thenBlock = currentBlock.successors[0];
     HBasicBlock elseBlock = currentBlock.successors[1];
@@ -294,12 +330,14 @@ class HInstructionStringifier implements HVisitor<String> {
     return "$invokeType: $functionName($argumentsString)";
   }
 
+  @override
   String visitIndex(HIndex node) {
     String receiver = temporaryId(node.receiver);
     String index = temporaryId(node.index);
     return "Index: $receiver[$index]";
   }
 
+  @override
   String visitIndexAssign(HIndexAssign node) {
     String receiver = temporaryId(node.receiver);
     String index = temporaryId(node.index);
@@ -307,15 +345,18 @@ class HInstructionStringifier implements HVisitor<String> {
     return "IndexAssign: $receiver[$index] = $value";
   }
 
+  @override
   String visitInterceptor(HInterceptor node) {
     String value = temporaryId(node.inputs[0]);
     if (node.interceptedClasses != null) {
-      String cls = namer.suffixForGetInterceptor(node.interceptedClasses);
-      return "Interceptor ($cls): $value";
+      String cls = suffixForGetInterceptor(closedWorld.commonElements,
+          closedWorld.nativeData, node.interceptedClasses);
+      return "Interceptor (${cls}): $value";
     }
     return "Interceptor: $value";
   }
 
+  @override
   String visitInvokeClosure(HInvokeClosure node) =>
       handleInvokeDynamic(node, "InvokeClosure");
 
@@ -325,36 +366,45 @@ class HInstructionStringifier implements HVisitor<String> {
     String target = "$receiver.$name";
     int offset = HInvoke.ARGUMENTS_OFFSET;
     List arguments = invoke.inputs.sublist(offset);
-    return handleGenericInvoke(kind, target, arguments) + "(${invoke.mask})";
+    return handleGenericInvoke(kind, target, arguments) +
+        "(${invoke.receiverType})";
   }
 
+  @override
   String visitInvokeDynamicMethod(HInvokeDynamicMethod node) =>
       handleInvokeDynamic(node, "InvokeDynamicMethod");
+  @override
   String visitInvokeDynamicGetter(HInvokeDynamicGetter node) =>
       handleInvokeDynamic(node, "InvokeDynamicGetter");
+  @override
   String visitInvokeDynamicSetter(HInvokeDynamicSetter node) =>
       handleInvokeDynamic(node, "InvokeDynamicSetter");
 
+  @override
   String visitInvokeStatic(HInvokeStatic invoke) {
     String target = invoke.element.name;
     return handleGenericInvoke("InvokeStatic", target, invoke.inputs);
   }
 
+  @override
   String visitInvokeSuper(HInvokeSuper invoke) {
     String target = invoke.element.name;
     return handleGenericInvoke("InvokeSuper", target, invoke.inputs);
   }
 
+  @override
   String visitInvokeConstructorBody(HInvokeConstructorBody invoke) {
     String target = invoke.element.name;
     return handleGenericInvoke("InvokeConstructorBody", target, invoke.inputs);
   }
 
+  @override
   String visitInvokeGeneratorBody(HInvokeGeneratorBody invoke) {
     String target = invoke.element.name;
     return handleGenericInvoke("InvokeGeneratorBody", target, invoke.inputs);
   }
 
+  @override
   String visitForeignCode(HForeignCode node) {
     var template = node.codeTemplate;
     String code = '${template.ast}';
@@ -362,10 +412,13 @@ class HInstructionStringifier implements HVisitor<String> {
     return "ForeignCode: $code ($inputs)";
   }
 
+  @override
   String visitLess(HLess node) => handleInvokeBinary(node, 'Less');
+  @override
   String visitLessEqual(HLessEqual node) =>
       handleInvokeBinary(node, 'LessEqual');
 
+  @override
   String visitLiteralList(HLiteralList node) {
     StringBuffer elementsString = new StringBuffer();
     for (int i = 0; i < node.inputs.length; i++) {
@@ -375,6 +428,7 @@ class HInstructionStringifier implements HVisitor<String> {
     return "LiteralList: [$elementsString]";
   }
 
+  @override
   String visitLoopBranch(HLoopBranch branch) {
     HBasicBlock bodyBlock = currentBlock.successors[0];
     HBasicBlock exitBlock = currentBlock.successors[1];
@@ -382,23 +436,29 @@ class HInstructionStringifier implements HVisitor<String> {
     return "LoopBranch ($conditionId): (B${bodyBlock.id}) then (B${exitBlock.id})";
   }
 
+  @override
   String visitMultiply(HMultiply node) => handleInvokeBinary(node, 'Multiply');
 
+  @override
   String visitNegate(HNegate node) {
     String operand = temporaryId(node.operand);
     return "Negate: $operand";
   }
 
+  @override
   String visitNot(HNot node) => "Not: ${temporaryId(node.inputs[0])}";
 
+  @override
   String visitParameterValue(HParameterValue node) {
     return "ParameterValue: ${node.sourceElement.name}";
   }
 
+  @override
   String visitLocalValue(HLocalValue node) {
     return "LocalValue: ${node.sourceElement.name}";
   }
 
+  @override
   String visitPhi(HPhi phi) {
     StringBuffer buffer = new StringBuffer();
     buffer.write("Phi: ");
@@ -409,42 +469,54 @@ class HInstructionStringifier implements HVisitor<String> {
     return buffer.toString();
   }
 
+  @override
   String visitRef(HRef node) {
     return 'Ref: ${temporaryId(node.value)}';
   }
 
+  @override
   String visitReturn(HReturn node) => "Return: ${temporaryId(node.inputs[0])}";
 
+  @override
   String visitShiftLeft(HShiftLeft node) =>
       handleInvokeBinary(node, 'ShiftLeft');
+  @override
   String visitShiftRight(HShiftRight node) =>
       handleInvokeBinary(node, 'ShiftRight');
 
+  @override
   String visitStatic(HStatic node) => "Static: ${node.element.name}";
 
+  @override
   String visitLazyStatic(HLazyStatic node) =>
       "LazyStatic: ${node.element.name}";
 
+  @override
   String visitOneShotInterceptor(HOneShotInterceptor node) =>
       handleInvokeDynamic(node, "OneShotInterceptor");
 
+  @override
   String visitStaticStore(HStaticStore node) {
     String lhs = node.element.name;
     return "StaticStore: $lhs = ${temporaryId(node.inputs[0])}";
   }
 
+  @override
   String visitStringConcat(HStringConcat node) {
     var leftId = temporaryId(node.left);
     var rightId = temporaryId(node.right);
     return "StringConcat: $leftId + $rightId";
   }
 
+  @override
   String visitStringify(HStringify node) {
     return "Stringify: ${temporaryId(node.inputs[0])}";
   }
 
+  @override
   String visitSubtract(HSubtract node) => handleInvokeBinary(node, 'Subtract');
 
+  @override
   String visitSwitch(HSwitch node) {
     StringBuffer buf = new StringBuffer();
     buf.write("Switch: (");
@@ -461,26 +533,33 @@ class HInstructionStringifier implements HVisitor<String> {
     return buf.toString();
   }
 
+  @override
   String visitThis(HThis node) => "This";
 
+  @override
   String visitThrow(HThrow node) => "Throw: ${temporaryId(node.inputs[0])}";
 
+  @override
   String visitThrowExpression(HThrowExpression node) {
     return "ThrowExpression: ${temporaryId(node.inputs[0])}";
   }
 
+  @override
   String visitTruncatingDivide(HTruncatingDivide node) {
     return handleInvokeBinary(node, 'TruncatingDivide');
   }
 
+  @override
   String visitRemainder(HRemainder node) {
     return handleInvokeBinary(node, 'Remainder');
   }
 
+  @override
   String visitExitTry(HExitTry node) {
     return "ExitTry";
   }
 
+  @override
   String visitTry(HTry node) {
     List<HBasicBlock> successors = currentBlock.successors;
     String tryBlock = 'B${successors[0].id}';
@@ -498,16 +577,19 @@ class HInstructionStringifier implements HVisitor<String> {
         "Join: B${successors.last.id}";
   }
 
+  @override
   String visitIs(HIs node) {
     String type = node.typeExpression.toString();
     return "Is: ${temporaryId(node.expression)} is $type";
   }
 
+  @override
   String visitIsViaInterceptor(HIsViaInterceptor node) {
     String type = node.typeExpression.toString();
     return "IsViaInterceptor: ${temporaryId(node.inputs[0])} is $type";
   }
 
+  @override
   String visitTypeConversion(HTypeConversion node) {
     String checkedInput = temporaryId(node.checkedInput);
     String rest;
@@ -522,21 +604,32 @@ class HInstructionStringifier implements HVisitor<String> {
   }
 
   String _typeConversionKind(HTypeConversion node) {
-    switch (node.kind) {
-      case HTypeConversion.CHECKED_MODE_CHECK:
-        return 'CHECKED_MODE';
-      case HTypeConversion.ARGUMENT_TYPE_CHECK:
-        return 'ARGUMENT';
-      case HTypeConversion.CAST_TYPE_CHECK:
-        return 'CAST';
-      case HTypeConversion.BOOLEAN_CONVERSION_CHECK:
-        return 'BOOLEAN_CONVERSION';
-      case HTypeConversion.RECEIVER_TYPE_CHECK:
-        return 'RECEIVER';
-    }
+    if (node.isTypeCheck) return 'TYPE_CHECK';
+    if (node.isCastCheck) return 'CAST_CHECK';
     return '?';
   }
 
+  @override
+  String visitPrimitiveCheck(HPrimitiveCheck node) {
+    String checkedInput = temporaryId(node.checkedInput);
+    assert(node.inputs.length == 1);
+    String kind = _primitiveCheckKind(node);
+    return "PrimitiveCheck: $kind $checkedInput to ${node.instructionType}";
+  }
+
+  String _primitiveCheckKind(HPrimitiveCheck node) {
+    if (node.isReceiverTypeCheck) return 'RECEIVER';
+    if (node.isArgumentTypeCheck) return 'ARGUMENT';
+    return '?';
+  }
+
+  @override
+  String visitBoolConversion(HBoolConversion node) {
+    String checkedInput = temporaryId(node.checkedInput);
+    return "BoolConversion: $checkedInput";
+  }
+
+  @override
   String visitTypeKnown(HTypeKnown node) {
     assert(node.inputs.length <= 2);
     String result =
@@ -547,31 +640,87 @@ class HInstructionStringifier implements HVisitor<String> {
     return result;
   }
 
+  @override
   String visitRangeConversion(HRangeConversion node) {
     return "RangeConversion: ${node.checkedInput}";
   }
 
+  @override
   String visitTypeInfoReadRaw(HTypeInfoReadRaw node) {
     var inputs = node.inputs.map(temporaryId).join(', ');
     return "TypeInfoReadRaw: $inputs";
   }
 
+  @override
   String visitTypeInfoReadVariable(HTypeInfoReadVariable node) {
     var inputs = node.inputs.map(temporaryId).join(', ');
     return "TypeInfoReadVariable: ${node.variable}  $inputs";
   }
 
+  @override
   String visitTypeInfoExpression(HTypeInfoExpression node) {
     var inputs = node.inputs.map(temporaryId).join(', ');
     return "TypeInfoExpression: ${node.kindAsString} ${node.dartType}"
         " ($inputs)";
   }
 
+  @override
   String visitAwait(HAwait node) {
     return "Await: ${temporaryId(node.inputs[0])}";
   }
 
+  @override
   String visitYield(HYield node) {
     return "Yield${node.hasStar ? "*" : ""}: ${temporaryId(node.inputs[0])}";
+  }
+
+  @override
+  String visitIsTest(HIsTest node) {
+    var inputs = node.inputs.map(temporaryId).join(', ');
+    return "IsTest: $inputs";
+  }
+
+  @override
+  String visitAsCheck(HAsCheck node) {
+    var inputs = node.inputs.map(temporaryId).join(', ');
+    String error = node.isTypeError ? 'TypeError' : 'CastError';
+    return "AsCheck: $error $inputs";
+  }
+
+  @override
+  String visitAsCheckSimple(HAsCheckSimple node) {
+    var inputs = node.inputs.map(temporaryId).join(', ');
+    String error = node.isTypeError ? 'TypeError' : 'CastError';
+    return "AsCheckSimple: $error ${node.dartType} $inputs";
+  }
+
+  @override
+  String visitSubtypeCheck(HSubtypeCheck node) {
+    var inputs = node.inputs.map(temporaryId).join(', ');
+    return "SubtypeCheck: $inputs";
+  }
+
+  @override
+  String visitLoadType(HLoadType node) {
+    var inputs = node.inputs.map(temporaryId).join(', ');
+    return "LoadType: ${node.typeExpression}  $inputs";
+  }
+
+  @override
+  String visitInstanceEnvironment(HInstanceEnvironment node) {
+    var inputs = node.inputs.map(temporaryId).join(', ');
+    return "InstanceEnvironment: $inputs";
+  }
+
+  @override
+  String visitTypeEval(HTypeEval node) {
+    var inputs = node.inputs.map(temporaryId).join(', ');
+    return "TypeEval: ${node.typeExpression}  ${node.envStructure}  $inputs";
+  }
+
+  @override
+  String visitTypeBind(HTypeBind node) {
+    var inputs = node.inputs.map(temporaryId).join(', ');
+    return "TypeBind: $inputs";
   }
 }

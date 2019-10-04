@@ -5,8 +5,8 @@
 main.dart.patch: |
   <<<< []
   class A<S> {
-  ==== []
-  class A<S extends S> {
+  ==== {"messages":[],"hasCompileTimeError":1}
+  class A<S extends num> {
   >>>>
     S field;
   }

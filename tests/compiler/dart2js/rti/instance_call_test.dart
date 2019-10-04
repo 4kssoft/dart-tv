@@ -8,76 +8,75 @@ import 'package:compiler/src/common_elements.dart';
 import 'package:compiler/src/compiler.dart';
 import 'package:compiler/src/elements/entities.dart';
 import 'package:compiler/src/elements/names.dart';
-import 'package:compiler/src/js_backend/runtime_types.dart';
+import 'package:compiler/src/js_backend/runtime_types_resolution.dart';
 import 'package:compiler/src/js_emitter/model.dart';
+import 'package:compiler/src/js_model/js_strategy.dart';
 import 'package:compiler/src/js/js.dart' as js;
 import 'package:compiler/src/world.dart';
 import 'package:compiler/src/universe/call_structure.dart';
 import 'package:compiler/src/universe/selector.dart';
 import 'package:expect/expect.dart';
 import '../helpers/program_lookup.dart';
-import '../memory_compiler.dart';
+import '../helpers/memory_compiler.dart';
 
 const String code = '''
-import 'package:meta/dart2js.dart';
-
 class A {
   // Both method1 implementations need type arguments.
-  @noInline
+  @pragma('dart2js:noInline')
   method1<T>(T t) => t is T;
 
   // One of the method2 implementations need type arguments.
-  @noInline
+  @pragma('dart2js:noInline')
   method2<T>(T t) => t is T;
 
   // None of the method3 implementations need type arguments.
-  @noInline
+  @pragma('dart2js:noInline')
   method3<T>(T t) => false;
 }
 
 class B {
-  @noInline
+  @pragma('dart2js:noInline')
   method1<T>(T t) => t is T;
-  @noInline
+  @pragma('dart2js:noInline')
   method2<T>(T t) => true;
-  @noInline
+  @pragma('dart2js:noInline')
   method3<T>(T t) => true;
 }
 
 // A call to either A.method1 or B.method1.
-@noInline
+@pragma('dart2js:noInline')
 call1(c) => c.method1<int>(0);
 
 // A call to A.method1.
-@noInline
+@pragma('dart2js:noInline')
 call1a() => new A().method1<int>(0);
 
 // A call to B.method1.
-@noInline
+@pragma('dart2js:noInline')
 call1b() => new B().method1<int>(0);
 
 // A call to either A.method2 or B.method2.
-@noInline
+@pragma('dart2js:noInline')
 call2(c) => c.method2<int>(0);
 
 // A call to A.method2.
-@noInline
+@pragma('dart2js:noInline')
 call2a() => new A().method2<int>(0);
 
 // A call to B.method2.
-@noInline
+@pragma('dart2js:noInline')
 call2b() => new B().method2<int>(0);
 
 // A call to either A.method3 or B.method3.
-@noInline
+@pragma('dart2js:noInline')
 call3(c) => c.method3<int>(0);
 
 // A call to A.method3.
-@noInline
+@pragma('dart2js:noInline')
 call3a() => new A().method3<int>(0);
 
 // A call to B.method3.
-@noInline
+@pragma('dart2js:noInline')
 call3b() => new B().method3<int>(0);
 
 main() {
@@ -100,16 +99,17 @@ main() {
   asyncTest(() async {
     CompilationResult result = await runCompiler(
         memorySourceFiles: {'main.dart': code},
-        options: [Flags.strongMode, Flags.omitImplicitChecks]);
+        options: [Flags.omitImplicitChecks]);
     Expect.isTrue(result.isSuccess);
     Compiler compiler = result.compiler;
+    JsBackendStrategy backendStrategy = compiler.backendStrategy;
     JClosedWorld closedWorld = compiler.backendClosedWorldForTesting;
     RuntimeTypesNeed rtiNeed = closedWorld.rtiNeed;
     ElementEnvironment elementEnvironment = closedWorld.elementEnvironment;
-    ProgramLookup programLookup = new ProgramLookup(compiler);
+    ProgramLookup programLookup = new ProgramLookup(backendStrategy);
 
     js.Name getName(String name, int typeArguments) {
-      return compiler.backend.namer.invocationName(new Selector.call(
+      return backendStrategy.namerForTesting.invocationName(new Selector.call(
           new PublicName(name),
           new CallStructure(1, const <String>[], typeArguments)));
     }
@@ -153,14 +153,17 @@ main() {
       js.Name selector = getName(targetName, expectedTypeArguments);
       bool callFound = false;
       forEachNode(fun, onCall: (js.Call node) {
-        js.Expression target = node.target;
-        if (target is js.PropertyAccess && target.selector == selector) {
-          callFound = true;
-          Expect.equals(
-              1 + expectedTypeArguments,
-              node.arguments.length,
-              "Unexpected argument count in $function call to $targetName: "
-              "${js.nodeToString(fun)}");
+        js.Expression target = js.undefer(node.target);
+        if (target is js.PropertyAccess) {
+          js.Node targetSelector = js.undefer(target.selector);
+          if (targetSelector is js.Name && targetSelector.key == selector.key) {
+            callFound = true;
+            Expect.equals(
+                1 + expectedTypeArguments,
+                node.arguments.length,
+                "Unexpected argument count in $function call to $targetName: "
+                "${js.nodeToString(fun)}");
+          }
         }
       });
       Expect.isTrue(callFound,

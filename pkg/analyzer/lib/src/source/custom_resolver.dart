@@ -1,9 +1,10 @@
-// Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2016, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/src/generated/source.dart';
+import 'package:analyzer/src/util/uri.dart';
 
 class CustomUriResolver extends UriResolver {
   final ResourceProvider resourceProvider;
@@ -21,8 +22,8 @@ class CustomUriResolver extends UriResolver {
     if (!fileUri.isAbsolute) {
       return null;
     }
-    return resourceProvider
-        .getFile(resourceProvider.pathContext.fromUri(fileUri))
-        .createSource(actualUri ?? uri);
+    var pathContext = resourceProvider.pathContext;
+    var path = fileUriToNormalizedPath(pathContext, fileUri);
+    return resourceProvider.getFile(path).createSource(actualUri ?? uri);
   }
 }

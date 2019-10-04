@@ -1,11 +1,11 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analyzer/error/error.dart';
 import 'package:analyzer/source/error_processor.dart';
 import 'package:analyzer/src/error/codes.dart';
-import 'package:analyzer/src/generated/engine.dart' hide AnalysisResult;
+import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer_cli/src/options.dart';
 
 /// Compute the severity of the error; however:
@@ -26,10 +26,7 @@ ErrorSeverity computeSeverity(
     }
   }
 
-  if (!commandLineOptions.enableTypeChecks &&
-      error.errorCode.type == ErrorType.CHECKED_MODE_COMPILE_TIME_ERROR) {
-    return ErrorSeverity.INFO;
-  } else if (commandLineOptions.lintsAreFatal && error.errorCode is LintCode) {
+  if (commandLineOptions.lintsAreFatal && error.errorCode is LintCode) {
     return ErrorSeverity.ERROR;
   }
 

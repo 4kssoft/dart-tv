@@ -111,7 +111,7 @@ abstract class Set<E> extends EfficientLengthIterable<E> {
    * then the returned set can be used as a `Set<T>`.
    */
   static Set<T> castFrom<S, T>(Set<S> source, {Set<R> Function<R>() newSet}) =>
-      new CastSet<S, T>(source, newSet);
+      CastSet<S, T>(source, newSet);
 
   /**
    * Provides a view of this set as a set of [R] instances.
@@ -126,10 +126,6 @@ abstract class Set<E> extends EfficientLengthIterable<E> {
    * this set as well.
    */
   Set<R> cast<R>();
-
-  @Deprecated("Use cast instead.")
-  Set<R> retype<R>();
-
   /**
    * Provides an iterator that iterates over the elements of this set.
    *
@@ -184,8 +180,16 @@ abstract class Set<E> extends EfficientLengthIterable<E> {
   /**
    * If an object equal to [object] is in the set, return it.
    *
-   * Checks if there is an object in the set that is equal to [object].
-   * If so, that object is returned, otherwise returns null.
+   * Checks whether [object] is in the set, like [contains], and if so,
+   * returns the object in the set, otherwise returns `null`.
+   *
+   * If the equality relation used by the set is not identity,
+   * then the returned object may not be *identical* to [object].
+   * Some set implementations may not be able to implement this method.
+   * If the [contains] method is computed,
+   * rather than being based on an actual object instance,
+   * then there may not be a specific object instance representing the
+   * set element.
    */
   E lookup(Object object);
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -6,6 +6,7 @@ import 'dart:async';
 
 import 'package:analysis_server/src/provisional/completion/dart/completion_dart.dart';
 import 'package:analysis_server/src/services/completion/dart/completion_manager.dart';
+import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
@@ -188,8 +189,26 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
       if (previousMember.leftBracket == null ||
           previousMember.leftBracket.isSynthetic) {
         // If the prior member is an unfinished class declaration
-        // then the user is probably finishing that
+        // then the user is probably finishing that.
         _addClassDeclarationKeywords(previousMember);
+        return;
+      }
+    }
+    if (previousMember is ExtensionDeclaration) {
+      if (previousMember.leftBracket == null ||
+          previousMember.leftBracket.isSynthetic) {
+        // If the prior member is an unfinished extension declaration then the
+        // user is probably finishing that.
+        _addExtensionDeclarationKeywords(previousMember);
+        return;
+      }
+    }
+    if (previousMember is MixinDeclaration) {
+      if (previousMember.leftBracket == null ||
+          previousMember.leftBracket.isSynthetic) {
+        // If the prior member is an unfinished mixin declaration
+        // then the user is probably finishing that.
+        _addMixinDeclarationKeywords(previousMember);
         return;
       }
     }
@@ -232,9 +251,23 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
       if (entity is ConstructorInitializer) {
         _addSuggestion(Keyword.ASSERT);
       }
-      if (node.initializers.last == entity) {
-        _addSuggestion(Keyword.SUPER);
-        _addSuggestion(Keyword.THIS);
+      var last = node.initializers.last;
+      if (last == entity) {
+        Token previous = node.findPrevious(last.beginToken);
+        if (previous != null && previous.end <= request.offset) {
+          _addSuggestion(Keyword.SUPER);
+          _addSuggestion(Keyword.THIS);
+        }
+      }
+    } else {
+      Token separator = node.separator;
+      if (separator != null) {
+        var offset = request.offset;
+        if (separator.end <= offset && offset <= separator.next.offset) {
+          _addSuggestion(Keyword.ASSERT);
+          _addSuggestion(Keyword.SUPER);
+          _addSuggestion(Keyword.THIS);
+        }
       }
     }
   }
@@ -259,6 +292,21 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
   }
 
   @override
+  visitExtensionDeclaration(ExtensionDeclaration node) {
+    // Don't suggest extension name
+    if (entity == node.name) {
+      return;
+    }
+    if (entity == node.rightBracket) {
+      _addExtensionBodyKeywords();
+    } else if (entity is ClassMember) {
+      _addExtensionBodyKeywords();
+    } else {
+      _addExtensionDeclarationKeywords(node);
+    }
+  }
+
+  @override
   visitFieldDeclaration(FieldDeclaration node) {
     VariableDeclarationList fields = node.fields;
     if (entity != fields) {
@@ -270,6 +318,10 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
     }
     if (node.covariantKeyword == null) {
       _addSuggestion(Keyword.COVARIANT);
+    }
+    if (node.fields.lateKeyword == null &&
+        request.featureSet.isEnabled(Feature.non_nullable)) {
+      _addSuggestion(Keyword.LATE);
     }
     if (!node.isStatic) {
       _addSuggestion(Keyword.STATIC);
@@ -283,7 +335,7 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
   }
 
   @override
-  visitForEachStatement(ForEachStatement node) {
+  visitForEachParts(ForEachParts node) {
     if (entity == node.inKeyword) {
       Token previous = node.findPrevious(node.inKeyword);
       if (previous is SyntheticStringToken && previous.lexeme == 'in') {
@@ -304,18 +356,46 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
   }
 
   @override
+  visitForElement(ForElement node) {
+    _addCollectionElementKeywords();
+    _addExpressionKeywords(node);
+    return super.visitForElement(node);
+  }
+
+  @override
   visitFormalParameterList(FormalParameterList node) {
     AstNode constructorDeclaration =
-        node.getAncestor((p) => p is ConstructorDeclaration);
+        node.thisOrAncestorOfType<ConstructorDeclaration>();
     if (constructorDeclaration != null) {
       _addSuggestions([Keyword.THIS]);
     }
     if (entity is Token && (entity as Token).type == TokenType.CLOSE_PAREN) {
       _addSuggestion(Keyword.COVARIANT);
+      if (request.featureSet.isEnabled(Feature.non_nullable)) {
+        _addSuggestion(Keyword.REQUIRED);
+      }
     } else if (entity is FormalParameter) {
       Token beginToken = (entity as FormalParameter).beginToken;
       if (beginToken != null && request.target.offset == beginToken.end) {
         _addSuggestion(Keyword.COVARIANT);
+        if (request.featureSet.isEnabled(Feature.non_nullable)) {
+          _addSuggestion(Keyword.REQUIRED);
+        }
+      }
+    }
+  }
+
+  @override
+  visitForParts(ForParts node) {
+    // Actual: for (int x i^)
+    // Parsed: for (int x; i^;)
+    // Handle the degenerate case while typing - for (int x i^)
+    if (node.condition == entity &&
+        entity is SimpleIdentifier &&
+        node is ForPartsWithDeclarations &&
+        node.variables != null) {
+      if (_isPreviousTokenSynthetic(entity, TokenType.SEMICOLON)) {
+        _addSuggestion(Keyword.IN, DART_RELEVANCE_HIGH);
       }
     }
   }
@@ -324,20 +404,8 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
   visitForStatement(ForStatement node) {
     // Actual: for (va^)
     // Parsed: for (va^; ;)
-    if (node.initialization == entity && entity is SimpleIdentifier) {
-      if (_isNextTokenSynthetic(entity, TokenType.SEMICOLON)) {
-        _addSuggestion(Keyword.VAR, DART_RELEVANCE_HIGH);
-      }
-    }
-    // Actual: for (int x i^)
-    // Parsed: for (int x; i^;)
-    // Handle the degenerate case while typing - for (int x i^)
-    if (node.condition == entity &&
-        entity is SimpleIdentifier &&
-        node.variables != null) {
-      if (_isPreviousTokenSynthetic(entity, TokenType.SEMICOLON)) {
-        _addSuggestion(Keyword.IN, DART_RELEVANCE_HIGH);
-      }
+    if (node.forLoopParts == entity) {
+      _addSuggestion(Keyword.VAR, DART_RELEVANCE_HIGH);
     }
   }
 
@@ -361,11 +429,27 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
   }
 
   @override
+  visitIfElement(IfElement node) {
+    _addCollectionElementKeywords();
+    _addExpressionKeywords(node);
+    return super.visitIfElement(node);
+  }
+
+  @override
   visitIfStatement(IfStatement node) {
     if (_isPreviousTokenSynthetic(entity, TokenType.CLOSE_PAREN)) {
+      // analyzer parser
       // Actual: if (x i^)
       // Parsed: if (x) i^
       _addSuggestion(Keyword.IS, DART_RELEVANCE_HIGH);
+    } else if (entity == node.rightParenthesis) {
+      if (node.condition.endToken.next == droppedToken) {
+        // fasta parser
+        // Actual: if (x i^)
+        // Parsed: if (x)
+        //    where "i" is in the token stream but not part of the AST
+        _addSuggestion(Keyword.IS, DART_RELEVANCE_HIGH);
+      }
     } else if (entity == node.thenStatement || entity == node.elseStatement) {
       _addStatementKeywords(node);
     } else if (entity == node.condition) {
@@ -414,6 +498,12 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
   }
 
   @override
+  visitListLiteral(ListLiteral node) {
+    _addCollectionElementKeywords();
+    super.visitListLiteral(node);
+  }
+
+  @override
   visitMethodDeclaration(MethodDeclaration node) {
     if (entity == node.body) {
       if (isEmptyBody(node.body)) {
@@ -437,6 +527,28 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
       // no keywords in '.' expression
     } else {
       super.visitMethodInvocation(node);
+    }
+  }
+
+  @override
+  visitMixinDeclaration(MixinDeclaration node) {
+    // Don't suggest mixin name
+    if (entity == node.name) {
+      return;
+    }
+    if (entity == node.rightBracket) {
+      _addClassBodyKeywords();
+    } else if (entity is ClassMember) {
+      _addClassBodyKeywords();
+      int index = node.members.indexOf(entity);
+      ClassMember previous = index > 0 ? node.members[index - 1] : null;
+      if (previous is MethodDeclaration && isEmptyBody(previous.body)) {
+        _addSuggestion(Keyword.ASYNC);
+        _addSuggestion2(ASYNC_STAR);
+        _addSuggestion2(SYNC_STAR);
+      }
+    } else {
+      _addMixinDeclarationKeywords(node);
     }
   }
 
@@ -492,6 +604,18 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
   }
 
   @override
+  visitSetOrMapLiteral(SetOrMapLiteral node) {
+    _addCollectionElementKeywords();
+    super.visitSetOrMapLiteral(node);
+  }
+
+  @override
+  visitSpreadElement(SpreadElement node) {
+    _addExpressionKeywords(node);
+    return super.visitSpreadElement(node);
+  }
+
+  @override
   visitStringLiteral(StringLiteral node) {
     // ignored
   }
@@ -520,6 +644,12 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
         _addStatementKeywords(node);
       }
     }
+  }
+
+  @override
+  visitSwitchCase(SwitchCase node) {
+    _addStatementKeywords(node);
+    return super.visitSwitchCase(node);
   }
 
   @override
@@ -555,6 +685,26 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
       Keyword.VAR,
       Keyword.VOID
     ]);
+    if (request.featureSet.isEnabled(Feature.non_nullable)) {
+      _addSuggestion(Keyword.LATE);
+    }
+  }
+
+  void _addExtensionBodyKeywords() {
+    _addSuggestions([
+      Keyword.CONST,
+      Keyword.DYNAMIC,
+      Keyword.FINAL,
+      Keyword.GET,
+      Keyword.OPERATOR,
+      Keyword.SET,
+      Keyword.STATIC,
+      Keyword.VAR,
+      Keyword.VOID
+    ]);
+    if (request.featureSet.isEnabled(Feature.non_nullable)) {
+      _addSuggestion(Keyword.LATE);
+    }
   }
 
   void _addClassDeclarationKeywords(ClassDeclaration node) {
@@ -570,6 +720,15 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
     }
   }
 
+  void _addCollectionElementKeywords() {
+    if (request.featureSet.isEnabled(Feature.control_flow_collections)) {
+      _addSuggestions([
+        Keyword.FOR,
+        Keyword.IF,
+      ]);
+    }
+  }
+
   void _addCompilationUnitKeywords() {
     _addSuggestions([
       Keyword.ABSTRACT,
@@ -582,6 +741,12 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
       Keyword.VAR,
       Keyword.VOID
     ], DART_RELEVANCE_HIGH);
+    if (request.featureSet.isEnabled(Feature.extension_methods)) {
+      _addSuggestion(Keyword.EXTENSION, DART_RELEVANCE_HIGH);
+    }
+    if (request.featureSet.isEnabled(Feature.non_nullable)) {
+      _addSuggestion(Keyword.LATE, DART_RELEVANCE_HIGH);
+    }
   }
 
   void _addExpressionKeywords(AstNode node) {
@@ -597,6 +762,12 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
     }
     if (_inAsyncMethodOrFunction(node)) {
       _addSuggestion(Keyword.AWAIT);
+    }
+  }
+
+  void _addExtensionDeclarationKeywords(ExtensionDeclaration node) {
+    if (node.onKeyword == null || node.onKeyword.isSynthetic) {
+      _addSuggestion(Keyword.ON, DART_RELEVANCE_HIGH);
     }
   }
 
@@ -618,6 +789,17 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
         _addSuggestion(Keyword.SHOW, DART_RELEVANCE_HIGH);
         _addSuggestion(Keyword.HIDE, DART_RELEVANCE_HIGH);
       }
+    }
+  }
+
+  void _addMixinDeclarationKeywords(MixinDeclaration node) {
+    // Very simplistic suggestion because analyzer will warn if
+    // the on / implements clauses are out of order
+    if (node.onClause == null) {
+      _addSuggestion(Keyword.ON, DART_RELEVANCE_HIGH);
+    }
+    if (node.implementsClause == null) {
+      _addSuggestion(Keyword.IMPLEMENTS, DART_RELEVANCE_HIGH);
     }
   }
 
@@ -657,6 +839,9 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
       Keyword.VOID,
       Keyword.WHILE
     ]);
+    if (request.featureSet.isEnabled(Feature.non_nullable)) {
+      _addSuggestion(Keyword.LATE);
+    }
   }
 
   void _addSuggestion(Keyword keyword,
@@ -665,7 +850,7 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
   }
 
   void _addSuggestion2(String completion,
-      {int offset, int relevance: DART_RELEVANCE_KEYWORD}) {
+      {int offset, int relevance = DART_RELEVANCE_KEYWORD}) {
     if (offset == null) {
       offset = completion.length;
     }
@@ -681,21 +866,21 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
   }
 
   bool _inAsyncMethodOrFunction(AstNode node) {
-    FunctionBody body = node.getAncestor((n) => n is FunctionBody);
+    FunctionBody body = node.thisOrAncestorOfType<FunctionBody>();
     return body != null && body.isAsynchronous && body.star == null;
   }
 
   bool _inAsyncStarOrSyncStarMethodOrFunction(AstNode node) {
-    FunctionBody body = node.getAncestor((n) => n is FunctionBody);
+    FunctionBody body = node.thisOrAncestorOfType<FunctionBody>();
     return body != null && body.keyword != null && body.star != null;
   }
 
   bool _inCatchClause(Block node) =>
-      node.getAncestor((p) => p is CatchClause) != null;
+      node.thisOrAncestorOfType<CatchClause>() != null;
 
   bool _inClassMemberBody(AstNode node) {
     while (true) {
-      AstNode body = node.getAncestor((n) => n is FunctionBody);
+      AstNode body = node.thisOrAncestorOfType<FunctionBody>();
       if (body == null) {
         return false;
       }
@@ -708,23 +893,22 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
   }
 
   bool _inDoLoop(AstNode node) =>
-      node.getAncestor((p) => p is DoStatement) != null;
+      node.thisOrAncestorOfType<DoStatement>() != null;
 
   bool _inForLoop(AstNode node) =>
-      node.getAncestor((p) => p is ForStatement || p is ForEachStatement) !=
-      null;
+      node.thisOrAncestorMatching((p) => p is ForStatement) != null;
 
   bool _inLoop(AstNode node) =>
       _inDoLoop(node) || _inForLoop(node) || _inWhileLoop(node);
 
   bool _inSwitch(AstNode node) =>
-      node.getAncestor((p) => p is SwitchStatement) != null;
+      node.thisOrAncestorOfType<SwitchStatement>() != null;
 
   bool _inWhileLoop(AstNode node) =>
-      node.getAncestor((p) => p is WhileStatement) != null;
+      node.thisOrAncestorOfType<WhileStatement>() != null;
 
   bool _isEntityAfterIfWithoutElse(AstNode node) {
-    Block block = node?.getAncestor((n) => n is Block);
+    Block block = node?.thisOrAncestorOfType<Block>();
     if (block == null) {
       return false;
     }
@@ -743,15 +927,6 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
           return statement is IfStatement && statement.elseStatement == null;
         }
       }
-    }
-    return false;
-  }
-
-  static bool _isNextTokenSynthetic(Object entity, TokenType type) {
-    if (entity is AstNode) {
-      Token token = entity.beginToken;
-      Token nextToken = token.next;
-      return nextToken.isSynthetic && nextToken.type == type;
     }
     return false;
   }

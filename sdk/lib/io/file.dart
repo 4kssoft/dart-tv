@@ -237,6 +237,7 @@ class FileLock {
  *   a tutorial about writing command-line apps, includes information about
  *   files and directories.
  */
+@pragma("vm:entry-point")
 abstract class File implements FileSystemEntity {
   /**
    * Creates a [File] object.
@@ -247,6 +248,7 @@ abstract class File implements FileSystemEntity {
    * If [path] is an absolute path, it will be immune to changes to the
    * current working directory.
    */
+  @pragma("vm:entry-point")
   factory File(String path) {
     final IOOverrides overrides = IOOverrides.current;
     if (overrides == null) {
@@ -266,6 +268,7 @@ abstract class File implements FileSystemEntity {
    * Creates a File object from a raw path, that is, a sequence of bytes
    * as represented by the OS.
    */
+  @pragma("vm:entry-point")
   factory File.fromRawPath(Uint8List rawPath) {
     // TODO(bkonyi): Handle overrides.
     return new _File.fromRawPath(rawPath);
@@ -365,8 +368,8 @@ abstract class File implements FileSystemEntity {
 /**
  * Get the last-accessed time of the file.
  *
- * Returns the date and time when the file was last accessed, if the
- * information is available.
+ * Returns a `Future<DateTime>` that completes with the date and time when the
+ * file was last accessed, if the information is available.
  *
  * Throws a [FileSystemException] if the operation fails.
  */
@@ -386,6 +389,8 @@ abstract class File implements FileSystemEntity {
   /**
    * Modifies the time the file was last accessed.
    *
+   * Returns a [Future] that completes once the operation has completed.
+   *
    * Throws a [FileSystemException] if the time cannot be set.
    */
   Future setLastAccessed(DateTime time);
@@ -400,8 +405,8 @@ abstract class File implements FileSystemEntity {
 /**
  * Get the last-modified time of the file.
  *
- * Returns the date and time when the file was last modified, if the
- * information is available.
+ * Returns a `Future<DateTime>` that completes with the date and time when the
+ * file was last modified, if the information is available.
  *
  * Throws a [FileSystemException] if the operation fails.
  */
@@ -420,6 +425,8 @@ abstract class File implements FileSystemEntity {
 
   /**
    * Modifies the time the file was last modified.
+   *
+   * Returns a [Future] that completes once the operation has completed.
    *
    * Throws a [FileSystemException] if the time cannot be set.
    */
@@ -498,17 +505,17 @@ abstract class File implements FileSystemEntity {
 
   /**
    * Read the entire file contents as a list of bytes. Returns a
-   * `Future<List<int>>` that completes with the list of bytes that
+   * `Future<Uint8List>` that completes with the list of bytes that
    * is the contents of the file.
    */
-  Future<List<int>> readAsBytes();
+  Future<Uint8List> readAsBytes();
 
   /**
    * Synchronously read the entire file contents as a list of bytes.
    *
    * Throws a [FileSystemException] if the operation fails.
    */
-  List<int> readAsBytesSync();
+  Uint8List readAsBytesSync();
 
   /**
    * Read the entire file contents as a string using the given
@@ -675,7 +682,7 @@ abstract class RandomAccessFile {
   /**
    * Reads [bytes] bytes from a file and returns the result as a list of bytes.
    */
-  Future<List<int>> read(int bytes);
+  Future<Uint8List> read(int bytes);
 
   /**
    * Synchronously reads a maximum of [bytes] bytes from a file and
@@ -683,7 +690,7 @@ abstract class RandomAccessFile {
    *
    * Throws a [FileSystemException] if the operation fails.
    */
-  List<int> readSync(int bytes);
+  Uint8List readSync(int bytes);
 
   /**
    * Reads into an existing [List<int>] from the file. If [start] is present,
@@ -950,6 +957,7 @@ abstract class RandomAccessFile {
 /**
  * Exception thrown when a file operation fails.
  */
+@pragma("vm:entry-point")
 class FileSystemException implements IOException {
   /**
    * Message describing the error. This does not include any detailed
@@ -975,12 +983,13 @@ class FileSystemException implements IOException {
    * [message], optional file system path [path] and optional OS error
    * [osError].
    */
+  @pragma("vm:entry-point")
   const FileSystemException([this.message = "", this.path = "", this.osError]);
 
   String toString() {
     StringBuffer sb = new StringBuffer();
     sb.write("FileSystemException");
-    if (!message.isEmpty) {
+    if (message.isNotEmpty) {
       sb.write(": $message");
       if (path != null) {
         sb.write(", path = '$path'");

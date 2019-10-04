@@ -7,9 +7,6 @@
 
 #if !defined(DART_PRECOMPILED_RUNTIME)
 
-#include <map>
-
-#include "vm/compiler/frontend/kernel_to_il.h"
 #include "vm/kernel.h"
 #include "vm/object.h"
 
@@ -20,13 +17,17 @@ namespace kernel {
 // package:kernel/binary.md.
 
 static const uint32_t kMagicProgramFile = 0x90ABCDEFu;
-static const uint32_t kBinaryFormatVersion = 7;
+
+// Both version numbers are inclusive.
+static const uint32_t kMinSupportedKernelFormatVersion = 18;
+static const uint32_t kMaxSupportedKernelFormatVersion = 34;
 
 // Keep in sync with package:kernel/lib/binary/tag.dart
 #define KERNEL_TAG_LIST(V)                                                     \
   V(Nothing, 0)                                                                \
   V(Something, 1)                                                              \
   V(Class, 2)                                                                  \
+  V(Extension, 115)                                                            \
   V(FunctionNode, 3)                                                           \
   V(Field, 4)                                                                  \
   V(Constructor, 5)                                                            \
@@ -59,9 +60,15 @@ static const uint32_t kBinaryFormatVersion = 7;
   V(ConstructorInvocation, 31)                                                 \
   V(ConstConstructorInvocation, 32)                                            \
   V(Not, 33)                                                                   \
+  V(NullCheck, 117)                                                            \
   V(LogicalExpression, 34)                                                     \
   V(ConditionalExpression, 35)                                                 \
   V(StringConcatenation, 36)                                                   \
+  V(ListConcatenation, 111)                                                    \
+  V(SetConcatenation, 112)                                                     \
+  V(MapConcatenation, 113)                                                     \
+  V(InstanceCreation, 114)                                                     \
+  V(FileUriExpression, 116)                                                    \
   V(IsExpression, 37)                                                          \
   V(AsExpression, 38)                                                          \
   V(StringLiteral, 39)                                                         \
@@ -75,15 +82,18 @@ static const uint32_t kBinaryFormatVersion = 7;
   V(Rethrow, 47)                                                               \
   V(Throw, 48)                                                                 \
   V(ListLiteral, 49)                                                           \
+  V(SetLiteral, 109)                                                           \
   V(MapLiteral, 50)                                                            \
   V(AwaitExpression, 51)                                                       \
   V(FunctionExpression, 52)                                                    \
   V(Let, 53)                                                                   \
+  V(BlockExpression, 82)                                                       \
   V(Instantiation, 54)                                                         \
   V(PositiveIntLiteral, 55)                                                    \
   V(NegativeIntLiteral, 56)                                                    \
   V(BigIntLiteral, 57)                                                         \
   V(ConstListLiteral, 58)                                                      \
+  V(ConstSetLiteral, 110)                                                      \
   V(ConstMapLiteral, 59)                                                       \
   V(ExpressionStatement, 61)                                                   \
   V(Block, 62)                                                                 \
@@ -107,7 +117,6 @@ static const uint32_t kBinaryFormatVersion = 7;
   V(AsyncForInStatement, 80)                                                   \
   V(AssertBlock, 81)                                                           \
   V(TypedefType, 87)                                                           \
-  V(VectorType, 88)                                                            \
   V(BottomType, 89)                                                            \
   V(InvalidType, 90)                                                           \
   V(DynamicType, 91)                                                           \
@@ -117,15 +126,8 @@ static const uint32_t kBinaryFormatVersion = 7;
   V(TypeParameterType, 95)                                                     \
   V(SimpleInterfaceType, 96)                                                   \
   V(SimpleFunctionType, 97)                                                    \
-  V(NullReference, 99)                                                         \
-  V(ClassReference, 100)                                                       \
-  V(MemberReference, 101)                                                      \
-  V(VectorCreation, 102)                                                       \
-  V(VectorGet, 103)                                                            \
-  V(VectorSet, 104)                                                            \
-  V(VectorCopy, 105)                                                           \
-  V(ClosureCreation, 106)                                                      \
-  V(ConstantExpression, 107)                                                   \
+  V(ConstantExpression, 106)                                                   \
+  V(Deprecated_ConstantExpression, 107)                                        \
   V(SpecializedVariableGet, 128)                                               \
   V(SpecializedVariableSet, 136)                                               \
   V(SpecializedIntLiteral, 144)
@@ -147,12 +149,33 @@ enum ConstantTag {
   kIntConstant = 2,
   kDoubleConstant = 3,
   kStringConstant = 4,
-  kMapConstant = 5,
-  kListConstant = 6,
-  kInstanceConstant = 7,
-  kPartialInstantiationConstant = 8,
-  kTearOffConstant = 9,
-  kTypeLiteralConstant = 10,
+  kSymbolConstant = 5,
+  kMapConstant = 6,
+  kListConstant = 7,
+  kSetConstant = 13,
+  kInstanceConstant = 8,
+  kPartialInstantiationConstant = 9,
+  kTearOffConstant = 10,
+  kTypeLiteralConstant = 11,
+  // These constants are not expected to be seen by the VM, because all
+  // constants are fully evaluated.
+  kUnevaluatedConstant = 12,
+};
+
+// Keep in sync with package:kernel/lib/ast.dart
+enum Nullability {
+  kNullable = 0,
+  kNonNullable = 1,
+  kNeither = 2,
+  kLegacy = 3,
+};
+
+// Keep in sync with package:kernel/lib/ast.dart
+enum Variance {
+  kUnrelated = 0,
+  kCovariant = 1,
+  kContravariant = 2,
+  kInvariant = 3,
 };
 
 static const int SpecializedIntLiteralBias = 3;
@@ -170,7 +193,7 @@ class Reader : public ValueObject {
         size_(size),
         offset_(0) {}
 
-  explicit Reader(const TypedData& typed_data)
+  explicit Reader(const ExternalTypedData& typed_data)
       : thread_(Thread::Current()),
         raw_buffer_(NULL),
         typed_data_(&typed_data),
@@ -246,6 +269,16 @@ class Reader : public ValueObject {
     }
   }
 
+  intptr_t ReadSLEB128() {
+    const uint8_t* buffer = this->buffer();
+    return Utils::DecodeSLEB128<intptr_t>(buffer, size_, &offset_);
+  }
+
+  int64_t ReadSLEB128AsInt64() {
+    const uint8_t* buffer = this->buffer();
+    return Utils::DecodeSLEB128<int64_t>(buffer, size_, &offset_);
+  }
+
   /**
    * Read and return a TokenPosition from this reader.
    */
@@ -302,6 +335,16 @@ class Reader : public ValueObject {
     }
   }
 
+  Nullability ReadNullability() {
+    uint8_t byte = ReadByte();
+    return static_cast<Nullability>(byte);
+  }
+
+  Variance ReadVariance() {
+    uint8_t byte = ReadByte();
+    return static_cast<Variance>(byte);
+  }
+
   void EnsureEnd() {
     if (offset_ != size_) {
       FATAL2(
@@ -330,27 +373,26 @@ class Reader : public ValueObject {
   intptr_t size() const { return size_; }
   void set_size(intptr_t size) { size_ = size; }
 
-  const TypedData* typed_data() const { return typed_data_; }
-  void set_typed_data(const TypedData* typed_data) { typed_data_ = typed_data; }
+  const ExternalTypedData* typed_data() const { return typed_data_; }
+  void set_typed_data(const ExternalTypedData* typed_data) {
+    typed_data_ = typed_data;
+  }
 
   const uint8_t* raw_buffer() const { return raw_buffer_; }
   void set_raw_buffer(const uint8_t* raw_buffer) { raw_buffer_ = raw_buffer; }
 
-  void CopyDataToVMHeap(const TypedData& typed_data,
-                        intptr_t offset,
-                        intptr_t size) {
-    NoSafepointScope no_safepoint(thread_);
-    memmove(typed_data.DataAddr(0), buffer() + offset, size);
+  RawExternalTypedData* ExternalDataFromTo(intptr_t start, intptr_t end) {
+    return ExternalTypedData::New(kExternalTypedDataUint8ArrayCid,
+                                  const_cast<uint8_t*>(buffer() + start),
+                                  end - start, Heap::kOld);
   }
 
-  uint8_t* CopyDataIntoZone(Zone* zone, intptr_t offset, intptr_t length) {
-    uint8_t* buffer_ = zone->Alloc<uint8_t>(length);
-    {
-      NoSafepointScope no_safepoint(thread_);
-      memmove(buffer_, buffer() + offset, length);
-    }
-    return buffer_;
+  const uint8_t* BufferAt(intptr_t offset) {
+    ASSERT((offset >= 0) && (offset < size_));
+    return &buffer()[offset];
   }
+
+  RawTypedData* ReadLineStartsData(intptr_t line_start_count);
 
  private:
   const uint8_t* buffer() const {
@@ -363,7 +405,7 @@ class Reader : public ValueObject {
 
   Thread* thread_;
   const uint8_t* raw_buffer_;
-  const TypedData* typed_data_;
+  const ExternalTypedData* typed_data_;
   intptr_t size_;
   intptr_t offset_;
   TokenPosition max_position_;
@@ -372,6 +414,66 @@ class Reader : public ValueObject {
 
   friend class PositionScope;
   friend class Program;
+};
+
+// A helper class that saves the current reader position, goes to another reader
+// position, and upon destruction, resets to the original reader position.
+class AlternativeReadingScope {
+ public:
+  AlternativeReadingScope(Reader* reader, intptr_t new_position)
+      : reader_(reader), saved_offset_(reader_->offset()) {
+    reader_->set_offset(new_position);
+  }
+
+  explicit AlternativeReadingScope(Reader* reader)
+      : reader_(reader), saved_offset_(reader_->offset()) {}
+
+  ~AlternativeReadingScope() { reader_->set_offset(saved_offset_); }
+
+  intptr_t saved_offset() { return saved_offset_; }
+
+ private:
+  Reader* const reader_;
+  const intptr_t saved_offset_;
+
+  DISALLOW_COPY_AND_ASSIGN(AlternativeReadingScope);
+};
+
+// Similar to AlternativeReadingScope, but also switches reading to another
+// typed data array.
+class AlternativeReadingScopeWithNewData {
+ public:
+  AlternativeReadingScopeWithNewData(Reader* reader,
+                                     const ExternalTypedData* new_typed_data,
+                                     intptr_t new_position)
+      : reader_(reader),
+        saved_size_(reader_->size()),
+        saved_raw_buffer_(reader_->raw_buffer()),
+        saved_typed_data_(reader_->typed_data()),
+        saved_offset_(reader_->offset()) {
+    reader_->set_raw_buffer(nullptr);
+    reader_->set_typed_data(new_typed_data);
+    reader_->set_size(new_typed_data->Length());
+    reader_->set_offset(new_position);
+  }
+
+  ~AlternativeReadingScopeWithNewData() {
+    reader_->set_raw_buffer(saved_raw_buffer_);
+    reader_->set_typed_data(saved_typed_data_);
+    reader_->set_size(saved_size_);
+    reader_->set_offset(saved_offset_);
+  }
+
+  intptr_t saved_offset() { return saved_offset_; }
+
+ private:
+  Reader* reader_;
+  intptr_t saved_size_;
+  const uint8_t* saved_raw_buffer_;
+  const ExternalTypedData* saved_typed_data_;
+  intptr_t saved_offset_;
+
+  DISALLOW_COPY_AND_ASSIGN(AlternativeReadingScopeWithNewData);
 };
 
 // A helper class that resets the readers min and max positions both upon
@@ -401,6 +503,8 @@ class PositionScope {
   Reader* reader_;
   TokenPosition min_;
   TokenPosition max_;
+
+  DISALLOW_COPY_AND_ASSIGN(PositionScope);
 };
 
 }  // namespace kernel

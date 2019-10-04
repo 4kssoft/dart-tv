@@ -1,16 +1,13 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-library analyzer.test.generated.sdk_test;
-
 import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/generated/sdk.dart';
+import 'package:analyzer/src/test_utilities/mock_sdk.dart';
+import 'package:analyzer/src/test_utilities/resource_provider_mixin.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
-
-import '../src/context/mock_sdk.dart';
-import 'test_support.dart';
 
 main() {
   defineReflectiveSuite(() {
@@ -20,14 +17,14 @@ main() {
 }
 
 @reflectiveTest
-class DartSdkManagerTest extends EngineTestCase {
+class DartSdkManagerTest with ResourceProviderMixin {
   void test_anySdk() {
     DartSdkManager manager = new DartSdkManager('/a/b/c', false);
     expect(manager.anySdk, isNull);
 
     AnalysisOptions options = new AnalysisOptionsImpl();
     SdkDescription description = new SdkDescription(<String>['/c/d'], options);
-    DartSdk sdk = new MockSdk();
+    DartSdk sdk = new MockSdk(resourceProvider: resourceProvider);
     manager.getSdk(description, () => sdk);
     expect(manager.anySdk, same(sdk));
   }
@@ -36,11 +33,11 @@ class DartSdkManagerTest extends EngineTestCase {
     DartSdkManager manager = new DartSdkManager('/a/b/c', false);
     AnalysisOptions options = new AnalysisOptionsImpl();
     SdkDescription description1 = new SdkDescription(<String>['/c/d'], options);
-    DartSdk sdk1 = new MockSdk();
+    DartSdk sdk1 = new MockSdk(resourceProvider: resourceProvider);
     DartSdk result1 = manager.getSdk(description1, () => sdk1);
     expect(result1, same(sdk1));
     SdkDescription description2 = new SdkDescription(<String>['/e/f'], options);
-    DartSdk sdk2 = new MockSdk();
+    DartSdk sdk2 = new MockSdk(resourceProvider: resourceProvider);
     DartSdk result2 = manager.getSdk(description2, () => sdk2);
     expect(result2, same(sdk2));
 
@@ -52,7 +49,7 @@ class DartSdkManagerTest extends EngineTestCase {
     DartSdkManager manager = new DartSdkManager('/a/b/c', false);
     AnalysisOptions options = new AnalysisOptionsImpl();
     SdkDescription description = new SdkDescription(<String>['/c/d'], options);
-    DartSdk sdk = new MockSdk();
+    DartSdk sdk = new MockSdk(resourceProvider: resourceProvider);
     DartSdk result = manager.getSdk(description, () => sdk);
     expect(result, same(sdk));
     manager.getSdk(description, _failIfAbsent);
@@ -64,7 +61,7 @@ class DartSdkManagerTest extends EngineTestCase {
 }
 
 @reflectiveTest
-class SdkDescriptionTest extends EngineTestCase {
+class SdkDescriptionTest {
   void test_equals_differentPaths_nested() {
     AnalysisOptions options = new AnalysisOptionsImpl();
     SdkDescription left = new SdkDescription(<String>['/a/b/c'], options);
@@ -89,11 +86,9 @@ class SdkDescriptionTest extends EngineTestCase {
   void test_equals_samePaths_differentOptions() {
     String path = '/a/b/c';
     AnalysisOptionsImpl leftOptions = new AnalysisOptionsImpl()
-      ..previewDart2 = false
-      ..strongMode = false;
+      ..useFastaParser = false;
     AnalysisOptionsImpl rightOptions = new AnalysisOptionsImpl()
-      ..previewDart2 = true
-      ..strongMode = true;
+      ..useFastaParser = true;
     SdkDescription left = new SdkDescription(<String>[path], leftOptions);
     SdkDescription right = new SdkDescription(<String>[path], rightOptions);
     expect(left == right, isFalse);

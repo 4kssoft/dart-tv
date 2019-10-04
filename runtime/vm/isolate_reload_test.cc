@@ -98,9 +98,6 @@ TEST_CASE(IsolateReload_KernelIncrementalCompile) {
       "main() {\n"
       "  return 42;\n"
       "}\n",
-    },
-    {
-      "file:///.packages", "untitled:/"
     }};
   // clang-format on
 
@@ -158,9 +155,6 @@ TEST_CASE(IsolateReload_KernelIncrementalCompileAppAndLib) {
       "WhatsTheMeaningOfAllThis() {\n"
       "  return 42;\n"
       "}\n",
-    },
-    {
-      "file:///.packages", "untitled:/"
     }};
   // clang-format on
 
@@ -184,6 +178,7 @@ TEST_CASE(IsolateReload_KernelIncrementalCompileAppAndLib) {
       ""
     }};
   // clang-format on
+
   {
     const uint8_t* kernel_buffer = NULL;
     intptr_t kernel_buffer_size = 0;
@@ -228,9 +223,6 @@ TEST_CASE(IsolateReload_KernelIncrementalCompileGenerics) {
       "  State(this.t);\n"
       "  T howAreTheThings() => t;\n"
       "}\n",
-    },
-    {
-      "file:///.packages", "untitled:/"
     }};
   // clang-format on
 
@@ -281,6 +273,83 @@ TEST_CASE(IsolateReload_KernelIncrementalCompileGenerics) {
   EXPECT_EQ(24, value);
 }
 
+TEST_CASE(IsolateReload_KernelIncrementalCompileBaseClass) {
+  // clang-format off
+  Dart_SourceFile sourcefiles[] = {
+      {
+          "file:///test-app.dart",
+          "import 'test-util.dart';\n"
+          "main() {\n"
+          "  var v = doWork();"
+          "  return v == 42 ? 1: v == null ? -1: 0;\n"
+          "}\n",
+      },
+      {
+          "file:///test-lib.dart",
+          "class State<T, U> {\n"
+          "  T t;\n"
+          "  U u;\n"
+          "  State(List l) {\n"
+          "    t = l[0] is T? l[0]: null;\n"
+          "    u = l[1] is U? l[1]: null;\n"
+          "  }\n"
+          "}\n",
+      },
+      {
+          "file:///test-util.dart",
+          "import 'test-lib.dart';\n"
+          "class MyAccountState extends State<int, String> {\n"
+          "  MyAccountState(List l): super(l) {}\n"
+          "  first() => t;\n"
+          "}\n"
+          "doWork() => new MyAccountState(<dynamic>[42, 'abc']).first();\n"
+      }};
+  // clang-format on
+
+  Dart_Handle lib = TestCase::LoadTestScriptWithDFE(
+      sizeof(sourcefiles) / sizeof(Dart_SourceFile), sourcefiles,
+      NULL /* resolver */, true /* finalize */, true /* incrementally */);
+  EXPECT_VALID(lib);
+  Dart_Handle result = Dart_Invoke(lib, NewString("main"), 0, NULL);
+  int64_t value = 0;
+  result = Dart_IntegerToInt64(result, &value);
+  EXPECT_VALID(result);
+  EXPECT_EQ(1, value);
+
+  // clang-format off
+  Dart_SourceFile updated_sourcefiles[] = {
+      {
+          "file:///test-lib.dart",
+          "class State<U, T> {\n"
+          "  T t;\n"
+          "  U u;\n"
+          "  State(List l) {\n"
+          "    t = l[0] is T? l[0]: null;\n"
+          "    u = l[1] is U? l[1]: null;\n"
+          "  }\n"
+          "}\n",
+      }};
+  // clang-format on
+  {
+    const uint8_t* kernel_buffer = NULL;
+    intptr_t kernel_buffer_size = 0;
+    char* error = TestCase::CompileTestScriptWithDFE(
+        "file:///test-app.dart",
+        sizeof(updated_sourcefiles) / sizeof(Dart_SourceFile),
+        updated_sourcefiles, &kernel_buffer, &kernel_buffer_size,
+        true /* incrementally */);
+    EXPECT(error == NULL);
+    EXPECT_NOTNULL(kernel_buffer);
+
+    lib = TestCase::ReloadTestKernel(kernel_buffer, kernel_buffer_size);
+    EXPECT_VALID(lib);
+  }
+  result = Dart_Invoke(lib, NewString("main"), 0, NULL);
+  result = Dart_IntegerToInt64(result, &value);
+  EXPECT_VALID(result);
+  EXPECT_EQ(-1, value);
+}
+
 TEST_CASE(IsolateReload_BadClass) {
   const char* kScript =
       "class Foo {\n"
@@ -308,11 +377,7 @@ TEST_CASE(IsolateReload_BadClass) {
       "}\n";
 
   Dart_Handle result = TestCase::ReloadTestScript(kReloadScript);
-  if (TestCase::UsingDartFrontend()) {
-    EXPECT_ERROR(result, "Expected ';' before this");
-  } else {
-    EXPECT_ERROR(result, "unexpected token");
-  }
+  EXPECT_ERROR(result, "Expected ';' after this");
   EXPECT_EQ(4, SimpleInvoke(lib, "main"));
 }
 
@@ -506,6 +571,32 @@ TEST_CASE(IsolateReload_ClassAdded) {
       "}\n"
       "main() {\n"
       "  return new A().toString();\n"
+      "}\n";
+
+  lib = TestCase::ReloadTestScript(kReloadScript);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("hello from A", SimpleInvokeStr(lib, "main"));
+}
+
+TEST_CASE(IsolateReload_ClassRemoved) {
+  const char* kScript =
+      "class A {\n"
+      "  toString() => 'hello from A';\n"
+      "}\n"
+      "List<dynamic> list = <dynamic>[];"
+      "main() {\n"
+      "  list.add(new A());\n"
+      "  return list[0].toString();\n"
+      "}\n";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("hello from A", SimpleInvokeStr(lib, "main"));
+
+  const char* kReloadScript =
+      "List<dynamic> list = <dynamic>[];\n"
+      "main() {\n"
+      "  return list[0].toString();\n"
       "}\n";
 
   lib = TestCase::ReloadTestScript(kReloadScript);
@@ -1087,15 +1178,7 @@ TEST_CASE(IsolateReload_LibraryShow) {
       "}\n";
 
   lib = TestCase::ReloadTestScript(kReloadScript);
-  if (TestCase::UsingDartFrontend() && TestCase::UsingStrongMode()) {
-    EXPECT_ERROR(lib, "importedIntFunc");
-  } else {
-    EXPECT_VALID(lib);
-    // Works.
-    EXPECT_STREQ("a", SimpleInvokeStr(lib, "main"));
-    // Results in an error.
-    EXPECT_ERROR(SimpleInvokeError(lib, "mainInt"), "importedIntFunc");
-  }
+  EXPECT_ERROR(lib, "importedIntFunc");
 }
 
 // Verifies that we clear the ICs for the functions live on the stack in a way
@@ -1177,13 +1260,9 @@ TEST_CASE(IsolateReload_TopLevelParseError) {
       "}\n";
 
   lib = TestCase::ReloadTestScript(kReloadScript);
-  if (TestCase::UsingDartFrontend()) {
-    EXPECT_ERROR(lib,
-                 "Variables must be declared using the keywords"
-                 " 'const', 'final', 'var' or a type name.");
-  } else {
-    EXPECT_ERROR(lib, "unexpected token");
-  }
+  EXPECT_ERROR(lib,
+               "Variables must be declared using the keywords"
+               " 'const', 'final', 'var' or a type name.");
 }
 
 TEST_CASE(IsolateReload_PendingUnqualifiedCall_StaticToInstance) {
@@ -1620,32 +1699,10 @@ TEST_CASE(IsolateReload_TearOff_Parameter_Count_Mismatch) {
   Dart_Handle error_handle = SimpleInvokeError(lib, "main");
 
   const char* error;
-  if (TestCase::UsingStrongMode()) {
-    error =
-        "file:///test-lib:8:12: Error: Too few positional"
-        " arguments: 1 required, 0 given.\n"
-        "  return f1();";
-  } else if (TestCase::UsingDartFrontend()) {
-    error =
-        "NoSuchMethodError: Closure call with mismatched arguments: function "
-        "'C.foo'\n"
-        "Receiver: Closure: (dynamic) => dynamic from Function 'foo': static.\n"
-        "Tried calling: C.foo()\n"
-        "Found: C.foo(dynamic) => dynamic\n"
-        "#0      Object.noSuchMethod "
-        "(dart:core/runtime/libobject_patch.dart:46:5)\n"
-        "#1      main (file:///test-lib:8:12)";
-  } else {
-    error =
-        "NoSuchMethodError: Closure call with mismatched arguments: function "
-        "'C.foo'\n"
-        "Receiver: Closure: (dynamic) => dynamic from Function 'foo': static.\n"
-        "Tried calling: C.foo()\n"
-        "Found: C.foo(dynamic) => dynamic\n"
-        "#0      Object.noSuchMethod "
-        "(dart:core-patch/dart:core/object_patch.dart:46)\n"
-        "#1      main (test-lib:8:12)";
-  }
+  error =
+      "/test-lib:8:12: Error: Too few positional"
+      " arguments: 1 required, 0 given.\n"
+      "  return f1();";
   EXPECT_ERROR(error_handle, error);
 }
 
@@ -2094,6 +2151,7 @@ TEST_CASE(IsolateReload_EnumToNotEnum) {
       "  final int zero = 0;\n"
       "}\n"
       "main() {\n"
+      "  return new Fruit().zero.toString();\n"
       "}\n";
 
   Dart_Handle result = TestCase::ReloadTestScript(kReloadScript);
@@ -2106,12 +2164,12 @@ TEST_CASE(IsolateReload_NotEnumToEnum) {
       "  final int zero = 0;\n"
       "}\n"
       "main() {\n"
-      "  return 'yes';\n"
+      "  return new Fruit().zero.toString();\n"
       "}\n";
 
   Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
   EXPECT_VALID(lib);
-  EXPECT_STREQ("yes", SimpleInvokeStr(lib, "main"));
+  EXPECT_STREQ("0", SimpleInvokeStr(lib, "main"));
 
   const char* kReloadScript =
       "enum Fruit {\n"
@@ -2301,189 +2359,217 @@ TEST_CASE(IsolateReload_EnumValuesToString) {
                SimpleInvokeStr(lib, "main"));
 }
 
-TEST_CASE(IsolateReload_DirectSubclasses_Success) {
+ISOLATE_UNIT_TEST_CASE(IsolateReload_DirectSubclasses_Success) {
   Object& new_subclass = Object::Handle();
   String& name = String::Handle();
 
-  // Lookup the Iterator class by name from the dart core library.
+  // Lookup the Stopwatch class by name from the dart core library.
   ObjectStore* object_store = Isolate::Current()->object_store();
   const Library& core_lib = Library::Handle(object_store->core_library());
-  name = String::New("Iterator");
-  const Class& iterator_cls = Class::Handle(core_lib.LookupClass(name));
+  name = String::New("Stopwatch");
+  const Class& stopwatch_cls = Class::Handle(core_lib.LookupClass(name));
 
-  // Keep track of how many subclasses an Iterator has.
-  const GrowableObjectArray& subclasses =
-      GrowableObjectArray::Handle(iterator_cls.direct_subclasses());
-  intptr_t saved_subclass_count = subclasses.Length();
+  // Keep track of how many subclasses an Stopwatch has.
+  auto& subclasses =
+      GrowableObjectArray::Handle(stopwatch_cls.direct_subclasses());
+  intptr_t saved_subclass_count = subclasses.IsNull() ? 0 : subclasses.Length();
 
   const char* kScript =
-      "abstract class AIterator extends Iterator {\n"
+      "class AStopwatch extends Stopwatch {\n"
       "}\n"
       "main() {\n"
+      "  new AStopwatch();\n"  // Force finalization.
       "  return 1;\n"
       "}\n";
 
-  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
-  EXPECT_VALID(lib);
-  EXPECT_EQ(1, SimpleInvoke(lib, "main"));
+  {
+    TransitionVMToNative transition(thread);
+    Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+    EXPECT_VALID(lib);
+    EXPECT_EQ(1, SimpleInvoke(lib, "main"));
+  }
 
-  // Iterator has one non-core subclass.
+  // Stopwatch has one non-core subclass.
+  subclasses = stopwatch_cls.direct_subclasses();
   EXPECT_EQ(saved_subclass_count + 1, subclasses.Length());
 
-  // The new subclass is named AIterator.
+  // The new subclass is named AStopwatch.
   new_subclass = subclasses.At(subclasses.Length() - 1);
   name = Class::Cast(new_subclass).Name();
-  EXPECT_STREQ("AIterator", name.ToCString());
+  EXPECT_STREQ("AStopwatch", name.ToCString());
 
   const char* kReloadScript =
-      "class AIterator {\n"
+      "class AStopwatch {\n"
       "}\n"
-      "abstract class BIterator extends Iterator {\n"
+      "class BStopwatch extends Stopwatch {\n"
       "}\n"
       "main() {\n"
+      "  new AStopwatch();\n"  // Force finalization.
+      "  new BStopwatch();\n"  // Force finalization.
       "  return 2;\n"
       "}\n";
 
-  lib = TestCase::ReloadTestScript(kReloadScript);
-  EXPECT_VALID(lib);
-  EXPECT_EQ(2, SimpleInvoke(lib, "main"));
+  {
+    TransitionVMToNative transition(thread);
+    Dart_Handle lib = TestCase::ReloadTestScript(kReloadScript);
+    EXPECT_VALID(lib);
+    EXPECT_EQ(2, SimpleInvoke(lib, "main"));
+  }
 
-  // Iterator still has only one non-core subclass (AIterator is gone).
+  // Stopwatch still has only one non-core subclass (AStopwatch is gone).
+  subclasses = stopwatch_cls.direct_subclasses();
   EXPECT_EQ(saved_subclass_count + 1, subclasses.Length());
 
-  // The new subclass is named BIterator.
+  // The new subclass is named BStopwatch.
   new_subclass = subclasses.At(subclasses.Length() - 1);
   name = Class::Cast(new_subclass).Name();
-  EXPECT_STREQ("BIterator", name.ToCString());
+  EXPECT_STREQ("BStopwatch", name.ToCString());
 }
 
-TEST_CASE(IsolateReload_DirectSubclasses_GhostSubclass) {
+ISOLATE_UNIT_TEST_CASE(IsolateReload_DirectSubclasses_GhostSubclass) {
   Object& new_subclass = Object::Handle();
   String& name = String::Handle();
 
-  // Lookup the Iterator class by name from the dart core library.
+  // Lookup the Stopwatch class by name from the dart core library.
   ObjectStore* object_store = Isolate::Current()->object_store();
   const Library& core_lib = Library::Handle(object_store->core_library());
-  name = String::New("Iterator");
-  const Class& iterator_cls = Class::Handle(core_lib.LookupClass(name));
+  name = String::New("Stopwatch");
+  const Class& stopwatch_cls = Class::Handle(core_lib.LookupClass(name));
 
-  // Keep track of how many subclasses an Iterator has.
-  const GrowableObjectArray& subclasses =
-      GrowableObjectArray::Handle(iterator_cls.direct_subclasses());
-  intptr_t saved_subclass_count = subclasses.Length();
+  // Keep track of how many subclasses an Stopwatch has.
+  auto& subclasses =
+      GrowableObjectArray::Handle(stopwatch_cls.direct_subclasses());
+  intptr_t saved_subclass_count = subclasses.IsNull() ? 0 : subclasses.Length();
 
   const char* kScript =
-      "abstract class AIterator extends Iterator {\n"
+      "class AStopwatch extends Stopwatch {\n"
       "}\n"
       "main() {\n"
+      "  new AStopwatch();\n"  // Force finalization.
       "  return 1;\n"
       "}\n";
 
-  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
-  EXPECT_VALID(lib);
-  EXPECT_EQ(1, SimpleInvoke(lib, "main"));
+  {
+    TransitionVMToNative transition(thread);
+    Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+    EXPECT_VALID(lib);
+    EXPECT_EQ(1, SimpleInvoke(lib, "main"));
+  }
 
-  // Iterator has one new subclass.
+  // Stopwatch has one new subclass.
+  subclasses = stopwatch_cls.direct_subclasses();
   EXPECT_EQ(saved_subclass_count + 1, subclasses.Length());
 
-  // The new subclass is named AIterator.
+  // The new subclass is named AStopwatch.
   new_subclass = subclasses.At(subclasses.Length() - 1);
   name = Class::Cast(new_subclass).Name();
-  EXPECT_STREQ("AIterator", name.ToCString());
+  EXPECT_STREQ("AStopwatch", name.ToCString());
 
   const char* kReloadScript =
-      "abstract class BIterator extends Iterator {\n"
+      "class BStopwatch extends Stopwatch {\n"
       "}\n"
       "main() {\n"
+      "  new BStopwatch();\n"  // Force finalization.
       "  return 2;\n"
       "}\n";
 
-  lib = TestCase::ReloadTestScript(kReloadScript);
-  EXPECT_VALID(lib);
-  EXPECT_EQ(2, SimpleInvoke(lib, "main"));
+  {
+    TransitionVMToNative transition(thread);
+    Dart_Handle lib = TestCase::ReloadTestScript(kReloadScript);
+    EXPECT_VALID(lib);
+    EXPECT_EQ(2, SimpleInvoke(lib, "main"));
+  }
 
-  // Iterator has two non-core subclasses.
+  // Stopwatch has two non-core subclasses.
+  subclasses = stopwatch_cls.direct_subclasses();
   EXPECT_EQ(saved_subclass_count + 2, subclasses.Length());
 
-  // The non-core subclasses are AIterator and BIterator.
+  // The non-core subclasses are AStopwatch and BStopwatch.
   new_subclass = subclasses.At(subclasses.Length() - 2);
   name = Class::Cast(new_subclass).Name();
-  EXPECT_STREQ("AIterator", name.ToCString());
+  EXPECT_STREQ("AStopwatch", name.ToCString());
 
   new_subclass = subclasses.At(subclasses.Length() - 1);
   name = Class::Cast(new_subclass).Name();
-  EXPECT_STREQ("BIterator", name.ToCString());
+  EXPECT_STREQ("BStopwatch", name.ToCString());
 }
 
 // Make sure that we restore the direct subclass info when we revert.
-TEST_CASE(IsolateReload_DirectSubclasses_Failure) {
+ISOLATE_UNIT_TEST_CASE(IsolateReload_DirectSubclasses_Failure) {
   Object& new_subclass = Object::Handle();
   String& name = String::Handle();
 
-  // Lookup the Iterator class by name from the dart core library.
+  // Lookup the Stopwatch class by name from the dart core library.
   ObjectStore* object_store = Isolate::Current()->object_store();
   const Library& core_lib = Library::Handle(object_store->core_library());
-  name = String::New("Iterator");
-  const Class& iterator_cls = Class::Handle(core_lib.LookupClass(name));
+  name = String::New("Stopwatch");
+  const Class& stopwatch_cls = Class::Handle(core_lib.LookupClass(name));
 
-  // Keep track of how many subclasses an Iterator has.
-  const GrowableObjectArray& subclasses =
-      GrowableObjectArray::Handle(iterator_cls.direct_subclasses());
-  intptr_t saved_subclass_count = subclasses.Length();
+  // Keep track of how many subclasses an Stopwatch has.
+  auto& subclasses =
+      GrowableObjectArray::Handle(stopwatch_cls.direct_subclasses());
+  intptr_t saved_subclass_count = subclasses.IsNull() ? 0 : subclasses.Length();
 
   const char* kScript =
-      "abstract class AIterator extends Iterator {\n"
+      "class AStopwatch extends Stopwatch {\n"
       "}\n"
       "class Foo {\n"
       "  final a;\n"
       "  Foo(this.a);\n"
       "}\n"
       "main() {\n"
-      "  new Foo(5);\n"  // Force Foo to be finalized.
+      "  new AStopwatch();\n"  // Force finalization.
+      "  new Foo(5);\n"        // Force finalization.
       "  return 1;\n"
       "}\n";
 
-  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
-  EXPECT_VALID(lib);
-  EXPECT_EQ(1, SimpleInvoke(lib, "main"));
+  {
+    TransitionVMToNative transition(thread);
+    Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+    EXPECT_VALID(lib);
+    EXPECT_EQ(1, SimpleInvoke(lib, "main"));
+  }
 
-  // Iterator has one non-core subclass...
+  // Stopwatch has one non-core subclass...
+  subclasses = stopwatch_cls.direct_subclasses();
   EXPECT_EQ(saved_subclass_count + 1, subclasses.Length());
 
-  // ... and the non-core subclass is named AIterator.
+  // ... and the non-core subclass is named AStopwatch.
+  subclasses = stopwatch_cls.direct_subclasses();
   new_subclass = subclasses.At(subclasses.Length() - 1);
   name = Class::Cast(new_subclass).Name();
-  EXPECT_STREQ("AIterator", name.ToCString());
+  EXPECT_STREQ("AStopwatch", name.ToCString());
 
   // Attempt to reload with a bogus script.
   const char* kReloadScript =
-      "abstract class BIterator extends Iterator {\n"
+      "class BStopwatch extends Stopwatch {\n"
       "}\n"
       "class Foo {\n"
       "  final a kjsdf ksjdf ;\n"  // When we refinalize, we get an error.
       "  Foo(this.a);\n"
       "}\n"
       "main() {\n"
-      "  new Foo(5);\n"
+      "  new BStopwatch();\n"  // Force finalization.
+      "  new Foo(5);\n"        // Force finalization.
       "  return 2;\n"
       "}\n";
 
-  lib = TestCase::ReloadTestScript(kReloadScript);
-  if (TestCase::UsingDartFrontend()) {
-    EXPECT_ERROR(lib, "Expected ';' before this");
-  } else {
-    EXPECT_ERROR(lib, "unexpected token");
+  {
+    TransitionVMToNative transition(thread);
+    Dart_Handle lib = TestCase::ReloadTestScript(kReloadScript);
+    EXPECT_ERROR(lib, "Expected ';' after this");
   }
 
-  // If we don't clean up the subclasses, we would find BIterator in
+  // If we don't clean up the subclasses, we would find BStopwatch in
   // the list of subclasses, which would be bad.  Make sure that
-  // Iterator still has only one non-core subclass...
+  // Stopwatch still has only one non-core subclass...
+  subclasses = stopwatch_cls.direct_subclasses();
   EXPECT_EQ(saved_subclass_count + 1, subclasses.Length());
 
-  // ...and the non-core subclass is still named AIterator.
+  // ...and the non-core subclass is still named AStopwatch.
   new_subclass = subclasses.At(subclasses.Length() - 1);
   name = Class::Cast(new_subclass).Name();
-  EXPECT_STREQ("AIterator", name.ToCString());
+  EXPECT_STREQ("AStopwatch", name.ToCString());
 }
 
 // Tests reload succeeds when instance format changes.
@@ -2842,6 +2928,39 @@ TEST_CASE(IsolateReload_ShapeChangeRetainsHash) {
   const char* kReloadScript =
       "class A{\n"
       "  var x, y, z;\n"
+      "}\n"
+      "var a, hash1, hash2;\n"
+      "main() {\n"
+      "  hash2 = a.hashCode;\n"
+      "  return (hash1 == hash2).toString();\n"
+      "}\n";
+
+  lib = TestCase::ReloadTestScript(kReloadScript);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("true", SimpleInvokeStr(lib, "main"));
+}
+
+TEST_CASE(IsolateReload_ShapeChangeRetainsHash_Const) {
+  const char* kScript =
+      "class A {\n"
+      "  final x;\n"
+      "  const A(this.x);\n"
+      "}\n"
+      "var a, hash1, hash2;\n"
+      "main() {\n"
+      "  a = const A(1);\n"
+      "  hash1 = a.hashCode;\n"
+      "  return 'okay';\n"
+      "}\n";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+  EXPECT_VALID(lib);
+  EXPECT_STREQ("okay", SimpleInvokeStr(lib, "main"));
+
+  const char* kReloadScript =
+      "class A {\n"
+      "  final x, y, z;\n"
+      "  const A(this.x, this.y, this.z);\n"
       "}\n"
       "var a, hash1, hash2;\n"
       "main() {\n"

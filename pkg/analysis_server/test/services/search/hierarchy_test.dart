@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -445,7 +445,46 @@ class F implements A {}
     }
   }
 
-  Future<Null> _indexTestUnit(String code) async {
+  test_getSuperClasses_superclassConstraints() async {
+    await _indexTestUnit('''
+class A {}
+class B extends A {}
+class C {}
+
+mixin M1 on A {}
+mixin M2 on B {}
+mixin M3 on M1 {}
+mixin M4 on M2 {}
+mixin M5 on A, C {}
+''');
+    ClassElement a = findElement('A');
+    ClassElement b = findElement('B');
+    ClassElement c = findElement('C');
+    ClassElement m1 = findElement('M1');
+    ClassElement m2 = findElement('M2');
+    ClassElement m3 = findElement('M3');
+    ClassElement m4 = findElement('M4');
+    ClassElement m5 = findElement('M5');
+    ClassElement object = a.supertype.element;
+
+    _assertSuperClasses(object, []);
+    _assertSuperClasses(a, [object]);
+    _assertSuperClasses(b, [object, a]);
+    _assertSuperClasses(c, [object]);
+
+    _assertSuperClasses(m1, [object, a]);
+    _assertSuperClasses(m2, [object, a, b]);
+    _assertSuperClasses(m3, [object, a, m1]);
+    _assertSuperClasses(m4, [object, a, b, m2]);
+    _assertSuperClasses(m5, [object, a, c]);
+  }
+
+  void _assertSuperClasses(ClassElement element, List<ClassElement> expected) {
+    var supers = getSuperClasses(element);
+    expect(supers, unorderedEquals(expected));
+  }
+
+  Future<void> _indexTestUnit(String code) async {
     await resolveTestUnit(code);
   }
 }

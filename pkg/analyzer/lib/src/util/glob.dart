@@ -1,8 +1,6 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
-library analyzer.src.util.glob;
 
 /**
  * A pattern that matches against filesystem path-like strings with wildcards.
@@ -83,8 +81,8 @@ class Glob {
   static bool _hasJustPrefix(String pattern, String prefix) {
     if (pattern.startsWith(prefix)) {
       int prefixLength = prefix.length;
-      return pattern.indexOf('*', prefixLength) == -1 &&
-          pattern.indexOf('?', prefixLength) == -1;
+      return !pattern.contains('*', prefixLength) &&
+          !pattern.contains('?', prefixLength);
     }
     return false;
   }

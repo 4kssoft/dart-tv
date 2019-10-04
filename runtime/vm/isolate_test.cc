@@ -43,30 +43,30 @@ TEST_CASE(IsolateSpawn) {
   // Necessary because asynchronous errors use "print" to print their
   // stack trace.
   Dart_Handle url = NewString("dart:_internal");
-  DART_CHECK_VALID(url);
+  EXPECT_VALID(url);
   Dart_Handle internal_lib = Dart_LookupLibrary(url);
-  DART_CHECK_VALID(internal_lib);
+  EXPECT_VALID(internal_lib);
   Dart_Handle print = Dart_GetField(test_lib, NewString("_nullPrintClosure"));
   Dart_Handle result =
       Dart_SetField(internal_lib, NewString("_printClosure"), print);
 
-  DART_CHECK_VALID(result);
+  EXPECT_VALID(result);
 
   // Setup the 'scheduleImmediate' closure.
   url = NewString("dart:isolate");
-  DART_CHECK_VALID(url);
+  EXPECT_VALID(url);
   Dart_Handle isolate_lib = Dart_LookupLibrary(url);
-  DART_CHECK_VALID(isolate_lib);
+  EXPECT_VALID(isolate_lib);
   Dart_Handle schedule_immediate_closure = Dart_Invoke(
       isolate_lib, NewString("_getIsolateScheduleImmediateClosure"), 0, NULL);
   Dart_Handle args[1];
   args[0] = schedule_immediate_closure;
   url = NewString("dart:async");
-  DART_CHECK_VALID(url);
+  EXPECT_VALID(url);
   Dart_Handle async_lib = Dart_LookupLibrary(url);
-  DART_CHECK_VALID(async_lib);
-  DART_CHECK_VALID(Dart_Invoke(
-      async_lib, NewString("_setScheduleImmediateClosure"), 1, args));
+  EXPECT_VALID(async_lib);
+  EXPECT_VALID(Dart_Invoke(async_lib, NewString("_setScheduleImmediateClosure"),
+                           1, args));
 
   result = Dart_Invoke(test_lib, NewString("testMain"), 0, NULL);
   EXPECT_VALID(result);
@@ -130,7 +130,7 @@ TEST_CASE(StackLimitInterrupts) {
                         isolate->heap()->barrier_done());
   // Start all tasks. They will busy-wait until interrupted in the first round.
   for (intptr_t task = 0; task < InterruptChecker::kTaskCount; task++) {
-    Dart::thread_pool()->Run(new InterruptChecker(thread, &barrier));
+    Dart::thread_pool()->Run<InterruptChecker>(thread, &barrier);
   }
   // Wait for all tasks to get ready for the first round.
   barrier.Sync();

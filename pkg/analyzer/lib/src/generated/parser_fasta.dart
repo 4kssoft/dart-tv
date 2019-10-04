@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -24,13 +24,13 @@ abstract class ParserAdapter implements Parser {
   final AstBuilder astBuilder;
 
   ParserAdapter(this.currentToken, ErrorReporter errorReporter, Uri fileUri,
-      {bool allowNativeClause: false, bool enableGenericMethodComments: false})
+      FeatureSet featureSet,
+      {bool allowNativeClause: false})
       : fastaParser = new fasta.Parser(null),
-        astBuilder = new AstBuilder(errorReporter, fileUri, true) {
+        astBuilder = new AstBuilder(errorReporter, fileUri, true, featureSet) {
     fastaParser.listener = astBuilder;
     astBuilder.parser = fastaParser;
     astBuilder.allowNativeClause = allowNativeClause;
-    astBuilder.parseGenericMethodComments = enableGenericMethodComments;
   }
 
   @override
@@ -45,16 +45,29 @@ abstract class ParserAdapter implements Parser {
   void set enableOptionalNewAndConst(bool enable) {}
 
   @override
+  void set enableSetLiterals(bool value) {
+    // TODO(danrubel): Remove this method once the reference to this flag
+    // has been removed from dartfmt.
+  }
+
+  @override
   void set parseFunctionBodies(bool parseFunctionBodies) {
     astBuilder.parseFunctionBodies = parseFunctionBodies;
   }
 
   @override
-  bool get parseGenericMethodComments => astBuilder.parseGenericMethodComments;
+  set parseGenericMethods(_) {}
 
-  @override
-  set parseGenericMethodComments(bool value) {
-    astBuilder.parseGenericMethodComments = value;
+  /// Append the given token to the end of the token stream,
+  /// and update the token's offset.
+  appendToken(Token token, Token newToken) {
+    while (!token.next.isEof) {
+      token = token.next;
+    }
+    newToken
+      ..offset = token.end
+      ..setNext(token.next);
+    token.setNext(newToken);
   }
 
   @override
@@ -66,6 +79,18 @@ abstract class ParserAdapter implements Parser {
         .parseMetadata(fastaParser.syntheticPreviousToken(currentToken))
         .next;
     return astBuilder.pop();
+  }
+
+  @override
+  Expression parseArgument() {
+    currentToken = new SimpleToken(TokenType.OPEN_PAREN, 0)
+      ..setNext(currentToken);
+    appendToken(currentToken, new SimpleToken(TokenType.CLOSE_PAREN, 0));
+    currentToken = fastaParser
+        .parseArguments(fastaParser.syntheticPreviousToken(currentToken))
+        .next;
+    MethodInvocation invocation = astBuilder.pop();
+    return invocation.argumentList.arguments[0];
   }
 
   @override
@@ -107,10 +132,12 @@ abstract class ParserAdapter implements Parser {
       <ClassMember>[],
       null /* rightBracket */,
     );
-    currentToken = fastaParser.parseClassMember(currentToken);
+    // TODO(danrubel): disambiguate between class and mixin
+    currentToken = fastaParser.parseClassMember(currentToken, className);
+    //currentToken = fastaParser.parseMixinMember(currentToken);
     ClassDeclaration declaration = astBuilder.classDeclaration;
     astBuilder.classDeclaration = null;
-    return declaration.members[0];
+    return declaration.members.isNotEmpty ? declaration.members[0] : null;
   }
 
   @override
@@ -130,7 +157,9 @@ abstract class ParserAdapter implements Parser {
   @override
   CompilationUnit parseCompilationUnit2() {
     currentToken = fastaParser.parseUnit(currentToken);
-    return astBuilder.pop();
+    CompilationUnitImpl compilationUnit = astBuilder.pop();
+    compilationUnit.localDeclarations = astBuilder.localDeclarations;
+    return compilationUnit;
   }
 
   @override
@@ -169,6 +198,12 @@ abstract class ParserAdapter implements Parser {
 
   @override
   Expression parseEqualityExpression() => parseExpression2();
+
+  @override
+  Expression parseExpression(Token token) {
+    currentToken = token;
+    return parseExpression2();
+  }
 
   @override
   Expression parseExpression2() {
@@ -281,8 +316,10 @@ abstract class ParserAdapter implements Parser {
 
   @override
   TypeAnnotation parseTypeAnnotation(bool inExpression) {
-    currentToken = fastaParser
-        .parseType(fastaParser.syntheticPreviousToken(currentToken))
+    Token previous = fastaParser.syntheticPreviousToken(currentToken);
+    currentToken = fasta
+        .computeType(previous, true, !inExpression)
+        .parseType(previous, fastaParser)
         .next;
     return astBuilder.pop();
   }
@@ -299,8 +336,10 @@ abstract class ParserAdapter implements Parser {
 
   @override
   TypeName parseTypeName(bool inExpression) {
-    currentToken = fastaParser
-        .parseType(fastaParser.syntheticPreviousToken(currentToken))
+    Token previous = fastaParser.syntheticPreviousToken(currentToken);
+    currentToken = fasta
+        .computeType(previous, true, !inExpression)
+        .parseType(previous, fastaParser)
         .next;
     return astBuilder.pop();
   }
@@ -327,18 +366,6 @@ abstract class ParserAdapter implements Parser {
 
   @override
   Expression parseUnaryExpression() => parseExpression2();
-
-  /// Append the given token to the end of the token stream,
-  /// and update the token's offset.
-  appendToken(Token token, Token newToken) {
-    while (!token.next.isEof) {
-      token = token.next;
-    }
-    newToken
-      ..offset = token.end
-      ..setNext(token.next);
-    token.setNext(newToken);
-  }
 }
 
 /**
@@ -353,19 +380,17 @@ class _Parser2 extends ParserAdapter {
   @override
   bool enableUriInPartOf = true;
 
-  @override
-  bool enableNnbd = false;
-
-  factory _Parser2(Source source, AnalysisErrorListener errorListener,
+  factory _Parser2(
+      Source source, AnalysisErrorListener errorListener, FeatureSet featureSet,
       {bool allowNativeClause: false}) {
     var errorReporter = new ErrorReporter(errorListener, source);
-    return new _Parser2._(source, errorReporter, source.uri,
+    return new _Parser2._(source, errorReporter, source.uri, featureSet,
         allowNativeClause: allowNativeClause);
   }
 
   _Parser2._(this._source, ErrorReporter errorReporter, Uri fileUri,
-      {bool allowNativeClause: false})
-      : super(null, errorReporter, fileUri,
+      FeatureSet featureSet, {bool allowNativeClause: false})
+      : super(null, errorReporter, fileUri, featureSet,
             allowNativeClause: allowNativeClause);
 
   noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);

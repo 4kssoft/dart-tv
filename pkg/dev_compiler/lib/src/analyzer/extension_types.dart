@@ -3,11 +3,15 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:collection';
+
 import 'package:analyzer/dart/element/element.dart'
-    show ClassElement, CompilationUnitElement, Element;
+    show ClassElement, CompilationUnitElement, Element, LibraryElement;
 import 'package:analyzer/dart/element/type.dart' show DartType, InterfaceType;
-import 'package:analyzer/src/generated/engine.dart' show AnalysisContext;
+import 'package:analyzer/src/generated/resolver.dart' show TypeProvider;
+import 'package:analyzer/src/summary2/linked_element_factory.dart';
+
 import 'element_helpers.dart' show getAnnotationName, isBuiltinAnnotation;
+import 'type_utilities.dart';
 
 /// Contains information about native JS types (those types provided by the
 /// implementation) that are also provided by the Dart SDK.
@@ -27,17 +31,17 @@ import 'element_helpers.dart' show getAnnotationName, isBuiltinAnnotation;
 /// This will provide the [Iterable.first] property, without needing to add
 /// `first` to the `Array.prototype`.
 class ExtensionTypeSet {
-  final AnalysisContext _context;
+  final LinkedElementFactory _elementFactory;
 
   // Abstract types that may be implemented by both native and non-native
   // classes.
-  final _extensibleTypes = new HashSet<ClassElement>();
+  final _extensibleTypes = HashSet<ClassElement>();
 
   // Concrete native types.
-  final _nativeTypes = new HashSet<ClassElement>();
-  final _pendingLibraries = new HashSet<String>();
+  final _nativeTypes = HashSet<ClassElement>();
+  final _pendingLibraries = HashSet<String>();
 
-  ExtensionTypeSet(this._context) {
+  ExtensionTypeSet(TypeProvider types, this._elementFactory) {
     // TODO(vsm): Eventually, we want to make this extensible - i.e., find
     // annotations in user code as well.  It would need to be summarized in
     // the element model - not searched this way on every compile.  To make this
@@ -46,7 +50,6 @@ class ExtensionTypeSet {
     // First, core types:
     // TODO(vsm): If we're analyzing against the main SDK, those
     // types are not explicitly annotated.
-    var types = _context.typeProvider;
     _extensibleTypes.add(types.objectType.element);
     _addExtensionType(types.intType, true);
     _addExtensionType(types.doubleType, true);
@@ -69,25 +72,30 @@ class ExtensionTypeSet {
     _addPendingExtensionTypes('dart:web_sql');
   }
 
-  void _visitCompilationUnit(CompilationUnitElement unit) {
-    unit.types.forEach(_visitClass);
+  /// Gets the JS peer for this Dart type if any, otherwise null.
+  ///
+  /// For example for dart:_interceptors `JSArray` this will return "Array",
+  /// referring to the JavaScript built-in `Array` type.
+  List<String> getNativePeers(ClassElement classElem) {
+    if (classElem.isDartCoreObject) return ['Object'];
+    var names = getAnnotationName(
+        classElem,
+        (a) =>
+            isBuiltinAnnotation(a, '_js_helper', 'JsPeerInterface') ||
+            isBuiltinAnnotation(a, '_js_helper', 'Native'));
+    if (names == null) return [];
+
+    // Omit the special name "!nonleaf" and any future hacks starting with "!"
+    return names.split(',').where((peer) => !peer.startsWith("!")).toList();
   }
 
-  void _visitClass(ClassElement element) {
-    if (_isNative(element)) {
-      _addExtensionType(element.type, true);
-    }
-  }
+  bool hasNativeSubtype(DartType type) =>
+      isNativeInterface(type.element) || isNativeClass(type.element);
 
-  bool _isNative(ClassElement element) {
-    for (var metadata in element.metadata) {
-      var e = metadata.element?.enclosingElement;
-      if (e.name == 'Native' || e.name == 'JsPeerInterface') {
-        if (e.source.isInSystemLibrary) return true;
-      }
-    }
-    return false;
-  }
+  bool isNativeClass(Element element) => _setContains(_nativeTypes, element);
+
+  bool isNativeInterface(Element element) =>
+      _setContains(_extensibleTypes, element);
 
   void _addExtensionType(InterfaceType t, [bool mustBeNative = false]) {
     if (t.isObject) return;
@@ -103,26 +111,39 @@ class ExtensionTypeSet {
     }
     element.interfaces.forEach(_addExtensionType);
     element.mixins.forEach(_addExtensionType);
-    _addExtensionType(element.supertype);
-  }
-
-  void _addExtensionTypesForLibrary(String libraryUri, List<String> typeNames) {
-    var sourceFactory = _context.sourceFactory.forUri(libraryUri);
-    var library = _context.computeLibraryElement(sourceFactory);
-    for (var typeName in typeNames) {
-      _addExtensionType(library.getType(typeName).type);
-    }
+    var supertype = element.supertype;
+    if (supertype != null) _addExtensionType(element.supertype);
   }
 
   void _addExtensionTypes(String libraryUri) {
-    var sourceFactory = _context.sourceFactory.forUri(libraryUri);
-    var library = _context.computeLibraryElement(sourceFactory);
+    var library = _getLibraryByUri(libraryUri);
     _visitCompilationUnit(library.definingCompilationUnit);
     library.parts.forEach(_visitCompilationUnit);
   }
 
+  void _addExtensionTypesForLibrary(String libraryUri, List<String> typeNames) {
+    var library = _getLibraryByUri(libraryUri);
+    for (var typeName in typeNames) {
+      _addExtensionType(getLegacyRawClassType(library.getType(typeName)));
+    }
+  }
+
   void _addPendingExtensionTypes(String libraryUri) {
     _pendingLibraries.add(libraryUri);
+  }
+
+  LibraryElement _getLibraryByUri(String uriStr) {
+    return _elementFactory.libraryOfUri(uriStr);
+  }
+
+  bool _isNative(ClassElement element) {
+    for (var metadata in element.metadata) {
+      var e = metadata.element?.enclosingElement;
+      if (e.name == 'Native' || e.name == 'JsPeerInterface') {
+        if (e.source.isInSystemLibrary) return true;
+      }
+    }
+    return false;
   }
 
   bool _processPending(Element element) {
@@ -144,28 +165,13 @@ class ExtensionTypeSet {
         _processPending(element) && set.contains(element);
   }
 
-  bool isNativeClass(Element element) => _setContains(_nativeTypes, element);
+  void _visitClass(ClassElement element) {
+    if (_isNative(element)) {
+      _addExtensionType(getLegacyRawClassType(element), true);
+    }
+  }
 
-  bool isNativeInterface(Element element) =>
-      _setContains(_extensibleTypes, element);
-
-  bool hasNativeSubtype(DartType type) =>
-      isNativeInterface(type.element) || isNativeClass(type.element);
-
-  /// Gets the JS peer for this Dart type if any, otherwise null.
-  ///
-  /// For example for dart:_interceptors `JSArray` this will return "Array",
-  /// referring to the JavaScript built-in `Array` type.
-  List<String> getNativePeers(ClassElement classElem) {
-    if (classElem.type.isObject) return ['Object'];
-    var names = getAnnotationName(
-        classElem,
-        (a) =>
-            isBuiltinAnnotation(a, '_js_helper', 'JsPeerInterface') ||
-            isBuiltinAnnotation(a, '_js_helper', 'Native'));
-    if (names == null) return [];
-
-    // Omit the special name "!nonleaf" and any future hacks starting with "!"
-    return names.split(',').where((peer) => !peer.startsWith("!")).toList();
+  void _visitCompilationUnit(CompilationUnitElement unit) {
+    unit.types.forEach(_visitClass);
   }
 }

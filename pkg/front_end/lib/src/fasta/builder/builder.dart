@@ -4,6 +4,14 @@
 
 library fasta.builder;
 
+export '../identifiers.dart'
+    show
+        Identifier,
+        InitializedIdentifier,
+        QualifiedName,
+        deprecated_extractToken,
+        flattenName;
+
 export '../scope.dart' show AccessErrorBuilder, Scope, ScopeBuilder;
 
 export 'builtin_type_builder.dart' show BuiltinTypeBuilder;
@@ -12,17 +20,22 @@ export 'class_builder.dart' show ClassBuilder;
 
 export 'constructor_reference_builder.dart' show ConstructorReferenceBuilder;
 
-export 'declaration.dart' show Declaration;
+export 'declaration.dart' show Builder;
 
 export 'dynamic_type_builder.dart' show DynamicTypeBuilder;
 
-export 'enum_builder.dart' show EnumBuilder;
+export 'enum_builder.dart' show EnumBuilder, EnumConstantInfo;
 
 export 'field_builder.dart' show FieldBuilder;
 
 export 'formal_parameter_builder.dart' show FormalParameterBuilder;
 
-export 'function_type_alias_builder.dart' show FunctionTypeAliasBuilder;
+export 'procedure_builder.dart'
+    show
+        FunctionBuilder,
+        ConstructorBuilder,
+        ProcedureBuilder,
+        RedirectingFactoryBuilder;
 
 export 'function_type_builder.dart' show FunctionTypeBuilder;
 
@@ -38,13 +51,15 @@ export 'mixin_application_builder.dart' show MixinApplicationBuilder;
 
 export 'modifier_builder.dart' show ModifierBuilder;
 
+export 'name_iterator.dart' show NameIterator;
+
 export 'named_type_builder.dart' show NamedTypeBuilder;
+
+export 'nullability_builder.dart' show NullabilityBuilder;
 
 export 'prefix_builder.dart' show PrefixBuilder;
 
-export 'procedure_builder.dart' show ProcedureBuilder;
-
-export 'qualified_name.dart' show QualifiedName;
+export 'type_alias_builder.dart' show TypeAliasBuilder;
 
 export 'type_builder.dart' show TypeBuilder;
 

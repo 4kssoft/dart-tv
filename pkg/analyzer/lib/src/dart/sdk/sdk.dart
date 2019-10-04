@@ -1,13 +1,12 @@
-// Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2016, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
-
-library analyzer.src.generated.sdk2;
 
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io' as io;
 
+import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/error/listener.dart';
 import 'package:analyzer/exception/exception.dart';
@@ -22,7 +21,6 @@ import 'package:analyzer/src/generated/parser.dart';
 import 'package:analyzer/src/generated/sdk.dart';
 import 'package:analyzer/src/generated/source_io.dart';
 import 'package:analyzer/src/summary/idl.dart' show PackageBundle;
-import 'package:analyzer/src/summary/package_bundle_reader.dart';
 import 'package:path/path.dart' as pathos;
 import 'package:yaml/yaml.dart';
 
@@ -88,16 +86,6 @@ abstract class AbstractDartSdk implements DartSdk {
       _analysisContext = new SdkAnalysisContext(_analysisOptions);
       SourceFactory factory = new SourceFactory([new DartUriResolver(this)]);
       _analysisContext.sourceFactory = factory;
-      if (_useSummary) {
-        PackageBundle sdkBundle = getLinkedBundle();
-        if (sdkBundle != null) {
-          SummaryDataStore dataStore =
-              new SummaryDataStore([], resourceProvider: resourceProvider);
-          dataStore.addBundle(null, sdkBundle);
-          _analysisContext.resultProvider =
-              new InputPackagesResultProvider(_analysisContext, dataStore);
-        }
-      }
     }
     return _analysisContext;
   }
@@ -142,6 +130,16 @@ abstract class AbstractDartSdk implements DartSdk {
     });
   }
 
+  /**
+   * Return info for debugging https://github.com/dart-lang/sdk/issues/35226.
+   */
+  Map<String, Object> debugInfo() {
+    return <String, Object>{
+      'runtimeType': '$runtimeType',
+      'libraryMap': libraryMap.debugInfo(),
+    };
+  }
+
   @override
   Source fromFileUri(Uri uri) {
     File file =
@@ -163,8 +161,7 @@ abstract class AbstractDartSdk implements DartSdk {
   @override
   PackageBundle getLinkedBundle() {
     if (_useSummary) {
-      bool strongMode = _analysisOptions?.strongMode ?? false;
-      _sdkBundle ??= getSummarySdkBundle(strongMode);
+      _sdkBundle ??= getSummarySdkBundle();
       return _sdkBundle;
     }
     return null;
@@ -180,7 +177,7 @@ abstract class AbstractDartSdk implements DartSdk {
    * This method should not be used outside of `analyzer` and `analyzer_cli`
    * packages.
    */
-  PackageBundle getSummarySdkBundle(bool strongMode);
+  PackageBundle getSummarySdkBundle();
 
   Source internalMapDartUri(String dartUri) {
     // TODO(brianwilkerson) Figure out how to unify the implementations in the
@@ -299,8 +296,8 @@ class EmbedderSdk extends AbstractDartSdk {
   String getRelativePathFromFile(File file) => file.path;
 
   @override
-  PackageBundle getSummarySdkBundle(bool strongMode) {
-    String name = strongMode ? 'strong.sum' : 'spec.sum';
+  PackageBundle getSummarySdkBundle() {
+    String name = 'strong.sum';
     File file = _embedderYamlLibFolder.parent.getChildAssumingFile(name);
     try {
       if (file.exists) {
@@ -568,6 +565,16 @@ class FolderBasedDartSdk extends AbstractDartSdk {
         .getChildAssumingFile(_LIBRARIES_FILE);
   }
 
+  /**
+   * Return info for debugging https://github.com/dart-lang/sdk/issues/35226.
+   */
+  @override
+  Map<String, Object> debugInfo() {
+    var result = super.debugInfo();
+    result['directory'] = _sdkDirectory.path;
+    return result;
+  }
+
   @override
   String getRelativePathFromFile(File file) {
     String filePath = file.path;
@@ -583,9 +590,9 @@ class FolderBasedDartSdk extends AbstractDartSdk {
    * This method should not be used outside of `analyzer` and `analyzer_cli`
    * packages.
    */
-  PackageBundle getSummarySdkBundle(bool strongMode) {
+  PackageBundle getSummarySdkBundle() {
     String rootPath = directory.path;
-    String name = strongMode ? 'strong.sum' : 'spec.sum';
+    String name = 'strong.sum';
     String path =
         resourceProvider.pathContext.join(rootPath, 'lib', '_internal', name);
     try {
@@ -609,13 +616,12 @@ class FolderBasedDartSdk extends AbstractDartSdk {
    */
   LibraryMap initialLibraryMap(bool useDart2jsPaths) {
     List<String> searchedPaths = <String>[];
-    var lastStackTrace = null;
-    var lastException = null;
+    StackTrace lastStackTrace;
+    Object lastException;
     for (File librariesFile in _libraryMapLocations) {
       try {
         String contents = librariesFile.readAsStringSync();
-        return new SdkLibrariesReader(useDart2jsPaths)
-            .readFromFile(librariesFile, contents);
+        return new SdkLibrariesReader().readFromFile(librariesFile, contents);
       } catch (exception, stackTrace) {
         searchedPaths.add(librariesFile.path);
         lastException = exception;
@@ -650,7 +656,7 @@ class FolderBasedDartSdk extends AbstractDartSdk {
     }
     try {
       File file = libraryDirectory.getChildAssumingFile(library.path);
-      if (!relativePath.isEmpty) {
+      if (relativePath.isNotEmpty) {
         File relativeFile = file.parent.getChildAssumingFile(relativePath);
         if (relativeFile.path == file.path) {
           // The relative file is the library, so return a Source for the
@@ -687,7 +693,7 @@ class FolderBasedDartSdk extends AbstractDartSdk {
 
   static String getSdkProperty(ResourceProvider resourceProvider) {
     String exec = io.Platform.resolvedExecutable;
-    if (exec.length == 0) {
+    if (exec.isEmpty) {
       return null;
     }
     pathos.Context pathContext = resourceProvider.pathContext;
@@ -866,17 +872,7 @@ class SdkExtensionFinder {
  *     };
  */
 class SdkLibrariesReader {
-  /**
-   * A flag indicating whether the dart2js path should be used when it is
-   * available.
-   */
-  final bool _useDart2jsPaths;
-
-  /**
-   * Initialize a newly created library reader to use the dart2js path if
-   * [_useDart2jsPaths] is `true`.
-   */
-  SdkLibrariesReader(this._useDart2jsPaths);
+  SdkLibrariesReader([@deprecated bool useDart2jsPaths]);
 
   /**
    * Return the library map read from the given [file], given that the content
@@ -891,12 +887,16 @@ class SdkLibrariesReader {
    */
   LibraryMap readFromSource(Source source, String libraryFileContents) {
     BooleanErrorListener errorListener = new BooleanErrorListener();
+    // TODO(paulberry): initialize the feature set appropriately based on the
+    // version of the SDK we are reading, and enable flags.
+    var featureSet = FeatureSet.fromEnableFlags([]);
     Scanner scanner = new Scanner(
-        source, new CharSequenceReader(libraryFileContents), errorListener);
-    Parser parser = new Parser(source, errorListener);
+        source, new CharSequenceReader(libraryFileContents), errorListener)
+      ..configureFeatures(featureSet);
+    Parser parser = new Parser(source, errorListener, featureSet: featureSet);
     CompilationUnit unit = parser.parseCompilationUnit(scanner.tokenize());
     SdkLibrariesReader_LibraryBuilder libraryBuilder =
-        new SdkLibrariesReader_LibraryBuilder(_useDart2jsPaths);
+        new SdkLibrariesReader_LibraryBuilder(true);
     // If any syntactic errors were found then don't try to visit the AST
     // structure.
     if (!errorListener.errorReported) {

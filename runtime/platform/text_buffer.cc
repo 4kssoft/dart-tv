@@ -6,8 +6,8 @@
 
 #include "platform/assert.h"
 #include "platform/globals.h"
+#include "platform/unicode.h"
 #include "platform/utils.h"
-#include "vm/unicode.h"
 
 namespace dart {
 
@@ -135,12 +135,7 @@ void TextBuffer::AddEscapedString(const char* s) {
 void TextBuffer::EnsureCapacity(intptr_t len) {
   intptr_t remaining = buf_size_ - msg_len_;
   if (remaining <= len) {
-    const int kBufferSpareCapacity = 64;  // Somewhat arbitrary.
-    // TODO(turnidge): do we need to guard against overflow or other
-    // security issues here? Text buffers are used by the debugger
-    // to send user-controlled data (e.g. values of string variables) to
-    // the debugger front-end.
-    intptr_t new_size = buf_size_ + len + kBufferSpareCapacity;
+    intptr_t new_size = buf_size_ + Utils::Maximum(buf_size_, len + 1);
     char* new_buf = reinterpret_cast<char*>(realloc(buf_, new_size));
     if (new_buf == NULL) {
       OUT_OF_MEMORY();
@@ -149,8 +144,6 @@ void TextBuffer::EnsureCapacity(intptr_t len) {
     buf_size_ = new_size;
   }
 }
-
-#ifndef PRODUCT
 
 void BufferFormatter::Print(const char* format, ...) {
   va_list args;
@@ -168,7 +161,5 @@ void BufferFormatter::VPrint(const char* format, va_list args) {
     position_ += (available <= written) ? available : written;
   }
 }
-
-#endif  // !PRODUCT
 
 }  // namespace dart

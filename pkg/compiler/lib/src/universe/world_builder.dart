@@ -4,43 +4,15 @@
 
 library world_builder;
 
-import 'dart:collection';
-
-import '../common.dart';
-import '../common/names.dart' show Identifiers, Names;
 import '../common_elements.dart';
-import '../constants/values.dart';
 import '../elements/entities.dart';
+import '../elements/names.dart';
 import '../elements/types.dart';
-import '../js_backend/allocator_analysis.dart' show KAllocatorAnalysis;
-import '../js_backend/backend_usage.dart' show BackendUsageBuilder;
-import '../js_backend/interceptor_data.dart' show InterceptorDataBuilder;
-import '../js_backend/native_data.dart' show NativeBasicData, NativeDataBuilder;
-import '../js_backend/no_such_method_registry.dart';
-import '../js_backend/runtime_types.dart';
-import '../js_model/locals.dart';
-import '../js_model/elements.dart' show JSignatureMethod;
-import '../kernel/element_map_impl.dart';
-import '../native/enqueue.dart' show NativeResolutionEnqueuer;
-import '../options.dart';
-import '../universe/class_set.dart';
-import '../util/enumset.dart';
-import '../util/util.dart';
-import '../world.dart' show World, JClosedWorld, KClosedWorld, OpenWorld;
-import 'class_hierarchy_builder.dart' show ClassHierarchyBuilder, ClassQueries;
+import '../ir/static_type.dart';
+import '../js_backend/native_data.dart' show NativeBasicData;
+import '../world.dart' show World, JClosedWorld, OpenWorld;
 import 'selector.dart' show Selector;
-import 'use.dart'
-    show
-        ConstantUse,
-        ConstantUseKind,
-        DynamicUse,
-        DynamicUseKind,
-        StaticUse,
-        StaticUseKind;
-
-part 'codegen_world_builder.dart';
-part 'member_usage.dart';
-part 'resolution_world_builder.dart';
+import 'use.dart' show DynamicUse, StaticUse;
 
 /// The combined constraints on receivers all the dynamic call sites of the same
 /// selector.
@@ -62,7 +34,7 @@ part 'resolution_world_builder.dart';
 /// the selector constraints for dynamic calls to 'foo' with two positional
 /// arguments could be 'receiver of exact instance `A` or `B`'.
 abstract class SelectorConstraints {
-  /// Returns `true` if [selector] applies to [element] under these constraints
+  /// Returns `true` if [name] applies to [element] under these constraints
   /// given the closed [world].
   ///
   /// Consider for instance in this world:
@@ -77,7 +49,7 @@ abstract class SelectorConstraints {
   ///
   /// Ideally the selector constraints for calls `foo` with two positional
   /// arguments apply to `A.foo` but `B.foo`.
-  bool applies(MemberEntity element, Selector selector, covariant World world);
+  bool canHit(MemberEntity element, Name name, covariant World world);
 
   /// Returns `true` if at least one of the receivers matching these constraints
   /// in the closed [world] have no implementation matching [selector].
@@ -105,52 +77,12 @@ abstract class UniverseSelectorConstraints extends SelectorConstraints {
 abstract class SelectorConstraintsStrategy {
   /// Create a [UniverseSelectorConstraints] to represent the global receiver
   /// constraints for dynamic call sites with [selector].
-  UniverseSelectorConstraints createSelectorConstraints(Selector selector);
+  UniverseSelectorConstraints createSelectorConstraints(
+      Selector selector, Object initialConstraint);
 
   /// Returns `true`  if [member] is a potential target of [dynamicUse].
   bool appliedUnnamed(DynamicUse dynamicUse, MemberEntity member, World world);
 }
-
-class OpenWorldStrategy implements SelectorConstraintsStrategy {
-  const OpenWorldStrategy();
-
-  OpenWorldConstraints createSelectorConstraints(Selector selector) {
-    return new OpenWorldConstraints();
-  }
-
-  @override
-  bool appliedUnnamed(DynamicUse dynamicUse, MemberEntity member, World world) {
-    Selector selector = dynamicUse.selector;
-    return selector.appliesUnnamed(member);
-  }
-}
-
-class OpenWorldConstraints extends UniverseSelectorConstraints {
-  bool isAll = false;
-
-  @override
-  bool applies(MemberEntity element, Selector selector, World world) => isAll;
-
-  @override
-  bool needsNoSuchMethodHandling(Selector selector, World world) => isAll;
-
-  @override
-  bool addReceiverConstraint(Object constraint) {
-    if (isAll) return false;
-    isAll = true;
-    return true;
-  }
-
-  String toString() {
-    if (isAll) {
-      return '<all>';
-    } else {
-      return '<none>';
-    }
-  }
-}
-
-bool useStrongModeWorldStrategy = false;
 
 /// Open world strategy that constrains instance member access to subtypes of
 /// the static type of the receiver.
@@ -159,8 +91,11 @@ bool useStrongModeWorldStrategy = false;
 class StrongModeWorldStrategy implements SelectorConstraintsStrategy {
   const StrongModeWorldStrategy();
 
-  StrongModeWorldConstraints createSelectorConstraints(Selector selector) {
-    return new StrongModeWorldConstraints();
+  @override
+  StrongModeWorldConstraints createSelectorConstraints(
+      Selector selector, Object initialConstraint) {
+    return new StrongModeWorldConstraints()
+      ..addReceiverConstraint(initialConstraint);
   }
 
   @override
@@ -169,7 +104,8 @@ class StrongModeWorldStrategy implements SelectorConstraintsStrategy {
     Selector selector = dynamicUse.selector;
     StrongModeConstraint constraint = dynamicUse.receiverConstraint;
     return selector.appliesUnnamed(member) &&
-        (constraint == null || constraint.canHit(member, selector, world));
+        (constraint == null ||
+            constraint.canHit(member, selector.memberName, world));
   }
 }
 
@@ -178,11 +114,11 @@ class StrongModeWorldConstraints extends UniverseSelectorConstraints {
   Set<StrongModeConstraint> _constraints;
 
   @override
-  bool applies(MemberEntity element, Selector selector, World world) {
+  bool canHit(MemberEntity element, Name name, World world) {
     if (isAll) return true;
     if (_constraints == null) return false;
     for (StrongModeConstraint constraint in _constraints) {
-      if (constraint.canHit(element, selector, world)) {
+      if (constraint.canHit(element, name, world)) {
         return true;
       }
     }
@@ -216,6 +152,7 @@ class StrongModeWorldConstraints extends UniverseSelectorConstraints {
     return _constraints.add(constraint);
   }
 
+  @override
   String toString() {
     if (isAll) {
       return '<all>';
@@ -229,24 +166,45 @@ class StrongModeWorldConstraints extends UniverseSelectorConstraints {
 
 class StrongModeConstraint {
   final ClassEntity cls;
+  final ClassRelation relation;
 
-  const StrongModeConstraint(this.cls);
+  factory StrongModeConstraint(CommonElements commonElements,
+      NativeBasicData nativeBasicData, ClassEntity cls,
+      [ClassRelation relation = ClassRelation.subtype]) {
+    if (nativeBasicData.isJsInteropClass(cls)) {
+      // We can not tell js-interop classes apart, so we just assume the
+      // receiver could be any js-interop class.
+      cls = commonElements.jsJavaScriptObjectClass;
+      relation = ClassRelation.subtype;
+    }
+    return new StrongModeConstraint.internal(cls, relation);
+  }
+
+  const StrongModeConstraint.internal(this.cls, this.relation);
 
   bool needsNoSuchMethodHandling(Selector selector, World world) => true;
 
-  bool canHit(MemberEntity element, Selector selector, OpenWorld world) {
-    return world.isInheritedInSubtypeOf(element, cls);
+  bool canHit(MemberEntity element, Name name, OpenWorld world) {
+    return world.isInheritedIn(element, cls, relation);
   }
 
-  bool operator ==(other) {
+  bool get isExact => relation == ClassRelation.exact;
+
+  bool get isThis => relation == ClassRelation.thisExpression;
+
+  @override
+  bool operator ==(Object other) {
     if (identical(this, other)) return true;
-    if (other is! StrongModeConstraint) return false;
-    return cls == other.cls;
+    return other is StrongModeConstraint &&
+        cls == other.cls &&
+        relation == other.relation;
   }
 
+  @override
   int get hashCode => cls.hashCode * 13;
 
-  String toString() => 'StrongModeConstraint($cls)';
+  @override
+  String toString() => 'StrongModeConstraint($cls,$relation)';
 }
 
 /// The [WorldBuilder] is an auxiliary class used in the process of computing
@@ -259,74 +217,28 @@ abstract class WorldBuilder {
   /// super-call.
   // TODO(johnniwinther): Improve semantic precision.
   Iterable<ClassEntity> get directlyInstantiatedClasses;
-
-  /// All types that are checked either through is, as or checked mode checks.
-  Iterable<DartType> get isChecks;
-
-  /// All directly instantiated types, that is, the types of the directly
-  /// instantiated classes.
-  // TODO(johnniwinther): Improve semantic precision.
-  Iterable<InterfaceType> get instantiatedTypes;
-
-  // TODO(johnniwinther): Clean up these getters.
-  /// Methods in instantiated classes that are potentially closurized.
-  Iterable<FunctionEntity> get closurizedMembers;
-
-  /// Static or top level methods that are closurized.
-  Iterable<FunctionEntity> get closurizedStatics;
-
-  /// Live generic instance methods.
-  Iterable<FunctionEntity> get genericInstanceMethods;
-
-  /// Live generic local functions.
-  Iterable<Local> get genericLocalFunctions;
-
-  /// Live generic methods.
-  Iterable<FunctionEntity> get genericMethods;
-
-  /// Live user-defined 'noSuchMethod' implementations.
-  Iterable<FunctionEntity> get userNoSuchMethods;
-
-  /// Type variables used as type literals.
-  Iterable<TypeVariableType> get typeVariableTypeLiterals;
-
-  /// Call [f] for each generic [function] with the type arguments passed
-  /// through static calls to [function].
-  void forEachStaticTypeArgument(
-      void f(Entity function, Set<DartType> typeArguments));
-
-  /// Call [f] for each generic [selector] with the type arguments passed
-  /// through dynamic calls to [selector].
-  void forEachDynamicTypeArgument(
-      void f(Selector selector, Set<DartType> typeArguments));
 }
 
 abstract class WorldBuilderBase {
-  final Map<Entity, Set<DartType>> _staticTypeArgumentDependencies =
+  final Map<Entity, Set<DartType>> staticTypeArgumentDependencies =
       <Entity, Set<DartType>>{};
 
-  final Map<Selector, Set<DartType>> _dynamicTypeArgumentDependencies =
+  final Map<Selector, Set<DartType>> dynamicTypeArgumentDependencies =
       <Selector, Set<DartType>>{};
-
-  /// Set of methods in instantiated classes that are potentially closurized.
-  final Set<FunctionEntity> closurizedMembers = new Set<FunctionEntity>();
-
-  /// Set of static or top level methods that are closurized.
-  final Set<FunctionEntity> closurizedStatics = new Set<FunctionEntity>();
 
   final Set<TypeVariableType> typeVariableTypeLiterals =
       new Set<TypeVariableType>();
 
   void _registerStaticTypeArgumentDependency(
       Entity element, List<DartType> typeArguments) {
-    _staticTypeArgumentDependencies.putIfAbsent(
+    staticTypeArgumentDependencies.putIfAbsent(
         element, () => new Set<DartType>())
       ..addAll(typeArguments);
   }
 
   void _registerDynamicTypeArgumentDependency(
       Selector selector, List<DartType> typeArguments) {
-    _dynamicTypeArgumentDependencies.putIfAbsent(
+    dynamicTypeArgumentDependencies.putIfAbsent(
         selector, () => new Set<DartType>())
       ..addAll(typeArguments);
   }
@@ -343,16 +255,6 @@ abstract class WorldBuilderBase {
       Selector selector, List<DartType> typeArguments) {
     if (typeArguments.isEmpty) return;
     _registerDynamicTypeArgumentDependency(selector, typeArguments);
-  }
-
-  void forEachStaticTypeArgument(
-      void f(Entity function, Set<DartType> typeArguments)) {
-    _staticTypeArgumentDependencies.forEach(f);
-  }
-
-  void forEachDynamicTypeArgument(
-      void f(Selector selector, Set<DartType> typeArguments)) {
-    _dynamicTypeArgumentDependencies.forEach(f);
   }
 
   void registerTypeVariableTypeLiteral(TypeVariableType typeVariable) {

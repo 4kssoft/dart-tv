@@ -1,12 +1,12 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:async';
 
 import 'package:analysis_server/src/services/correction/organize_directives.dart';
+import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/error/error.dart';
-import 'package:analyzer/src/dart/analysis/driver.dart';
 import 'package:analyzer_plugin/protocol/protocol_common.dart'
     hide AnalysisError;
 import 'package:test/test.dart';
@@ -23,6 +23,26 @@ main() {
 @reflectiveTest
 class OrganizeDirectivesTest extends AbstractSingleUnitTest {
   List<AnalysisError> testErrors;
+
+  test_docComment_beforeDirective_hasUnresolvedIdentifier() async {
+    await _computeUnitAndErrors(r'''
+/// Library documentation comment A
+/// Library documentation comment B
+import 'a.dart';
+import 'b.dart';
+
+B b;
+''');
+    // validate change
+    _assertOrganize(r'''
+/// Library documentation comment A
+/// Library documentation comment B
+import 'a.dart';
+import 'b.dart';
+
+B b;
+''');
+  }
 
   test_keep_duplicateImports_withDifferentPrefix() async {
     await _computeUnitAndErrors(r'''
@@ -96,8 +116,8 @@ main() {
   }
 
   test_remove_unresolvedDirectives() async {
-    addSource('/project/existing_part1.dart', 'part of lib;');
-    addSource('/project/existing_part2.dart', 'part of lib;');
+    addSource('/home/test/lib/existing_part1.dart', 'part of lib;');
+    addSource('/home/test/lib/existing_part2.dart', 'part of lib;');
     await _computeUnitAndErrors(r'''
 library lib;
 
@@ -286,12 +306,9 @@ main() {
 // header
 library lib;
 
-import 'a.dart';
-import 'b.dart';
-import 'c.dart';
-// c
-// aa
-// bbb
+import 'a.dart';// aa
+import 'b.dart';// bbb
+import 'c.dart';// c
 
 /** doc */
 main() {
@@ -324,7 +341,7 @@ import 'package:product2.client/entity.dart';
   }
 
   void _assertOrganize(String expectedCode,
-      {bool removeUnresolved: false, bool removeUnused: false}) {
+      {bool removeUnresolved = false, bool removeUnused = false}) {
     DirectiveOrganizer organizer = new DirectiveOrganizer(
         testCode, testUnit, testErrors,
         removeUnresolved: removeUnresolved, removeUnused: removeUnused);
@@ -333,9 +350,10 @@ import 'package:product2.client/entity.dart';
     expect(result, expectedCode);
   }
 
-  Future<Null> _computeUnitAndErrors(String code) async {
+  Future<void> _computeUnitAndErrors(String code) async {
     addTestSource(code);
-    AnalysisResult result = await driver.getResult(testSource.fullName);
+    ResolvedUnitResult result =
+        await session.getResolvedUnit(testSource.fullName);
     testUnit = result.unit;
     testErrors = result.errors;
   }

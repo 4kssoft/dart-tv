@@ -3,33 +3,31 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:async_helper/async_helper.dart';
-import 'package:compiler/src/commandline_options.dart';
 import 'package:compiler/src/common_elements.dart';
 import 'package:compiler/src/compiler.dart';
 import 'package:compiler/src/elements/entities.dart';
-import 'package:compiler/src/js_backend/runtime_types.dart';
+import 'package:compiler/src/js_backend/runtime_types_resolution.dart';
 import 'package:compiler/src/js_emitter/model.dart';
+import 'package:compiler/src/js_model/js_strategy.dart';
 import 'package:compiler/src/js/js.dart' as js;
 import 'package:compiler/src/world.dart';
 import 'package:expect/expect.dart';
 import '../helpers/program_lookup.dart';
-import '../memory_compiler.dart';
+import '../helpers/memory_compiler.dart';
 
 const String code = '''
-import 'package:meta/dart2js.dart';
-
 class A<T> {
   final field;
 
-  @noInline
+  @pragma('dart2js:noInline')
   factory A.fact(t) => new A(t);
 
-  @noInline
+  @pragma('dart2js:noInline')
   A(t) : field = t is T;
 }
 
 // A call to A.fact.
-@noInline
+@pragma('dart2js:noInline')
 callAfact() => new A<int>.fact(0).runtimeType;
 
 main() {
@@ -39,17 +37,18 @@ main() {
 
 main() {
   asyncTest(() async {
-    CompilationResult result = await runCompiler(
-        memorySourceFiles: {'main.dart': code}, options: [Flags.strongMode]);
+    CompilationResult result =
+        await runCompiler(memorySourceFiles: {'main.dart': code});
     Expect.isTrue(result.isSuccess);
     Compiler compiler = result.compiler;
+    JsBackendStrategy backendStrategy = compiler.backendStrategy;
     JClosedWorld closedWorld = compiler.backendClosedWorldForTesting;
     RuntimeTypesNeed rtiNeed = closedWorld.rtiNeed;
     ElementEnvironment elementEnvironment = closedWorld.elementEnvironment;
-    ProgramLookup programLookup = new ProgramLookup(compiler);
+    ProgramLookup programLookup = new ProgramLookup(backendStrategy);
 
     js.Name getName(String name) {
-      return compiler.backend.namer
+      return backendStrategy.namerForTesting
           .globalPropertyNameForMember(lookupMember(elementEnvironment, name));
     }
 
@@ -84,14 +83,17 @@ main() {
       js.Name selector = getName(targetName);
       bool callFound = false;
       forEachNode(fun, onCall: (js.Call node) {
-        js.Expression target = node.target;
-        if (target is js.PropertyAccess && target.selector == selector) {
-          callFound = true;
-          Expect.equals(
-              expectedTypeArguments,
-              node.arguments.length,
-              "Unexpected argument count in $function call to $targetName: "
-              "${js.nodeToString(fun)}");
+        js.Expression target = js.undefer(node.target);
+        if (target is js.PropertyAccess) {
+          js.Node targetSelector = js.undefer(target.selector);
+          if (targetSelector is js.Name && targetSelector.key == selector.key) {
+            callFound = true;
+            Expect.equals(
+                expectedTypeArguments,
+                node.arguments.length,
+                "Unexpected argument count in $function call to $targetName: "
+                "${js.nodeToString(fun)}");
+          }
         }
       });
       Expect.isTrue(

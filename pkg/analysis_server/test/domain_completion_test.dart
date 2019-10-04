@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -19,15 +19,18 @@ import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import 'domain_completion_util.dart';
+import 'mocks.dart';
 
 main() {
   defineReflectiveSuite(() {
-    defineReflectiveTests(CompletionDomainHandlerTest);
+    defineReflectiveTests(CompletionDomainHandlerGetSuggestionsTest);
+    defineReflectiveTests(CompletionDomainHandlerListTokenDetailsTest);
   });
 }
 
 @reflectiveTest
-class CompletionDomainHandlerTest extends AbstractCompletionDomainTest {
+class CompletionDomainHandlerGetSuggestionsTest
+    extends AbstractCompletionDomainTest {
   test_ArgumentList_constructor_named_fieldFormalParam() async {
     // https://github.com/dart-lang/sdk/issues/31023
     addTestFile('''
@@ -238,7 +241,7 @@ class A {
     //
     // We no longer support the analysis of non-dart files.
     //
-    testFile = resourceProvider.convertPath('/project/web/test.html');
+    testFile = convertPath('/project/web/test.html');
     addTestFile('''
       <html>^</html>
     ''');
@@ -251,7 +254,7 @@ class A {
 
   test_import_uri_with_trailing() {
     final filePath = '/project/bin/testA.dart';
-    final incompleteImportText = convertPathForImport('/project/bin/t');
+    final incompleteImportText = toUriStr('/project/bin/t');
     newFile(filePath, content: 'library libA;');
     addTestFile('''
     import "$incompleteImportText^.dart";
@@ -260,8 +263,7 @@ class A {
       expect(replacementOffset,
           equals(completionOffset - incompleteImportText.length));
       expect(replacementLength, equals(5 + incompleteImportText.length));
-      assertHasResult(
-          CompletionSuggestionKind.IMPORT, convertPathForImport(filePath));
+      assertHasResult(CompletionSuggestionKind.IMPORT, toUriStr(filePath));
       assertNoResult('test');
     });
   }
@@ -509,7 +511,7 @@ class A {
   foo(bar) => 0;''');
     addTestFile('''
   library libA;
-  part "${convertPathForImport('/testA.dart')}";
+  part "${toUriStr('/testA.dart')}";
   import "dart:math";
   /// The [^]
   main(aaa, bbb) {}
@@ -533,9 +535,10 @@ class A {
   }
 
   test_inherited() {
-    newFile('/libA.dart', content: 'class A {m() {}}');
     addTestFile('''
-import ${convertPathForImport('/libA.dart')};
+class A {
+  m() {}
+}
 class B extends A {
   x() {^}
 }
@@ -545,6 +548,27 @@ class B extends A {
       expect(replacementLength, equals(0));
       assertHasResult(CompletionSuggestionKind.INVOCATION, 'm');
     });
+  }
+
+  test_invalidFilePathFormat_notAbsolute() async {
+    var request =
+        new CompletionGetSuggestionsParams('test.dart', 0).toRequest('0');
+    var response = await waitResponse(request);
+    expect(
+      response,
+      isResponseFailure('0', RequestErrorCode.INVALID_FILE_PATH_FORMAT),
+    );
+  }
+
+  test_invalidFilePathFormat_notNormalized() async {
+    var request = new CompletionGetSuggestionsParams(
+            convertPath('/foo/../bar/test.dart'), 0)
+        .toRequest('0');
+    var response = await waitResponse(request);
+    expect(
+      response,
+      isResponseFailure('0', RequestErrorCode.INVALID_FILE_PATH_FORMAT),
+    );
   }
 
   test_invocation() {
@@ -586,6 +610,15 @@ class B extends A {
       expect(replacementLength, equals(0));
       assertHasResult(CompletionSuggestionKind.INVOCATION, 'b');
     });
+  }
+
+  test_is_asPrefixedIdentifierStart() async {
+    addTestFile('''
+class A { var isVisible;}
+main(A p) { var v1 = p.is^; }''');
+    await getSuggestions();
+    assertHasResult(CompletionSuggestionKind.INVOCATION, 'isVisible',
+        relevance: DART_RELEVANCE_DEFAULT);
   }
 
   test_keyword() {
@@ -637,9 +670,9 @@ main() {
   }
 
   test_local_override() {
-    newFile('/libA.dart', content: 'class A {m() {}}');
+    newFile('/project/bin/a.dart', content: 'class A {m() {}}');
     addTestFile('''
-import '/libA.dart';
+import 'a.dart';
 class B extends A {
   m() {}
   x() {^}
@@ -708,9 +741,9 @@ main() {
   }
 
   test_overrides() {
-    newFile('/libA.dart', content: 'class A {m() {}}');
+    newFile('/project/bin/a.dart', content: 'class A {m() {}}');
     addTestFile('''
-import '/libA.dart';
+import 'a.dart';
 class B extends A {m() {^}}
 ''');
     return getSuggestions().then((_) {
@@ -722,10 +755,10 @@ class B extends A {m() {^}}
   }
 
   test_partFile() {
-    newFile('/project/bin/testA.dart', content: '''
+    newFile('/project/bin/a.dart', content: '''
       library libA;
-      part "${convertPathForImport(testFile)}";
       import 'dart:html';
+      part 'test.dart';
       class A { }
     ''');
     addTestFile('''
@@ -745,12 +778,12 @@ class B extends A {m() {^}}
   }
 
   test_partFile2() {
-    newFile('/testA.dart', content: '''
+    newFile('/project/bin/a.dart', content: '''
       part of libA;
       class A { }''');
     addTestFile('''
       library libA;
-      part "${convertPathForImport("/testA.dart")}";
+      part "a.dart";
       import 'dart:html';
       main() {^}
     ''');
@@ -832,6 +865,427 @@ class B extends A {m() {^}}
   }
 }
 
+@reflectiveTest
+class CompletionDomainHandlerListTokenDetailsTest
+    extends AbstractCompletionDomainTest {
+  String testFileUri;
+
+  void expectTokens(String content, List<TokenDetails> expectedTokens) async {
+    newFile(testFile, content: content);
+    Request request =
+        new CompletionListTokenDetailsParams(testFile).toRequest('0');
+    Response response = await waitResponse(request);
+    List<Map<String, dynamic>> tokens = response.result['tokens'];
+    _compareTokens(tokens, expectedTokens);
+  }
+
+  @override
+  void setUp() {
+    super.setUp();
+    testFileUri = toUriStr(testFile);
+  }
+
+  test_classDeclaration() async {
+    await expectTokens('''
+class A {}
+class B extends A {}
+class C implements B {}
+class D with C {}
+''', [
+      token('class', 0, null, null),
+      token('A', 6, 'Type',
+          ['declaration']), //token('A', 6, 'dart:core;Type', ['declaration']),
+      token('{', 8, null, null),
+      token('}', 9, null, null),
+      token('class', 11, null, null),
+      token('B', 17, 'Type',
+          ['declaration']), //token('B', 17, 'dart:core;Type', ['declaration']),
+      token('extends', 19, null, null),
+      token('A', 27, 'dart:core;Type<A>', [
+        'reference'
+      ]), //token('A', 27, 'dart:core;Type<$testFileUri;A>', ['reference']),
+      token('{', 29, null, null),
+      token('}', 30, null, null),
+      token('class', 32, null, null),
+      token('C', 38, 'Type',
+          ['declaration']), //token('C', 38, 'dart:core;Type', ['declaration']),
+      token('implements', 40, null, null),
+      token('B', 51, 'dart:core;Type<B>', [
+        'reference'
+      ]), //token('B', 51, 'dart:core;Type<$testFileUri;B>', ['reference']),
+      token('{', 53, null, null),
+      token('}', 54, null, null),
+      token('class', 56, null, null),
+      token('D', 62, 'Type',
+          ['declaration']), //token('D', 62, 'dart:core;Type', ['declaration']),
+      token('with', 64, null, null),
+      token('C', 69, 'dart:core;Type<C>', [
+        'reference'
+      ]), //token('C', 69, 'dart:core;Type<$testFileUri;C>', ['reference']),
+      token('{', 71, null, null),
+      token('}', 72, null, null),
+    ]);
+  }
+
+  test_genericType() async {
+    await expectTokens('''
+List<int> x = null;
+''', [
+      token('List', 0, 'dart:core;Type<List>', [
+        'reference'
+      ]), //token('List', 0, 'dart:core;Type<dart:core;List>', ['reference']),
+      token('<', 4, null, null),
+      token('int', 5, 'dart:core;Type<int>', [
+        'reference'
+      ]), //token('int', 5, 'dart:core;Type<dart:core;int>', ['reference']),
+      token('>', 8, null, null),
+      token('x', 10, 'List',
+          ['declaration']), //token('x', 10, 'dart:core;List', ['declaration']),
+      token('=', 12, null, null),
+      token('null', 14, null, null),
+      token(';', 18, null, null),
+    ]);
+  }
+
+  test_getterInvocation() async {
+    await expectTokens('''
+var x = 'a'.length;
+''', [
+      token('var', 0, null, null),
+      token('x', 4, 'int',
+          ['declaration']), //token('x', 4, 'dart:core;int', ['declaration']),
+      token('=', 6, null, null),
+      token("'a'", 8, 'String',
+          null), //token("'a'", 8, 'dart:core;String', null),
+      token('.', 11, null, null),
+      token('length', 12, 'int',
+          ['reference']), //token('length', 12, 'dart:core;int', ['reference']),
+      token(';', 18, null, null),
+    ]);
+  }
+
+  test_literal_bool() async {
+    await expectTokens('''
+var x = true;
+''', [
+      token('var', 0, null, null),
+      token('x', 4, 'bool',
+          ['declaration']), //token('x', 4, 'dart:core;bool', ['declaration']),
+      token('=', 6, null, null),
+      token(
+          'true', 8, 'bool', null), //token('true', 8, 'dart:core;bool', null),
+      token(';', 12, null, null),
+    ]);
+  }
+
+  test_literal_double() async {
+    await expectTokens('''
+var x = 3.4;
+''', [
+      token('var', 0, null, null),
+      token('x', 4, 'double', [
+        'declaration'
+      ]), //token('x', 4, 'dart:core;double', ['declaration']),
+      token('=', 6, null, null),
+      token('3.4', 8, 'double',
+          null), //token('3.4', 8, 'dart:core;double', null),
+      token(';', 11, null, null),
+    ]);
+  }
+
+  test_literal_int() async {
+    await expectTokens('''
+var x = 7;
+''', [
+      token('var', 0, null, null),
+      token('x', 4, 'int',
+          ['declaration']), //token('x', 4, 'dart:core;int', ['declaration']),
+      token('=', 6, null, null),
+      token('7', 8, 'int', null), //token('7', 8, 'dart:core;int', null),
+      token(';', 9, null, null),
+    ]);
+  }
+
+  test_literal_list() async {
+    await expectTokens('''
+var x = <int>[];
+''', [
+      token('var', 0, null, null),
+      token('x', 4, 'List',
+          ['declaration']), //token('x', 4, 'dart:core;List', ['declaration']),
+      token('=', 6, null, null),
+      token('<', 8, null, null),
+      token("int", 9, 'dart:core;Type<int>', [
+        'reference'
+      ]), //token("int", 9, 'dart:core;Type<dart:core;int>', ['reference']),
+      token('>', 12, null, null),
+      token('[', 13, null, null),
+      token(']', 14, null, null),
+      token(';', 15, null, null),
+    ]);
+  }
+
+  test_literal_map() async {
+    await expectTokens('''
+var x = <int, int>{};
+''', [
+      token('var', 0, null, null),
+      token('x', 4, 'Map',
+          ['declaration']), //token('x', 4, 'dart:core;Map', ['declaration']),
+      token('=', 6, null, null),
+      token('<', 8, null, null),
+      token("int", 9, 'dart:core;Type<int>', [
+        'reference'
+      ]), //token("int", 9, 'dart:core;Type<dart:core;int>', ['reference']),
+//      token(',', null, null),
+      token("int", 14, 'dart:core;Type<int>', [
+        'reference'
+      ]), //token("int", 14, 'dart:core;Type<dart:core;int>', ['reference']),
+      token('>', 17, null, null),
+      token('{', 18, null, null),
+      token('}', 19, null, null),
+      token(';', 20, null, null),
+    ]);
+  }
+
+  test_literal_null() async {
+    await expectTokens('''
+var x = null;
+''', [
+      token('var', 0, null, null),
+      token('x', 4, 'dynamic', ['declaration']),
+      token('=', 6, null, null),
+      token('null', 8, null, null),
+      token(';', 12, null, null),
+    ]);
+  }
+
+  test_literal_set() async {
+    await expectTokens('''
+var x = <int>{};
+''', [
+      token('var', 0, null, null),
+      token('x', 4, 'Set',
+          ['declaration']), //token('x', 4, 'dart:core;Set', ['declaration']),
+      token('=', 6, null, null),
+      token('<', 8, null, null),
+      token("int", 9, 'dart:core;Type<int>', [
+        'reference'
+      ]), //token("int", 9, 'dart:core;Type<dart:core;int>', ['reference']),
+      token('>', 12, null, null),
+      token('{', 13, null, null),
+      token('}', 14, null, null),
+      token(';', 15, null, null),
+    ]);
+  }
+
+  test_literal_string() async {
+    await expectTokens('''
+var x = 'a';
+''', [
+      token('var', 0, null, null),
+      token('x', 4, 'String', [
+        'declaration'
+      ]), //token('x', 4, 'dart:core;String', ['declaration']),
+      token('=', 6, null, null),
+      token("'a'", 8, 'String',
+          null), //token("'a'", 8, 'dart:core;String', null),
+      token(';', 11, null, null),
+    ]);
+  }
+
+  test_methodDeclaration() async {
+    await expectTokens('''
+class A {
+  String c(int x, int y) {}
+}
+''', [
+      token('class', 0, null, null),
+      token('A', 6, 'Type',
+          ['declaration']), //token('A', 6, 'dart:core;Type', ['declaration']),
+      token('{', 8, null, null),
+      token('String', 12, 'dart:core;Type<String>', [
+        'reference'
+      ]), //token('String', 12, 'dart:core;Type<dart:core;String>', ['reference']),
+      token('c', 19,
+          'String Function(int, int)', //'dart:core;String Function(dart:core;int, dart:core;int)',
+          ['declaration']),
+      token('(', 20, null, null),
+      token('int', 21, 'dart:core;Type<int>', [
+        'reference'
+      ]), //token('int', 21, 'dart:core;Type<dart:core;int>', ['reference']),
+      token('x', 25, 'int',
+          ['declaration']), //token('x', 25, 'dart:core;int', ['declaration']),
+//      token(',', null, null),
+      token('int', 28, 'dart:core;Type<int>', [
+        'reference'
+      ]), //token('int', 28, 'dart:core;Type<dart:core;int>', ['reference']),
+      token('y', 32, 'int',
+          ['declaration']), //token('y', 32, 'dart:core;int', ['declaration']),
+      token(')', 33, null, null),
+      token('{', 35, null, null),
+      token('}', 36, null, null),
+      token('}', 38, null, null),
+    ]);
+  }
+
+  test_methodInvocation() async {
+    await expectTokens('''
+var x = 'radar'.indexOf('r', 1);
+''', [
+      token('var', 0, null, null),
+      token('x', 4, 'int',
+          ['declaration']), //token('x', 4, 'dart:core;int', ['declaration']),
+      token('=', 6, null, null),
+      token("'radar'", 8, 'String',
+          null), //token("'radar'", 8, 'dart:core;String', null),
+      token('.', 15, null, null),
+      token('indexOf', 16,
+          'int Function(Pattern, int)', //'dart:core;int Function(dart:core;Pattern, dart:core;int)',
+          ['reference']),
+      token('(', 23, null, null),
+      token("'r'", 24, 'String',
+          null), //token("'r'", 24, 'dart:core;String', null),
+//      token(',', null, null),
+      token('1', 29, 'int', null), //token('1', 29, 'dart:core;int', null),
+      token(')', 30, null, null),
+      token(';', 31, null, null),
+    ]);
+  }
+
+  test_mixinDeclaration() async {
+    await expectTokens('''
+class A {}
+class B {}
+mixin D on A implements B {}
+''', [
+      token('class', 0, null, null),
+      token('A', 6, 'Type',
+          ['declaration']), //token('A', 6, 'dart:core;Type', ['declaration']),
+      token('{', 8, null, null),
+      token('}', 9, null, null),
+      token('class', 11, null, null),
+      token('B', 17, 'Type',
+          ['declaration']), //token('B', 17, 'dart:core;Type', ['declaration']),
+      token('{', 19, null, null),
+      token('}', 20, null, null),
+      token('mixin', 22, null, null),
+      token('D', 28, 'Type',
+          ['declaration']), //token('D', 28, 'dart:core;Type', ['declaration']),
+      token('on', 30, null, null),
+      token('A', 33, 'dart:core;Type<A>', [
+        'reference'
+      ]), //token('A', 33, 'dart:core;Type<$testFileUri;A>', ['reference']),
+      token('implements', 35, null, null),
+      token('B', 46, 'dart:core;Type<B>', [
+        'reference'
+      ]), //token('B', 'dart:core;Type<$testFileUri;B>', ['reference']),
+      token('{', 48, null, null),
+      token('}', 49, null, null),
+    ]);
+  }
+
+  test_parameterReference() async {
+    await expectTokens('''
+int f(int p) {
+  return p;
+}
+''', [
+      token('int', 0, 'dart:core;Type<int>', [
+        'reference'
+      ]), //token('int', 0, 'dart:core;Type<dart:core;int>', ['reference']),
+      token('f', 4, 'int Function(int)', [
+        'declaration'
+      ]), //token('f', 4, 'dart:core;int Function(dart:core;int)', ['declaration']),
+      token('(', 5, null, null),
+      token('int', 6, 'dart:core;Type<int>', [
+        'reference'
+      ]), //token('int', 6, 'dart:core;Type<dart:core;int>', ['reference']),
+      token('p', 10, 'int',
+          ['declaration']), //token('p', 10, 'dart:core;int', ['declaration']),
+      token(')', 11, null, null),
+      token('{', 13, null, null),
+      token('return', 17, null, null),
+      token('p', 24, 'int',
+          ['reference']), //token('p', 24, 'dart:core;int', ['reference']),
+      token(';', 25, null, null),
+      token('}', 27, null, null),
+    ]);
+  }
+
+  test_topLevelVariable_withDocComment() async {
+    await expectTokens('''
+/// Doc comment [x] with reference.
+int x;
+''', [
+      token('int', 36, 'dart:core;Type<int>', [
+        'reference'
+      ]), //token('int', 36, 'dart:core;Type<dart:core;int>', ['reference']),
+      token('x', 40, 'int',
+          ['declaration']), //token('x', 40, 'dart:core;int', ['declaration']),
+      token(';', 41, null, null),
+    ]);
+  }
+
+  TokenDetails token(
+      String lexeme, int offset, String type, List<String> kinds) {
+    return new TokenDetails(lexeme, offset,
+        type: type, validElementKinds: kinds);
+  }
+
+  void _compareTokens(List<Map<String, dynamic>> actualTokens,
+      List<TokenDetails> expectedTokens) {
+    int length = expectedTokens.length;
+    expect(actualTokens, hasLength(length));
+    List<String> errors = [];
+    for (int i = 0; i < length; i++) {
+      Map<String, dynamic> actual = actualTokens[i];
+      TokenDetails expected = expectedTokens[i];
+      if (actual['lexeme'] != expected.lexeme) {
+        errors.add('Lexeme at $i: '
+            'expected "${expected.lexeme}", '
+            'actual "${actual['lexeme']}"');
+      }
+      if (actual['offset'] != expected.offset) {
+        errors.add('Offset at $i: ("${expected.lexeme}"): '
+            'expected "${expected.offset}", '
+            'actual "${actual['offset']}"');
+      }
+      if (actual['type'] != expected.type) {
+        errors.add('Type at $i ("${expected.lexeme}"): '
+            'expected "${expected.type}", '
+            'actual "${actual['type']}"');
+      }
+      if (_differentKinds(
+          actual['validElementKinds'], expected.validElementKinds)) {
+        errors.add('Kinds at $i ("${expected.lexeme}"): '
+            'expected "${expected.validElementKinds}", '
+            'actual "${actual['validElementKinds']}"');
+      }
+    }
+    expect(errors, isEmpty);
+  }
+
+  /// Return `true` if the two lists of kinds are different.
+  bool _differentKinds(List<String> actual, List<String> expected) {
+    if (actual == null) {
+      return expected != null;
+    } else if (expected == null) {
+      return true;
+    }
+    int expectedLength = expected.length;
+    if (actual.length != expectedLength) {
+      return true;
+    }
+    for (int i = 0; i < expectedLength; i++) {
+      if (actual[i] != expected[i]) {
+        return true;
+      }
+    }
+    return false;
+  }
+}
+
 class MockRelevancySorter implements DartContributionSorter {
   bool enabled = true;
 
@@ -844,3 +1298,4 @@ class MockRelevancySorter implements DartContributionSorter {
     return new Future.value();
   }
 }
+

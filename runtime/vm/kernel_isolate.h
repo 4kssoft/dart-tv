@@ -5,7 +5,7 @@
 #ifndef RUNTIME_VM_KERNEL_ISOLATE_H_
 #define RUNTIME_VM_KERNEL_ISOLATE_H_
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
+#include <vector>
 
 #include "include/dart_api.h"
 #include "include/dart_native_api.h"
@@ -16,6 +16,8 @@
 
 namespace dart {
 
+// TODO(33433): The kernel service does not belong in the VM.
+
 class KernelIsolate : public AllStatic {
  public:
   static const char* kName;
@@ -24,8 +26,11 @@ class KernelIsolate : public AllStatic {
   static const int kAcceptTag;
   static const int kTrainTag;
   static const int kCompileExpressionTag;
+  static const int kListDependenciesTag;
+  static const int kNotifyIsolateShutdown;
 
   static void Run();
+  static void Shutdown();
 
   static bool NameEquals(const char* name);
   static bool Exists();
@@ -41,7 +46,9 @@ class KernelIsolate : public AllStatic {
       int source_files_count = 0,
       Dart_SourceFile source_files[] = NULL,
       bool incremental_compile = true,
-      const char* package_config = NULL);
+      const char* package_config = NULL,
+      const char* multiroot_filepaths = NULL,
+      const char* multiroot_scheme = NULL);
 
   static Dart_KernelCompilationResult AcceptCompilation();
   static Dart_KernelCompilationResult UpdateInMemorySources(
@@ -56,29 +63,42 @@ class KernelIsolate : public AllStatic {
       const char* klass,
       bool is_static);
 
- protected:
-  static Monitor* monitor_;
-  static Dart_IsolateCreateCallback create_callback_;
+  static Dart_KernelCompilationResult ListDependencies();
 
+  static void NotifyAboutIsolateShutdown(const Isolate* isolate);
+
+  static void AddExperimentalFlag(const char* value);
+
+ protected:
   static void InitCallback(Isolate* I);
   static void SetKernelIsolate(Isolate* isolate);
   static void SetLoadPort(Dart_Port port);
+  static void FinishedExiting();
   static void FinishedInitializing();
-
-  static Dart_Port kernel_port_;
-  static Isolate* isolate_;
-  static bool initializing_;
-
-  static Dart_IsolateCreateCallback create_callback() {
-    return create_callback_;
+  static void InitializingFailed();
+  static Dart_IsolateGroupCreateCallback create_group_callback() {
+    return create_group_callback_;
   }
 
+  static Dart_IsolateGroupCreateCallback create_group_callback_;
+  static Monitor* monitor_;
+  enum State {
+    kStopped,
+    kStarting,
+    kStarted,
+    kStopping,
+  };
+  static State state_;
+  static Isolate* isolate_;
+  static Dart_Port kernel_port_;
+
+  static MallocGrowableArray<char*>* experimental_flags_;
+
   friend class Dart;
+  friend class Isolate;
   friend class RunKernelTask;
 };
 
 }  // namespace dart
-
-#endif  // DART_PRECOMPILED_RUNTIME
 
 #endif  // RUNTIME_VM_KERNEL_ISOLATE_H_

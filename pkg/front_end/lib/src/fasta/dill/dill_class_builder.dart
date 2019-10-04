@@ -4,25 +4,27 @@
 
 library fasta.dill_class_builder;
 
-import 'package:kernel/ast.dart' show Class, DartType, Member;
+import 'package:kernel/ast.dart'
+    show Class, DartType, Member, Supertype, TypeParameter;
 
 import '../problems.dart' show unimplemented;
 
 import '../kernel/kernel_builder.dart'
     show
-        KernelClassBuilder,
-        KernelTypeBuilder,
+        ClassBuilder,
+        TypeBuilder,
         LibraryBuilder,
         MemberBuilder,
-        Scope;
+        Scope,
+        TypeVariableBuilder;
 
-import '../modifier.dart' show abstractMask;
-
-import 'dill_member_builder.dart' show DillMemberBuilder;
+import '../modifier.dart' show abstractMask, namedMixinApplicationMask;
 
 import 'dill_library_builder.dart' show DillLibraryBuilder;
 
-class DillClassBuilder extends KernelClassBuilder {
+import 'dill_member_builder.dart' show DillMemberBuilder;
+
+class DillClassBuilder extends ClassBuilder {
   final Class cls;
 
   DillClassBuilder(Class cls, DillLibraryBuilder parent)
@@ -34,12 +36,41 @@ class DillClassBuilder extends KernelClassBuilder {
             null,
             null,
             null,
-            new Scope(<String, MemberBuilder>{}, <String, MemberBuilder>{},
-                parent.scope, "class ${cls.name}", isModifiable: false),
-            new Scope(<String, MemberBuilder>{}, null, null, "constructors",
+            null,
+            new Scope(
+                local: <String, MemberBuilder>{},
+                setters: <String, MemberBuilder>{},
+                parent: parent.scope,
+                debugName: "class ${cls.name}",
+                isModifiable: false),
+            new Scope(
+                local: <String, MemberBuilder>{},
+                debugName: cls.name,
                 isModifiable: false),
             parent,
             cls.fileOffset);
+
+  List<TypeVariableBuilder> get typeVariables {
+    List<TypeVariableBuilder> typeVariables = super.typeVariables;
+    if (typeVariables == null && cls.typeParameters.isNotEmpty) {
+      typeVariables = super.typeVariables =
+          computeTypeVariableBuilders(library, cls.typeParameters);
+    }
+    return typeVariables;
+  }
+
+  Uri get fileUri => cls.fileUri;
+
+  TypeBuilder get supertype {
+    TypeBuilder supertype = super.supertype;
+    if (supertype == null) {
+      Supertype targetSupertype = cls.supertype;
+      if (targetSupertype == null) return null;
+      super.supertype =
+          supertype = computeTypeBuilder(library, targetSupertype);
+    }
+    return supertype;
+  }
 
   @override
   Class get actualCls => cls;
@@ -61,7 +92,7 @@ class DillClassBuilder extends KernelClassBuilder {
 
   @override
   List<DartType> buildTypeArguments(
-      LibraryBuilder library, List<KernelTypeBuilder> arguments) {
+      LibraryBuilder library, List<TypeBuilder> arguments) {
     // For performance reasons, [typeVariables] aren't restored from [target].
     // So, if [arguments] is null, the default types should be retrieved from
     // [cls.typeParameters].
@@ -88,13 +119,53 @@ class DillClassBuilder extends KernelClassBuilder {
   /// superclass.
   bool get isMixinApplication => cls.isMixinApplication;
 
-  KernelTypeBuilder get mixedInType => unimplemented("mixedInType", -1, null);
+  TypeBuilder get mixedInType {
+    return computeTypeBuilder(library, cls.mixedInType);
+  }
 
-  void set mixedInType(KernelTypeBuilder mixin) {
+  List<TypeBuilder> get interfaces {
+    if (cls.implementedTypes.isEmpty) return null;
+    if (super.interfaces == null) {
+      List<TypeBuilder> result =
+          new List<TypeBuilder>(cls.implementedTypes.length);
+      for (int i = 0; i < result.length; i++) {
+        result[i] = computeTypeBuilder(library, cls.implementedTypes[i]);
+      }
+      super.interfaces = result;
+    }
+    return super.interfaces;
+  }
+
+  void set mixedInType(TypeBuilder mixin) {
     unimplemented("mixedInType=", -1, null);
   }
 }
 
 int computeModifiers(Class cls) {
-  return cls.isAbstract ? abstractMask : 0;
+  int modifiers = 0;
+  if (cls.isAbstract) {
+    modifiers |= abstractMask;
+  }
+  if (cls.isMixinApplication && cls.name != null) {
+    modifiers |= namedMixinApplicationMask;
+  }
+  return modifiers;
+}
+
+TypeBuilder computeTypeBuilder(
+    DillLibraryBuilder library, Supertype supertype) {
+  return supertype == null
+      ? null
+      : library.loader.computeTypeBuilder(supertype.asInterfaceType);
+}
+
+List<TypeVariableBuilder> computeTypeVariableBuilders(
+    DillLibraryBuilder library, List<TypeParameter> typeParameters) {
+  if (typeParameters == null || typeParameters.length == 0) return null;
+  List<TypeVariableBuilder> result =
+      new List.filled(typeParameters.length, null);
+  for (int i = 0; i < result.length; i++) {
+    result[i] = new TypeVariableBuilder.fromKernel(typeParameters[i], library);
+  }
+  return result;
 }

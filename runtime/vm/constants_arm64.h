@@ -5,9 +5,13 @@
 #ifndef RUNTIME_VM_CONSTANTS_ARM64_H_
 #define RUNTIME_VM_CONSTANTS_ARM64_H_
 
+#ifndef RUNTIME_VM_CONSTANTS_H_
+#error Do not include constants_arm64.h directly; use constants.h instead.
+#endif
+
 #include "platform/assert.h"
 
-namespace dart {
+namespace arch_arm64 {
 
 enum Register {
   R0 = 0,
@@ -38,7 +42,7 @@ enum Register {
   R25 = 25,
   R26 = 26,  // THR
   R27 = 27,  // PP
-  R28 = 28,
+  R28 = 28,  // BARRIER_MASK
   R29 = 29,  // FP
   R30 = 30,  // LR
   R31 = 31,  // ZR, CSP
@@ -104,27 +108,31 @@ const FpuRegister FpuTMP = VTMP;
 const int kNumberOfFpuRegisters = kNumberOfVRegisters;
 const FpuRegister kNoFpuRegister = kNoVRegister;
 
+extern const char* cpu_reg_names[kNumberOfCpuRegisters];
+extern const char* fpu_reg_names[kNumberOfFpuRegisters];
+
 // Register aliases.
 const Register TMP = R16;  // Used as scratch register by assembler.
 const Register TMP2 = R17;
-const Register PP = R27;   // Caches object pool pointer in generated code.
+const Register PP = R27;  // Caches object pool pointer in generated code.
 const Register CODE_REG = R24;
 const Register FPREG = FP;          // Frame pointer register.
 const Register SPREG = R15;         // Stack pointer register.
 const Register LRREG = LR;          // Link register.
-const Register ICREG = R5;          // IC data register.
 const Register ARGS_DESC_REG = R4;  // Arguments descriptor register.
 const Register THR = R26;           // Caches current thread in generated code.
 const Register CALLEE_SAVED_TEMP = R19;
 const Register CALLEE_SAVED_TEMP2 = R20;
+const Register BARRIER_MASK = R28;
 
-// Exception object is passed in this register to the catch handlers when an
-// exception is thrown.
+// ABI for catch-clause entry point.
 const Register kExceptionObjectReg = R0;
-
-// Stack trace object is passed in this register to the catch handlers when
-// an exception is thrown.
 const Register kStackTraceObjectReg = R1;
+
+// ABI for write barrier stub.
+const Register kWriteBarrierObjectReg = R1;
+const Register kWriteBarrierValueReg = R0;
+const Register kWriteBarrierSlotReg = R25;
 
 // Masks, sizes, etc.
 const int kXRegSizeInBits = 64;
@@ -134,7 +142,10 @@ const int64_t kWRegMask = 0x00000000ffffffffL;
 
 // List of registers used in load/store multiple.
 typedef uint32_t RegList;
-const RegList kAllCpuRegistersList = 0xFFFF;
+const RegList kAllCpuRegistersList = 0xFFFFFFFF;
+
+// See "Procedure Call Standard for the ARM 64-bit Architecture", document
+// number "ARM IHI 0055B", May 22 2013.
 
 // C++ ABI call registers.
 const RegList kAbiArgumentCpuRegs = (1 << R0) | (1 << R1) | (1 << R2) |
@@ -150,15 +161,18 @@ const VRegister kAbiFirstPreservedFpuReg = V8;
 const VRegister kAbiLastPreservedFpuReg = V15;
 const int kAbiPreservedFpuRegCount = 8;
 
-const intptr_t kReservedCpuRegisters = (1 << SPREG) |  // Dart SP
-                                       (1 << FPREG) | (1 << TMP) | (1 << TMP2) |
-                                       (1 << PP) | (1 << THR) | (1 << LR) |
-                                       (1 << R31) |  // C++ SP
-                                       (1 << R18);   // iOS platform register.
+const intptr_t kReservedCpuRegisters =
+    (1 << SPREG) |  // Dart SP
+    (1 << FPREG) | (1 << TMP) | (1 << TMP2) | (1 << PP) | (1 << THR) |
+    (1 << LR) | (1 << BARRIER_MASK) | (1 << R31) |  // C++ SP
+    (1 << R18);                                     // iOS platform register.
 // TODO(rmacnak): Only reserve on Mac & iOS.
+constexpr intptr_t kNumberOfReservedCpuRegisters = 10;
 // CPU registers available to Dart allocator.
 const RegList kDartAvailableCpuRegs =
     kAllCpuRegistersList & ~kReservedCpuRegisters;
+constexpr int kNumberOfDartAvailableCpuRegs =
+    kNumberOfCpuRegisters - kNumberOfReservedCpuRegisters;
 // Registers available to Dart that are not preserved by runtime calls.
 const RegList kDartVolatileCpuRegs =
     kDartAvailableCpuRegs & ~kAbiPreservedCpuRegs;
@@ -166,6 +180,45 @@ const Register kDartFirstVolatileCpuReg = R0;
 const Register kDartLastVolatileCpuReg = R14;
 const int kDartVolatileCpuRegCount = 15;
 const int kDartVolatileFpuRegCount = 24;
+
+constexpr int kStoreBufferWrapperSize = 32;
+
+#define R(REG) (1 << REG)
+
+class CallingConventions {
+ public:
+  static const intptr_t kArgumentRegisters = kAbiArgumentCpuRegs;
+  static const Register ArgumentRegisters[];
+  static const intptr_t kNumArgRegs = 8;
+
+  static const FpuRegister FpuArgumentRegisters[];
+  static const intptr_t kFpuArgumentRegisters =
+      R(V0) | R(V1) | R(V2) | R(V3) | R(V4) | R(V5) | R(V6) | R(V7);
+  static const intptr_t kNumFpuArgRegs = 8;
+
+  static const bool kArgumentIntRegXorFpuReg = false;
+
+  static constexpr intptr_t kCalleeSaveCpuRegisters = kAbiPreservedCpuRegs;
+
+  // Whether floating-point values should be passed as integers ("softfp" vs
+  // "hardfp").
+  static constexpr bool kAbiSoftFP = false;
+
+  // Whether 64-bit arguments must be aligned to an even register or 8-byte
+  // stack address. Not relevant on X64 since the word size is 64-bits already.
+  static constexpr bool kAlignArguments = false;
+
+  static constexpr Register kReturnReg = R0;
+  static constexpr Register kSecondReturnReg = kNoRegister;
+  static constexpr FpuRegister kReturnFpuReg = V0;
+
+  static constexpr Register kFirstCalleeSavedCpuReg = kAbiFirstPreservedCpuReg;
+  static constexpr Register kFirstNonArgumentRegister = R8;
+  static constexpr Register kSecondNonArgumentRegister = R9;
+  static constexpr Register kStackPointerRegister = SPREG;
+};
+
+#undef R
 
 static inline Register ConcreteRegister(Register r) {
   return ((r == ZR) || (r == CSP)) ? R31 : r;
@@ -362,10 +415,7 @@ enum SystemOp {
   SystemFixed = CompareBranchFixed | B31 | B30 | B24,
   HINT = SystemFixed | B17 | B16 | B13 | B4 | B3 | B2 | B1 | B0,
   CLREX = SystemFixed | B17 | B16 | B13 | B12 | B11 | B10 | B9 | B8 | B6 | B4 |
-          B3 |
-          B2 |
-          B1 |
-          B0,
+          B3 | B2 | B1 | B0,
 };
 
 // C3.2.5
@@ -876,7 +926,6 @@ class Instr {
 
   // Reserved brk and hlt instruction codes.
   static const int32_t kBreakPointCode = 0xdeb0;      // For breakpoint.
-  static const int32_t kStopMessageCode = 0xdeb1;     // For Stop(message).
   static const int32_t kSimulatorBreakCode = 0xdeb2;  // For breakpoint in sim.
   static const int32_t kSimulatorRedirectCode = 0xca11;  // For redirection.
 
@@ -1152,13 +1201,13 @@ class Instr {
   // reference to an instruction is to convert a pointer. There is no way
   // to allocate or create instances of class Instr.
   // Use the At(pc) function to create references to Instr.
-  static Instr* At(uword pc) { return reinterpret_cast<Instr*>(pc); }
+  static Instr* At(::dart::uword pc) { return reinterpret_cast<Instr*>(pc); }
 
  private:
   DISALLOW_ALLOCATION();
   DISALLOW_IMPLICIT_CONSTRUCTORS(Instr);
 };
 
-}  // namespace dart
+}  // namespace arch_arm64
 
 #endif  // RUNTIME_VM_CONSTANTS_ARM64_H_

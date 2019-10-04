@@ -1,12 +1,11 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 /**
  * Code generation for the file "AnalysisServer.java".
  */
-import 'package:analyzer/src/codegen/tools.dart';
-import 'package:front_end/src/codegen/tools.dart';
+import 'package:analysis_tool/tools.dart';
 import 'package:html/dom.dart' as dom;
 
 import 'api.dart';
@@ -141,6 +140,8 @@ class CodegenJavaType extends CodegenJavaVisitor {
       return 'getAsString';
     } else if (name == 'boolean' || name == 'Boolean') {
       return 'getAsBoolean';
+    } else if (name == 'double' || name == 'Double') {
+      return 'getAsDouble';
     } else if (name == 'int' || name == 'Integer') {
       return 'getAsInt';
     } else if (name == 'long' || name == 'Long') {
@@ -534,9 +535,11 @@ class CodegenJavaType extends CodegenJavaVisitor {
   Element element = Element.fromJson(elementObject);
   int offset = outlineObject.get("offset").getAsInt();
   int length = outlineObject.get("length").getAsInt();
+  int codeOffset = outlineObject.get("codeOffset").getAsInt();
+  int codeLength = outlineObject.get("codeLength").getAsInt();
 
   // create outline object
-  Outline outline = new Outline(parent, element, offset, length);
+  Outline outline = new Outline(parent, element, offset, length, codeOffset, codeLength);
 
   // compute children recursively
   List<Outline> childrenList = Lists.newArrayList();

@@ -7,10 +7,11 @@
 
 #include "platform/assert.h"
 #include "vm/allocation.h"
+#include "vm/compiler/assembler/object_pool_builder.h"
+#include "vm/compiler/runtime_api.h"
 #include "vm/globals.h"
 #include "vm/growable_array.h"
 #include "vm/hash_map.h"
-#include "vm/object.h"
 
 namespace dart {
 
@@ -18,13 +19,16 @@ namespace dart {
 DECLARE_FLAG(bool, use_far_branches);
 #endif
 
+class MemoryRegion;
+
+namespace compiler {
+
 // Forward declarations.
 class Assembler;
 class AssemblerFixup;
 class AssemblerBuffer;
-class MemoryRegion;
 
-class Label : public ValueObject {
+class Label : public ZoneAllocated {
  public:
   Label() : position_(0), unresolved_(0) {
 #ifdef DEBUG
@@ -44,12 +48,12 @@ class Label : public ValueObject {
   // for unused labels.
   intptr_t Position() const {
     ASSERT(!IsUnused());
-    return IsBound() ? -position_ - kWordSize : position_ - kWordSize;
+    return IsBound() ? -position_ - kBias : position_ - kBias;
   }
 
   intptr_t LinkPosition() const {
     ASSERT(IsLinked());
-    return position_ - kWordSize;
+    return position_ - kBias;
   }
 
   intptr_t NearPosition() {
@@ -68,6 +72,12 @@ class Label : public ValueObject {
 #else
   static const int kMaxUnresolvedBranches = 1;  // Unused on non-Intel.
 #endif
+  // Zero position_ means unused (neither bound nor linked to).
+  // Thus we offset actual positions by the given bias to prevent zero
+  // positions from occurring.
+  // Note: we use target::kWordSize as a bias because on ARM
+  // there are assertions that check that distance is aligned.
+  static constexpr int kBias = 4;
 
   intptr_t position_;
   intptr_t unresolved_;
@@ -78,13 +88,13 @@ class Label : public ValueObject {
   void BindTo(intptr_t position) {
     ASSERT(!IsBound());
     ASSERT(!HasNear());
-    position_ = -position - kWordSize;
+    position_ = -position - kBias;
     ASSERT(IsBound());
   }
 
   void LinkTo(intptr_t position) {
     ASSERT(!IsBound());
-    position_ = position + kWordSize;
+    position_ = position + kBias;
     ASSERT(IsLinked());
   }
 
@@ -184,8 +194,10 @@ class AssemblerBuffer : public ValueObject {
     return *pointer_offsets_;
   }
 
+#if defined(TARGET_ARCH_IA32)
   // Emit an object pointer directly in the code.
   void EmitObject(const Object& object);
+#endif
 
   // Emit a fixup at the current location.
   void EmitFixup(AssemblerFixup* fixup) {
@@ -284,113 +296,79 @@ class AssemblerBuffer : public ValueObject {
   friend class AssemblerFixup;
 };
 
-struct ObjectPoolWrapperEntry {
-  ObjectPoolWrapperEntry() : raw_value_(), type_(), equivalence_() {}
-  explicit ObjectPoolWrapperEntry(const Object* obj)
-      : obj_(obj), type_(ObjectPool::kTaggedObject), equivalence_(obj) {}
-  explicit ObjectPoolWrapperEntry(const Object* obj, const Object* eqv)
-      : obj_(obj), type_(ObjectPool::kTaggedObject), equivalence_(eqv) {}
-  ObjectPoolWrapperEntry(uword value, ObjectPool::EntryType info)
-      : raw_value_(value), type_(info), equivalence_() {}
-
-  union {
-    const Object* obj_;
-    uword raw_value_;
-  };
-  ObjectPool::EntryType type_;
-  const Object* equivalence_;
-};
-
-// Pair type parameter for DirectChainedHashMap used for the constant pool.
-class ObjIndexPair {
- public:
-  // Typedefs needed for the DirectChainedHashMap template.
-  typedef ObjectPoolWrapperEntry Key;
-  typedef intptr_t Value;
-  typedef ObjIndexPair Pair;
-
-  static const intptr_t kNoIndex = -1;
-
-  ObjIndexPair()
-      : key_(static_cast<uword>(NULL), ObjectPool::kTaggedObject),
-        value_(kNoIndex) {}
-
-  ObjIndexPair(Key key, Value value) : value_(value) {
-    key_.type_ = key.type_;
-    if (key.type_ == ObjectPool::kTaggedObject) {
-      key_.obj_ = key.obj_;
-      key_.equivalence_ = key.equivalence_;
-    } else {
-      key_.raw_value_ = key.raw_value_;
-    }
-  }
-
-  static Key KeyOf(Pair kv) { return kv.key_; }
-
-  static Value ValueOf(Pair kv) { return kv.value_; }
-
-  static intptr_t Hashcode(Key key) {
-    if (key.type_ != ObjectPool::kTaggedObject) {
-      return key.raw_value_;
-    }
-    if (key.obj_->IsSmi()) {
-      return Smi::Cast(*key.obj_).Value();
-    }
-    // TODO(asiva) For now we assert that the object is from Old space
-    // and use the address of the raw object, once the weak_entry_table code
-    // in heap allows for multiple thread access we should switch this code
-    // to create a temporary raw obj => id mapping and use that.
-    ASSERT(key.obj_->IsOld());
-    return reinterpret_cast<intptr_t>(key.obj_->raw());
-  }
-
-  static inline bool IsKeyEqual(Pair kv, Key key) {
-    if (kv.key_.type_ != key.type_) return false;
-    if (kv.key_.type_ == ObjectPool::kTaggedObject) {
-      return (kv.key_.obj_->raw() == key.obj_->raw()) &&
-             (kv.key_.equivalence_->raw() == key.equivalence_->raw());
-    }
-    return kv.key_.raw_value_ == key.raw_value_;
-  }
-
- private:
-  Key key_;
-  Value value_;
-};
-
-enum Patchability {
-  kPatchable,
-  kNotPatchable,
-};
-
-class ObjectPoolWrapper : public ValueObject {
- public:
-  intptr_t AddObject(const Object& obj, Patchability patchable = kNotPatchable);
-  intptr_t AddImmediate(uword imm);
-
-  intptr_t FindObject(const Object& obj,
-                      Patchability patchable = kNotPatchable);
-  intptr_t FindObject(const Object& obj, const Object& equivalence);
-  intptr_t FindImmediate(uword imm);
-  intptr_t FindNativeFunction(const ExternalLabel* label,
-                              Patchability patchable);
-  intptr_t FindNativeFunctionWrapper(const ExternalLabel* label,
-                                     Patchability patchable);
-
-  RawObjectPool* MakeObjectPool();
-
- private:
-  intptr_t AddObject(ObjectPoolWrapperEntry entry, Patchability patchable);
-  intptr_t FindObject(ObjectPoolWrapperEntry entry, Patchability patchable);
-
-  // Objects and jump targets.
-  GrowableArray<ObjectPoolWrapperEntry> object_pool_;
-
-  // Hashmap for fast lookup in object pool.
-  DirectChainedHashMap<ObjIndexPair> object_pool_index_table_;
-};
-
 enum RestorePP { kRestoreCallerPP, kKeepCalleePP };
+
+class AssemblerBase : public StackResource {
+ public:
+  explicit AssemblerBase(ObjectPoolBuilder* object_pool_builder)
+      : StackResource(ThreadState::Current()),
+        prologue_offset_(-1),
+        has_single_entry_point_(true),
+        object_pool_builder_(object_pool_builder) {}
+  virtual ~AssemblerBase();
+
+  intptr_t CodeSize() const { return buffer_.Size(); }
+
+  uword CodeAddress(intptr_t offset) { return buffer_.Address(offset); }
+
+  bool HasObjectPoolBuilder() const { return object_pool_builder_ != nullptr; }
+  ObjectPoolBuilder& object_pool_builder() { return *object_pool_builder_; }
+
+  intptr_t prologue_offset() const { return prologue_offset_; }
+  bool has_single_entry_point() const { return has_single_entry_point_; }
+
+  void Comment(const char* format, ...) PRINTF_ATTRIBUTE(2, 3);
+  static bool EmittingComments();
+
+  virtual void Breakpoint() = 0;
+
+  intptr_t InsertAlignedRelocation(BSS::Relocation reloc);
+
+  void Unimplemented(const char* message);
+  void Untested(const char* message);
+  void Unreachable(const char* message);
+  virtual void Stop(const char* message) = 0;
+
+  void FinalizeInstructions(const MemoryRegion& region) {
+    buffer_.FinalizeInstructions(region);
+  }
+
+  // Count the fixups that produce a pointer offset, without processing
+  // the fixups.
+  intptr_t CountPointerOffsets() const { return buffer_.CountPointerOffsets(); }
+
+  const ZoneGrowableArray<intptr_t>& GetPointerOffsets() const {
+    return buffer_.pointer_offsets();
+  }
+
+  class CodeComment : public ZoneAllocated {
+   public:
+    CodeComment(intptr_t pc_offset, const String& comment)
+        : pc_offset_(pc_offset), comment_(comment) {}
+
+    intptr_t pc_offset() const { return pc_offset_; }
+    const String& comment() const { return comment_; }
+
+   private:
+    intptr_t pc_offset_;
+    const String& comment_;
+
+    DISALLOW_COPY_AND_ASSIGN(CodeComment);
+  };
+
+  const GrowableArray<CodeComment*>& comments() const { return comments_; }
+
+ protected:
+  AssemblerBuffer buffer_;  // Contains position independent code.
+  int32_t prologue_offset_;
+  bool has_single_entry_point_;
+
+ private:
+  GrowableArray<CodeComment*> comments_;
+  ObjectPoolBuilder* object_pool_builder_;
+};
+
+}  // namespace compiler
 
 }  // namespace dart
 

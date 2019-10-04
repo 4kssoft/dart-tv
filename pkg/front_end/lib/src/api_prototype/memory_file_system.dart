@@ -26,7 +26,9 @@ class MemoryFileSystem implements FileSystem {
   Uri currentDirectory;
 
   MemoryFileSystem(Uri currentDirectory)
-      : currentDirectory = _addTrailingSlash(currentDirectory);
+      : currentDirectory = _addTrailingSlash(currentDirectory) {
+    _directories.add(currentDirectory);
+  }
 
   @override
   MemoryFileSystemEntity entityForUri(Uri uri) {
@@ -35,7 +37,7 @@ class MemoryFileSystem implements FileSystem {
   }
 
   String get debugString {
-    var sb = new StringBuffer();
+    StringBuffer sb = new StringBuffer();
     _files.forEach((uri, _) => sb.write("- $uri\n"));
     _directories.forEach((uri) => sb.write("- $uri\n"));
     return '$sb';
@@ -86,11 +88,11 @@ class MemoryFileSystemEntity implements FileSystemEntity {
 
   @override
   Future<List<int>> readAsBytes() async {
-    List<int> contents = _fileSystem._files[uri];
+    Uint8List contents = _fileSystem._files[uri];
     if (contents == null) {
       throw new FileSystemException(uri, 'File $uri does not exist.');
     }
-    return contents.toList();
+    return contents;
   }
 
   @override
@@ -108,7 +110,11 @@ class MemoryFileSystemEntity implements FileSystemEntity {
   /// If no file exists, one is created.  If a file exists already, it is
   /// overwritten.
   void writeAsBytesSync(List<int> bytes) {
-    _update(uri, new Uint8List.fromList(bytes));
+    if (bytes is Uint8List) {
+      _update(uri, bytes);
+    } else {
+      _update(uri, new Uint8List.fromList(bytes));
+    }
   }
 
   /// Writes the given string to this file system entity.

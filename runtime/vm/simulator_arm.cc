@@ -15,7 +15,7 @@
 
 #include "vm/compiler/assembler/assembler.h"
 #include "vm/compiler/assembler/disassembler.h"
-#include "vm/constants_arm.h"
+#include "vm/constants.h"
 #include "vm/cpu.h"
 #include "vm/native_arguments.h"
 #include "vm/os_thread.h"
@@ -122,15 +122,14 @@ SimulatorDebugger::SimulatorDebugger(Simulator* sim) {
 SimulatorDebugger::~SimulatorDebugger() {}
 
 void SimulatorDebugger::Stop(Instr* instr, const char* message) {
-  OS::Print("Simulator hit %s\n", message);
+  OS::PrintErr("Simulator hit %s\n", message);
   Debug();
 }
 
 static Register LookupCpuRegisterByName(const char* name) {
-  static const char* kNames[] = {"r0",  "r1",  "r2",  "r3",  "r4",  "r5",
-                                 "r6",  "r7",  "r8",  "r9",  "r10", "r11",
-                                 "r12", "r13", "r14", "r15", "pc",  "lr",
-                                 "sp",  "ip",  "fp",  "pp",  "ctx"};
+  static const char* kNames[] = {
+      "r0",  "r1",  "r2",  "r3",  "r4",  "r5", "r6", "r7", "r8", "r9", "r10",
+      "r11", "r12", "r13", "r14", "r15", "pc", "lr", "sp", "ip", "fp", "pp"};
   static const Register kRegisters[] = {R0, R1, R2,  R3,  R4,  R5,  R6,  R7,
                                         R8, R9, R10, R11, R12, R13, R14, R15,
                                         PC, LR, SP,  IP,  FP,  PP};
@@ -258,7 +257,7 @@ void SimulatorDebugger::PrintDartFrame(uword pc,
   if (token_pos.IsReal()) {
     script.GetTokenLocation(token_pos, &line, &column);
   }
-  OS::Print(
+  OS::PrintErr(
       "pc=0x%" Px " fp=0x%" Px " sp=0x%" Px " %s%s (%s:%" Pd ":%" Pd ")\n", pc,
       fp, sp, is_optimized ? (is_inlined ? "inlined " : "optimized ") : "",
       func_name.ToCString(), url.ToCString(), line, column);
@@ -277,6 +276,7 @@ void SimulatorDebugger::PrintBacktrace() {
   Code& unoptimized_code = Code::Handle();
   while (frame != NULL) {
     if (frame->IsDartFrame()) {
+      ASSERT(!frame->is_interpreted());  // Not yet supported.
       code = frame->LookupDartCode();
       function = code.function();
       if (code.is_optimized()) {
@@ -303,13 +303,13 @@ void SimulatorDebugger::PrintBacktrace() {
                      GetApproximateTokenIndex(code, frame->pc()),
                      code.is_optimized(), false);
     } else {
-      OS::Print("pc=0x%" Px " fp=0x%" Px " sp=0x%" Px " %s frame\n",
-                frame->pc(), frame->fp(), frame->sp(),
-                frame->IsEntryFrame()
-                    ? "entry"
-                    : frame->IsExitFrame()
-                          ? "exit"
-                          : frame->IsStubFrame() ? "stub" : "invalid");
+      OS::PrintErr("pc=0x%" Px " fp=0x%" Px " sp=0x%" Px " %s frame\n",
+                   frame->pc(), frame->fp(), frame->sp(),
+                   frame->IsEntryFrame()
+                       ? "entry"
+                       : frame->IsExitFrame()
+                             ? "exit"
+                             : frame->IsStubFrame() ? "stub" : "invalid");
     }
     frame = frames.NextFrame();
   }
@@ -378,12 +378,12 @@ void SimulatorDebugger::Debug() {
     if (last_pc != sim_->get_pc()) {
       last_pc = sim_->get_pc();
       if (Simulator::IsIllegalAddress(last_pc)) {
-        OS::Print("pc is out of bounds: 0x%" Px "\n", last_pc);
+        OS::PrintErr("pc is out of bounds: 0x%" Px "\n", last_pc);
       } else {
         if (FLAG_support_disassembler) {
           Disassembler::Disassemble(last_pc, last_pc + Instr::kInstrSize);
         } else {
-          OS::Print("Disassembler not supported in this mode.\n");
+          OS::PrintErr("Disassembler not supported in this mode.\n");
         }
       }
     }
@@ -399,7 +399,7 @@ void SimulatorDebugger::Debug() {
                         "%" XSTR(ARG_SIZE) "s",
                         cmd, arg1, arg2);
       if ((strcmp(cmd, "h") == 0) || (strcmp(cmd, "help") == 0)) {
-        OS::Print(
+        OS::PrintErr(
             "c/cont -- continue execution\n"
             "disasm -- disassemble instrs at current pc location\n"
             "  other variants are:\n"
@@ -421,7 +421,7 @@ void SimulatorDebugger::Debug() {
             "unstop -- if current pc is a stop instr make it a nop\n"
             "q/quit -- Quit the debugger and exit the program\n");
       } else if ((strcmp(cmd, "quit") == 0) || (strcmp(cmd, "q") == 0)) {
-        OS::Print("Quitting\n");
+        OS::PrintErr("Quitting\n");
         OS::Exit(0);
       } else if ((strcmp(cmd, "si") == 0) || (strcmp(cmd, "stepi") == 0)) {
         sim_->InstructionDecode(reinterpret_cast<Instr*>(sim_->get_pc()));
@@ -435,14 +435,14 @@ void SimulatorDebugger::Debug() {
           uint32_t value;
           if (strcmp(arg1, "icount") == 0) {
             const uint64_t icount = sim_->get_icount();
-            OS::Print("icount: %" Pu64 " 0x%" Px64 "\n", icount, icount);
+            OS::PrintErr("icount: %" Pu64 " 0x%" Px64 "\n", icount, icount);
           } else if (GetValue(arg1, &value)) {
-            OS::Print("%s: %u 0x%x\n", arg1, value, value);
+            OS::PrintErr("%s: %u 0x%x\n", arg1, value, value);
           } else {
-            OS::Print("%s unrecognized\n", arg1);
+            OS::PrintErr("%s unrecognized\n", arg1);
           }
         } else {
-          OS::Print("print <reg or icount or value or *addr>\n");
+          OS::PrintErr("print <reg or icount or value or *addr>\n");
         }
       } else if ((strcmp(cmd, "ps") == 0) ||
                  (strcmp(cmd, "printsingle") == 0)) {
@@ -450,12 +450,12 @@ void SimulatorDebugger::Debug() {
           float fvalue;
           if (GetFValue(arg1, &fvalue)) {
             uint32_t value = bit_cast<uint32_t, float>(fvalue);
-            OS::Print("%s: 0%u 0x%x %.8g\n", arg1, value, value, fvalue);
+            OS::PrintErr("%s: 0%u 0x%x %.8g\n", arg1, value, value, fvalue);
           } else {
-            OS::Print("%s unrecognized\n", arg1);
+            OS::PrintErr("%s unrecognized\n", arg1);
           }
         } else {
-          OS::Print("printfloat <sreg or *addr>\n");
+          OS::PrintErr("printfloat <sreg or *addr>\n");
         }
       } else if ((strcmp(cmd, "pd") == 0) ||
                  (strcmp(cmd, "printdouble") == 0)) {
@@ -463,13 +463,13 @@ void SimulatorDebugger::Debug() {
           double dvalue;
           if (GetDValue(arg1, &dvalue)) {
             uint64_t long_value = bit_cast<uint64_t, double>(dvalue);
-            OS::Print("%s: %llu 0x%llx %.8g\n", arg1, long_value, long_value,
-                      dvalue);
+            OS::PrintErr("%s: %llu 0x%llx %.8g\n", arg1, long_value, long_value,
+                         dvalue);
           } else {
-            OS::Print("%s unrecognized\n", arg1);
+            OS::PrintErr("%s unrecognized\n", arg1);
           }
         } else {
-          OS::Print("printdouble <dreg or *addr>\n");
+          OS::PrintErr("printdouble <dreg or *addr>\n");
         }
       } else if ((strcmp(cmd, "po") == 0) ||
                  (strcmp(cmd, "printobject") == 0)) {
@@ -479,20 +479,20 @@ void SimulatorDebugger::Debug() {
           if (((arg1[0] == '*') && GetValue(arg1 + 1, &value)) ||
               GetValue(arg1, &value)) {
             if (Isolate::Current()->heap()->Contains(value)) {
-              OS::Print("%s: \n", arg1);
+              OS::PrintErr("%s: \n", arg1);
 #if defined(DEBUG)
               const Object& obj =
                   Object::Handle(reinterpret_cast<RawObject*>(value));
               obj.Print();
 #endif  // defined(DEBUG)
             } else {
-              OS::Print("0x%x is not an object reference\n", value);
+              OS::PrintErr("0x%x is not an object reference\n", value);
             }
           } else {
-            OS::Print("%s unrecognized\n", arg1);
+            OS::PrintErr("%s unrecognized\n", arg1);
           }
         } else {
-          OS::Print("printobject <*reg or *addr>\n");
+          OS::PrintErr("printobject <*reg or *addr>\n");
         }
       } else if (strcmp(cmd, "disasm") == 0) {
         uint32_t start = 0;
@@ -505,8 +505,9 @@ void SimulatorDebugger::Debug() {
             // No length parameter passed, assume 10 instructions.
             if (Simulator::IsIllegalAddress(start)) {
               // If start isn't a valid address, warn and use PC instead.
-              OS::Print("First argument yields invalid address: 0x%x\n", start);
-              OS::Print("Using PC instead\n");
+              OS::PrintErr("First argument yields invalid address: 0x%x\n",
+                           start);
+              OS::PrintErr("Using PC instead\n");
               start = sim_->get_pc();
             }
             end = start + (10 * Instr::kInstrSize);
@@ -516,8 +517,9 @@ void SimulatorDebugger::Debug() {
           if (GetValue(arg1, &start) && GetValue(arg2, &length)) {
             if (Simulator::IsIllegalAddress(start)) {
               // If start isn't a valid address, warn and use PC instead.
-              OS::Print("First argument yields invalid address: 0x%x\n", start);
-              OS::Print("Using PC instead\n");
+              OS::PrintErr("First argument yields invalid address: 0x%x\n",
+                           start);
+              OS::PrintErr("Using PC instead\n");
               start = sim_->get_pc();
             }
             end = start + (length * Instr::kInstrSize);
@@ -527,63 +529,63 @@ void SimulatorDebugger::Debug() {
           if (FLAG_support_disassembler) {
             Disassembler::Disassemble(start, end);
           } else {
-            OS::Print("Disassembler not supported in this mode.\n");
+            OS::PrintErr("Disassembler not supported in this mode.\n");
           }
         } else {
-          OS::Print("disasm [<address> [<number_of_instructions>]]\n");
+          OS::PrintErr("disasm [<address> [<number_of_instructions>]]\n");
         }
       } else if (strcmp(cmd, "gdb") == 0) {
-        OS::Print("relinquishing control to gdb\n");
+        OS::PrintErr("relinquishing control to gdb\n");
         OS::DebugBreak();
-        OS::Print("regaining control from gdb\n");
+        OS::PrintErr("regaining control from gdb\n");
       } else if (strcmp(cmd, "break") == 0) {
         if (args == 2) {
           uint32_t addr;
           if (GetValue(arg1, &addr)) {
             if (!SetBreakpoint(reinterpret_cast<Instr*>(addr))) {
-              OS::Print("setting breakpoint failed\n");
+              OS::PrintErr("setting breakpoint failed\n");
             }
           } else {
-            OS::Print("%s unrecognized\n", arg1);
+            OS::PrintErr("%s unrecognized\n", arg1);
           }
         } else {
-          OS::Print("break <addr>\n");
+          OS::PrintErr("break <addr>\n");
         }
       } else if (strcmp(cmd, "del") == 0) {
         if (!DeleteBreakpoint(NULL)) {
-          OS::Print("deleting breakpoint failed\n");
+          OS::PrintErr("deleting breakpoint failed\n");
         }
       } else if (strcmp(cmd, "flags") == 0) {
-        OS::Print("APSR: ");
-        OS::Print("N flag: %d; ", sim_->n_flag_);
-        OS::Print("Z flag: %d; ", sim_->z_flag_);
-        OS::Print("C flag: %d; ", sim_->c_flag_);
-        OS::Print("V flag: %d\n", sim_->v_flag_);
-        OS::Print("FPSCR: ");
-        OS::Print("N flag: %d; ", sim_->fp_n_flag_);
-        OS::Print("Z flag: %d; ", sim_->fp_z_flag_);
-        OS::Print("C flag: %d; ", sim_->fp_c_flag_);
-        OS::Print("V flag: %d\n", sim_->fp_v_flag_);
+        OS::PrintErr("APSR: ");
+        OS::PrintErr("N flag: %d; ", sim_->n_flag_);
+        OS::PrintErr("Z flag: %d; ", sim_->z_flag_);
+        OS::PrintErr("C flag: %d; ", sim_->c_flag_);
+        OS::PrintErr("V flag: %d\n", sim_->v_flag_);
+        OS::PrintErr("FPSCR: ");
+        OS::PrintErr("N flag: %d; ", sim_->fp_n_flag_);
+        OS::PrintErr("Z flag: %d; ", sim_->fp_z_flag_);
+        OS::PrintErr("C flag: %d; ", sim_->fp_c_flag_);
+        OS::PrintErr("V flag: %d\n", sim_->fp_v_flag_);
       } else if (strcmp(cmd, "unstop") == 0) {
         intptr_t stop_pc = sim_->get_pc() - Instr::kInstrSize;
         Instr* stop_instr = reinterpret_cast<Instr*>(stop_pc);
         if (stop_instr->IsSvc() || stop_instr->IsBkpt()) {
           stop_instr->SetInstructionBits(Instr::kNopInstruction);
         } else {
-          OS::Print("Not at debugger stop.\n");
+          OS::PrintErr("Not at debugger stop.\n");
         }
       } else if (strcmp(cmd, "trace") == 0) {
         if (FLAG_trace_sim_after == ULLONG_MAX) {
           FLAG_trace_sim_after = sim_->get_icount();
-          OS::Print("execution tracing on\n");
+          OS::PrintErr("execution tracing on\n");
         } else {
           FLAG_trace_sim_after = ULLONG_MAX;
-          OS::Print("execution tracing off\n");
+          OS::PrintErr("execution tracing off\n");
         }
       } else if (strcmp(cmd, "bt") == 0) {
         PrintBacktrace();
       } else {
-        OS::Print("Unknown command: %s\n", cmd);
+        OS::PrintErr("Unknown command: %s\n", cmd);
       }
     }
     delete[] line;
@@ -605,7 +607,7 @@ char* SimulatorDebugger::ReadLine(const char* prompt) {
   char line_buf[256];
   intptr_t offset = 0;
   bool keep_going = true;
-  OS::Print("%s", prompt);
+  OS::PrintErr("%s", prompt);
   while (keep_going) {
     if (fgets(line_buf, sizeof(line_buf), stdin) == NULL) {
       // fgets got an error. Just give up.
@@ -658,8 +660,7 @@ char* SimulatorDebugger::ReadLine(const char* prompt) {
   return result;
 }
 
-void Simulator::InitOnce() {
-}
+void Simulator::Init() {}
 
 Simulator::Simulator() : exclusive_access_addr_(0), exclusive_access_value_(0) {
   // Setup simulator support first. Some of this information is needed to
@@ -669,19 +670,20 @@ Simulator::Simulator() : exclusive_access_addr_(0), exclusive_access_value_(0) {
   // handling stack overflow exceptions. To be safe in potential
   // stack underflows we also add some underflow buffer space.
   stack_ =
-      new char[(OSThread::GetSpecifiedStackSize() + OSThread::kStackSizeBuffer +
-                kSimulatorStackUnderflowSize)];
+      new char[(OSThread::GetSpecifiedStackSize() +
+                OSThread::kStackSizeBufferMax + kSimulatorStackUnderflowSize)];
   // Low address.
-  stack_limit_ = reinterpret_cast<uword>(stack_) + OSThread::kStackSizeBuffer;
+  stack_limit_ = reinterpret_cast<uword>(stack_);
+  // Limit for StackOverflowError.
+  overflow_stack_limit_ = stack_limit_ + OSThread::kStackSizeBufferMax;
   // High address.
-  stack_base_ = stack_limit_ + OSThread::GetSpecifiedStackSize();
+  stack_base_ = overflow_stack_limit_ + OSThread::GetSpecifiedStackSize();
 
   pc_modified_ = false;
   icount_ = 0;
   break_pc_ = NULL;
   break_instr_ = 0;
   last_setjmp_buffer_ = NULL;
-  top_exit_frame_info_ = 0;
 
   // Setup architecture state.
   // All registers are initialized to zero to start with.
@@ -827,10 +829,12 @@ uword Simulator::FunctionForRedirect(uword redirect) {
 
 // Get the active Simulator for the current isolate.
 Simulator* Simulator::Current() {
-  Simulator* simulator = Isolate::Current()->simulator();
+  Isolate* isolate = Isolate::Current();
+  Simulator* simulator = isolate->simulator();
   if (simulator == NULL) {
+    NoSafepointScope no_safepoint;
     simulator = new Simulator();
-    Isolate::Current()->set_simulator(simulator);
+    isolate->set_simulator(simulator);
   }
   return simulator;
 }
@@ -1059,8 +1063,8 @@ bool Simulator::IsTracingExecution() const {
 
 // Unsupported instructions use Format to print an error and stop execution.
 void Simulator::Format(Instr* instr, const char* format) {
-  OS::Print("Simulator found unsupported instruction:\n 0x%p: %s\n", instr,
-            format);
+  OS::PrintErr("Simulator found unsupported instruction:\n 0x%p: %s\n", instr,
+               format);
   UNIMPLEMENTED();
 }
 
@@ -1363,7 +1367,8 @@ typedef void (*SimulatorRuntimeCall)(NativeArguments arguments);
 typedef int32_t (*SimulatorLeafRuntimeCall)(int32_t r0,
                                             int32_t r1,
                                             int32_t r2,
-                                            int32_t r3);
+                                            int32_t r3,
+                                            int32_t r4);
 
 // Calls to leaf float Dart runtime functions are based on this interface.
 typedef double (*SimulatorLeafFloatRuntimeCall)(double d0, double d1);
@@ -1385,15 +1390,8 @@ void Simulator::SupervisorCall(Instr* instr) {
         if (IsTracingExecution()) {
           THR_Print("Call to host function at 0x%" Pd "\n", external);
         }
-
-        if ((redirection->call_kind() == kRuntimeCall) ||
-            (redirection->call_kind() == kBootstrapNativeCall) ||
-            (redirection->call_kind() == kNativeCall)) {
-          // Set the top_exit_frame_info of this simulator to the native stack.
-          set_top_exit_frame_info(OSThread::GetCurrentStackPointer());
-        }
         if (redirection->call_kind() == kRuntimeCall) {
-          NativeArguments arguments;
+          NativeArguments arguments(NULL, 0, NULL, NULL);
           ASSERT(sizeof(NativeArguments) == 4 * kWordSize);
           arguments.thread_ = reinterpret_cast<Thread*>(get_register(R0));
           arguments.argc_tag_ = get_register(R1);
@@ -1406,14 +1404,15 @@ void Simulator::SupervisorCall(Instr* instr) {
           set_register(R1, icount_);
         } else if (redirection->call_kind() == kLeafRuntimeCall) {
           ASSERT((0 <= redirection->argument_count()) &&
-                 (redirection->argument_count() <= 4));
+                 (redirection->argument_count() <= 5));
           int32_t r0 = get_register(R0);
           int32_t r1 = get_register(R1);
           int32_t r2 = get_register(R2);
           int32_t r3 = get_register(R3);
+          int32_t r4 = *reinterpret_cast<int32_t*>(get_register(SP));
           SimulatorLeafRuntimeCall target =
               reinterpret_cast<SimulatorLeafRuntimeCall>(external);
-          r0 = target(r0, r1, r2, r3);
+          r0 = target(r0, r1, r2, r3, r4);
           set_register(R0, r0);       // Set returned result from function.
           set_register(R1, icount_);  // Zap unused result register.
         } else if (redirection->call_kind() == kLeafFloatRuntimeCall) {
@@ -1465,7 +1464,6 @@ void Simulator::SupervisorCall(Instr* instr) {
           set_register(R0, icount_);  // Zap result register from void function.
           set_register(R1, icount_);
         }
-        set_top_exit_frame_info(0);
 
         // Zap caller-saved registers, since the actual runtime call could have
         // used them.
@@ -1492,7 +1490,6 @@ void Simulator::SupervisorCall(Instr* instr) {
         set_pc(saved_lr);
       } else {
         // Coming via long jump from a throw. Continue to exception handler.
-        set_top_exit_frame_info(0);
       }
 
       break;
@@ -1558,20 +1555,10 @@ DART_FORCE_INLINE void Simulator::DecodeType01(Instr* instr) {
             // Format(instr, "bkpt #'imm12_4");
             SimulatorDebugger dbg(this);
             int32_t imm = instr->BkptField();
-            if (imm == Instr::kStopMessageCode) {
-              const char* message = "Stop messages not enabled";
-              if (FLAG_print_stop_message) {
-                message = *reinterpret_cast<const char**>(
-                    reinterpret_cast<intptr_t>(instr) - Instr::kInstrSize);
-              }
-              set_pc(get_pc() + Instr::kInstrSize);
-              dbg.Stop(instr, message);
-            } else {
-              char buffer[32];
-              snprintf(buffer, sizeof(buffer), "bkpt #0x%x", imm);
-              set_pc(get_pc() + Instr::kInstrSize);
-              dbg.Stop(instr, buffer);
-            }
+            char buffer[32];
+            snprintf(buffer, sizeof(buffer), "bkpt #0x%x", imm);
+            set_pc(get_pc() + Instr::kInstrSize);
+            dbg.Stop(instr, buffer);
           } else {
             // Format(instr, "smc'cond");
             UnimplementedInstruction(instr);
@@ -1601,7 +1588,7 @@ DART_FORCE_INLINE void Simulator::DecodeType01(Instr* instr) {
             // Registers rd, rn, rm, ra are encoded as rn, rm, rs, rd.
             // Format(instr, "mls'cond's 'rn, 'rm, 'rs, 'rd");
             rd_val = get_register(rd);
-            // fall through
+            FALL_THROUGH;
           }
           case 0: {
             // Registers rd, rn, rm are encoded as rn, rm, rs.
@@ -1659,6 +1646,7 @@ DART_FORCE_INLINE void Simulator::DecodeType01(Instr* instr) {
               // umaal is only in ARMv6 and above.
               UnimplementedInstruction(instr);
             }
+            FALL_THROUGH;
           case 5:
           // Registers rd_lo, rd_hi, rn, rm are encoded as rd, rn, rm, rs.
           // Format(instr, "umlal'cond's 'rd, 'rn, 'rm, 'rs");
@@ -3745,14 +3733,17 @@ void Simulator::JumpToFrame(uword pc, uword sp, uword fp, Thread* thread) {
   set_register(FP, static_cast<int32_t>(fp));
   set_register(THR, reinterpret_cast<uword>(thread));
   // Set the tag.
-  thread->set_vm_tag(VMTag::kDartTagId);
+  thread->set_vm_tag(VMTag::kDartCompiledTagId);
   // Clear top exit frame.
   thread->set_top_exit_frame_info(0);
   // Restore pool pointer.
   int32_t code =
       *reinterpret_cast<int32_t*>(fp + kPcMarkerSlotFromFp * kWordSize);
-  int32_t pp = *reinterpret_cast<int32_t*>(code + Code::object_pool_offset() -
-                                           kHeapObjectTag);
+  int32_t pp = (FLAG_precompiled_mode && FLAG_use_bare_instructions)
+                   ? reinterpret_cast<int32_t>(thread->global_object_pool())
+                   : *reinterpret_cast<int32_t*>(
+                         (code + Code::object_pool_offset() - kHeapObjectTag));
+
   set_register(CODE_REG, code);
   set_register(PP, pp);
   buf->Longjmp();

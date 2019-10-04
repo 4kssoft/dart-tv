@@ -115,7 +115,7 @@ abstract class InternetAddress {
    * 4 or 16 byte long list. The returned list is a copy, making it possible
    * to change the list without modifying the [InternetAddress].
    */
-  List<int> get rawAddress;
+  Uint8List get rawAddress;
 
   /**
    * Returns true if the [InternetAddress] is a loopback address.
@@ -395,6 +395,110 @@ class SocketOption {
   const SocketOption._(this._value);
 }
 
+// Must be kept in sync with enum in socket.cc
+enum _RawSocketOptions {
+  SOL_SOCKET, // 0
+  IPPROTO_IP, // 1
+  IP_MULTICAST_IF, // 2
+  IPPROTO_IPV6, // 3
+  IPV6_MULTICAST_IF, // 4
+  IPPROTO_TCP, // 5
+  IPPROTO_UDP, // 6
+}
+
+/// The [RawSocketOption] is used as a parameter to [Socket.setRawOption],
+/// [RawSocket.setRawOption], and [RawDatagramSocket.setRawOption] to customize
+/// the behaviour of the underlying socket.
+///
+/// It allows for fine grained control of the socket options, and its values
+/// will be passed to the underlying platform's implementation of `setsockopt`
+/// and `getsockopt`.
+@Since("2.2")
+class RawSocketOption {
+  /// Creates a [RawSocketOption] for `getRawOption` and `setRawOption`.
+  ///
+  /// All arguments are required and must not be null.
+  ///
+  /// The level and option arguments correspond to level and optname arguments
+  /// on the get/setsockopt native calls.
+  ///
+  /// The value argument and its length correspond to the optval and length
+  /// arguments on the native call.
+  ///
+  /// For a `getRawOption` call, the value parameter will be updated after a
+  /// successful call (although its length will not be changed).
+  ///
+  /// For a `setRawOption` call, the value parameter will be used set the
+  /// option.
+  const RawSocketOption(this.level, this.option, this.value);
+
+  /// Convenience constructor for creating an int based RawSocketOption.
+  factory RawSocketOption.fromInt(int level, int option, int value) {
+    if (value == null) {
+      value = 0;
+    }
+    final Uint8List list = Uint8List(4);
+    final buffer = ByteData.view(list.buffer);
+    buffer.setInt32(0, value);
+    return RawSocketOption(level, option, list);
+  }
+
+  /// Convenience constructor for creating a bool based RawSocketOption.
+  factory RawSocketOption.fromBool(int level, int option, bool value) =>
+      RawSocketOption.fromInt(level, option, value == true ? 1 : 0);
+
+  /// The level for the option to set or get.
+  ///
+  /// See also:
+  ///   * [RawSocketOption.levelSocket]
+  ///   * [RawSocketOption.levelIPv4]
+  ///   * [RawSocketOption.levelIPv6]
+  ///   * [RawSocketOption.levelTcp]
+  ///   * [RawSocketOption.levelUdp]
+  final int level;
+
+  /// The option to set or get.
+  final int option;
+
+  /// The raw data to set, or the array to write the current option value into.
+  ///
+  /// This list must be the correct length for the expected option. For most
+  /// options that take int or bool values, the length should be 4. For options
+  /// that expect a struct (such as an in_addr_t), the length should be the
+  /// correct length for that struct.
+  final Uint8List value;
+
+  /// Socket level option for SOL_SOCKET.
+  static int get levelSocket =>
+      _getOptionValue(_RawSocketOptions.SOL_SOCKET.index);
+
+  /// Socket level option for IPPROTO_IP.
+  static int get levelIPv4 =>
+      _getOptionValue(_RawSocketOptions.IPPROTO_IP.index);
+
+  /// Socket option for IP_MULTICAST_IF.
+  static int get IPv4MulticastInterface =>
+      _getOptionValue(_RawSocketOptions.IP_MULTICAST_IF.index);
+
+  /// Socket level option for IPPROTO_IPV6.
+  static int get levelIPv6 =>
+      _getOptionValue(_RawSocketOptions.IPPROTO_IPV6.index);
+
+  /// Socket option for IPV6_MULTICAST_IF.
+  static int get IPv6MulticastInterface =>
+      _getOptionValue(_RawSocketOptions.IPV6_MULTICAST_IF.index);
+
+  /// Socket level option for IPPROTO_TCP.
+  static int get levelTcp =>
+      _getOptionValue(_RawSocketOptions.IPPROTO_TCP.index);
+
+  /// Socket level option for IPPROTO_UDP.
+  static int get levelUdp =>
+      _getOptionValue(_RawSocketOptions.IPPROTO_UDP.index);
+
+  external static int _getOptionValue(int key);
+}
+
 /**
  * Events for the [RawSocket].
  */
@@ -426,9 +530,40 @@ class RawSocketEvent {
   }
 }
 
+/// Returned by the `startConnect` methods on client-side socket types `S`,
+/// `ConnectionTask<S>` allows cancelling an attempt to connect to a host.
+class ConnectionTask<S> {
+  /// A `Future` that completes with value that `S.connect()` would return
+  /// unless [cancel] is called on this [ConnectionTask].
+  ///
+  /// If [cancel] is called, the `Future` completes with a [SocketException]
+  /// error whose message indicates that the connection attempt was cancelled.
+  final Future<S> socket;
+  final void Function() _onCancel;
+
+  ConnectionTask._({Future<S> socket, void Function() onCancel})
+      : assert(socket != null),
+        assert(onCancel != null),
+        this.socket = socket,
+        this._onCancel = onCancel;
+
+  /// Cancels the connection attempt.
+  ///
+  /// This also causes the [socket] `Future` to complete with a
+  /// [SocketException] error.
+  void cancel() {
+    _onCancel();
+  }
+}
+
 /**
- * The [RawSocket] is a low-level interface to a socket, exposing the raw
- * events signaled by the system. It's a [Stream] of [RawSocketEvent]s.
+ * A [RawSocket] is an unbuffered interface to a TCP socket.
+ *
+ * The raw socket delivers the data stream in the same chunks as the underlying
+ * operating system.
+ *
+ * It is not the same as a
+ * [POSIX raw socket](http://man7.org/linux/man-pages/man7/raw.7.html).
  */
 abstract class RawSocket implements Stream<RawSocketEvent> {
   /**
@@ -470,6 +605,12 @@ abstract class RawSocket implements Stream<RawSocketEvent> {
   external static Future<RawSocket> connect(host, int port,
       {sourceAddress, Duration timeout});
 
+  /// Like [connect], but returns a [Future] that completes with a
+  /// [ConnectionTask] that can be cancelled if the [RawSocket] is no
+  /// longer needed.
+  external static Future<ConnectionTask<RawSocket>> startConnect(host, int port,
+      {sourceAddress});
+
   /**
    * Returns the number of received and non-read bytes in the socket that
    * can be read.
@@ -483,7 +624,7 @@ abstract class RawSocket implements Stream<RawSocketEvent> {
    * available for immediate reading. If no data is available [:null:]
    * is returned.
    */
-  List<int> read([int len]);
+  Uint8List read([int len]);
 
   /**
    * Writes up to [count] bytes of the buffer from [offset] buffer offset to
@@ -541,6 +682,26 @@ abstract class RawSocket implements Stream<RawSocketEvent> {
    * Returns [:true:] if the option was set successfully, false otherwise.
    */
   bool setOption(SocketOption option, bool enabled);
+
+  /**
+   * Use [getRawOption] to get low level information about the [RawSocket]. See
+   * [RawSocketOption] for available options.
+   *
+   * Returns the [RawSocketOption.value] on success.
+   *
+   * Throws an [OSError] on failure.
+   */
+  @Since("2.2")
+  Uint8List getRawOption(RawSocketOption option);
+
+  /**
+   * Use [setRawOption] to customize the [RawSocket]. See [RawSocketOption] for
+   * available options.
+   *
+   * Throws an [OSError] on failure.
+   */
+  @Since("2.2")
+  void setRawOption(RawSocketOption option);
 }
 
 /**
@@ -549,7 +710,7 @@ abstract class RawSocket implements Stream<RawSocketEvent> {
  * The [Socket] exposes both a [Stream] and a [IOSink] interface, making it
  * ideal for using together with other [Stream]s.
  */
-abstract class Socket implements Stream<List<int>>, IOSink {
+abstract class Socket implements Stream<Uint8List>, IOSink {
   /**
    * Creates a new socket connection to the host and port and returns a [Future]
    * that will complete with either a [Socket] once connected or an error
@@ -583,8 +744,24 @@ abstract class Socket implements Stream<List<int>>, IOSink {
         sourceAddress: sourceAddress, timeout: timeout);
   }
 
+  /// Like [connect], but returns a [Future] that completes with a
+  /// [ConnectionTask] that can be cancelled if the [Socket] is no
+  /// longer needed.
+  static Future<ConnectionTask<Socket>> startConnect(host, int port,
+      {sourceAddress}) {
+    final IOOverrides overrides = IOOverrides.current;
+    if (overrides == null) {
+      return Socket._startConnect(host, port, sourceAddress: sourceAddress);
+    }
+    return overrides.socketStartConnect(host, port,
+        sourceAddress: sourceAddress);
+  }
+
   external static Future<Socket> _connect(host, int port,
       {sourceAddress, Duration timeout});
+
+  external static Future<ConnectionTask<Socket>> _startConnect(host, int port,
+      {sourceAddress});
 
   /**
    * Destroy the socket in both directions. Calling [destroy] will make the
@@ -603,6 +780,24 @@ abstract class Socket implements Stream<List<int>>, IOSink {
    * Returns [:true:] if the option was set successfully, false otherwise.
    */
   bool setOption(SocketOption option, bool enabled);
+
+  /**
+   * Use [getRawOption] to get low level information about the [RawSocket]. See
+   * [RawSocketOption] for available options.
+   *
+   * Returns the [RawSocketOption.value] on success.
+   *
+   * Throws an [OSError] on failure.
+   */
+  Uint8List getRawOption(RawSocketOption option);
+
+  /**
+   * Use [setRawOption] to customize the [RawSocket]. See [RawSocketOption] for
+   * available options.
+   *
+   * Throws an [OSError] on failure.
+   */
+  void setRawOption(RawSocketOption option);
 
   /**
    * Returns the port used by this socket.
@@ -630,12 +825,12 @@ abstract class Socket implements Stream<List<int>>, IOSink {
 }
 
 /**
- * Datagram package. Data send to and received from datagram sockets
+ * Datagram package. Data sent to and received from datagram sockets
  * contains the internet address and port of the destination or source
  * togeter with the data.
  */
 class Datagram {
-  List<int> data;
+  Uint8List data;
   InternetAddress address;
   int port;
 
@@ -643,12 +838,16 @@ class Datagram {
 }
 
 /**
- * The [RawDatagramSocket] is a low-level interface to an UDP socket,
- * exposing the raw events signaled by the system. It's a [Stream] of
- * [RawSocketEvent]s.
+ * A [RawDatagramSocket] is an unbuffered interface to a UDP socket.
+ *
+ * The raw datagram socket delivers the datagrams in the same chunks as the
+ * underlying operating system. It's a [Stream] of [RawSocketEvent]s.
  *
  * Note that the event [RawSocketEvent.readClosed] will never be
  * received as an UDP socket cannot be closed by a remote peer.
+ *
+ * It is not the same as a
+ * [POSIX raw socket](http://man7.org/linux/man-pages/man7/raw.7.html).
  */
 abstract class RawDatagramSocket extends Stream<RawSocketEvent> {
   /**
@@ -691,6 +890,8 @@ abstract class RawDatagramSocket extends Stream<RawSocketEvent> {
    *
    * By default this value is `null`
    */
+  @Deprecated("This property is not implemented. Use getRawOption and "
+      "setRawOption instead.")
   NetworkInterface multicastInterface;
 
   /**
@@ -709,7 +910,7 @@ abstract class RawDatagramSocket extends Stream<RawSocketEvent> {
    * port.
    */
   external static Future<RawDatagramSocket> bind(host, int port,
-      {bool reuseAddress: true});
+      {bool reuseAddress: true, bool reusePort: false, int ttl: 1});
 
   /**
    * Returns the port used by this socket.
@@ -757,6 +958,24 @@ abstract class RawDatagramSocket extends Stream<RawSocketEvent> {
    * exception is thrown.
    */
   void leaveMulticast(InternetAddress group, [NetworkInterface interface]);
+
+  /**
+   * Use [getRawOption] to get low level information about the [RawSocket]. See
+   * [RawSocketOption] for available options.
+   *
+   * Returns [RawSocketOption.value] on success.
+   *
+   * Throws an [OSError] on failure.
+   */
+  Uint8List getRawOption(RawSocketOption option);
+
+  /**
+   * Use [setRawOption] to customize the [RawSocket]. See [RawSocketOption] for
+   * available options.
+   *
+   * Throws an [OSError] on failure.
+   */
+  void setRawOption(RawSocketOption option);
 }
 
 class SocketException implements IOException {
@@ -775,7 +994,7 @@ class SocketException implements IOException {
   String toString() {
     StringBuffer sb = new StringBuffer();
     sb.write("SocketException");
-    if (!message.isEmpty) {
+    if (message.isNotEmpty) {
       sb.write(": $message");
       if (osError != null) {
         sb.write(" ($osError)");

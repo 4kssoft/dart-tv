@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -34,16 +34,44 @@ const default = const Object();
 ''', expectedErrorsInValidCode: [ParserErrorCode.MISSING_IDENTIFIER]);
   }
 
-  @failingTest
   void test_expressionInPlaceOfTypeName() {
     // https://github.com/dart-lang/sdk/issues/30370
     testRecovery('''
 f() {
   return <g('')>[0, 1, 2];
 }
-''', [], '''
+''', [ParserErrorCode.EXPECTED_TOKEN], '''
 f() {
-  return <_s_>[0, 1, 2];
+  return <g>[0, 1, 2];
+}
+''');
+  }
+
+  void test_expressionInPlaceOfTypeName2() {
+    // https://github.com/dart-lang/sdk/issues/30370
+    testRecovery('''
+f() {
+  return <test('', (){})>[0, 1, 2];
+}
+''', [ParserErrorCode.EXPECTED_TOKEN], '''
+f() {
+  return <test>[0, 1, 2];
+}
+''');
+  }
+
+  @failingTest
+  void test_functionInPlaceOfTypeName() {
+    // https://github.com/dart-lang/sdk/issues/30370
+    // TODO(danrubel): Improve recovery. Currently, the fasta scanner
+    // does not associate `<` with `>` in this situation.
+    testRecovery('''
+f() {
+  return <test('', (){});>[0, 1, 2];
+}
+''', [ParserErrorCode.UNEXPECTED_TOKEN], '''
+f() {
+  return _s_ < test('', (){}); _s_ > [0, 1, 2];
 }
 ''');
   }

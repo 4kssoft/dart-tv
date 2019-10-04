@@ -4,16 +4,43 @@
 
 library fasta.invalid_type_builder;
 
+import 'package:kernel/ast.dart' show DartType, InvalidType, Nullability;
+
 import '../fasta_codes.dart' show LocatedMessage;
 
-import 'builder.dart' show TypeBuilder, TypeDeclarationBuilder;
+import 'builder.dart' show NullabilityBuilder, TypeDeclarationBuilder;
 
-abstract class InvalidTypeBuilder<T extends TypeBuilder, R>
-    extends TypeDeclarationBuilder<T, R> {
-  InvalidTypeBuilder(String name, int charOffset, [Uri fileUri])
-      : super(null, 0, name, null, charOffset, fileUri);
+import '../kernel/kernel_builder.dart' show TypeBuilder, LibraryBuilder;
 
-  LocatedMessage get message;
-
+class InvalidTypeBuilder extends TypeDeclarationBuilder {
   String get debugName => "InvalidTypeBuilder";
+
+  final LocatedMessage message;
+
+  final List<LocatedMessage> context;
+
+  final bool suppressMessage;
+
+  InvalidTypeBuilder(String name, this.message,
+      {this.context, this.suppressMessage: true})
+      : super(null, 0, name, null, message.charOffset, message.uri);
+
+  @override
+  InvalidType get target => const InvalidType();
+
+  DartType buildType(LibraryBuilder library,
+      NullabilityBuilder nullabilityBuilder, List<TypeBuilder> arguments) {
+    return buildTypesWithBuiltArguments(library, null, null);
+  }
+
+  /// [Arguments] have already been built.
+  DartType buildTypesWithBuiltArguments(LibraryBuilder library,
+      Nullability nullability, List<DartType> arguments) {
+    if (!suppressMessage) {
+      library.addProblem(message.messageObject, message.charOffset,
+          message.length, message.uri,
+          context: context);
+    }
+    return const InvalidType();
+  }
 }

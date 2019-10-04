@@ -1,4 +1,4 @@
-// Copyright (c) 2016, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2016, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -23,21 +23,22 @@ class SearchEngineImpl implements SearchEngine {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     List<AnalysisDriver> drivers = _drivers.toList();
+    SearchedFiles searchedFiles = _createSearchedFiles(drivers);
 
     String libraryUriStr = type.librarySource.uri.toString();
     bool hasSubtypes = false;
     Set<String> visitedIds = new Set<String>();
     Set<String> members = new Set<String>();
 
-    Future<Null> addMembers(ClassElement type, SubtypeResult subtype) async {
+    Future<void> addMembers(ClassElement type, SubtypeResult subtype) async {
       // TODO(brianwilkerson) Determine whether this await is necessary.
       await null;
       if (subtype != null && !visitedIds.add(subtype.id)) {
         return;
       }
       for (AnalysisDriver driver in drivers) {
-        List<SubtypeResult> subtypes =
-            await driver.search.subtypes(type: type, subtype: subtype);
+        List<SubtypeResult> subtypes = await driver.search
+            .subtypes(searchedFiles, type: type, subtype: subtype);
         for (SubtypeResult subtype in subtypes) {
           hasSubtypes = true;
           members.addAll(subtype.libraryUri == libraryUriStr
@@ -62,7 +63,7 @@ class SearchEngineImpl implements SearchEngine {
     await null;
     Set<ClassElement> allSubtypes = new Set<ClassElement>();
 
-    Future<Null> addSubtypes(ClassElement type) async {
+    Future<void> addSubtypes(ClassElement type) async {
       // TODO(brianwilkerson) Determine whether this await is necessary.
       await null;
       List<SearchResult> directResults = await _searchDirectSubtypes(type);

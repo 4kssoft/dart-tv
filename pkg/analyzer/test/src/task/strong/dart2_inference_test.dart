@@ -1,23 +1,20 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/token.dart';
-import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/src/dart/element/type.dart';
-import 'package:analyzer/src/generated/engine.dart';
+import 'package:analyzer/src/test_utilities/function_ast_visitor.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
-import '../../../generated/resolver_test_case.dart';
-import '../../../generated/test_support.dart';
+import '../../dart/resolution/driver_resolution.dart';
 
 void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(Dart2InferenceTest);
-    defineReflectiveTests(Dart2InferenceTest_Task);
   });
 }
 
@@ -25,46 +22,35 @@ void main() {
 ///
 /// https://github.com/dart-lang/sdk/issues/31638
 @reflectiveTest
-class Dart2InferenceTest extends ResolverTestCase {
-  @override
-  AnalysisOptions get defaultAnalysisOptions =>
-      new AnalysisOptionsImpl()..strongMode = true;
-
-  @override
-  bool get enableNewAnalysisDriver => true;
-
+class Dart2InferenceTest extends DriverResolutionTest {
   test_bool_assert() async {
     var code = r'''
-T f<T>() => null;
+T f<T>(int _) => null;
 
 main() {
-  assert(f()); // 1
-  assert(f(), f()); // 2
+  assert(f(1));
+  assert(f(2), f(3));
 }
 
 class C {
-  C() : assert(f()), // 3
-        assert(f(), f()); // 4
+  C() : assert(f(4)),
+        assert(f(5), f(6));
 }
 ''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    var unit = analysisResult.unit;
-
-    String getType(String prefix) {
-      var invocation = _findMethodInvocation(unit, code, prefix);
-      return invocation.staticInvokeType.toString();
+    await resolveTestCode(code);
+    MethodInvocation invocation(String search) {
+      return findNode.methodInvocation(search);
     }
 
-    expect(getType('f()); // 1'), '() → bool');
+    assertInvokeType(invocation('f(1));'), 'bool Function(int)');
 
-    expect(getType('f(), '), '() → bool');
-    expect(getType('f()); // 2'), '() → dynamic');
+    assertInvokeType(invocation('f(2)'), 'bool Function(int)');
+    assertInvokeType(invocation('f(3)'), 'dynamic Function(int)');
 
-    expect(getType('f()), // 3'), '() → bool');
+    assertInvokeType(invocation('f(4)'), 'bool Function(int)');
 
-    expect(getType('f(), '), '() → bool');
-    expect(getType('f()); // 4'), '() → dynamic');
+    assertInvokeType(invocation('f(5)'), 'bool Function(int)');
+    assertInvokeType(invocation('f(6)'), 'dynamic Function(int)');
   }
 
   test_bool_logical() async {
@@ -79,13 +65,10 @@ main() {
   var v2 = f() && f(); // 4
 }
 ''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    var unit = analysisResult.unit;
-
+    await resolveTestCode(code);
     void assertType(String prefix) {
-      var invocation = _findMethodInvocation(unit, code, prefix);
-      expect(invocation.staticInvokeType.toString(), '() → bool');
+      var invocation = findNode.methodInvocation(prefix);
+      expect(invocation.staticInvokeType.toString(), 'bool Function()');
     }
 
     assertType('f() || f(); // 1');
@@ -110,13 +93,10 @@ main() {
   for (; f(); ) {} // 4
 }
 ''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    var unit = analysisResult.unit;
-
+    await resolveTestCode(code);
     void assertType(String prefix) {
-      var invocation = _findMethodInvocation(unit, code, prefix);
-      expect(invocation.staticInvokeType.toString(), '() → bool');
+      var invocation = findNode.methodInvocation(prefix);
+      expect(invocation.staticInvokeType.toString(), 'bool Function()');
     }
 
     assertType('f()) {} // 1');
@@ -132,12 +112,9 @@ void main() {
   g = () => 42;
 }
 ''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    var unit = analysisResult.unit;
-
-    Expression closure = _findExpression(unit, code, '() => 42');
-    expect(closure.staticType.toString(), '() → List<int>');
+    await resolveTestCode(code);
+    Expression closure = findNode.expression('() => 42');
+    expect(closure.staticType.toString(), 'List<int> Function()');
   }
 
   test_closure_downwardReturnType_block() async {
@@ -149,16 +126,13 @@ void main() {
   };
 }
 ''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    var unit = analysisResult.unit;
-
-    Expression closure = _findExpression(unit, code, '() { // mark');
-    expect(closure.staticType.toString(), '() → List<int>');
+    await resolveTestCode(code);
+    Expression closure = findNode.expression('() { // mark');
+    expect(closure.staticType.toString(), 'List<int> Function()');
   }
 
   test_compoundAssignment_index() async {
-    var code = r'''
+    await resolveTestCode(r'''
 int getInt() => 0;
 num getNum() => 0;
 double getDouble() => 0.0;
@@ -278,15 +252,12 @@ void test9(Test<double, double> t) {
   var /*@type=double*/ v10 = ++t['x'];
   var /*@type=double*/ v11 = t['x']++;
 }
-''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    var unit = analysisResult.unit;
-    _assertTypeAnnotations(code, unit);
+''');
+    _assertTypeAnnotations();
   }
 
   test_compoundAssignment_prefixedIdentifier() async {
-    var code = r'''
+    await assertNoErrorsInCode(r'''
 int getInt() => 0;
 num getNum() => 0;
 double getDouble() => 0.0;
@@ -360,13 +331,8 @@ void test9(Test<double, double> t) {
   var /*@type=double*/ v10 = ++t.x;
   var /*@type=double*/ v11 = t.x++;
 }
-''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    assertNoErrors(source);
-
-    var unit = analysisResult.unit;
-    _assertTypeAnnotations(code, unit);
+''');
+    _assertTypeAnnotations();
   }
 
   test_compoundAssignment_propertyAccess() async {
@@ -375,7 +341,7 @@ void test9(Test<double, double> t) {
     var t5 = 'new Test<num, num>()';
     var t8 = 'new Test<double, num>()';
     var t9 = 'new Test<double, double>()';
-    var code = '''
+    await assertNoErrorsInCode('''
 int getInt() => 0;
 num getNum() => 0;
 double getDouble() => 0.0;
@@ -449,17 +415,12 @@ void test9() {
   var /*@type=double*/ v10 = ++$t9.x;
   var /*@type=double*/ v11 = $t9.x++;
 }
-''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    assertNoErrors(source);
-
-    var unit = analysisResult.unit;
-    _assertTypeAnnotations(code, unit);
+''');
+    _assertTypeAnnotations();
   }
 
   test_compoundAssignment_simpleIdentifier() async {
-    var code = r'''
+    await assertNoErrorsInCode(r'''
 int getInt() => 0;
 num getNum() => 0;
 double getDouble() => 0.0;
@@ -543,17 +504,12 @@ class Test9 extends Test<double, double> {
     var /*@type=double*/ v11 = x++;
   }
 }
-''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    assertNoErrors(source);
-
-    var unit = analysisResult.unit;
-    _assertTypeAnnotations(code, unit);
+''');
+    _assertTypeAnnotations();
   }
 
   test_compoundAssignment_simpleIdentifier_topLevel() async {
-    var code = r'''
+    await assertNoErrorsInCode(r'''
 class A {}
 
 class B extends A {
@@ -567,13 +523,8 @@ void set topLevel(A value) {}
 main() {
   var /*@type=B*/ v = topLevel += 1;
 }
-''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    assertNoErrors(source);
-
-    var unit = analysisResult.unit;
-    _assertTypeAnnotations(code, unit);
+''');
+    _assertTypeAnnotations();
   }
 
   test_forIn_identifier() async {
@@ -597,12 +548,9 @@ class C {
     for (aTopLevelSetter in f()) {} // top setter
   }
 }''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    var unit = analysisResult.unit;
-
+    await resolveTestCode(code);
     void assertType(String prefix) {
-      var invocation = _findMethodInvocation(unit, code, prefix);
+      var invocation = findNode.methodInvocation(prefix);
       expect(invocation.staticType.toString(), 'Iterable<A>');
     }
 
@@ -623,35 +571,32 @@ void test(Iterable<num> iter) {
   for (num y in f()) {} // 3
 }
 ''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    var unit = analysisResult.unit;
-
+    await resolveTestCode(code);
     {
-      var node = EngineTestCase.findSimpleIdentifier(unit, code, 'w in');
+      var node = findNode.simple('w in');
       VariableElement element = node.staticElement;
       expect(node.staticType, typeProvider.dynamicType);
       expect(element.type, typeProvider.dynamicType);
 
-      var invocation = _findMethodInvocation(unit, code, 'f()) {} // 1');
+      var invocation = findNode.methodInvocation('f()) {} // 1');
       expect(invocation.staticType.toString(), 'Iterable<dynamic>');
     }
 
     {
-      var node = EngineTestCase.findSimpleIdentifier(unit, code, 'x in');
+      var node = findNode.simple('x in');
       VariableElement element = node.staticElement;
       expect(node.staticType, typeProvider.numType);
       expect(element.type, typeProvider.numType);
     }
 
     {
-      var node = EngineTestCase.findSimpleIdentifier(unit, code, 'y in');
+      var node = findNode.simple('y in');
       VariableElement element = node.staticElement;
 
       expect(node.staticType, typeProvider.numType);
       expect(element.type, typeProvider.numType);
 
-      var invocation = _findMethodInvocation(unit, code, 'f()) {} // 3');
+      var invocation = findNode.methodInvocation('f()) {} // 3');
       expect(invocation.staticType.toString(), 'Iterable<num>');
     }
   }
@@ -671,16 +616,13 @@ void test(List<A> listA, List<B> listB) {
   for (B b3 in f(listB)) {} // 5
 }
 ''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    var unit = analysisResult.unit;
-
+    await resolveTestCode(code);
     void assertTypes(
         String vSearch, String vType, String fSearch, String fType) {
-      var node = EngineTestCase.findSimpleIdentifier(unit, code, vSearch);
+      var node = findNode.simple(vSearch);
       expect(node.staticType.toString(), vType);
 
-      var invocation = _findMethodInvocation(unit, code, fSearch);
+      var invocation = findNode.methodInvocation(fSearch);
       expect(invocation.staticType.toString(), fType);
     }
 
@@ -698,11 +640,8 @@ class C {
   operator []=(int index, double value) => null;
 }
 ''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    var unit = analysisResult.unit;
-
-    ClassElement c = unit.element.getType('C');
+    await resolveTestCode(code);
+    ClassElement c = findElement.class_('C');
 
     PropertyAccessorElement x = c.accessors[0];
     expect(x.returnType, VoidTypeImpl.instance);
@@ -722,11 +661,8 @@ class Derived extends Base {
   set x(_) {}
   operator[]=(int x, int y) {}
 }''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    var unit = analysisResult.unit;
-
-    ClassElement c = unit.element.getType('Derived');
+    await resolveTestCode(code);
+    ClassElement c = findElement.class_('Derived');
 
     PropertyAccessorElement x = c.accessors[0];
     expect(x.returnType, VoidTypeImpl.instance);
@@ -743,10 +679,8 @@ void main() {
   f((x) {});
 }
 ''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    var unit = analysisResult.unit;
-    var xNode = EngineTestCase.findSimpleIdentifier(unit, code, 'x) {}');
+    await resolveTestCode(code);
+    var xNode = findNode.simple('x) {}');
     VariableElement xElement = xNode.staticElement;
     expect(xNode.staticType, typeProvider.objectType);
     expect(xElement.type, typeProvider.objectType);
@@ -757,14 +691,11 @@ void main() {
 var x = [];
 var y = {};
 ''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    var unit = analysisResult.unit;
-
-    SimpleIdentifier x = _findExpression(unit, code, 'x = ');
+    await resolveTestCode(code);
+    SimpleIdentifier x = findNode.expression('x = ');
     expect(x.staticType.toString(), 'List<dynamic>');
 
-    SimpleIdentifier y = _findExpression(unit, code, 'y = ');
+    SimpleIdentifier y = findNode.expression('y = ');
     expect(y.staticType.toString(), 'Map<dynamic, dynamic>');
   }
 
@@ -773,14 +704,11 @@ var y = {};
 var x = [null];
 var y = {null: null};
 ''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    var unit = analysisResult.unit;
-
-    SimpleIdentifier x = _findExpression(unit, code, 'x = ');
+    await resolveTestCode(code);
+    SimpleIdentifier x = findNode.expression('x = ');
     expect(x.staticType.toString(), 'List<Null>');
 
-    SimpleIdentifier y = _findExpression(unit, code, 'y = ');
+    SimpleIdentifier y = findNode.expression('y = ');
     expect(y.staticType.toString(), 'Map<Null, Null>');
   }
 
@@ -798,11 +726,8 @@ void test(C<int> x) {
       break;
   }
 }''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    var unit = analysisResult.unit;
-
-    var node = _findInstanceCreation(unit, code, 'const C():');
+    await resolveTestCode(code);
+    var node = findNode.instanceCreation('const C():');
     expect(node.staticType.toString(), 'C<int>');
   }
 
@@ -816,14 +741,11 @@ main() {
   var y = new C().m();
 }
 ''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    var unit = analysisResult.unit;
-
-    SimpleIdentifier x = _findExpression(unit, code, 'x = ');
+    await resolveTestCode(code);
+    SimpleIdentifier x = findNode.expression('x = ');
     expect(x.staticType, VoidTypeImpl.instance);
 
-    SimpleIdentifier y = _findExpression(unit, code, 'y = ');
+    SimpleIdentifier y = findNode.expression('y = ');
     expect(y.staticType, VoidTypeImpl.instance);
   }
 
@@ -835,18 +757,18 @@ main() {
   var y = f();
 }
 ''';
-    var source = addSource(code);
-    var analysisResult = await computeAnalysisResult(source);
-    var unit = analysisResult.unit;
-
-    SimpleIdentifier x = _findExpression(unit, code, 'x = ');
+    await resolveTestCode(code);
+    SimpleIdentifier x = findNode.expression('x = ');
     expect(x.staticType, VoidTypeImpl.instance);
 
-    SimpleIdentifier y = _findExpression(unit, code, 'y = ');
+    SimpleIdentifier y = findNode.expression('y = ');
     expect(y.staticType, VoidTypeImpl.instance);
   }
 
-  void _assertTypeAnnotations(String code, CompilationUnit unit) {
+  void _assertTypeAnnotations() {
+    var code = result.content;
+    var unit = result.unit;
+
     var types = <int, String>{};
     {
       int lastIndex = 0;
@@ -863,49 +785,18 @@ main() {
         lastIndex = closeIndex;
       }
     }
-    unit.accept(new _TypeAnnotationsValidator(types));
+
+    unit.accept(FunctionAstVisitor(
+      simpleIdentifier: (node) {
+        Token comment = node.token.precedingComments;
+        if (comment != null) {
+          String expectedType = types[comment.offset];
+          if (expectedType != null) {
+            String actualType = node.staticType.toString();
+            expect(actualType, expectedType, reason: '@${comment.offset}');
+          }
+        }
+      },
+    ));
   }
-
-  Expression _findExpression(AstNode root, String code, String prefix) {
-    return EngineTestCase.findNode(root, code, prefix, (n) {
-      return n is Expression;
-    });
-  }
-
-  InstanceCreationExpression _findInstanceCreation(
-      AstNode root, String code, String prefix) {
-    return EngineTestCase.findNode(root, code, prefix, (n) {
-      return n is InstanceCreationExpression;
-    });
-  }
-
-  MethodInvocation _findMethodInvocation(
-      AstNode root, String code, String prefix) {
-    return EngineTestCase.findNode(root, code, prefix, (n) {
-      return n is MethodInvocation;
-    });
-  }
-}
-
-class _TypeAnnotationsValidator extends RecursiveAstVisitor {
-  final Map<int, String> types;
-
-  _TypeAnnotationsValidator(this.types);
-
-  void visitSimpleIdentifier(SimpleIdentifier node) {
-    Token comment = node.token.precedingComments;
-    if (comment != null) {
-      String expectedType = types[comment.offset];
-      if (expectedType != null) {
-        String actualType = node.staticType.toString();
-        expect(actualType, expectedType, reason: '@${comment.offset}');
-      }
-    }
-  }
-}
-
-@reflectiveTest
-class Dart2InferenceTest_Task extends Dart2InferenceTest {
-  @override
-  bool get enableNewAnalysisDriver => false;
 }

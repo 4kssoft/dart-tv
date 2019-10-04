@@ -50,6 +50,68 @@ int Utils::HighestBit(int64_t v) {
   return r;
 }
 
+// Implementation according to H.S.Warren's "Hacker's Delight"
+// (Addison Wesley, 2002) Chapter 10 and T.Grablund, P.L.Montogomery's
+// "Division by Invariant Integers Using Multiplication" (PLDI 1994).
+void Utils::CalculateMagicAndShiftForDivRem(int64_t divisor,
+                                            int64_t* magic,
+                                            int64_t* shift) {
+  ASSERT(divisor <= -2 || divisor >= 2);
+  /* The magic number M and shift S can be calculated in the following way:
+   * Let nc be the most positive value of numerator(n) such that nc = kd - 1,
+   * where divisor(d) >= 2.
+   * Let nc be the most negative value of numerator(n) such that nc = kd + 1,
+   * where divisor(d) <= -2.
+   * Thus nc can be calculated like:
+   * nc =  exp + exp       % d - 1, where d >= 2 and exp = 2^63.
+   * nc = -exp + (exp + 1) % d,     where d >= 2 and exp = 2^63.
+   *
+   * So the shift p is the smallest p satisfying
+   * 2^p > nc * (d - 2^p % d), where d >= 2
+   * 2^p > nc * (d + 2^p % d), where d <= -2.
+   *
+   * The magic number M is calculated by
+   * M = (2^p + d - 2^p % d) / d, where d >= 2
+   * M = (2^p - d - 2^p % d) / d, where d <= -2.
+   */
+  int64_t p = 63;
+  const uint64_t exp = 1LL << 63;
+
+  // Initialize the computations.
+  uint64_t abs_d = (divisor >= 0) ? divisor : -divisor;
+  uint64_t sign_bit = static_cast<uint64_t>(divisor) >> 63;
+  uint64_t tmp = exp + sign_bit;
+  uint64_t abs_nc = tmp - 1 - (tmp % abs_d);
+  uint64_t quotient1 = exp / abs_nc;
+  uint64_t remainder1 = exp % abs_nc;
+  uint64_t quotient2 = exp / abs_d;
+  uint64_t remainder2 = exp % abs_d;
+
+  // To avoid handling both positive and negative divisor,
+  // "Hacker's Delight" introduces a method to handle these
+  // two cases together to avoid duplication.
+  uint64_t delta;
+  do {
+    p++;
+    quotient1 = 2 * quotient1;
+    remainder1 = 2 * remainder1;
+    if (remainder1 >= abs_nc) {
+      quotient1++;
+      remainder1 = remainder1 - abs_nc;
+    }
+    quotient2 = 2 * quotient2;
+    remainder2 = 2 * remainder2;
+    if (remainder2 >= abs_d) {
+      quotient2++;
+      remainder2 = remainder2 - abs_d;
+    }
+    delta = abs_d - remainder2;
+  } while (quotient1 < delta || (quotient1 == delta && remainder1 == 0));
+
+  *magic = (divisor > 0) ? (quotient2 + 1) : (-quotient2 - 1);
+  *shift = p - 64;
+}
+
 uint32_t Utils::StringHash(const char* data, int length) {
   // This implementation is based on the public domain MurmurHash
   // version 2.0. It assumes that the underlying CPU can read from
@@ -78,10 +140,10 @@ uint32_t Utils::StringHash(const char* data, int length) {
   switch (size) {
     case 3:
       hash ^= cursor[2] << 16;
-      /* Falls through. */
+      FALL_THROUGH;
     case 2:
       hash ^= cursor[1] << 8;
-      /* Falls through. */
+      FALL_THROUGH;
     case 1:
       hash ^= cursor[0];
       hash *= M;
@@ -98,6 +160,7 @@ uint32_t Utils::StringHash(const char* data, int length) {
 uint32_t Utils::WordHash(intptr_t key) {
   // TODO(iposva): Need to check hash spreading.
   // This example is from http://www.concentric.net/~Ttwang/tech/inthash.htm
+  // via. http://web.archive.org/web/20071223173210/http://www.concentric.net/~Ttwang/tech/inthash.htm
   uword a = static_cast<uword>(key);
   a = (a + 0x7ed55d16) + (a << 12);
   a = (a ^ 0xc761c23c) ^ (a >> 19);
@@ -106,6 +169,32 @@ uint32_t Utils::WordHash(intptr_t key) {
   a = (a + 0xfd7046c5) + (a << 3);
   a = (a ^ 0xb55a4f09) ^ (a >> 16);
   return static_cast<uint32_t>(a);
+}
+
+char* Utils::SCreate(const char* format, ...) {
+  va_list args;
+  va_start(args, format);
+  char* buffer = VSCreate(format, args);
+  va_end(args);
+  return buffer;
+}
+
+char* Utils::VSCreate(const char* format, va_list args) {
+  // Measure.
+  va_list measure_args;
+  va_copy(measure_args, args);
+  intptr_t len = VSNPrint(NULL, 0, format, measure_args);
+  va_end(measure_args);
+
+  char* buffer = reinterpret_cast<char*>(malloc(len + 1));
+  ASSERT(buffer != NULL);
+
+  // Print.
+  va_list print_args;
+  va_copy(print_args, args);
+  VSNPrint(buffer, len + 1, format, print_args);
+  va_end(print_args);
+  return buffer;
 }
 
 }  // namespace dart

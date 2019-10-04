@@ -4,10 +4,7 @@
 
 import 'dart:html';
 
-/// ignore: IMPORT_INTERNAL_LIBRARY
-import 'dart:_js_helper';
-
-/*element: main:[]*/
+/*member: main:[]*/
 main() {
   document.createElement(CustomElement.tag);
   newCustom();
@@ -21,14 +18,14 @@ main() {
 // constructor isn't.
 ////////////////////////////////////////////////////////////////////////////////
 
-/*element: newCustom:[]*/
-@NoInline()
+/*member: newCustom:[]*/
+@pragma('dart2js:noInline')
 newCustom() {
   new CustomElement();
 }
 
-/*element: newCustomCreated:[]*/
-@NoInline()
+/*member: newCustomCreated:[]*/
+@pragma('dart2js:noInline')
 newCustomCreated() {
   new CustomElement.created();
 }
@@ -36,10 +33,10 @@ newCustomCreated() {
 class CustomElement extends HtmlElement {
   static final tag = 'x-foo';
 
-  /*element: CustomElement.:[newCustom:CustomElement]*/
+  /*member: CustomElement.:[newCustom:CustomElement]*/
   factory CustomElement() => new Element.tag(tag);
 
-  /*element: CustomElement.created:[]*/
+  /*member: CustomElement.created:[]*/
   CustomElement.created() : super.created() {
     print('boo');
   }
@@ -50,23 +47,23 @@ class CustomElement extends HtmlElement {
 // the generative constructor are inlined.
 ////////////////////////////////////////////////////////////////////////////////
 
-/*element: newNormal:[]*/
-@NoInline()
+/*member: newNormal:[]*/
+@pragma('dart2js:noInline')
 newNormal() {
   new NormalElement();
 }
 
-/*element: newNormalCreated:[]*/
-@NoInline()
+/*member: newNormalCreated:[]*/
+@pragma('dart2js:noInline')
 newNormalCreated() {
   new NormalElement.created();
 }
 
 class NormalElement {
-  /*element: NormalElement.:[newNormal:NormalElement]*/
+  /*member: NormalElement.:[newNormal:NormalElement]*/
   factory NormalElement() => null;
 
-  /*element: NormalElement.created:[newNormalCreated+,newNormalCreated:NormalElement]*/
+  /*member: NormalElement.created:[newNormalCreated+,newNormalCreated:NormalElement]*/
   NormalElement.created() {
     print('foo');
   }

@@ -2,13 +2,14 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+// ignore_for_file: slash_for_doc_comments, unnecessary_const
+
 part of js_ast;
 
 class JavaScriptPrintingOptions {
   final bool shouldCompressOutput;
   final bool minifyLocalVariables;
   final bool preferSemicolonToNewlineInMinifiedOutput;
-  final bool emitTypes;
   final bool allowSingleLineIfStatements;
 
   /// True to allow keywords in properties, such as `obj.var` or `obj.function`
@@ -16,12 +17,11 @@ class JavaScriptPrintingOptions {
   final bool allowKeywordsInProperties;
 
   JavaScriptPrintingOptions(
-      {this.shouldCompressOutput: false,
-      this.minifyLocalVariables: false,
-      this.preferSemicolonToNewlineInMinifiedOutput: false,
-      this.emitTypes: false,
-      this.allowKeywordsInProperties: false,
-      this.allowSingleLineIfStatements: false});
+      {this.shouldCompressOutput = false,
+      this.minifyLocalVariables = false,
+      this.preferSemicolonToNewlineInMinifiedOutput = false,
+      this.allowKeywordsInProperties = false,
+      this.allowSingleLineIfStatements = false});
 }
 
 /// An environment in which JavaScript printing is done.  Provides emitting of
@@ -47,8 +47,9 @@ abstract class JavaScriptPrintingContext {
 
 /// A simple implementation of [JavaScriptPrintingContext] suitable for tests.
 class SimpleJavaScriptPrintingContext extends JavaScriptPrintingContext {
-  final StringBuffer buffer = new StringBuffer();
+  final StringBuffer buffer = StringBuffer();
 
+  @override
   void emit(String string) {
     buffer.write(string);
   }
@@ -58,7 +59,7 @@ class SimpleJavaScriptPrintingContext extends JavaScriptPrintingContext {
 
 // TODO(ochafik): Inline the body of [TypeScriptTypePrinter] here if/when it no
 // longer needs to share utils with [ClosureTypePrinter].
-class Printer extends TypeScriptTypePrinter implements NodeVisitor {
+class Printer implements NodeVisitor {
   final JavaScriptPrintingOptions options;
   final JavaScriptPrintingContext context;
   final bool shouldCompressOutput;
@@ -79,15 +80,15 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
   /// Whether the next call to [indent] should just be a no-op.
   bool _skipNextIndent = false;
 
-  static final identifierCharacterRegExp = new RegExp(r'^[a-zA-Z_0-9$]');
-  static final expressionContinuationRegExp = new RegExp(r'^[-+([]');
+  static final identifierCharacterRegExp = RegExp(r'^[a-zA-Z_0-9$]');
+  static final expressionContinuationRegExp = RegExp(r'^[-+([]');
 
   Printer(JavaScriptPrintingOptions options, JavaScriptPrintingContext context,
       {LocalNamer localNamer})
       : options = options,
         context = context,
         shouldCompressOutput = options.shouldCompressOutput,
-        danglingElseVisitor = new DanglingElseVisitor(context),
+        danglingElseVisitor = DanglingElseVisitor(context),
         localNamer = determineRenamer(localNamer, options) {
     context.printer = this;
   }
@@ -96,8 +97,8 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
       LocalNamer localNamer, JavaScriptPrintingOptions options) {
     if (localNamer != null) return localNamer;
     return (options.shouldCompressOutput && options.minifyLocalVariables)
-        ? new MinifyRenamer()
-        : new IdentityNamer();
+        ? MinifyRenamer()
+        : IdentityNamer();
   }
 
   // The current indentation string.
@@ -131,10 +132,10 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     if (!shouldCompressOutput) out(" ");
   }
 
-  String lastAddedString = null;
+  String lastAddedString;
   int get lastCharCode {
     if (lastAddedString == null) return 0;
-    assert(lastAddedString.length != "");
+    assert(lastAddedString.isNotEmpty);
     return lastAddedString.codeUnitAt(lastAddedString.length - 1);
   }
 
@@ -235,6 +236,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     nodes.forEach(visit);
   }
 
+  @override
   visitProgram(Program program) {
     if (program.scriptTag != null) {
       out('#!${program.scriptTag}\n');
@@ -286,22 +288,25 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     if (needsNewline) lineOut();
   }
 
+  @override
   visitBlock(Block block) {
     blockOut(block, true, true);
   }
 
+  @override
   visitDebuggerStatement(node) {
     outIndentLn('debugger;');
   }
 
+  @override
   visitExpressionStatement(ExpressionStatement expressionStatement) {
     indent();
-    outClosureAnnotation(expressionStatement);
     visitNestedExpression(expressionStatement.expression, EXPRESSION,
         newInForInit: false, newAtStatementBegin: true);
     outSemicolonLn();
   }
 
+  @override
   visitEmptyStatement(EmptyStatement nop) {
     outIndentLn(";");
   }
@@ -317,7 +322,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     if (hasElse) {
       bool needsBraces = node.then.accept(danglingElseVisitor) || then is Do;
       if (needsBraces) {
-        then = new Block(<Statement>[then]);
+        then = Block(<Statement>[then]);
       }
     }
     if (shouldIndent) indent();
@@ -355,10 +360,12 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     }
   }
 
+  @override
   visitIf(If node) {
     ifOut(node, true);
   }
 
+  @override
   visitFor(For loop) {
     outIndent("for");
     spaceOut();
@@ -383,6 +390,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     blockBody(loop.body, needsSeparation: false, needsNewline: true);
   }
 
+  @override
   visitForIn(ForIn loop) {
     outIndent("for");
     spaceOut();
@@ -397,6 +405,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     blockBody(loop.body, needsSeparation: false, needsNewline: true);
   }
 
+  @override
   visitForOf(ForOf loop) {
     outIndent("for");
     spaceOut();
@@ -405,12 +414,13 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
         newInForInit: true, newAtStatementBegin: false);
     out(" of");
     pendingSpace = true;
-    visitNestedExpression(loop.iterable, EXPRESSION,
+    visitNestedExpression(loop.iterable, ASSIGNMENT,
         newInForInit: false, newAtStatementBegin: false);
     out(")");
     blockBody(loop.body, needsSeparation: false, needsNewline: true);
   }
 
+  @override
   visitWhile(While loop) {
     outIndent("while");
     spaceOut();
@@ -421,6 +431,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     blockBody(loop.body, needsSeparation: false, needsNewline: true);
   }
 
+  @override
   visitDo(Do loop) {
     outIndent("do");
     if (blockBody(loop.body, needsSeparation: true, needsNewline: false)) {
@@ -437,6 +448,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     outSemicolonLn();
   }
 
+  @override
   visitContinue(Continue node) {
     if (node.targetLabel == null) {
       outIndent("continue");
@@ -446,6 +458,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     outSemicolonLn();
   }
 
+  @override
   visitBreak(Break node) {
     if (node.targetLabel == null) {
       outIndent("break");
@@ -455,6 +468,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     outSemicolonLn();
   }
 
+  @override
   visitReturn(Return node) {
     if (node.value == null) {
       outIndent("return");
@@ -467,6 +481,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     outSemicolonLn();
   }
 
+  @override
   visitDartYield(DartYield node) {
     if (node.hasStar) {
       outIndent("yield*");
@@ -479,6 +494,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     outSemicolonLn();
   }
 
+  @override
   visitThrow(Throw node) {
     outIndent("throw");
     pendingSpace = true;
@@ -487,6 +503,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     outSemicolonLn();
   }
 
+  @override
   visitTry(Try node) {
     outIndent("try");
     blockBody(node.body, needsSeparation: true, needsNewline: false);
@@ -502,6 +519,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     }
   }
 
+  @override
   visitCatch(Catch node) {
     spaceOut();
     out("catch");
@@ -513,6 +531,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     blockBody(node.body, needsSeparation: false, needsNewline: false);
   }
 
+  @override
   visitSwitch(Switch node) {
     outIndent("switch");
     spaceOut();
@@ -528,6 +547,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     outIndentLn("}");
   }
 
+  @override
   visitSwitchCase(SwitchCase node) {
     if (node.isDefault) {
       outIndentLn("default:");
@@ -538,11 +558,12 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
           newInForInit: false, newAtStatementBegin: false);
       outLn(":");
     }
-    if (!node.body.statements.isEmpty) {
+    if (node.body.statements.isNotEmpty) {
       blockOut(node.body, true, true);
     }
   }
 
+  @override
   visitLabeledStatement(LabeledStatement node) {
     outIndent("${node.label}:");
     blockBody(node.body, needsSeparation: false, needsNewline: true);
@@ -558,14 +579,12 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
           newInForInit: false, newAtStatementBegin: false);
     }
     localNamer.enterScope(fun);
-    outTypeParams(fun.typeParams);
     out("(");
     if (fun.params != null) {
       visitCommaSeparated(fun.params, PRIMARY,
           newInForInit: false, newAtStatementBegin: false);
     }
     out(")");
-    outTypeAnnotation(fun.returnType);
     switch (fun.asyncModifier) {
       case const AsyncModifier.sync():
         break;
@@ -583,9 +602,9 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     localNamer.leaveScope();
   }
 
+  @override
   visitFunctionDeclaration(FunctionDeclaration declaration) {
     indent();
-    outClosureAnnotation(declaration);
     var f = declaration.function;
     context.enterNode(f);
     functionOut(f, declaration.name);
@@ -622,8 +641,8 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     }
   }
 
+  @override
   visitVariableDeclarationList(VariableDeclarationList list) {
-    outClosureAnnotation(list);
     // Note: keyword can be null for non-static field declarations.
     if (list.keyword != null) {
       out(list.keyword);
@@ -633,6 +652,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
         newInForInit: inForInit, newAtStatementBegin: false);
   }
 
+  @override
   visitArrayBindingPattern(ArrayBindingPattern node) {
     out("[");
     visitCommaSeparated(node.variables, EXPRESSION,
@@ -640,6 +660,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     out("]");
   }
 
+  @override
   visitObjectBindingPattern(ObjectBindingPattern node) {
     out("{");
     visitCommaSeparated(node.variables, EXPRESSION,
@@ -647,6 +668,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     out("}");
   }
 
+  @override
   visitDestructuredVariable(DestructuredVariable node) {
     var name = node.name;
     var property = node.property;
@@ -665,7 +687,6 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
       }
       visit(structure);
     }
-    outTypeAnnotation(node.type);
     var defaultValue = node.defaultValue;
     if (defaultValue != null) {
       spaceOut();
@@ -676,10 +697,12 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     }
   }
 
+  @override
   visitSimpleBindingPattern(SimpleBindingPattern node) {
     visit(node.name);
   }
 
+  @override
   visitAssignment(Assignment assignment) {
     visitNestedExpression(assignment.leftHandSide, LEFT_HAND_SIDE,
         newInForInit: inForInit, newAtStatementBegin: atStatementBegin);
@@ -694,8 +717,8 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     }
   }
 
+  @override
   visitVariableInitialization(VariableInitialization init) {
-    outClosureAnnotation(init);
     visitNestedExpression(init.declaration, LEFT_HAND_SIDE,
         newInForInit: inForInit, newAtStatementBegin: atStatementBegin);
     if (init.value != null) {
@@ -707,6 +730,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     }
   }
 
+  @override
   visitConditional(Conditional cond) {
     visitNestedExpression(cond.condition, LOGICAL_OR,
         newInForInit: inForInit, newAtStatementBegin: atStatementBegin);
@@ -723,6 +747,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
         newInForInit: inForInit, newAtStatementBegin: false);
   }
 
+  @override
   visitNew(New node) {
     out("new ");
     inNewTarget = true;
@@ -735,6 +760,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     out(")");
   }
 
+  @override
   visitCall(Call call) {
     visitNestedExpression(call.target, LEFT_HAND_SIDE,
         newInForInit: inForInit, newAtStatementBegin: atStatementBegin);
@@ -744,6 +770,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     out(")");
   }
 
+  @override
   visitBinary(Binary binary) {
     Expression left = binary.left;
     Expression right = binary.right;
@@ -844,6 +871,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
         newInForInit: inForInit, newAtStatementBegin: false);
   }
 
+  @override
   visitPrefix(Prefix unary) {
     String op = unary.op;
     switch (op) {
@@ -872,8 +900,10 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
         newInForInit: inForInit, newAtStatementBegin: false);
   }
 
+  @override
   visitSpread(Spread unary) => visitPrefix(unary);
 
+  @override
   visitYield(Yield yield) {
     out(yield.star ? "yield*" : "yield");
     if (yield.value == null) return;
@@ -882,25 +912,29 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
         newInForInit: inForInit, newAtStatementBegin: false);
   }
 
+  @override
   visitPostfix(Postfix postfix) {
     visitNestedExpression(postfix.argument, LEFT_HAND_SIDE,
         newInForInit: inForInit, newAtStatementBegin: atStatementBegin);
     out(postfix.op);
   }
 
+  @override
   visitThis(This node) {
     out("this");
   }
 
+  @override
   visitSuper(Super node) {
     out("super");
   }
 
+  @override
   visitIdentifier(Identifier node) {
     out(localNamer.getName(node));
-    outTypeAnnotation(node.type);
   }
 
+  @override
   visitRestParameter(RestParameter node) {
     out('...');
     visitIdentifier(node.parameter);
@@ -931,6 +965,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     return options.allowKeywordsInProperties || field != '"super"';
   }
 
+  @override
   visitAccess(PropertyAccess access) {
     // Normally we can omit parens on the receiver if it is a Call, even though
     // Call expressions have lower precedence. However this optimization doesn't
@@ -953,6 +988,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     propertyNameOut(access.selector, inAccess: true);
   }
 
+  @override
   visitNamedFunction(NamedFunction namedFunction) {
     var f = namedFunction.function;
     context.enterNode(f);
@@ -960,15 +996,15 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     context.exitNode(f);
   }
 
+  @override
   visitFun(Fun fun) {
     functionOut(fun, null);
   }
 
+  @override
   visitArrowFun(ArrowFun fun) {
     localNamer.enterScope(fun);
-    if (fun.params.length == 1 &&
-        fun.params[0] is Identifier &&
-        (!options.emitTypes || fun.params[0].type == null)) {
+    if (fun.params.length == 1 && fun.params[0] is Identifier) {
       visitNestedExpression(fun.params.single, SPREAD,
           newInForInit: false, newAtStatementBegin: false);
     } else {
@@ -977,7 +1013,6 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
           newInForInit: false, newAtStatementBegin: false);
       out(")");
     }
-    outTypeAnnotation(fun.returnType);
     spaceOut();
     out("=>");
     var body = fun.body;
@@ -985,7 +1020,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
       spaceOut();
       // Object initializers require parenthesis to disambiguate
       // AssignmentExpression from FunctionBody. See:
-      // https://people.mozilla.org/~jorendorff/es6-draft.html#sec-arrow-function-definitions
+      // https://tc39.github.io/ecma262/#sec-arrow-function-definitions
       var needsParen = fun.body is ObjectInitializer;
       if (needsParen) out("(");
       visitNestedExpression(body, ASSIGNMENT,
@@ -997,14 +1032,17 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     localNamer.leaveScope();
   }
 
+  @override
   visitLiteralBool(LiteralBool node) {
     out(node.value ? "true" : "false");
   }
 
+  @override
   visitLiteralString(LiteralString node) {
     out(node.value);
   }
 
+  @override
   visitLiteralNumber(LiteralNumber node) {
     int charCode = node.value.codeUnitAt(0);
     if (charCode == charCodes.$MINUS && lastCharCode == charCodes.$MINUS) {
@@ -1013,10 +1051,12 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     out(node.value);
   }
 
+  @override
   visitLiteralNull(LiteralNull node) {
     out("null");
   }
 
+  @override
   visitArrayInitializer(ArrayInitializer node) {
     out("[");
     indentMore();
@@ -1051,10 +1091,12 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     out("]");
   }
 
+  @override
   visitArrayHole(ArrayHole node) {
     throw "Unreachable";
   }
 
+  @override
   visitObjectInitializer(ObjectInitializer node) {
     List<Property> properties = node.properties;
     out("{");
@@ -1080,6 +1122,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     out("}");
   }
 
+  @override
   visitProperty(Property node) {
     propertyNameOut(node.name);
     out(":");
@@ -1088,10 +1131,12 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
         newInForInit: false, newAtStatementBegin: false);
   }
 
+  @override
   visitRegExpLiteral(RegExpLiteral node) {
     out(node.pattern);
   }
 
+  @override
   visitTemplateString(TemplateString node) {
     out('`');
     int len = node.interpolations.length;
@@ -1105,35 +1150,24 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     out('`');
   }
 
+  @override
   visitTaggedTemplate(TaggedTemplate node) {
     visit(node.tag);
     visit(node.template);
   }
 
+  @override
   visitClassDeclaration(ClassDeclaration node) {
     indent();
     visit(node.classExpr);
     lineOut();
   }
 
-  void outTypeParams(Iterable<Identifier> typeParams) {
-    if (typeParams != null && options.emitTypes && typeParams.isNotEmpty) {
-      out("<");
-      var first = true;
-      for (var typeParam in typeParams) {
-        if (!first) out(", ");
-        first = false;
-        visit(typeParam);
-      }
-      out(">");
-    }
-  }
-
+  @override
   visitClassExpression(ClassExpression node) {
     localNamer.enterScope(node);
     out('class ');
     visit(node.name);
-    outTypeParams(node.typeParams);
     if (node.heritage != null) {
       out(' extends ');
       visit(node.heritage);
@@ -1143,14 +1177,6 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
       out('{');
       lineOut();
       indentMore();
-      if (options.emitTypes && node.fields != null) {
-        for (var field in node.fields) {
-          indent();
-          visit(field);
-          out(";");
-          lineOut();
-        }
-      }
       for (var method in node.methods) {
         indent();
         visit(method);
@@ -1165,8 +1191,8 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     localNamer.leaveScope();
   }
 
+  @override
   visitMethod(Method node) {
-    outClosureAnnotation(node);
     if (node.isStatic) {
       out('static ');
     }
@@ -1198,19 +1224,8 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     localNamer.leaveScope();
   }
 
-  void outClosureAnnotation(Node node) {
-    if (node != null && node.closureAnnotation != null) {
-      String comment = node.closureAnnotation.toString(indentation);
-      if (comment.isNotEmpty) {
-        out(comment);
-        lineOut();
-        indent();
-      }
-    }
-  }
-
   void propertyNameOut(Expression node,
-      {bool inMethod: false, bool inAccess: false}) {
+      {bool inMethod = false, bool inAccess = false}) {
     if (node is LiteralNumber) {
       LiteralNumber nameNumber = node;
       if (inAccess) out('[');
@@ -1236,6 +1251,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     }
   }
 
+  @override
   visitImportDeclaration(ImportDeclaration node) {
     indent();
     out('import ');
@@ -1251,6 +1267,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     outSemicolonLn();
   }
 
+  @override
   visitExportDeclaration(ExportDeclaration node) {
     indent();
     out('export ');
@@ -1260,6 +1277,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     outSemicolonLn();
   }
 
+  @override
   visitExportClause(ExportClause node) {
     nameSpecifierListOut(node.exports, true);
     fromClauseOut(node.from);
@@ -1268,7 +1286,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
   nameSpecifierListOut(List<NameSpecifier> names, bool export) {
     if (names == null) return;
 
-    if (names.length == 1 && names[0].name == '*') {
+    if (names.length == 1 && names[0].name.name == '*') {
       nameSpecifierOut(names[0], export);
       return;
     }
@@ -1290,13 +1308,14 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     if (from != null) {
       out(' from');
       spaceOut();
-      visit(from);
+      out("'${from.valueWithoutQuotes}.js'");
     }
   }
 
   /// This is unused, see [nameSpecifierOut].
+  @override
   visitNameSpecifier(NameSpecifier node) {
-    throw new UnsupportedError('visitNameSpecifier');
+    throw UnsupportedError('visitNameSpecifier');
   }
 
   nameSpecifierOut(NameSpecifier node, bool export) {
@@ -1323,10 +1342,12 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     }
   }
 
+  @override
   visitModule(Module node) {
     visitAll(node.body);
   }
 
+  @override
   visitLiteralExpression(LiteralExpression node) {
     String template = node.template;
     List<Expression> inputs = node.inputs;
@@ -1345,6 +1366,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     }
   }
 
+  @override
   visitLiteralStatement(LiteralStatement node) {
     outLn(node.code);
   }
@@ -1353,28 +1375,36 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     out('#${node.nameOrPosition}');
   }
 
+  @override
   visitInterpolatedExpression(InterpolatedExpression node) =>
       visitInterpolatedNode(node);
 
+  @override
   visitInterpolatedLiteral(InterpolatedLiteral node) =>
       visitInterpolatedNode(node);
 
+  @override
   visitInterpolatedParameter(InterpolatedParameter node) =>
       visitInterpolatedNode(node);
 
+  @override
   visitInterpolatedSelector(InterpolatedSelector node) =>
       visitInterpolatedNode(node);
 
+  @override
   visitInterpolatedMethod(InterpolatedMethod node) =>
       visitInterpolatedNode(node);
 
+  @override
   visitInterpolatedIdentifier(InterpolatedIdentifier node) =>
       visitInterpolatedNode(node);
 
+  @override
   visitInterpolatedStatement(InterpolatedStatement node) {
     outLn('#${node.nameOrPosition}');
   }
 
+  @override
   void visitComment(Comment node) {
     if (shouldCompressOutput) return;
     String comment = node.comment.trim();
@@ -1388,6 +1418,7 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     }
   }
 
+  @override
   void visitCommentExpression(CommentExpression node) {
     if (shouldCompressOutput) return;
     String comment = node.comment.trim();
@@ -1400,21 +1431,10 @@ class Printer extends TypeScriptTypePrinter implements NodeVisitor {
     visit(node.expression);
   }
 
+  @override
   void visitAwait(Await node) {
     out("await ");
     visit(node.expression);
-  }
-
-  void outTypeAnnotation(TypeRef node) {
-    if (node == null || !options.emitTypes || node.isUnknown) return;
-
-    if (node is OptionalTypeRef) {
-      out("?: ");
-      visit(node.type);
-    } else {
-      out(": ");
-      visit(node);
-    }
   }
 }
 
@@ -1427,8 +1447,8 @@ class VarCollector extends BaseVisitor {
 
   VarCollector()
       : nested = false,
-        vars = new Set<String>(),
-        params = new Set<String>();
+        vars = Set<String>(),
+        params = Set<String>();
 
   void forEachVar(void fn(String v)) => vars.forEach(fn);
   void forEachParam(void fn(String p)) => params.forEach(fn);
@@ -1448,39 +1468,49 @@ class VarCollector extends BaseVisitor {
     }
   }
 
+  @override
   void visitFunctionDeclaration(FunctionDeclaration declaration) {
     // Note that we don't bother collecting the name of the function.
     collectVarsInFunction(declaration.function);
   }
 
+  @override
   void visitNamedFunction(NamedFunction namedFunction) {
     // Note that we don't bother collecting the name of the function.
     collectVarsInFunction(namedFunction.function);
   }
 
+  @override
   void visitMethod(Method declaration) {
     collectVarsInFunction(declaration.function);
   }
 
+  @override
   void visitFun(Fun fun) {
     collectVarsInFunction(fun);
   }
 
+  @override
   void visitArrowFun(ArrowFun fun) {
     collectVarsInFunction(fun);
   }
 
+  @override
   void visitClassExpression(ClassExpression node) {
     // Note that we don't bother collecting the name of the class.
     if (node.heritage != null) node.heritage.accept(this);
-    for (Method method in node.methods) method.accept(this);
+    for (Method method in node.methods) {
+      method.accept(this);
+    }
   }
 
+  @override
   void visitCatch(Catch node) {
     declareVariable(node.declaration);
     node.body.accept(this);
   }
 
+  @override
   void visitVariableInitialization(VariableInitialization node) {
     // TODO(jmesserly): add ES6 support. Currently not needed because
     // dart2js does not emit ES6 rest param or destructuring.
@@ -1502,30 +1532,46 @@ class DanglingElseVisitor extends BaseVisitor<bool> {
 
   DanglingElseVisitor(this.context);
 
+  @override
   bool visitProgram(Program node) => false;
 
+  @override
   bool visitNode(Node node) {
     context.error("Forgot node: $node");
     return null;
   }
 
+  @override
   bool visitBlock(Block node) => false;
+  @override
   bool visitExpressionStatement(ExpressionStatement node) => false;
+  @override
   bool visitEmptyStatement(EmptyStatement node) => false;
+  @override
   bool visitIf(If node) {
     if (!node.hasElse) return true;
     return node.otherwise.accept(this);
   }
 
+  @override
   bool visitFor(For node) => node.body.accept(this);
+  @override
   bool visitForIn(ForIn node) => node.body.accept(this);
+  @override
   bool visitForOf(ForOf node) => node.body.accept(this);
+  @override
   bool visitWhile(While node) => node.body.accept(this);
+  @override
   bool visitDo(Do node) => false;
+  @override
   bool visitContinue(Continue node) => false;
+  @override
   bool visitBreak(Break node) => false;
+  @override
   bool visitReturn(Return node) => false;
+  @override
   bool visitThrow(Throw node) => false;
+  @override
   bool visitTry(Try node) {
     if (node.finallyPart != null) {
       return node.finallyPart.accept(this);
@@ -1534,14 +1580,22 @@ class DanglingElseVisitor extends BaseVisitor<bool> {
     }
   }
 
+  @override
   bool visitCatch(Catch node) => node.body.accept(this);
+  @override
   bool visitSwitch(Switch node) => false;
+  @override
   bool visitSwitchCase(SwitchCase node) => false;
+  @override
   bool visitFunctionDeclaration(FunctionDeclaration node) => false;
+  @override
   bool visitLabeledStatement(LabeledStatement node) => node.body.accept(this);
+  @override
   bool visitLiteralStatement(LiteralStatement node) => true;
+  @override
   bool visitClassDeclaration(ClassDeclaration node) => false;
 
+  @override
   bool visitExpression(Expression node) => false;
 }
 
@@ -1552,8 +1606,11 @@ abstract class LocalNamer {
 }
 
 class IdentityNamer implements LocalNamer {
+  @override
   String getName(Identifier node) => node.name;
+  @override
   void enterScope(Node node) {}
+  @override
   void leaveScope() {}
 }
 
@@ -1564,22 +1621,25 @@ class MinifyRenamer implements LocalNamer {
   int parameterNumber = 0;
   int variableNumber = 0;
 
+  @override
   void enterScope(Node node) {
-    var vars = new VarCollector();
+    var vars = VarCollector();
     node.accept(vars);
-    maps.add(new Map<String, String>());
+    maps.add(Map<String, String>());
     variableNumberStack.add(variableNumber);
     parameterNumberStack.add(parameterNumber);
     vars.forEachVar(declareVariable);
     vars.forEachParam(declareParameter);
   }
 
+  @override
   void leaveScope() {
     maps.removeLast();
     variableNumber = variableNumberStack.removeLast();
     parameterNumber = parameterNumberStack.removeLast();
   }
 
+  @override
   String getName(Identifier node) {
     String oldName = node.name;
     // Go from inner scope to outer looking for mapping of name.
@@ -1648,7 +1708,7 @@ class MinifyRenamer implements LocalNamer {
     String newName;
     if (n < LETTERS) {
       // Start naming variables a, b, c, ..., z, A, B, C, ..., Z.
-      newName = new String.fromCharCodes([nthLetter(n)]);
+      newName = String.fromCharCodes([nthLetter(n)]);
     } else {
       // Then name variables a0, a1, a2, ..., a9, b0, b1, ..., Z9, aa0, aa1, ...
       // For all functions with fewer than 500 locals this is just as compact
@@ -1671,9 +1731,9 @@ class MinifyRenamer implements LocalNamer {
         codes.add(nthLetter((n ~/ nameSpaceSize) % LETTERS));
       }
       codes.add(charCodes.$0 + digit);
-      newName = new String.fromCharCodes(codes);
+      newName = String.fromCharCodes(codes);
     }
-    assert(new RegExp(r'[a-zA-Z][a-zA-Z0-9]*').hasMatch(newName));
+    assert(RegExp(r'[a-zA-Z][a-zA-Z0-9]*').hasMatch(newName));
     maps.last[oldName] = newName;
     return newName;
   }
@@ -1681,9 +1741,10 @@ class MinifyRenamer implements LocalNamer {
 
 /// Like [BaseVisitor], but calls [declare] for [Identifier] declarations, and
 /// [visitIdentifier] otherwise.
-abstract class VariableDeclarationVisitor<T> extends BaseVisitor<T> {
+abstract class VariableDeclarationVisitor extends BaseVisitor<void> {
   declare(Identifier node);
 
+  @override
   visitFunctionExpression(FunctionExpression node) {
     node.params.forEach(_scanVariableBinding);
     node.body.accept(this);
@@ -1697,45 +1758,55 @@ abstract class VariableDeclarationVisitor<T> extends BaseVisitor<T> {
     }
   }
 
+  @override
   visitRestParameter(RestParameter node) {
     _scanVariableBinding(node.parameter);
     super.visitRestParameter(node);
   }
 
+  @override
   visitDestructuredVariable(DestructuredVariable node) {
     var name = node.name;
     if (name is Identifier) _scanVariableBinding(name);
     super.visitDestructuredVariable(node);
   }
 
+  @override
   visitSimpleBindingPattern(SimpleBindingPattern node) {
     _scanVariableBinding(node.name);
     super.visitSimpleBindingPattern(node);
   }
 
+  @override
   visitVariableInitialization(VariableInitialization node) {
     _scanVariableBinding(node.declaration);
     if (node.value != null) node.value.accept(this);
   }
 
+  @override
   visitCatch(Catch node) {
     declare(node.declaration);
     node.body.accept(this);
   }
 
+  @override
   visitFunctionDeclaration(FunctionDeclaration node) {
     declare(node.name);
     node.function.accept(this);
   }
 
+  @override
   visitNamedFunction(NamedFunction node) {
     declare(node.name);
     node.function.accept(this);
   }
 
+  @override
   visitClassExpression(ClassExpression node) {
     declare(node.name);
     if (node.heritage != null) node.heritage.accept(this);
-    for (Method element in node.methods) element.accept(this);
+    for (Method element in node.methods) {
+      element.accept(this);
+    }
   }
 }

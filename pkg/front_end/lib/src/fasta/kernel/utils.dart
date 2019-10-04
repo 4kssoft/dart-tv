@@ -6,10 +6,21 @@ import 'dart:async' show Future;
 
 import 'dart:io' show BytesBuilder, File, IOSink;
 
+import 'dart:typed_data' show Uint8List;
+
 import 'package:kernel/clone.dart' show CloneVisitor;
 
 import 'package:kernel/ast.dart'
-    show Library, Component, Procedure, Class, TypeParameter, Supertype;
+    show
+        Class,
+        Component,
+        DartType,
+        Library,
+        Procedure,
+        Supertype,
+        TreeNode,
+        TypeParameter,
+        TypeParameterType;
 
 import 'package:kernel/binary/ast_to_binary.dart' show BinaryPrinter;
 
@@ -25,11 +36,13 @@ void printComponentText(Component component,
     {bool libraryFilter(Library library)}) {
   if (component == null) return;
   StringBuffer sb = new StringBuffer();
+  Printer printer = new Printer(sb);
+  printer.writeComponentProblems(component);
   for (Library library in component.libraries) {
     if (libraryFilter != null && !libraryFilter(library)) continue;
-    Printer printer = new Printer(sb);
     printer.writeLibraryFile(library);
   }
+  printer.writeConstantTable(component);
   print(sb);
 }
 
@@ -43,47 +56,64 @@ Future<Null> writeComponentToFile(Component component, Uri uri,
         ? new BinaryPrinter(sink)
         : new LimitedBinaryPrinter(sink, filter ?? (_) => true, false);
     printer.writeComponentFile(component);
-    component.unbindCanonicalNames();
   } finally {
     await sink.close();
   }
 }
 
 /// Serialize the libraries in [component] that match [filter].
-List<int> serializeComponent(Component component,
-    {bool filter(Library library), bool excludeUriToSource: false}) {
+Uint8List serializeComponent(Component component,
+    {bool filter(Library library),
+    bool includeSources: true,
+    bool includeOffsets: true}) {
   ByteSink byteSink = new ByteSink();
-  BinaryPrinter printer = filter == null && !excludeUriToSource
-      ? new BinaryPrinter(byteSink)
-      : new LimitedBinaryPrinter(
-          byteSink, filter ?? (_) => true, excludeUriToSource);
+  BinaryPrinter printer = filter == null
+      ? new BinaryPrinter(byteSink,
+          includeSources: includeSources, includeOffsets: includeOffsets)
+      : new LimitedBinaryPrinter(byteSink, filter, !includeSources,
+          includeOffsets: includeOffsets);
   printer.writeComponentFile(component);
   return byteSink.builder.takeBytes();
 }
 
 const String kDebugClassName = "#DebugClass";
 
-List<int> serializeProcedure(Procedure procedure) {
-  Library fakeLibrary =
-      new Library(new Uri(scheme: 'evaluate', path: 'source'));
+Component createExpressionEvaluationComponent(Procedure procedure) {
+  Library realLibrary = procedure.enclosingLibrary;
+
+  Library fakeLibrary = new Library(new Uri(scheme: 'evaluate', path: 'source'))
+    ..setLanguageVersion(
+        realLibrary.languageVersionMajor, realLibrary.languageVersionMinor);
 
   if (procedure.parent is Class) {
     Class realClass = procedure.parent;
 
-    CloneVisitor cloner = new CloneVisitor();
-
-    Class fakeClass = new Class(name: kDebugClassName);
+    Class fakeClass = new Class(name: kDebugClassName)..parent = fakeLibrary;
+    Map<TypeParameter, TypeParameter> typeParams =
+        <TypeParameter, TypeParameter>{};
+    Map<TypeParameter, DartType> typeSubstitution = <TypeParameter, DartType>{};
     for (TypeParameter typeParam in realClass.typeParameters) {
-      fakeClass.typeParameters.add(typeParam.accept(cloner));
+      TypeParameter newNode = new TypeParameter(typeParam.name)
+        ..parent = fakeClass;
+      typeParams[typeParam] = newNode;
+      typeSubstitution[typeParam] = new TypeParameterType(newNode);
+    }
+    CloneVisitor cloner = new CloneVisitor(
+        typeSubstitution: typeSubstitution, typeParams: typeParams);
+
+    for (TypeParameter typeParam in realClass.typeParameters) {
+      fakeClass.typeParameters.add(typeParam.accept<TreeNode>(cloner));
     }
 
-    fakeClass.parent = fakeLibrary;
-    fakeClass.supertype = new Supertype.byReference(
-        realClass.supertype.className,
-        realClass.supertype.typeArguments.map(cloner.visitType).toList());
+    if (realClass.supertype != null) {
+      // supertype is null for Object.
+      fakeClass.supertype = new Supertype.byReference(
+          realClass.supertype.className,
+          realClass.supertype.typeArguments.map(cloner.visitType).toList());
+    }
 
     // Rebind the type parameters in the procedure.
-    procedure = procedure.accept(cloner);
+    procedure = procedure.accept<TreeNode>(cloner);
     procedure.parent = fakeClass;
     fakeClass.procedures.add(procedure);
     fakeLibrary.classes.add(fakeClass);
@@ -92,8 +122,12 @@ List<int> serializeProcedure(Procedure procedure) {
     procedure.parent = fakeLibrary;
   }
 
-  Component program = new Component(libraries: [fakeLibrary]);
-  return serializeComponent(program);
+  // TODO(vegorov) find a way to preserve metadata.
+  return new Component(libraries: [fakeLibrary]);
+}
+
+List<int> serializeProcedure(Procedure procedure) {
+  return serializeComponent(createExpressionEvaluationComponent(procedure));
 }
 
 /// A [Sink] that directly writes data into a byte builder.

@@ -15,6 +15,25 @@ const String dartSdkModule = 'dart_sdk';
 /// generation without needing global knowledge. See [TemporaryNamer].
 // TODO(jmesserly): move into js_ast? add a boolean to Identifier?
 class TemporaryId extends Identifier {
+  // TODO(jmesserly): by design, temporary identifier nodes are shared
+  // throughout the AST, so any source information we attach in one location
+  // be incorrect for another location (and overwrites previous data).
+  //
+  // If we want to track source information for temporary variables, we'll
+  // need to separate the identity of the variable from its Identifier.
+  //
+  // In practice that makes temporaries more difficult to use: they're no longer
+  // JS AST nodes, so `toIdentifier()` is required to put them in the JS AST.
+  // And anywhere we currently use type `Identifier` to hold Identifier or
+  // TemporaryId, those types would need to change to `Identifier Function()`.
+  //
+  // However we may need to fix this if we want hover to work well for things
+  // like library prefixes and field-initializing formals.
+  @override
+  get sourceInformation => null;
+  @override
+  set sourceInformation(Object obj) {}
+
   TemporaryId(String name) : super(name);
 }
 
@@ -29,12 +48,12 @@ class MaybeQualifiedId extends Expression {
   final Expression name;
 
   MaybeQualifiedId(this.qualifier, this.name) {
-    _expr = new PropertyAccess(qualifier, name);
+    _expr = PropertyAccess(qualifier, name);
   }
 
   /// Helper to create an [Identifier] from something that starts as a property.
   static Identifier identifier(LiteralString propertyName) =>
-      new Identifier(propertyName.valueWithoutQuotes);
+      Identifier(propertyName.valueWithoutQuotes);
 
   void setQualified(bool qualified) {
     var name = this.name;
@@ -43,10 +62,13 @@ class MaybeQualifiedId extends Expression {
     }
   }
 
+  @override
   int get precedenceLevel => _expr.precedenceLevel;
 
+  @override
   T accept<T>(NodeVisitor<T> visitor) => _expr.accept(visitor);
 
+  @override
   void visitChildren(NodeVisitor visitor) => _expr.visitChildren(visitor);
 }
 
@@ -64,18 +86,21 @@ class MaybeQualifiedId extends Expression {
 class TemporaryNamer extends LocalNamer {
   _FunctionScope scope;
 
-  TemporaryNamer(Node node) : scope = new _RenameVisitor.build(node).rootScope;
+  TemporaryNamer(Node node) : scope = _RenameVisitor.build(node).rootScope;
 
+  @override
   String getName(Identifier node) {
     var rename = scope.renames[identifierKey(node)];
     if (rename != null) return rename;
     return node.name;
   }
 
+  @override
   void enterScope(Node node) {
     scope = scope.childScopes[node];
   }
 
+  @override
   void leaveScope() {
     scope = scope.parent;
   }
@@ -89,29 +114,29 @@ class _FunctionScope {
   final _FunctionScope parent;
 
   /// All names declared in this scope.
-  final declared = new HashSet<Object>();
+  final declared = HashSet<Object>();
 
   /// All names [declared] in this scope or its [parent]s, that is used in this
   /// scope and/or children. This is exactly the set of variable names we must
   /// not collide with inside this scope.
-  final used = new HashSet<String>();
+  final used = HashSet<String>();
 
   /// Nested scopes, these are visited after everything else so the names
   /// they might need are in scope.
-  final childScopes = new Map<Node, _FunctionScope>();
+  final childScopes = Map<Node, _FunctionScope>();
 
   /// New names assigned for temps and identifiers.
-  final renames = new HashMap<Object, String>();
+  final renames = HashMap<Object, String>();
 
   _FunctionScope(this.parent);
 }
 
 /// Collects all names used in the visited tree.
 class _RenameVisitor extends VariableDeclarationVisitor {
-  final pendingRenames = new Map<Object, Set<_FunctionScope>>();
+  final pendingRenames = Map<Object, Set<_FunctionScope>>();
 
-  final _FunctionScope globalScope = new _FunctionScope(null);
-  final _FunctionScope rootScope = new _FunctionScope(null);
+  final _FunctionScope globalScope = _FunctionScope(null);
+  final _FunctionScope rootScope = _FunctionScope(null);
   _FunctionScope scope;
 
   _RenameVisitor.build(Node root) {
@@ -121,6 +146,7 @@ class _RenameVisitor extends VariableDeclarationVisitor {
     _finishNames();
   }
 
+  @override
   declare(Identifier node) {
     var id = identifierKey(node);
     var notAlreadyDeclared = scope.declared.add(id);
@@ -130,6 +156,7 @@ class _RenameVisitor extends VariableDeclarationVisitor {
     _markUsed(node, id, scope);
   }
 
+  @override
   visitIdentifier(Identifier node) {
     var id = identifierKey(node);
 
@@ -149,10 +176,10 @@ class _RenameVisitor extends VariableDeclarationVisitor {
   _markUsed(Identifier node, Object id, _FunctionScope declScope) {
     // If it needs rename, we can't add it to the used name set yet, instead we
     // will record all scopes it is visible in.
-    Set<_FunctionScope> usedIn = null;
+    Set<_FunctionScope> usedIn;
     var rename = declScope != globalScope && needsRename(node);
     if (rename) {
-      usedIn = pendingRenames.putIfAbsent(id, () => new HashSet());
+      usedIn = pendingRenames.putIfAbsent(id, () => HashSet());
     }
     for (var s = scope, end = declScope.parent; s != end; s = s.parent) {
       if (usedIn != null) {
@@ -163,13 +190,15 @@ class _RenameVisitor extends VariableDeclarationVisitor {
     }
   }
 
+  @override
   visitFunctionExpression(FunctionExpression node) {
     // Visit nested functions after all identifiers are declared.
-    scope.childScopes[node] = new _FunctionScope(scope);
+    scope.childScopes[node] = _FunctionScope(scope);
   }
 
+  @override
   visitClassExpression(ClassExpression node) {
-    scope.childScopes[node] = new _FunctionScope(scope);
+    scope.childScopes[node] = _FunctionScope(scope);
   }
 
   void _finishScopes() {
@@ -178,7 +207,7 @@ class _RenameVisitor extends VariableDeclarationVisitor {
       if (node is FunctionExpression) {
         super.visitFunctionExpression(node);
       } else {
-        super.visitClassExpression(node);
+        super.visitClassExpression(node as ClassExpression);
       }
       _finishScopes();
       scope = scope.parent;
@@ -234,7 +263,7 @@ Object /*String|TemporaryId*/ identifierKey(Identifier node) =>
 
 /// Returns true for invalid JS variable names, such as keywords.
 /// Also handles invalid variable names in strict mode, like "arguments".
-bool invalidVariableName(String keyword, {bool strictMode: true}) {
+bool invalidVariableName(String keyword, {bool strictMode = true}) {
   switch (keyword) {
     // http://www.ecma-international.org/ecma-262/6.0/#sec-future-reserved-words
     case "await":
@@ -260,7 +289,6 @@ bool invalidVariableName(String keyword, {bool strictMode: true}) {
     case "import":
     case "in":
     case "instanceof":
-    case "let":
     case "new":
     case "return":
     case "super":
@@ -292,17 +320,20 @@ bool invalidVariableName(String keyword, {bool strictMode: true}) {
   return false;
 }
 
-/// Returns true for invalid static field names in strict mode.
+/// Returns true for names that cannot be set via `className.fieldName = ...`
+/// on a JS class/constructor function.
 ///
-/// In particular, "caller" "callee" "arguments" and "name" cannot be used.
-/// These names however are valid as static getter/setter/method names using
-/// ES class syntax.
-bool invalidStaticFieldName(String name) {
+/// These are getters on `Function.prototype` so we cannot set them but we can
+/// define them on our object using `Object.defineProperty` or equivalent.
+/// They are also valid as static getter/setter/method names if we use the JS
+/// class syntax.
+bool isFunctionPrototypeGetter(String name) {
   switch (name) {
     case "arguments":
     case "caller":
     case "callee":
     case "name":
+    case "length":
       return true;
   }
   return false;
@@ -374,3 +405,32 @@ final friendlyNameForDartOperator = {
   '[]=': '_set',
   'unary-': '_negate',
 };
+
+// Invalid characters for identifiers, which would need to be escaped.
+final _invalidCharInIdentifier = RegExp(r'[^A-Za-z_$0-9]');
+
+/// Escape [name] to make it into a valid identifier.
+String toJSIdentifier(String name) {
+  if (name.isEmpty) return r'$';
+
+  // Escape any invalid characters
+  StringBuffer buffer;
+  for (int i = 0; i < name.length; i++) {
+    var ch = name[i];
+    var needsEscape = ch == r'$' || _invalidCharInIdentifier.hasMatch(ch);
+    if (needsEscape && buffer == null) {
+      buffer = StringBuffer(name.substring(0, i));
+    }
+    if (buffer != null) {
+      buffer.write(needsEscape ? '\$${ch.codeUnits.join("")}' : ch);
+    }
+  }
+
+  var result = buffer != null ? '$buffer' : name;
+  // Ensure the identifier first character is not numeric and that the whole
+  // identifier is not a keyword.
+  if (result.startsWith(RegExp('[0-9]')) || invalidVariableName(result)) {
+    return '\$$result';
+  }
+  return result;
+}

@@ -601,11 +601,11 @@ class _WebSocketPerMessageDeflate {
     data.addAll(const [0x00, 0x00, 0xff, 0xff]);
 
     decoder.process(data, 0, data.length);
-    var result = <int>[];
+    final result = new BytesBuilder();
     List<int> out;
 
     while ((out = decoder.processed()) != null) {
-      result.addAll(out);
+      result.add(out);
     }
 
     if ((serverSide && clientNoContextTakeover) ||
@@ -613,7 +613,7 @@ class _WebSocketPerMessageDeflate {
       decoder = null;
     }
 
-    return new Uint8List.fromList(result);
+    return result.takeBytes();
   }
 
   List<int> processOutgoingMessage(List<int> msg) {
@@ -647,6 +647,15 @@ class _WebSocketPerMessageDeflate {
 
     if (result.length > 4) {
       result = result.sublist(0, result.length - 4);
+    }
+
+    // RFC 7692 7.2.3.6. "Generating an Empty Fragment" says that if the
+    // compression library doesn't generate any data when the bufer is empty,
+    // then an empty uncompressed deflate block is used for this purpose. The
+    // 0x00 block has the BFINAL header bit set to 0 and the BTYPE header set to
+    // 00 along with 5 bits of padding. This block decodes to zero bytes.
+    if (result.length == 0) {
+      return [0x00];
     }
 
     return result;
@@ -732,12 +741,13 @@ class _WebSocketOutgoingTransformer
 
   void addFrame(int opcode, List<int> data) {
     createFrame(
-        opcode,
-        data,
-        webSocket._serverSide,
-        _deflateHelper != null &&
-            (opcode == _WebSocketOpcode.TEXT ||
-                opcode == _WebSocketOpcode.BINARY)).forEach((e) {
+            opcode,
+            data,
+            webSocket._serverSide,
+            _deflateHelper != null &&
+                (opcode == _WebSocketOpcode.TEXT ||
+                    opcode == _WebSocketOpcode.BINARY))
+        .forEach((e) {
       _eventSink.add(e);
     });
   }
@@ -940,6 +950,9 @@ class _WebSocketConsumer implements StreamConsumer {
   void add(data) {
     if (_closed) return;
     _ensureController();
+    // Stop sending message if _controller has been closed.
+    // https://github.com/dart-lang/sdk/issues/37441
+    if (_controller.isClosed) return;
     _controller.add(data);
   }
 
@@ -1056,7 +1069,7 @@ class _WebSocketImpl extends Stream with _ServiceObject implements WebSocket {
       List<int> expectedAccept = sha1.close();
       List<int> receivedAccept = _CryptoUtils.base64StringToBytes(accept);
       if (expectedAccept.length != receivedAccept.length) {
-        error("Reasponse header 'Sec-WebSocket-Accept' is the wrong length");
+        error("Response header 'Sec-WebSocket-Accept' is the wrong length");
       }
       for (int i = 0; i < expectedAccept.length; i++) {
         if (expectedAccept[i] != receivedAccept[i]) {
@@ -1118,7 +1131,7 @@ class _WebSocketImpl extends Stream with _ServiceObject implements WebSocket {
     _deflate = deflate;
 
     var transformer = new _WebSocketProtocolTransformer(_serverSide, _deflate);
-    _subscription = _socket.transform(transformer).listen((data) {
+    _subscription = transformer.bind(_socket).listen((data) {
       if (data is _WebSocketPing) {
         if (!_writeClosed) _consumer.add(new _WebSocketPong(data.payload));
       } else if (data is _WebSocketPong) {
@@ -1204,9 +1217,7 @@ class _WebSocketImpl extends Stream with _ServiceObject implements WebSocket {
   }
 
   void addUtf8Text(List<int> bytes) {
-    if (bytes is! List<int>) {
-      throw new ArgumentError.value(bytes, "bytes", "Is not a list of bytes");
-    }
+    ArgumentError.checkNotNull(bytes, "bytes");
     _sink.add(new _EncodedString(bytes));
   }
 

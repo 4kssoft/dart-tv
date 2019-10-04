@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -89,12 +89,12 @@ class TimingResult {
    */
   double computeStandardDeviation(List<int> values) {
     int count = values.length;
-    double sumOfValues = 0.0;
+    double sumOfValues = 0;
     for (int i = 0; i < count; i++) {
       sumOfValues += values[i];
     }
     double average = sumOfValues / count;
-    double sumOfDiffSquared = 0.0;
+    double sumOfDiffSquared = 0;
     for (int i = 0; i < count; i++) {
       double diff = values[i] - average;
       sumOfDiffSquared += diff * diff;

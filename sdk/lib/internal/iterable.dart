@@ -331,6 +331,7 @@ class ListIterator<E> implements Iterator<E> {
 
   E get current => _current;
 
+  @pragma("vm:prefer-inline")
   bool moveNext() {
     int length = _iterable.length;
     if (_length != length) {
@@ -493,9 +494,8 @@ class TakeIterable<E> extends Iterable<E> {
   final int _takeCount;
 
   factory TakeIterable(Iterable<E> iterable, int takeCount) {
-    if (takeCount is! int || takeCount < 0) {
-      throw new ArgumentError(takeCount);
-    }
+    ArgumentError.checkNotNull(takeCount, "takeCount");
+    RangeError.checkNotNegative(takeCount, "takeCount");
     if (iterable is EfficientLengthIterable) {
       return new EfficientLengthTakeIterable<E>(iterable, takeCount);
     }
@@ -526,7 +526,7 @@ class TakeIterator<E> extends Iterator<E> {
   int _remaining;
 
   TakeIterator(this._iterator, this._remaining) {
-    assert(_remaining is int && _remaining >= 0);
+    assert(_remaining >= 0);
   }
 
   bool moveNext() {
@@ -621,9 +621,7 @@ class EfficientLengthSkipIterable<E> extends SkipIterable<E>
 }
 
 int _checkCount(int count) {
-  if (count is! int) {
-    throw new ArgumentError.value(count, "count", "is not an integer");
-  }
+  ArgumentError.checkNotNull(count, "count");
   RangeError.checkNotNegative(count, "count");
   return count;
 }
@@ -633,7 +631,7 @@ class SkipIterator<E> extends Iterator<E> {
   int _skipCount;
 
   SkipIterator(this._iterator, this._skipCount) {
-    assert(_skipCount is int && _skipCount >= 0);
+    assert(_skipCount >= 0);
   }
 
   bool moveNext() {

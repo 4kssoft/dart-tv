@@ -11,8 +11,10 @@ import 'package:compiler/src/diagnostics/diagnostic_listener.dart';
 import 'package:compiler/src/elements/entities.dart';
 import 'package:compiler/src/js_backend/runtime_types.dart';
 import 'package:compiler/src/js_emitter/model.dart';
-import 'package:compiler/src/kernel/element_map.dart';
-import 'package:compiler/src/kernel/kernel_backend_strategy.dart';
+import 'package:compiler/src/js_model/element_map.dart';
+import 'package:compiler/src/js_model/js_strategy.dart';
+import 'package:compiler/src/js_model/js_world.dart';
+import 'package:front_end/src/testing/features.dart';
 import 'package:kernel/ast.dart' as ir;
 import '../equivalence/id_equivalence.dart';
 import '../equivalence/id_equivalence_helper.dart';
@@ -20,47 +22,34 @@ import '../helpers/program_lookup.dart';
 
 main(List<String> args) {
   asyncTest(() async {
-    cacheRtiDataForTesting = true;
     Directory dataDir =
         new Directory.fromUri(Platform.script.resolve('emission'));
-    await checkTests(
-      dataDir,
-      computeKernelRtiMemberEmission,
-      computeClassDataFromKernel: computeKernelRtiClassEmission,
-      args: args,
-      skipForStrong: [
-        // Dart 1 semantics:
-        'call.dart',
-        'call_typed.dart',
-        'call_typed_generic.dart',
-        'function_subtype_call2.dart',
-        'function_type_argument.dart',
-        'map_literal_checked.dart',
-        // TODO(johnniwinther): Optimize local function type signature need.
-        'subtype_named_args.dart',
-      ],
-    );
+    await checkTests(dataDir, const RtiEmissionDataComputer(), args: args);
   });
 }
 
 class Tags {
   static const String isChecks = 'checks';
-  static const String instance = 'instance';
+  static const String indirectInstance = 'indirectInstance';
+  static const String directInstance = 'instance';
   static const String checkedInstance = 'checkedInstance';
   static const String typeArgument = 'typeArgument';
   static const String checkedTypeArgument = 'checkedTypeArgument';
+  static const String typeLiteral = 'typeLiteral';
   static const String functionType = 'functionType';
 }
 
-abstract class ComputeValueMixin<T> {
+abstract class ComputeValueMixin {
   Compiler get compiler;
   ProgramLookup lookup;
 
+  JsBackendStrategy get backendStrategy => compiler.backendStrategy;
+
   RuntimeTypesImpl get checksBuilder =>
-      compiler.backend.rtiChecksBuilderForTesting;
+      backendStrategy.rtiChecksBuilderForTesting;
 
   String getClassValue(ClassEntity element) {
-    lookup ??= new ProgramLookup(compiler);
+    lookup ??= new ProgramLookup(backendStrategy);
     Class cls = lookup.getClass(element);
     Features features = new Features();
     if (cls != null) {
@@ -74,9 +63,12 @@ abstract class ComputeValueMixin<T> {
     }
     ClassUse classUse = checksBuilder.classUseMapForTesting[element];
     if (classUse != null) {
-      if (classUse.instance) {
-        features.add(Tags.instance);
+      if (classUse.directInstance) {
+        features.add(Tags.directInstance);
+      } else if (classUse.instance) {
+        features.add(Tags.indirectInstance);
       }
+
       if (classUse.checkedInstance) {
         features.add(Tags.checkedInstance);
       }
@@ -85,6 +77,9 @@ abstract class ComputeValueMixin<T> {
       }
       if (classUse.checkedTypeArgument) {
         features.add(Tags.checkedTypeArgument);
+      }
+      if (classUse.typeLiteral) {
+        features.add(Tags.typeLiteral);
       }
     }
     return features.getText();
@@ -98,63 +93,55 @@ abstract class ComputeValueMixin<T> {
   }
 }
 
-void computeKernelRtiMemberEmission(
-    Compiler compiler, MemberEntity member, Map<Id, ActualData> actualMap,
-    {bool verbose: false}) {
-  KernelBackendStrategy backendStrategy = compiler.backendStrategy;
-  KernelToElementMapForBuilding elementMap = backendStrategy.elementMap;
-  MemberDefinition definition = elementMap.getMemberDefinition(member);
-  new RtiMemberEmissionIrComputer(
-          compiler.reporter,
-          actualMap,
-          elementMap,
-          member,
-          compiler,
-          backendStrategy.closureDataLookup as ClosureDataLookup<ir.Node>)
-      .run(definition.node);
-}
+class RtiEmissionDataComputer extends DataComputer<String> {
+  const RtiEmissionDataComputer();
 
-void computeKernelRtiClassEmission(
-    Compiler compiler, ClassEntity cls, Map<Id, ActualData> actualMap,
-    {bool verbose: false}) {
-  KernelBackendStrategy backendStrategy = compiler.backendStrategy;
-  KernelToElementMapForBuilding elementMap = backendStrategy.elementMap;
-  new RtiClassEmissionIrComputer(compiler, elementMap, actualMap)
-      .computeClassValue(cls);
-}
-
-class RtiClassEmissionIrComputer extends DataRegistry
-    with ComputeValueMixin<ir.Node> {
-  final Compiler compiler;
-  final KernelToElementMapForBuilding _elementMap;
-  final Map<Id, ActualData> actualMap;
-
-  RtiClassEmissionIrComputer(this.compiler, this._elementMap, this.actualMap);
-
-  DiagnosticReporter get reporter => compiler.reporter;
-
-  void computeClassValue(ClassEntity cls) {
-    Id id = new ClassId(cls.name);
-    ir.TreeNode node = _elementMap.getClassDefinition(cls).node;
-    registerValue(
-        computeSourceSpanFromTreeNode(node), id, getClassValue(cls), cls);
+  @override
+  void computeMemberData(Compiler compiler, MemberEntity member,
+      Map<Id, ActualData<String>> actualMap,
+      {bool verbose: false}) {
+    JsClosedWorld closedWorld = compiler.backendClosedWorldForTesting;
+    JsToElementMap elementMap = closedWorld.elementMap;
+    MemberDefinition definition = elementMap.getMemberDefinition(member);
+    new RtiEmissionIrComputer(compiler.reporter, actualMap, elementMap,
+            compiler, closedWorld.closureDataLookup)
+        .run(definition.node);
   }
+
+  @override
+  void computeClassData(
+      Compiler compiler, ClassEntity cls, Map<Id, ActualData<String>> actualMap,
+      {bool verbose: false}) {
+    JsClosedWorld closedWorld = compiler.backendClosedWorldForTesting;
+    JsToElementMap elementMap = closedWorld.elementMap;
+    new RtiEmissionIrComputer(compiler.reporter, actualMap, elementMap,
+            compiler, closedWorld.closureDataLookup)
+        .computeForClass(elementMap.getClassDefinition(cls).node);
+  }
+
+  @override
+  DataInterpreter<String> get dataValidator => const StringDataInterpreter();
 }
 
-class RtiMemberEmissionIrComputer extends IrDataExtractor
-    with ComputeValueMixin<ir.Node> {
-  final KernelToElementMapForBuilding _elementMap;
-  final ClosureDataLookup<ir.Node> _closureDataLookup;
+class RtiEmissionIrComputer extends IrDataExtractor<String>
+    with ComputeValueMixin {
+  final JsToElementMap _elementMap;
+  final ClosureData _closureDataLookup;
+  @override
   final Compiler compiler;
 
-  RtiMemberEmissionIrComputer(
+  RtiEmissionIrComputer(
       DiagnosticReporter reporter,
-      Map<Id, ActualData> actualMap,
+      Map<Id, ActualData<String>> actualMap,
       this._elementMap,
-      MemberEntity member,
       this.compiler,
       this._closureDataLookup)
       : super(reporter, actualMap);
+
+  @override
+  String computeClassValue(Id id, ir.Class node) {
+    return getClassValue(_elementMap.getClass(node));
+  }
 
   @override
   String computeMemberValue(Id id, ir.Member node) {

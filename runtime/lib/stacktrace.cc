@@ -77,7 +77,7 @@ static RawStackTrace* CurrentStackTrace(
   intptr_t write_cursor = 0;
   if (for_async_function) {
     // Place the asynchronous gap marker at the top of the stack trace.
-    code = StubCode::AsynchronousGapMarker_entry()->code();
+    code = StubCode::AsynchronousGapMarker().raw();
     ASSERT(!code.IsNull());
     offset = Smi::New(0);
     code_array.SetAt(write_cursor, code);
@@ -102,13 +102,16 @@ RawStackTrace* GetStackTraceForException() {
   return CurrentStackTrace(thread, false, 0);
 }
 
-DEFINE_NATIVE_ENTRY(StackTrace_current, 0) {
+DEFINE_NATIVE_ENTRY(StackTrace_current, 0, 0) {
   return CurrentStackTrace(thread, false);
 }
 
-DEFINE_NATIVE_ENTRY(StackTrace_asyncStackTraceHelper, 1) {
+DEFINE_NATIVE_ENTRY(StackTrace_asyncStackTraceHelper, 0, 1) {
   if (!FLAG_causal_async_stacks) {
-    return Object::null();
+    // If causal async stacks are not enabled we should recognize this method
+    // and never call to the NOP runtime.
+    // See kernel_to_il.cc/bytecode_reader.cc/interpreter.cc.
+    UNREACHABLE();
   }
 #if !defined(PRODUCT)
   GET_NATIVE_ARGUMENT(Closure, async_op, arguments->NativeArgAt(0));
@@ -120,12 +123,12 @@ DEFINE_NATIVE_ENTRY(StackTrace_asyncStackTraceHelper, 1) {
   return CurrentStackTrace(thread, true);
 }
 
-DEFINE_NATIVE_ENTRY(StackTrace_clearAsyncThreadStackTrace, 0) {
+DEFINE_NATIVE_ENTRY(StackTrace_clearAsyncThreadStackTrace, 0, 0) {
   thread->clear_async_stack_trace();
   return Object::null();
 }
 
-DEFINE_NATIVE_ENTRY(StackTrace_setAsyncThreadStackTrace, 1) {
+DEFINE_NATIVE_ENTRY(StackTrace_setAsyncThreadStackTrace, 0, 1) {
   if (!FLAG_causal_async_stacks) {
     return Object::null();
   }
@@ -139,25 +142,37 @@ DEFINE_NATIVE_ENTRY(StackTrace_setAsyncThreadStackTrace, 1) {
 static void AppendFrames(const GrowableObjectArray& code_list,
                          const GrowableObjectArray& pc_offset_list,
                          int skip_frames) {
-  StackFrameIterator frames(ValidationPolicy::kDontValidateFrames,
-                            Thread::Current(),
+  Thread* thread = Thread::Current();
+  Zone* zone = thread->zone();
+  StackFrameIterator frames(ValidationPolicy::kDontValidateFrames, thread,
                             StackFrameIterator::kNoCrossThreadIteration);
   StackFrame* frame = frames.NextFrame();
   ASSERT(frame != NULL);  // We expect to find a dart invocation frame.
-  Code& code = Code::Handle();
-  Smi& offset = Smi::Handle();
-  while (frame != NULL) {
-    if (frame->IsDartFrame()) {
-      if (skip_frames > 0) {
-        skip_frames--;
-      } else {
-        code = frame->LookupDartCode();
-        offset = Smi::New(frame->pc() - code.PayloadStart());
-        code_list.Add(code);
-        pc_offset_list.Add(offset);
-      }
+  Code& code = Code::Handle(zone);
+  Bytecode& bytecode = Bytecode::Handle(zone);
+  Smi& offset = Smi::Handle(zone);
+  for (; frame != NULL; frame = frames.NextFrame()) {
+    if (!frame->IsDartFrame()) {
+      continue;
     }
-    frame = frames.NextFrame();
+    if (skip_frames > 0) {
+      skip_frames--;
+      continue;
+    }
+
+    if (frame->is_interpreted()) {
+      bytecode = frame->LookupDartBytecode();
+      if (bytecode.function() == Function::null()) {
+        continue;
+      }
+      offset = Smi::New(frame->pc() - bytecode.PayloadStart());
+      code_list.Add(bytecode);
+    } else {
+      code = frame->LookupDartCode();
+      offset = Smi::New(frame->pc() - code.PayloadStart());
+      code_list.Add(code);
+    }
+    pc_offset_list.Add(offset);
   }
 }
 

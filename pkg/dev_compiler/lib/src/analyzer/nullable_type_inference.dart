@@ -3,16 +3,18 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:collection';
+
 import 'package:analyzer/dart/ast/ast.dart';
-import 'package:analyzer/dart/ast/standard_resolution_map.dart';
 import 'package:analyzer/dart/ast/token.dart' show TokenType;
 import 'package:analyzer/dart/ast/visitor.dart' show RecursiveAstVisitor;
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/type.dart';
+
 import 'element_helpers.dart' show getStaticType, isInlineJS, findAnnotation;
 import 'js_interop.dart' show isNotNullAnnotation, isNullCheckAnnotation;
 import 'js_typerep.dart';
 import 'property_model.dart';
+import 'type_utilities.dart';
 
 /// An inference engine for nullable types.
 ///
@@ -35,14 +37,15 @@ abstract class NullableTypeInference {
   HashSet<LocalVariableElement> _notNullLocals;
 
   void inferNullableTypes(AstNode node) {
-    var visitor = new _NullableLocalInference(this);
+    var visitor = _NullableLocalInference(this);
     node.accept(visitor);
     _notNullLocals = visitor.computeNotNullLocals();
   }
 
   /// Adds a new variable, typically a compiler generated temporary, and record
   /// whether its type is nullable.
-  void addTemporaryVariable(LocalVariableElement local, {bool nullable: true}) {
+  void addTemporaryVariable(LocalVariableElement local,
+      {bool nullable = true}) {
     if (!nullable) _notNullLocals.add(local);
   }
 
@@ -52,7 +55,7 @@ abstract class NullableTypeInference {
   bool _isNonNullMethodInvocation(MethodInvocation expr) {
     // TODO(vsm): This logic overlaps with the resolver.
     // Where is the best place to put this?
-    var e = resolutionMap.staticElementForIdentifier(expr.methodName);
+    var e = expr.methodName.staticElement;
     if (e == null) return false;
     if (isInlineJS(e)) {
       // Fix types for JS builtin calls.
@@ -84,7 +87,7 @@ abstract class NullableTypeInference {
     if (e is MethodElement) {
       Element container = e.enclosingElement;
       if (container is ClassElement) {
-        DartType targetType = container.type;
+        DartType targetType = getLegacyRawClassType(container);
         InterfaceType implType = jsTypeRep.getImplementationType(targetType);
         if (implType != null) {
           MethodElement method = implType.lookUpMethod(e.name, coreLibrary);
@@ -108,7 +111,7 @@ abstract class NullableTypeInference {
     // type.
     Element container = element.enclosingElement;
     if (container is ClassElement) {
-      var targetType = container.type;
+      var targetType = getLegacyRawClassType(container);
       var implType = jsTypeRep.getImplementationType(targetType);
       if (implType != null) {
         var getter = implType.lookUpGetter(name, coreLibrary);
@@ -135,8 +138,8 @@ abstract class NullableTypeInference {
     // leads to O(depth) cost for calling this function. We could store the
     // resulting value if that becomes an issue, so we maintain the invariant
     // that each node is visited once.
-    Element element = null;
-    String name = null;
+    Element element;
+    String name;
     if (expr is PropertyAccess &&
         expr.operator?.type != TokenType.QUESTION_PERIOD) {
       element = expr.propertyName.staticElement;
@@ -195,7 +198,7 @@ abstract class NullableTypeInference {
       // they will throw noSuchMethod.
       // The only properties/methods on `null` are those on Object itself.
       for (var section in expr.cascadeSections) {
-        Element e = null;
+        Element e;
         if (section is PropertyAccess) {
           e = section.propertyName.staticElement;
         } else if (section is MethodInvocation) {
@@ -219,7 +222,7 @@ abstract class NullableTypeInference {
       return _isNullable(expr.expression, localIsNullable);
     }
     if (expr is InstanceCreationExpression) {
-      var e = resolutionMap.staticElementForConstructorReference(expr);
+      var e = expr.staticElement;
       if (e == null) return true;
 
       // Follow redirects.
@@ -301,14 +304,14 @@ class _NullableLocalInference extends RecursiveAstVisitor {
   final NullableTypeInference _nullInference;
 
   /// Known local variables.
-  final _locals = new HashSet<LocalVariableElement>.identity();
+  final _locals = HashSet<LocalVariableElement>.identity();
 
   /// Variables that are known to be nullable.
-  final _nullableLocals = new HashSet<LocalVariableElement>.identity();
+  final _nullableLocals = HashSet<LocalVariableElement>.identity();
 
   /// Given a variable, tracks all other variables that it is assigned to.
   final _assignments =
-      new HashMap<LocalVariableElement, Set<LocalVariableElement>>.identity();
+      HashMap<LocalVariableElement, Set<LocalVariableElement>>.identity();
 
   _NullableLocalInference(this._nullInference);
 
@@ -337,7 +340,7 @@ class _NullableLocalInference extends RecursiveAstVisitor {
 
   @override
   visitVariableDeclaration(VariableDeclaration node) {
-    var element = node.element;
+    var element = node.declaredElement;
     var initializer = node.initializer;
     if (element is LocalVariableElement) {
       _locals.add(element);
@@ -351,21 +354,27 @@ class _NullableLocalInference extends RecursiveAstVisitor {
   }
 
   @override
-  visitForEachStatement(ForEachStatement node) {
-    if (node.identifier == null) {
-      var declaration = node.loopVariable;
-      var element = declaration.element;
-      _locals.add(element);
-      if (!_assertedNotNull(element)) {
-        _nullableLocals.add(element);
-      }
-    } else {
-      var element = node.identifier.staticElement;
-      if (element is LocalVariableElement && !_assertedNotNull(element)) {
-        _nullableLocals.add(element);
+  visitForStatement(ForStatement node) {
+    var forLoopParts = node.forLoopParts;
+    if (forLoopParts is ForEachParts) {
+      if (forLoopParts is ForEachPartsWithIdentifier &&
+          forLoopParts.identifier != null) {
+        var element = forLoopParts.identifier.staticElement;
+        if (element is LocalVariableElement && !_assertedNotNull(element)) {
+          _nullableLocals.add(element);
+        }
+      } else if (forLoopParts is ForEachPartsWithDeclaration) {
+        var declaration = forLoopParts.loopVariable;
+        var element = declaration.declaredElement;
+        _locals.add(element);
+        if (!_assertedNotNull(element)) {
+          _nullableLocals.add(element);
+        }
+      } else {
+        throw StateError('Unrecognized for loop parts');
       }
     }
-    super.visitForEachStatement(node);
+    super.visitForStatement(node);
   }
 
   @override
@@ -418,7 +427,7 @@ class _NullableLocalInference extends RecursiveAstVisitor {
         bool visitLocal(LocalVariableElement otherLocal) {
           // Record the assignment.
           _assignments
-              .putIfAbsent(otherLocal, () => new HashSet.identity())
+              .putIfAbsent(otherLocal, () => HashSet.identity())
               .add(element);
           // Optimistically assume this local is not null.
           // We will validate this assumption later.

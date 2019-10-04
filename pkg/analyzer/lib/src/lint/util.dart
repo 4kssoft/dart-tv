@@ -1,17 +1,21 @@
-// Copyright (c) 2015, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2015, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:io';
 
-import 'package:analyzer/analyzer.dart';
+import 'package:analyzer/dart/analysis/features.dart';
+import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/token.dart';
+import 'package:analyzer/dart/ast/visitor.dart';
+import 'package:analyzer/error/error.dart';
+import 'package:analyzer/error/listener.dart';
 import 'package:analyzer/src/dart/ast/token.dart';
 import 'package:analyzer/src/dart/scanner/reader.dart';
 import 'package:analyzer/src/dart/scanner/scanner.dart';
 import 'package:analyzer/src/generated/parser.dart' show Parser;
 import 'package:analyzer/src/string_source.dart' show StringSource;
-import 'package:path/path.dart' as p;
+import 'package:path/path.dart' as path;
 
 final _identifier = new RegExp(r'^([(_|$)a-zA-Z]+([_a-zA-Z0-9])*)$');
 
@@ -32,21 +36,21 @@ final _underscores = new RegExp(r'^[_]+$');
 String createLibraryNamePrefix(
     {String libraryPath, String projectRoot, String packageName}) {
   // Use the posix context to canonicalize separators (`\`).
-  var libraryDirectory = p.posix.dirname(libraryPath);
-  var path = p.posix.relative(libraryDirectory, from: projectRoot);
+  var libraryDirectory = path.posix.dirname(libraryPath);
+  var relativePath = path.posix.relative(libraryDirectory, from: projectRoot);
   // Drop 'lib/'.
-  var segments = p.split(path);
+  var segments = path.split(relativePath);
   if (segments[0] == 'lib') {
-    path = p.posix.joinAll(segments.sublist(1));
+    relativePath = path.posix.joinAll(segments.sublist(1));
   }
   // Replace separators.
-  path = path.replaceAll('/', '.');
+  relativePath = relativePath.replaceAll('/', '.');
   // Add separator if needed.
-  if (path.isNotEmpty) {
-    path = '.$path';
+  if (relativePath.isNotEmpty) {
+    relativePath = '.$relativePath';
   }
 
-  return '$packageName$path';
+  return '$packageName$relativePath';
 }
 
 /// Returns `true` if this [fileName] is a Dart file.
@@ -86,7 +90,11 @@ bool isUpperCase(int c) => c >= 0x40 && c <= 0x5A;
 class Spelunker {
   final String path;
   final IOSink sink;
-  Spelunker(this.path, {IOSink sink}) : this.sink = sink ?? stdout;
+  FeatureSet featureSet;
+
+  Spelunker(this.path, {IOSink sink, FeatureSet featureSet})
+      : this.sink = sink ?? stdout,
+        featureSet = featureSet ?? FeatureSet.fromEnableFlags([]);
 
   void spelunk() {
     var contents = new File(path).readAsStringSync();
@@ -95,12 +103,14 @@ class Spelunker {
 
     var reader = new CharSequenceReader(contents);
     var stringSource = new StringSource(contents, path);
-    var scanner = new Scanner(stringSource, reader, errorListener);
+    var scanner = new Scanner(stringSource, reader, errorListener)
+      ..configureFeatures(featureSet);
     var startToken = scanner.tokenize();
 
     errorListener.throwIfErrors();
 
-    var parser = new Parser(stringSource, errorListener);
+    var parser =
+        new Parser(stringSource, errorListener, featureSet: featureSet);
     var node = parser.parseCompilationUnit(startToken);
 
     errorListener.throwIfErrors();
@@ -129,6 +139,7 @@ class _SourceVisitor extends GeneralizingAstVisitor {
   int indent = 0;
 
   final IOSink sink;
+
   _SourceVisitor(this.sink);
 
   String asString(AstNode node) =>

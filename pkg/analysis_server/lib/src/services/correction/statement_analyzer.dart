@@ -1,4 +1,4 @@
-// Copyright (c) 2014, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2014, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -6,9 +6,10 @@ import 'package:analysis_server/src/protocol_server.dart';
 import 'package:analysis_server/src/services/correction/selection_analyzer.dart';
 import 'package:analysis_server/src/services/correction/status.dart';
 import 'package:analysis_server/src/services/correction/util.dart';
+import 'package:analyzer/dart/analysis/features.dart';
+import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/token.dart';
-import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/src/dart/scanner/reader.dart';
 import 'package:analyzer/src/dart/scanner/scanner.dart';
 import 'package:analyzer/src/generated/source.dart';
@@ -18,10 +19,11 @@ import 'package:analyzer_plugin/utilities/range_factory.dart';
  * Returns [Token]s of the given Dart source, not `null`, may be empty if no
  * tokens or some exception happens.
  */
-List<Token> _getTokens(String text) {
+List<Token> _getTokens(String text, FeatureSet featureSet) {
   try {
     List<Token> tokens = <Token>[];
-    Scanner scanner = new Scanner(null, new CharSequenceReader(text), null);
+    Scanner scanner = new Scanner(null, new CharSequenceReader(text), null)
+      ..configureFeatures(featureSet);
     Token token = scanner.tokenize();
     while (token.type != TokenType.EOF) {
       tokens.add(token);
@@ -37,16 +39,24 @@ List<Token> _getTokens(String text) {
  * Analyzer to check if a selection covers a valid set of statements of AST.
  */
 class StatementAnalyzer extends SelectionAnalyzer {
-  final CompilationUnit unit;
+  final ResolvedUnitResult resolveResult;
 
-  RefactoringStatus _status = new RefactoringStatus();
+  final RefactoringStatus _status = new RefactoringStatus();
 
-  StatementAnalyzer(this.unit, SourceRange selection) : super(selection);
+  StatementAnalyzer(this.resolveResult, SourceRange selection)
+      : super(selection);
 
   /**
    * Returns the [RefactoringStatus] result of selection checking.
    */
   RefactoringStatus get status => _status;
+
+  /**
+   * Analyze the selection, compute [status] and nodes.
+   */
+  void analyze() {
+    resolveResult.unit.accept(this);
+  }
 
   /**
    * Records fatal error with given message and [Location].
@@ -68,7 +78,7 @@ class StatementAnalyzer extends SelectionAnalyzer {
     {
       int selectionStart = selection.offset;
       int selectionEnd = selection.end;
-      List<SourceRange> commentRanges = getCommentRanges(unit);
+      List<SourceRange> commentRanges = getCommentRanges(resolveResult.unit);
       for (SourceRange commentRange in commentRanges) {
         if (commentRange.contains(selectionStart)) {
           invalidSelection("Selection begins inside a comment.");
@@ -99,21 +109,31 @@ class StatementAnalyzer extends SelectionAnalyzer {
   @override
   Object visitForStatement(ForStatement node) {
     super.visitForStatement(node);
-    List<AstNode> selectedNodes = this.selectedNodes;
-    bool containsInit = _contains(selectedNodes, node.initialization) ||
-        _contains(selectedNodes, node.variables);
-    bool containsCondition = _contains(selectedNodes, node.condition);
-    bool containsUpdaters = _containsAny(selectedNodes, node.updaters);
-    bool containsBody = _contains(selectedNodes, node.body);
-    if (containsInit && containsCondition) {
-      invalidSelection(
-          "Operation not applicable to a 'for' statement's initializer and condition.");
-    } else if (containsCondition && containsUpdaters) {
-      invalidSelection(
-          "Operation not applicable to a 'for' statement's condition and updaters.");
-    } else if (containsUpdaters && containsBody) {
-      invalidSelection(
-          "Operation not applicable to a 'for' statement's updaters and body.");
+    var forLoopParts = node.forLoopParts;
+    if (forLoopParts is ForParts) {
+      List<AstNode> selectedNodes = this.selectedNodes;
+      bool containsInit;
+      if (forLoopParts is ForPartsWithExpression) {
+        containsInit = _contains(selectedNodes, forLoopParts.initialization);
+      } else if (forLoopParts is ForPartsWithDeclarations) {
+        containsInit = _contains(selectedNodes, forLoopParts.variables);
+      } else {
+        throw new StateError('Unrecognized for loop parts');
+      }
+      bool containsCondition = _contains(selectedNodes, forLoopParts.condition);
+      bool containsUpdaters =
+          _containsAny(selectedNodes, forLoopParts.updaters);
+      bool containsBody = _contains(selectedNodes, node.body);
+      if (containsInit && containsCondition) {
+        invalidSelection(
+            "Operation not applicable to a 'for' statement's initializer and condition.");
+      } else if (containsCondition && containsUpdaters) {
+        invalidSelection(
+            "Operation not applicable to a 'for' statement's condition and updaters.");
+      } else if (containsUpdaters && containsBody) {
+        invalidSelection(
+            "Operation not applicable to a 'for' statement's updaters and body.");
+      }
     }
     return null;
   }
@@ -204,10 +224,9 @@ class StatementAnalyzer extends SelectionAnalyzer {
    * Returns `true` if there are [Token]s in the given [SourceRange].
    */
   bool _hasTokens(SourceRange range) {
-    CompilationUnitElement unitElement = unit.element;
-    String fullText = unitElement.context.getContents(unitElement.source).data;
+    String fullText = resolveResult.content;
     String rangeText = fullText.substring(range.offset, range.end);
-    return _getTokens(rangeText).isNotEmpty;
+    return _getTokens(rangeText, resolveResult.unit.featureSet).isNotEmpty;
   }
 
   /**

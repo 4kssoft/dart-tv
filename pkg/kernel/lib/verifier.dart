@@ -27,7 +27,7 @@ class VerificationError {
       // TODO(ahe): Fix the compiler instead.
     }
     if (location != null) {
-      String file = location.file ?? "";
+      String file = location.file?.toString() ?? "";
       return "$file:${location.line}:${location.column}: Verification error:"
           " $details";
     } else {
@@ -43,7 +43,7 @@ enum TypedefState { Done, BeingChecked }
 /// Checks that a kernel component is well-formed.
 ///
 /// This does not include any kind of type checking.
-class VerifyingVisitor extends RecursiveVisitor {
+class VerifyingVisitor extends RecursiveVisitor<void> {
   final Set<Class> classes = new Set<Class>();
   final Set<Typedef> typedefs = new Set<Typedef>();
   Set<TypeParameter> typeParametersInScope = new Set<TypeParameter>();
@@ -86,7 +86,8 @@ class VerifyingVisitor extends RecursiveVisitor {
           node,
           "Incorrect parent pointer on ${node.runtimeType}:"
           " expected '${currentParent.runtimeType}',"
-          " but found: '${node.parent.runtimeType}'.");
+          " but found: '${node.parent.runtimeType}'.",
+          context: currentParent);
     }
     var oldParent = currentParent;
     currentParent = node;
@@ -199,6 +200,14 @@ class VerifyingVisitor extends RecursiveVisitor {
     currentLibrary = node;
     super.visitLibrary(node);
     currentLibrary = null;
+  }
+
+  visitExtension(Extension node) {
+    declareTypeParameters(node.typeParameters);
+    final oldParent = enterParent(node);
+    node.visitChildren(this);
+    exitParent(oldParent);
+    undeclareTypeParameters(node.typeParameters);
   }
 
   void checkTypedef(Typedef node) {
@@ -335,6 +344,21 @@ class VerifyingVisitor extends RecursiveVisitor {
 
   visitLet(Let node) {
     visitWithLocalScope(node);
+  }
+
+  visitBlockExpression(BlockExpression node) {
+    int stackHeight = enterLocalScope();
+    // Do not visit the block directly because the value expression needs to
+    // be in its scope.
+    TreeNode oldParent = enterParent(node);
+    enterParent(node.body);
+    for (int i = 0; i < node.body.statements.length; ++i) {
+      node.body.statements[i].accept(this);
+    }
+    exitParent(node);
+    node.value.accept(this);
+    exitParent(oldParent);
+    exitLocalScope(stackHeight);
   }
 
   visitCatch(Catch node) {

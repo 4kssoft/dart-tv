@@ -18,50 +18,44 @@ import '../js_backend/custom_elements_analysis.dart'
 import '../js_backend/native_data.dart';
 import '../js_backend/interceptor_data.dart';
 import '../native/enqueue.dart';
-import '../options.dart';
+import '../universe/codegen_world_builder.dart';
 import '../universe/selector.dart' show Selector;
-import '../universe/world_builder.dart' show CodegenWorldBuilder;
 import '../world.dart' show JClosedWorld;
 
-import 'code_emitter_task.dart' show CodeEmitterTask, Emitter;
+import 'code_emitter_task.dart' show Emitter;
 
 class InterceptorStubGenerator {
-  final CompilerOptions _options;
   final CommonElements _commonElements;
-  final CodeEmitterTask _emitterTask;
+  final Emitter _emitter;
   final NativeCodegenEnqueuer _nativeCodegenEnqueuer;
   final Namer _namer;
-  final OneShotInterceptorData _oneShotInterceptorData;
   final CustomElementsCodegenAnalysis _customElementsCodegenAnalysis;
-  final CodegenWorldBuilder _codegenWorldBuilder;
+  final CodegenWorld _codegenWorld;
   final JClosedWorld _closedWorld;
 
   InterceptorStubGenerator(
-      this._options,
       this._commonElements,
-      this._emitterTask,
+      this._emitter,
       this._nativeCodegenEnqueuer,
       this._namer,
-      this._oneShotInterceptorData,
       this._customElementsCodegenAnalysis,
-      this._codegenWorldBuilder,
+      this._codegenWorld,
       this._closedWorld);
 
   NativeData get _nativeData => _closedWorld.nativeData;
 
   InterceptorData get _interceptorData => _closedWorld.interceptorData;
 
-  Emitter get _emitter => _emitterTask.emitter;
+  jsAst.Expression generateGetInterceptorMethod(
+      SpecializedGetInterceptor interceptor) {
+    Set<ClassEntity> classes = interceptor.classes;
 
-  jsAst.Expression generateGetInterceptorMethod(Set<ClassEntity> classes) {
     jsAst.Expression interceptorFor(ClassEntity cls) {
-      return _emitterTask.interceptorPrototypeAccess(cls);
+      return _emitter.interceptorPrototypeAccess(cls);
     }
 
-    /**
-     * Build a JavaScript AST node for doing a type check on
-     * [cls]. [cls] must be a non-native interceptor class.
-     */
+    /// Build a JavaScript AST node for doing a type check on
+    /// [cls]. [cls] must be a non-native interceptor class.
     jsAst.Statement buildInterceptorCheck(ClassEntity cls) {
       jsAst.Expression condition;
       assert(_interceptorData.isInterceptedClass(cls));
@@ -201,8 +195,7 @@ class InterceptorStubGenerator {
       ]));
     } else {
       ClassEntity jsUnknown = _commonElements.jsUnknownJavaScriptObjectClass;
-      if (_codegenWorldBuilder.directlyInstantiatedClasses
-          .contains(jsUnknown)) {
+      if (_codegenWorld.directlyInstantiatedClasses.contains(jsUnknown)) {
         statements.add(js.statement('if (!(receiver instanceof #)) return #;', [
           _emitter.constructorAccess(_commonElements.objectClass),
           interceptorFor(jsUnknown)
@@ -301,14 +294,19 @@ class InterceptorStubGenerator {
       bool containsJsIndexable = _closedWorld
               .isImplemented(_commonElements.jsIndexingBehaviorInterface) &&
           classes.any((cls) {
-            return _closedWorld.isSubtypeOf(
-                cls, _commonElements.jsIndexingBehaviorInterface);
+            return _closedWorld.classHierarchy
+                .isSubtypeOf(cls, _commonElements.jsIndexingBehaviorInterface);
           });
       // The index set operator requires a check on its set value in
       // checked mode, so we don't optimize the interceptor if the
       // _compiler has type assertions enabled.
       if (selector.isIndexSet &&
-          (_options.enableTypeAssertions || !containsArray)) {
+          // TODO(johnniwinther): Support annotations on the possible targets
+          // and used their parameter check policy here.
+          (_closedWorld.annotationsData
+                  .getParameterCheckPolicy(null)
+                  .isEmitted ||
+              !containsArray)) {
         return null;
       }
       if (!containsArray && !containsString) {
@@ -379,11 +377,9 @@ class InterceptorStubGenerator {
     return null;
   }
 
-  jsAst.Expression generateOneShotInterceptor(jsAst.Name name) {
-    Selector selector =
-        _oneShotInterceptorData.getOneShotInterceptorSelector(name);
-    Set<ClassEntity> classes =
-        _interceptorData.getInterceptedClassesOn(selector.name, _closedWorld);
+  jsAst.Expression generateOneShotInterceptor(OneShotInterceptor interceptor) {
+    Selector selector = interceptor.selector;
+    Set<ClassEntity> classes = interceptor.classes;
     jsAst.Name getInterceptorName = _namer.nameForGetInterceptor(classes);
 
     List<String> parameterNames = <String>[];
@@ -424,8 +420,8 @@ class InterceptorStubGenerator {
     if (!analysis.needsTable) return null;
 
     List<jsAst.Expression> elements = <jsAst.Expression>[];
-    List<ConstantValue> constants =
-        _codegenWorldBuilder.getConstantsForEmission(_emitter.compareConstants);
+    Iterable<ConstantValue> constants =
+        _codegenWorld.getConstantsForEmission(_emitter.compareConstants);
     for (ConstantValue constant in constants) {
       if (constant is TypeConstantValue &&
           constant.representedType is InterfaceType) {

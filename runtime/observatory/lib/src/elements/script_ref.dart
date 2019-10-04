@@ -11,7 +11,7 @@ import 'package:observatory/src/elements/helpers/rendering_scheduler.dart';
 import 'package:observatory/src/elements/helpers/tag.dart';
 import 'package:observatory/src/elements/helpers/uris.dart';
 
-class ScriptRefElement extends HtmlElement implements Renderable {
+class ScriptRefElement extends CustomElement implements Renderable {
   static const tag = const Tag<ScriptRefElement>('script-ref');
 
   RenderingScheduler _r;
@@ -28,14 +28,14 @@ class ScriptRefElement extends HtmlElement implements Renderable {
       {RenderingQueue queue}) {
     assert(isolate != null);
     assert(script != null);
-    ScriptRefElement e = document.createElement(tag.name);
-    e._r = new RenderingScheduler(e, queue: queue);
+    ScriptRefElement e = new ScriptRefElement.created();
+    e._r = new RenderingScheduler<ScriptRefElement>(e, queue: queue);
     e._isolate = isolate;
     e._script = script;
     return e;
   }
 
-  ScriptRefElement.created() : super.created();
+  ScriptRefElement.created() : super.created(tag);
 
   @override
   void attached() {
@@ -46,12 +46,12 @@ class ScriptRefElement extends HtmlElement implements Renderable {
   @override
   void detached() {
     super.detached();
-    children = [];
+    children = <Element>[];
     _r.disable(notify: true);
   }
 
   void render() {
-    children = [
+    children = <Element>[
       new AnchorElement(href: Uris.inspect(isolate, object: script))
         ..title = script.uri
         ..text = script.uri.split('/').last

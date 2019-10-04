@@ -11,7 +11,7 @@
 
 #include "platform/utils.h"
 #include "vm/allocation.h"
-#include "vm/heap.h"
+#include "vm/heap/heap.h"
 #include "vm/instructions.h"
 #include "vm/os.h"
 #include "vm/stack_frame.h"
@@ -19,7 +19,7 @@
 
 namespace dart {
 
-#ifndef PRODUCT
+#if !defined(PRODUCT) || defined(FORCE_INCLUDE_DISASSEMBLER)
 
 enum OperandType {
   UNSET_OP_ORDER = 0,
@@ -308,7 +308,7 @@ class DisassemblerX64 : public ValueObject {
   }
 
   const char* NameOfCPURegister(int reg) const {
-    return Assembler::RegisterName(static_cast<Register>(reg));
+    return RegisterNames::RegisterName(static_cast<Register>(reg));
   }
 
   const char* NameOfByteCPURegister(int reg) const {
@@ -324,6 +324,7 @@ class DisassemblerX64 : public ValueObject {
   }
 
   void Print(const char* format, ...) PRINTF_ATTRIBUTE(2, 3);
+  void PrintJump(uint8_t* pc, int32_t disp);
   void PrintAddress(uint8_t* addr);
 
   int PrintOperands(const char* mnem, OperandType op_order, uint8_t* data);
@@ -344,7 +345,6 @@ class DisassemblerX64 : public ValueObject {
   const char* TwoByteMnemonic(uint8_t opcode);
   int TwoByteOpcodeInstruction(uint8_t* data);
   int Print660F38Instruction(uint8_t* data);
-  void CheckPrintStop(uint8_t* data);
 
   int F6F7Instruction(uint8_t* data);
   int ShiftInstruction(uint8_t* data);
@@ -436,14 +436,15 @@ int DisassemblerX64::PrintRightOperandHelper(
         return 1;
       }
       break;
-    case 1:  // fall through
+    case 1:
+      FALL_THROUGH;
     case 2:
       if ((rm & 7) == 4) {
         uint8_t sib = *(modrmp + 1);
         int scale, index, base;
         get_sib(sib, &scale, &index, &base);
         int disp = (mod == 2) ? *reinterpret_cast<int32_t*>(modrmp + 2)
-                              : *reinterpret_cast<char*>(modrmp + 2);
+                              : *reinterpret_cast<int8_t*>(modrmp + 2);
         if (index == 4 && (base & 7) == 4 && scale == 0 /*times_1*/) {
           Print("[%s", NameOfCPURegister(base));
           PrintDisp(disp, "]");
@@ -456,7 +457,7 @@ int DisassemblerX64::PrintRightOperandHelper(
       } else {
         // No sib.
         int disp = (mod == 2) ? *reinterpret_cast<int32_t*>(modrmp + 1)
-                              : *reinterpret_cast<char*>(modrmp + 1);
+                              : *reinterpret_cast<int8_t*>(modrmp + 1);
         Print("[%s", NameOfCPURegister(rm));
         PrintDisp(disp, "]");
         return (mod == 2) ? 5 : 2;
@@ -772,6 +773,14 @@ int DisassemblerX64::PrintOperands(const char* mnem,
   return advance;
 }
 
+void DisassemblerX64::PrintJump(uint8_t* pc, int32_t disp) {
+  if (FLAG_disassemble_relative) {
+    Print("%+d", disp);
+  } else {
+    PrintAddress(pc + disp);
+  }
+}
+
 void DisassemblerX64::PrintAddress(uint8_t* addr_byte_ptr) {
 #if defined(TARGET_ARCH_X64)
   Print("%#018" Px64 "", reinterpret_cast<uint64_t>(addr_byte_ptr));
@@ -790,9 +799,9 @@ void DisassemblerX64::PrintAddress(uint8_t* addr_byte_ptr) {
 int DisassemblerX64::JumpShort(uint8_t* data) {
   ASSERT(0xEB == *data);
   uint8_t b = *(data + 1);
-  uint8_t* dest = data + static_cast<int8_t>(b) + 2;
+  int32_t disp = static_cast<int8_t>(b) + 2;
   Print("jmp ");
-  PrintAddress(dest);
+  PrintJump(data, disp);
   return 2;
 }
 
@@ -800,10 +809,10 @@ int DisassemblerX64::JumpShort(uint8_t* data) {
 int DisassemblerX64::JumpConditional(uint8_t* data) {
   ASSERT(0x0F == *data);
   uint8_t cond = *(data + 1) & 0x0F;
-  uint8_t* dest = data + *reinterpret_cast<int32_t*>(data + 2) + 6;
+  int32_t disp = *reinterpret_cast<int32_t*>(data + 2) + 6;
   const char* mnem = conditional_code_suffix[cond];
   Print("j%s ", mnem);
-  PrintAddress(dest);
+  PrintJump(data, disp);
   return 6;  // includes 0x0F
 }
 
@@ -811,10 +820,10 @@ int DisassemblerX64::JumpConditional(uint8_t* data) {
 int DisassemblerX64::JumpConditionalShort(uint8_t* data) {
   uint8_t cond = *data & 0x0F;
   uint8_t b = *(data + 1);
-  uint8_t* dest = data + static_cast<int8_t>(b) + 2;
+  int32_t disp = static_cast<int8_t>(b) + 2;
   const char* mnem = conditional_code_suffix[cond];
   Print("j%s ", mnem);
-  PrintAddress(dest);
+  PrintJump(data, disp);
   return 2;
 }
 
@@ -1190,9 +1199,9 @@ bool DisassemblerX64::DecodeInstructionType(uint8_t** data) {
     }
 
     case CALL_JUMP_INSTR: {
-      uint8_t* addr = *data + *reinterpret_cast<int32_t*>(*data + 1) + 5;
+      int32_t disp = *reinterpret_cast<int32_t*>(*data + 1) + 5;
       Print("%s ", idesc.mnem);
-      PrintAddress(addr);
+      PrintJump(*data, disp);
       (*data) += 5;
       break;
     }
@@ -1227,20 +1236,6 @@ int DisassemblerX64::Print660F38Instruction(uint8_t* current) {
     UnimplementedInstruction();
     return 1;
   }
-}
-
-// Called when disassembling test eax, 0xXXXXX.
-void DisassemblerX64::CheckPrintStop(uint8_t* data) {
-#if defined(TARGET_ARCH_IA32)
-  // Recognize stop pattern.
-  if (*data == 0xCC) {
-    const char* message = "Stop messages not enabled";
-    if (FLAG_print_stop_message) {
-      message = *reinterpret_cast<const char**>(data - 4);
-    }
-    Print("  STOP:'%s'", message);
-  }
-#endif
 }
 
 // Handle all two-byte opcodes, which start with 0x0F.
@@ -1447,6 +1442,12 @@ int DisassemblerX64::TwoByteOpcodeInstruction(uint8_t* data) {
       get_modrm(*current, &mod, &regop, &rm);
       Print("cvtdq2pd %s,", NameOfXMMRegister(regop));
       current += PrintRightXMMOperand(current);
+    } else if (opcode == 0xB8) {
+      // POPCNT.
+      current += PrintOperands(mnemonic, REG_OPER_OP_ORDER, current);
+    } else if (opcode == 0xBD) {
+      // LZCNT (rep BSR encoding).
+      current += PrintOperands("lzcnt", REG_OPER_OP_ORDER, current);
     } else {
       UnimplementedInstruction();
     }
@@ -1590,7 +1591,7 @@ const char* DisassemblerX64::TwoByteMnemonic(uint8_t opcode) {
         "cpuid", "bt",   "shld",    "shld",    NULL,     NULL,
         NULL,    NULL,   NULL,      "bts",     "shrd",   "shrd",
         NULL,    "imul", "cmpxchg", "cmpxchg", NULL,     NULL,
-        NULL,    NULL,   "movzxb",  "movzxw",  NULL,     NULL,
+        NULL,    NULL,   "movzxb",  "movzxw",  "popcnt", NULL,
         NULL,    NULL,   "bsf",     "bsr",     "movsxb", "movsxw"};
     return mnemonics[opcode - 0xA2];
   }
@@ -1628,7 +1629,8 @@ int DisassemblerX64::InstructionDecode(uword pc) {
         data += 4;
         break;
 
-      case 0x69:  // fall through
+      case 0x69:
+        FALL_THROUGH;
       case 0x6B: {
         int mod, regop, rm;
         get_modrm(*(data + 1), &mod, &regop, &rm);
@@ -1641,7 +1643,8 @@ int DisassemblerX64::InstructionDecode(uword pc) {
         break;
       }
 
-      case 0x81:  // fall through
+      case 0x81:
+        FALL_THROUGH;
       case 0x83:  // 0x81 with sign extension bit set
         data += PrintImmediateOp(data);
         break;
@@ -1770,7 +1773,7 @@ int DisassemblerX64::InstructionDecode(uword pc) {
         // mov reg8,imm8 or mov reg32,imm32
         uint8_t opcode = *data;
         data++;
-        uint8_t is_not_8bit = (opcode >= 0xB8);
+        const bool is_not_8bit = opcode >= 0xB8;
         int reg = (opcode & 0x7) | (rex_b() ? 8 : 0);
         if (is_not_8bit) {
           Print("mov%s %s,", operand_size_code(), NameOfCPURegister(reg));
@@ -1806,7 +1809,8 @@ int DisassemblerX64::InstructionDecode(uword pc) {
         data += 2;
         break;
 
-      case 0xA1:  // Fall through.
+      case 0xA1:
+        FALL_THROUGH;
       case 0xA3:
         switch (operand_size()) {
           case DOUBLEWORD_SIZE: {
@@ -1854,32 +1858,38 @@ int DisassemblerX64::InstructionDecode(uword pc) {
 
       case 0xA9: {
         data++;
-        bool check_for_stop = operand_size() == DOUBLEWORD_SIZE;
         Print("test%s %s,", operand_size_code(), Rax());
         data += PrintImmediate(data, operand_size());
-        if (check_for_stop) {
-          CheckPrintStop(data);
-        }
         break;
       }
-      case 0xD1:  // fall through
-      case 0xD3:  // fall through
+      case 0xD1:
+        FALL_THROUGH;
+      case 0xD3:
+        FALL_THROUGH;
       case 0xC1:
         data += ShiftInstruction(data);
         break;
-      case 0xD0:  // fall through
-      case 0xD2:  // fall through
+      case 0xD0:
+        FALL_THROUGH;
+      case 0xD2:
+        FALL_THROUGH;
       case 0xC0:
         byte_size_operand_ = true;
         data += ShiftInstruction(data);
         break;
 
-      case 0xD9:  // fall through
-      case 0xDA:  // fall through
-      case 0xDB:  // fall through
-      case 0xDC:  // fall through
-      case 0xDD:  // fall through
-      case 0xDE:  // fall through
+      case 0xD9:
+        FALL_THROUGH;
+      case 0xDA:
+        FALL_THROUGH;
+      case 0xDB:
+        FALL_THROUGH;
+      case 0xDC:
+        FALL_THROUGH;
+      case 0xDD:
+        FALL_THROUGH;
+      case 0xDE:
+        FALL_THROUGH;
       case 0xDF:
         data += FPUInstruction(data);
         break;
@@ -1889,7 +1899,8 @@ int DisassemblerX64::InstructionDecode(uword pc) {
         break;
 
       case 0xF6:
-        byte_size_operand_ = true;  // fall through
+        byte_size_operand_ = true;
+        FALL_THROUGH;
       case 0xF7:
         data += F6F7Instruction(data);
         break;
@@ -1965,7 +1976,7 @@ void Disassembler::DecodeInstruction(char* hex_buffer,
     remaining_size -= 2;
   }
   hex_buffer[hex_index] = '\0';
-  if (out_instr_len) {
+  if (out_instr_len != nullptr) {
     *out_instr_len = instruction_length;
   }
 
@@ -1991,7 +2002,7 @@ void Disassembler::DecodeInstruction(char* hex_buffer,
 #endif
 }
 
-#endif  // !PRODUCT
+#endif  // !defined(PRODUCT) || defined(FORCE_INCLUDE_DISASSEMBLER)
 
 }  // namespace dart
 

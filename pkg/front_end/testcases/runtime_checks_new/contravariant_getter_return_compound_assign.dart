@@ -8,7 +8,7 @@ library test;
 typedef void F<T>(T x);
 
 class B<T> {
-  B<T> operator +(B<T> /*@covariance=genericImpl*/ other) => null;
+  B<T> operator +(B<T> other) => null;
 }
 
 class C<T> {
@@ -17,10 +17,10 @@ class C<T> {
 }
 
 void test(C<num> c) {
-  c. /*@checkReturn=B<(num) -> void>*/ x += new B<num>();
-  var y = c. /*@checkReturn=B<(num) -> void>*/ x += new B<num>();
-  c. /*@checkReturn=B<(num) -> void>*/ x ??= new B<num>();
-  var z = c. /*@checkReturn=B<(num) -> void>*/ x ??= new B<num>();
+  c. /*@ checkReturn=B<(num*) ->* void>* */ x += new B<num>();
+  var y = c. /*@ checkReturn=B<(num*) ->* void>* */ x += new B<num>();
+  c. /*@ checkReturn=B<(num*) ->* void>* */ x ??= new B<num>();
+  var z = c. /*@ checkReturn=B<(num*) ->* void>* */ x ??= new B<num>();
 }
 
 main() {}

@@ -1,4 +1,4 @@
-// Copyright (c) 2017, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2017, the Dart project authors. Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -67,6 +67,24 @@ class RangeFactory {
    */
   SourceRange node(AstNode node) {
     return new SourceRange(node.offset, node.length);
+  }
+
+  /**
+   * Return a source range that covers the given [item] (including a leading or
+   * trailing comma as appropriate) in the containing [list].
+   */
+  SourceRange nodeInList<T extends AstNode>(NodeList<T> list, T item) {
+    if (list.length == 1) {
+      return node(item);
+    }
+    final index = list.indexOf(item);
+    // Remove trailing comma.
+    if (index == 0) {
+      return startStart(item, list[1]);
+    } else {
+      // Remove leading comma.
+      return endEnd(list[index - 1], item);
+    }
   }
 
   /**
