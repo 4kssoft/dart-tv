@@ -11,6 +11,8 @@ import 'package:kernel/core_types.dart';
 import 'package:kernel/class_hierarchy.dart';
 import 'package:kernel/target/targets.dart';
 import 'invocation_mirror_constants.dart';
+import 'package:kernel/transformations/function_apply.dart'
+    show FunctionApplyTransformer;
 
 const Iterable<String> _allowedDartSchemePaths = const <String>[
   'async',
@@ -83,7 +85,11 @@ class Dart2jsTarget extends Target {
       List<ir.Library> libraries,
       Map<String, String> environmentDefines,
       DiagnosticReporter diagnosticReporter,
-      {void logger(String msg)}) {}
+      {void logger(String msg)}) {
+    for (var library in libraries) {
+      library.transformChildren(FunctionApplyTransformer());
+    }
+  }
 
   @override
   ir.Expression instantiateInvocation(

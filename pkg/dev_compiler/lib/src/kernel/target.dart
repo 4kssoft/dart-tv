@@ -8,6 +8,8 @@ import 'package:kernel/kernel.dart';
 import 'package:kernel/core_types.dart';
 import 'package:kernel/class_hierarchy.dart';
 import 'package:kernel/target/targets.dart';
+import 'package:kernel/transformations/function_apply.dart'
+    show FunctionApplyTransformer;
 import 'package:kernel/transformations/track_widget_constructor_locations.dart';
 import 'constants.dart' show DevCompilerConstantsBackend;
 import 'kernel_helpers.dart';
@@ -126,6 +128,10 @@ class DevCompilerTarget extends Target {
       {void logger(String msg)}) {
     for (var library in libraries) {
       _CovarianceTransformer(library).transform();
+    }
+
+    for (Library library in libraries) {
+      library.transformChildren(FunctionApplyTransformer());
     }
   }
 

@@ -14,6 +14,8 @@ import 'package:kernel/transformations/mixin_full_resolution.dart'
     as transformMixins show transformLibraries;
 import 'package:kernel/transformations/continuation.dart' as transformAsync
     show transformLibraries, transformProcedure;
+import 'package:kernel/transformations/function_apply.dart'
+    show FunctionApplyTransformer;
 import 'package:kernel/vm/constants_native_effects.dart'
     show VmConstantsBackend;
 
@@ -155,6 +157,10 @@ class VmTarget extends Target {
     callSiteAnnotator.transformLibraries(
         component, libraries, coreTypes, hierarchy);
     logger?.call("Annotated call sites");
+
+    for (Library library in libraries) {
+      library.transformChildren(FunctionApplyTransformer());
+    }
   }
 
   @override
