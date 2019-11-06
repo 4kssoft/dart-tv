@@ -31,26 +31,24 @@ ${user.toString().split('\n').map((l) => '    $l').join('\n')}
 }
 
 void main() {
-  final data = {
-    'name': 'Jack',
-    'age': 10,
-    'extras': ['foo', 1],
-    'mapExtras': {'foo': 1},
-  };
-  var user = jsonDecodeExperimental<User>(data);
-  print(user.runtimeType);
-  print(user);
-  var decoded =
-      jsonDecodeExperimental<Map<String, List<Login<int, int, bool>>>>({
+  var decoded = jsonDecodeExperimental<
+      Map<String, List<Login<int, dynamic, User<String, int, int>>>>>({
     'a': [
       {
         'user': {
           'name': 'Jack',
           'age': 10,
-          'extras': [true, false],
+          'extras': [
+            {
+              'name': 'Jack',
+              'age': 10,
+              'extras': [1],
+              'mapExtras': {'cool': 0},
+            }
+          ],
           'mapExtras': {
-            1: 2,
-            3: 4,
+            1: 'cool',
+            3: false,
           }
         },
         'password': 'adm1n'
@@ -58,8 +56,35 @@ void main() {
     ],
   });
   print(decoded);
+  print(decoded['a'][0].user.extras[0].runtimeType);
+
+  // final data = {
+  //   'name': 'Jack',
+  //   'age': 10,
+  //   'extras': ['foo', 1],
+  //   'mapExtras': {'foo': 1},
+  // };
+  // var user = jsonDecodeExperimental<User>(data);
+  // var decoded =
+  //     jsonDecodeExperimental<Map<String, List<Login<int, dynamic, bool>>>>({
+  //   'a': [
+  //     {
+  //       'user': {
+  //         'name': 'Jack',
+  //         'age': 10,
+  //         'extras': [true, false],
+  //         'mapExtras': {
+  //           1: 'cool',
+  //           3: false,
+  //         }
+  //       },
+  //       'password': 'adm1n'
+  //     },
+  //   ],
+  // });
   // print(decoded);
-  // print(decoded['a'][0].user.extras);
+  // print(decoded);
+  // print(decoded['a'][0].user.runtimeType);
   // final data = {
   //   'name': 'Jack',
   //   'age': 10,
