@@ -135,14 +135,9 @@ class JsonDecodeExperimentalTransformer extends Transformer {
                 Name('toList'),
                 Arguments.empty());
           case 'Map':
-            var keyType = type.typeArguments.first as InterfaceType;
-            if (keyType.classNode != coreTypes.stringClass) {
-              throw '''
-Only `String` is allowed as a map key type, but got $keyType.
-''';
-            }
-            var valueType = type.typeArguments[1] as InterfaceType;
-            var kParam = VariableDeclaration('k', type: keyType);
+            var keyType = type.typeArguments.first;
+            var valueType = type.typeArguments[1];
+            var kParam = VariableDeclaration('k', type: const DynamicType());
             var vParam = VariableDeclaration('v', type: const DynamicType());
             var mapEntryClass =
                 coreTypes.index.getClass('dart:core', 'MapEntry');
@@ -155,7 +150,7 @@ Only `String` is allowed as a map key type, but got $keyType.
                       ReturnStatement(ConstructorInvocation(
                           mapEntryClass.constructors.single,
                           Arguments([
-                            VariableGet(kParam),
+                            _newInstance(keyType, VariableGet(kParam)),
                             _newInstance(valueType, VariableGet(vParam))
                           ], types: [
                             keyType,

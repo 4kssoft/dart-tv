@@ -1,21 +1,23 @@
 import 'package:json_transformer/json_transformer.dart';
 
-class User<T> {
+class User<K, V, L> {
   final String name;
   final int age;
-  final List<T> extras;
+  final List<L> extras;
+  final Map<K, V> mapExtras;
 
-  User({this.name, this.age, this.extras});
+  User({this.name, this.age, this.extras, this.mapExtras});
 
   String toString() => '''
 name: $name
 age: $age
 extras: $extras
+mapExtras: $mapExtras
 ''';
 }
 
-class Login<T> {
-  final User<T> user;
+class Login<K, V, L> {
+  final User<K, V, L> user;
   final String password;
 
   Login({this.user, this.password});
@@ -32,16 +34,24 @@ void main() {
   final data = {
     'name': 'Jack',
     'age': 10,
-    'extras': ['foo', 1]
+    'extras': ['foo', 1],
+    'mapExtras': {'foo': 1},
   };
-  var user = jsonDecodeExperimental<User<dynamic>>(data);
-  var decoded = jsonDecodeExperimental<Map<String, List<Login<int>>>>({
+  var user = jsonDecodeExperimental<User>(data);
+  print(user.runtimeType);
+  print(user);
+  var decoded =
+      jsonDecodeExperimental<Map<String, List<Login<int, int, bool>>>>({
     'a': [
       {
         'user': {
           'name': 'Jack',
           'age': 10,
-          'extras': [1, 2, 3]
+          'extras': [true, false],
+          'mapExtras': {
+            1: 2,
+            3: 4,
+          }
         },
         'password': 'adm1n'
       },
