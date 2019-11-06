@@ -90,7 +90,7 @@ class Dart2jsTarget extends Target {
       {void logger(String msg)}) {
     for (var library in libraries) {
       library.transformChildren(FunctionApplyTransformer());
-      library.transformChildren(JsonDecodeExperimentalTransformer());
+      library.transformChildren(JsonDecodeExperimentalTransformer(coreTypes));
     }
   }
 

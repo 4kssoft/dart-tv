@@ -162,7 +162,7 @@ class VmTarget extends Target {
 
     for (Library library in libraries) {
       library.transformChildren(FunctionApplyTransformer());
-      library.transformChildren(JsonDecodeExperimentalTransformer());
+      library.transformChildren(JsonDecodeExperimentalTransformer(coreTypes));
     }
   }
 
