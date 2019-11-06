@@ -35,6 +35,14 @@ class FunctionApplyTransformer extends Transformer {
             positionalArgs = (providedPositionalArgs as ListConstant)
                 .entries
                 .map((c) => c.asExpression());
+          } else if (providedPositionalArgs is VariableGet) {
+            positionalArgs = [];
+            for (var i = 0;
+                i < targetFn.procedure.function.requiredParameterCount;
+                i++) {
+              positionalArgs.add(MethodInvocation(providedPositionalArgs,
+                  Name('[]'), Arguments([IntLiteral(i)])));
+            }
           } else {
             print(
                 'didnt understand list type $providedPositionalArgs ${providedPositionalArgs.runtimeType}');

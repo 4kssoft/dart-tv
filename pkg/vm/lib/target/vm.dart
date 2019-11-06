@@ -16,6 +16,8 @@ import 'package:kernel/transformations/continuation.dart' as transformAsync
     show transformLibraries, transformProcedure;
 import 'package:kernel/transformations/function_apply.dart'
     show FunctionApplyTransformer;
+import 'package:kernel/transformations/json_decode_experimental.dart'
+    show JsonDecodeExperimentalTransformer;
 import 'package:kernel/vm/constants_native_effects.dart'
     show VmConstantsBackend;
 
@@ -160,6 +162,7 @@ class VmTarget extends Target {
 
     for (Library library in libraries) {
       library.transformChildren(FunctionApplyTransformer());
+      library.transformChildren(JsonDecodeExperimentalTransformer());
     }
   }
 
