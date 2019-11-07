@@ -10,6 +10,8 @@ import 'package:kernel/class_hierarchy.dart';
 import 'package:kernel/target/targets.dart';
 import 'package:kernel/transformations/function_apply.dart'
     show FunctionApplyTransformer;
+import 'package:kernel/transformations/json_decode_experimental.dart'
+    show JsonDecodeExperimentalTransformer;
 import 'package:kernel/transformations/track_widget_constructor_locations.dart';
 import 'constants.dart' show DevCompilerConstantsBackend;
 import 'kernel_helpers.dart';
@@ -132,6 +134,7 @@ class DevCompilerTarget extends Target {
 
     for (Library library in libraries) {
       library.transformChildren(FunctionApplyTransformer());
+      library.transformChildren(JsonDecodeExperimentalTransformer(coreTypes));
     }
   }
 

@@ -48,8 +48,8 @@ class JsonDecodeExperimentalTransformer extends Transformer {
       if (library.importUri.scheme != 'dart') {
         if (library.importUri == _jsonTransformerUri) {
           switch (type.classNode.name) {
-            case 'LazyConvertedList':
-            case 'LazyConvertedMap':
+            case 'LazyList':
+            case 'LazyMap':
               return _newLazyCollection(type, argExpr);
             default:
               throw UnsupportedError('Unsupported type $type');
