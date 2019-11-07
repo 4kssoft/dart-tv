@@ -125,6 +125,8 @@ class VmTarget extends Target {
         // could possibly be done more cleanly after the VM no longer supports
         // doing constant evaluation on its own. See http://dartbug.com/32836
         "dart:typed_data",
+        // Required for the JsonDecodeExperimentalTransformer.
+        "dart:convert",
       ];
 
   @override

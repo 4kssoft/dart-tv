@@ -59,6 +59,12 @@ class Dart2jsTarget extends Target {
 
   @override
   List<String> get extraRequiredLibraries => _requiredLibraries[name];
+  
+  @override
+  List<String> get extraIndexedLibraries => const <String>[
+        // Required for the JsonDecodeExperimentalTransformer.
+        "dart:convert",
+      ];
 
   @override
   bool mayDefineRestrictedType(Uri uri) =>

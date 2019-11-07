@@ -68,6 +68,7 @@ class DevCompilerTarget extends Target {
   List<String> get extraIndexedLibraries => const [
         'dart:async',
         'dart:collection',
+        'dart:convert',
         'dart:html',
         'dart:indexed_db',
         'dart:math',

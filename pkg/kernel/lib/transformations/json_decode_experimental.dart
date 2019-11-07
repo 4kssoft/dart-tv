@@ -32,8 +32,25 @@ class JsonDecodeExperimentalTransformer extends Transformer {
         procedure.name.name == 'jsonDecodeExperimental') {
       // We know we have exactly one type argument.
       var typeArg = node.arguments.types.first as InterfaceType;
-      var expr = _newInstance(typeArg, node.arguments.positional.first);
-      print(expr.leakingDebugToString());
+      var jsonVar = VariableDeclaration(
+        'json',
+        type: const DynamicType(),
+        initializer: StaticInvocation(
+            coreTypes.index
+                .getLibrary('dart:convert')
+                .procedures
+                .firstWhere((p) => p.name.name == 'jsonDecode'),
+            Arguments(node.arguments.positional)),
+      );
+      var expr = MethodInvocation(
+          FunctionExpression(FunctionNode(
+            Block([
+              jsonVar,
+              ReturnStatement(_newInstance(typeArg, VariableGet(jsonVar))),
+            ]),
+          )),
+          Name('call'),
+          Arguments.empty());
       return expr;
     } else {
       return node;
