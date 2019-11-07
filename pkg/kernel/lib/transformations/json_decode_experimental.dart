@@ -12,8 +12,16 @@ final _jsonTransformerUri =
 
 class JsonDecodeExperimentalTransformer extends Transformer {
   final CoreTypes coreTypes;
+  final InterfaceType iterableDynamic;
+  final InterfaceType mapDynamic;
+  final Class mapEntryClass;
 
-  JsonDecodeExperimentalTransformer(this.coreTypes);
+  JsonDecodeExperimentalTransformer(this.coreTypes)
+      : iterableDynamic =
+            InterfaceType(coreTypes.iterableClass, const [DynamicType()]),
+        mapDynamic = InterfaceType(
+            coreTypes.mapClass, const [DynamicType(), DynamicType()]),
+        mapEntryClass = coreTypes.index.getClass('dart:core', 'MapEntry');
 
   @override
   Expression visitStaticInvocation(StaticInvocation node) {
@@ -111,12 +119,32 @@ class JsonDecodeExperimentalTransformer extends Transformer {
           case 'int':
           case 'double':
             return AsExpression(argExpr, type);
+          case 'Iterable':
+            var valueType = type.typeArguments.first;
+            var vParam = VariableDeclaration('v', type: const DynamicType());
+            return MethodInvocation(
+              AsExpression(argExpr, iterableDynamic),
+              Name('map'),
+              Arguments([
+                FunctionExpression(
+                  FunctionNode(
+                    ReturnStatement(
+                      _newInstance(valueType, VariableGet(vParam)),
+                    ),
+                    returnType: valueType,
+                    positionalParameters: [vParam],
+                  ),
+                ),
+              ], types: [
+                valueType,
+              ]),
+            );
           case 'List':
             var valueType = type.typeArguments.first;
             var vParam = VariableDeclaration('v', type: const DynamicType());
             return MethodInvocation(
                 MethodInvocation(
-                  argExpr,
+                  AsExpression(argExpr, iterableDynamic),
                   Name('map'),
                   Arguments([
                     FunctionExpression(
@@ -139,10 +167,8 @@ class JsonDecodeExperimentalTransformer extends Transformer {
             var valueType = type.typeArguments[1];
             var kParam = VariableDeclaration('k', type: const DynamicType());
             var vParam = VariableDeclaration('v', type: const DynamicType());
-            var mapEntryClass =
-                coreTypes.index.getClass('dart:core', 'MapEntry');
             return MethodInvocation(
-                argExpr,
+                AsExpression(argExpr, mapDynamic),
                 Name('map'),
                 Arguments([
                   FunctionExpression(
