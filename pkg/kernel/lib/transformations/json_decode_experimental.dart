@@ -13,14 +13,14 @@ final _jsonTransformerUri =
 class JsonDecodeExperimentalTransformer extends Transformer {
   final CoreTypes coreTypes;
   final InterfaceType iterableDynamic;
-  final InterfaceType mapDynamic;
+  final InterfaceType mapStringDynamic;
   final Class mapEntryClass;
 
   JsonDecodeExperimentalTransformer(this.coreTypes)
       : iterableDynamic =
             InterfaceType(coreTypes.iterableClass, const [DynamicType()]),
-        mapDynamic = InterfaceType(
-            coreTypes.mapClass, const [DynamicType(), DynamicType()]),
+        mapStringDynamic = InterfaceType(coreTypes.mapClass,
+            [coreTypes.stringClass.thisType, DynamicType()]),
         mapEntryClass = coreTypes.index.getClass('dart:core', 'MapEntry');
 
   @override
@@ -143,7 +143,7 @@ Unsupported type: ${type}
         var kParam = VariableDeclaration('k', type: const DynamicType());
         var vParam = VariableDeclaration('v', type: const DynamicType());
         return MethodInvocation(
-            AsExpression(argExpr, mapDynamic),
+            AsExpression(argExpr, mapStringDynamic),
             Name('map'),
             Arguments([
               FunctionExpression(
@@ -178,67 +178,77 @@ Unsupported core type: ${type.className};
       InterfaceType type, Expression argExpr) {
     var clazz = type.classNode;
 
-    var defaultConstructor = clazz.constructors
+    var constructor = clazz.constructors
         .firstWhere((c) => c.name.name == '', orElse: () => null);
-    if (defaultConstructor == null) {
-      throw 'no unnamed constructor for class: ${clazz.name} from library: ${clazz.enclosingLibrary.importUri}';
+    if (constructor == null) {
+      throw UnsupportedError('''
+Unable to find an unnamed constructor for type:
+
+  class: ${clazz.name}
+  library: ${clazz.enclosingLibrary.importUri}
+
+jsonAutoDecode only works for core types and types with unnamed constructors.
+''');
     }
 
-    // TODO: positional parameters
-    // var positionalArgs = <Expression>[];
-    // var positionalParams = defaultConstructor.function.positionalParameters;
+    var positionalParams = constructor.function.positionalParameters;
+    var positionalArgs = [
+      for (var param in positionalParams) _parameterValue(type, param, argExpr)
+    ];
 
-    var namedArgs = <NamedExpression>[];
-    var namedParams = defaultConstructor.function.namedParameters;
-
-    for (var param in namedParams) {
-      // First, build the expression to get the value out of the map
-      Expression mapValueExpr;
-
-      if (argExpr is MapLiteral) {
-        mapValueExpr = argExpr.entries
-            .firstWhere((e) => (e.key as StringLiteral).value == param.name)
-            .value;
-      } else if (argExpr is VariableGet || argExpr is MethodInvocation) {
-        mapValueExpr = MethodInvocation(
-            argExpr, Name('[]'), Arguments([StringLiteral(param.name)]));
-      } else {
-        throw '''
-  Unrecognized type of map argument:
-  runtimeType: ${argExpr.runtimeType}
-  value: $argExpr
-  ''';
-      }
-
-      // Now build the actual argument expression based on the type of the argument.
-      if (param.type is! InterfaceType) {
-        throw '''
-  Unsupported type, only classes are supported: ${type}
-  ''';
-      }
-      var paramType = param.type as InterfaceType;
-
-      var newTypeArgs = paramType.typeArguments.map((typeArg) {
-        if (typeArg is TypeParameterType) {
-          var index = type.classNode.typeParameters.indexOf(typeArg.parameter);
-          return type.typeArguments[index];
-        }
-        return typeArg;
-      }).toList();
-
-      paramType = InterfaceType(paramType.classNode, newTypeArgs);
-
-      namedArgs.add(
-          NamedExpression(param.name, _newInstance(paramType, mapValueExpr)));
-    }
+    var namedParams = constructor.function.namedParameters;
+    var namedArgs = [
+      for (var param in namedParams)
+        NamedExpression(param.name, _parameterValue(type, param, argExpr))
+    ];
 
     return ConstructorInvocation(
-        defaultConstructor,
+        constructor,
         Arguments(
-          [] /* TODO: support positional args */,
+          positionalArgs,
           named: namedArgs,
           types: type.typeArguments,
         ));
+  }
+
+  Expression _parameterValue(InterfaceType parent,
+      VariableDeclaration methodParam, Expression argExpr) {
+    // First, build the expression to get the value out of the map
+    Expression mapValueExpr;
+
+    if (argExpr is VariableGet || argExpr is MethodInvocation) {
+      mapValueExpr = MethodInvocation(
+        AsExpression(argExpr, mapStringDynamic),
+        Name('[]'),
+        Arguments([StringLiteral(methodParam.name)]),
+      );
+    } else {
+      throw '''
+  Unrecognized argument type:
+
+    runtimeType: ${argExpr.runtimeType}
+    value: $argExpr
+  ''';
+    }
+
+    // Now build the actual argument expression based on the type of the argument.
+    if (methodParam.type is! InterfaceType) {
+      throw '''
+  Unsupported type, only classes are supported: ${methodParam.type}
+  ''';
+    }
+    var paramType = methodParam.type as InterfaceType;
+
+    var newTypeArgs = paramType.typeArguments.map((typeArg) {
+      if (typeArg is TypeParameterType) {
+        var index = parent.classNode.typeParameters.indexOf(typeArg.parameter);
+        return parent.typeArguments[index];
+      }
+      return typeArg;
+    }).toList();
+
+    paramType = InterfaceType(paramType.classNode, newTypeArgs);
+    return _newInstance(paramType, mapValueExpr);
   }
 
   ConstructorInvocation _newLazyCollection(
