@@ -174,15 +174,21 @@ class ProgramWalker : public ValueObject {
     ASSERT(visitor_->IsCodeVisitor());
     visitor_->AsCodeVisitor()->VisitCode(code);
 
-    // If the precompiler can drop function objects not needed at runtime,
-    // then some entries in the static calls table may need to be visited.
+    // In the precompiler, some entries in the static calls table may need
+    // to be visited as they may not be reachable from other sources.
+    //
+    // TODO(dartbug.com/41636): Figure out why walking the static calls table
+    // in JIT mode with the DedupInstructions visitor fails, so we can remove
+    // the check for AOT mode.
     static_calls_array_ = code.static_calls_target_table();
-    if (static_calls_array_.IsNull()) return;
-    StaticCallsTable static_calls(static_calls_array_);
-    for (auto& view : static_calls) {
-      static_calls_table_entry_ = view.Get<Code::kSCallTableCodeOrTypeTarget>();
-      if (static_calls_table_entry_.IsCode()) {
-        AddToWorklist(Code::Cast(static_calls_table_entry_));
+    if (FLAG_precompiled_mode && !static_calls_array_.IsNull()) {
+      StaticCallsTable static_calls(static_calls_array_);
+      for (auto& view : static_calls) {
+        static_calls_table_entry_ =
+            view.Get<Code::kSCallTableCodeOrTypeTarget>();
+        if (static_calls_table_entry_.IsCode()) {
+          AddToWorklist(Code::Cast(static_calls_table_entry_));
+        }
       }
     }
   }
@@ -1158,7 +1164,7 @@ void ProgramVisitor::DedupInstructions(Zone* zone, Isolate* isolate) {
    public:
     explicit DedupInstructionsVisitor(Zone* zone)
         : Dedupper(zone),
-          function_(Function::Handle(zone)),
+          code_(Code::Handle(zone)),
           instructions_(Instructions::Handle(zone)) {
       if (Snapshot::IncludesCode(Dart::vm_snapshot_kind())) {
         // Prefer existing objects in the VM isolate.
@@ -1172,6 +1178,16 @@ void ProgramVisitor::DedupInstructions(Zone* zone, Isolate* isolate) {
       AddCanonical(instructions_);
     }
 
+    void VisitFunction(const Function& function) {
+      if (!function.HasCode()) return;
+      code_ = function.CurrentCode();
+      // This causes the code to be visited once here and once directly in the
+      // ProgramWalker, but as long as the deduplication process is idempotent,
+      // the cached entry points won't change during the second visit.
+      VisitCode(code_);
+      function.SetInstructions(code_);  // Update cached entry point.
+    }
+
     void VisitCode(const Code& code) {
       instructions_ = code.instructions();
       instructions_ = Dedup(instructions_);
@@ -1182,33 +1198,32 @@ void ProgramVisitor::DedupInstructions(Zone* zone, Isolate* isolate) {
       }
       code.SetActiveInstructions(instructions_,
                                  code.UncheckedEntryPointOffset());
-      if (!code.IsFunctionCode()) return;
-      function_ = code.function();
-      if (function_.IsNull()) return;
-      function_.SetInstructions(code);  // Update cached entry point.
     }
 
    private:
-    Function& function_;
+    Code& code_;
     Instructions& instructions_;
   };
 
 #if defined(DART_PRECOMPILER)
   class DedupInstructionsWithSameMetadataVisitor
       : public CodeVisitor,
-        public Dedupper<Code, CodeKeyValueTrait>,
-        public ObjectVisitor {
+        public Dedupper<Code, CodeKeyValueTrait> {
    public:
     explicit DedupInstructionsWithSameMetadataVisitor(Zone* zone)
         : Dedupper(zone),
           canonical_(Code::Handle(zone)),
-          function_(Function::Handle(zone)),
+          code_(Code::Handle(zone)),
           instructions_(Instructions::Handle(zone)) {}
 
-    void VisitObject(RawObject* obj) {
-      if (!obj->IsCode()) return;
-      canonical_ = Code::RawCast(obj);
-      AddCanonical(canonical_);
+    void VisitFunction(const Function& function) {
+      if (!function.HasCode()) return;
+      code_ = function.CurrentCode();
+      // This causes the code to be visited once here and once directly in the
+      // ProgramWalker, but as long as the deduplication process is idempotent,
+      // the cached entry points won't change during the second visit.
+      VisitCode(code_);
+      function.SetInstructions(code_);  // Update cached entry point.
     }
 
     void VisitCode(const Code& code) {
@@ -1218,17 +1233,13 @@ void ProgramVisitor::DedupInstructions(Zone* zone, Isolate* isolate) {
       code.SetActiveInstructions(instructions_,
                                  code.UncheckedEntryPointOffset());
       code.set_instructions(instructions_);
-      if (!code.IsFunctionCode()) return;
-      function_ = code.function();
-      if (function_.IsNull()) return;
-      function_.SetInstructions(code);  // Update cached entry point.
     }
 
    private:
     bool CanCanonicalize(const Code& code) const { return !code.IsDisabled(); }
 
     Code& canonical_;
-    Function& function_;
+    Code& code_;
     Instructions& instructions_;
   };
 

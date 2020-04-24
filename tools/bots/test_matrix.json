@@ -153,8 +153,14 @@
       "tests/.dart_tool/package_config.json",
       "tests/angular/",
       "tests/compiler/",
+      "tests/corelib_2/",
+      "tests/corelib/",
       "tests/dart/",
       "tests/kernel/",
+      "tests/language_2/",
+      "tests/language/",
+      "tests/lib_2/",
+      "tests/lib/",
       "tests/light_unittest.dart",
       "tests/search/",
       "tests/ffi/",
@@ -422,16 +428,16 @@
       }
     },
     "unittest-weak-asserts-no-sdk-(linux|mac|win)": {
-       "options": {
-         "compiler": "dartk",
-         "enable-asserts": true,
-         "mode": "release",
-         "runtime": "vm",
-         "timeout": 240,
-         "enable-experiment": [
-           "non-nullable"
-         ]
-       }
+      "options": {
+        "compiler": "dartk",
+        "enable-asserts": true,
+        "mode": "release",
+        "runtime": "vm",
+        "timeout": 240,
+        "enable-experiment": [
+          "non-nullable"
+        ]
+      }
     },
     "analyzer-unittest-asserts-(debug|product|release)-(linux|mac|win)": {
       "options": {
@@ -1519,7 +1525,7 @@
         "vm-kernel-asan-linux-release-ia32",
         "vm-kernel-asan-linux-release-x64",
         "vm-kernel-lsan-linux-release-ia32",
-        "vm-kernel-lsan-linux-release-x64",        
+        "vm-kernel-lsan-linux-release-x64",
         "vm-kernel-msan-linux-release-x64",
         "vm-kernel-ubsan-linux-release-ia32",
         "vm-kernel-ubsan-linux-release-x64"
@@ -3522,7 +3528,9 @@
           "name": "run tests",
           "script": "tools/run_abi_tests.py",
           "testRunner": true,
-          "arguments": ["-ndartkb-abi-linux-release-x64"]
+          "arguments": [
+            "-ndartkb-abi-linux-release-x64"
+          ]
         }
       ]
     },

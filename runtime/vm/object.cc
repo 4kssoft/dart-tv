@@ -33,6 +33,7 @@
 #include "vm/heap/become.h"
 #include "vm/heap/heap.h"
 #include "vm/heap/weak_code.h"
+#include "vm/image_snapshot.h"
 #include "vm/isolate_reload.h"
 #include "vm/kernel.h"
 #include "vm/kernel_binary.h"
@@ -138,7 +139,6 @@ RawBool* Object::false_ = reinterpret_cast<RawBool*>(RAW_NULL);
 RawClass* Object::class_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
 RawClass* Object::dynamic_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
 RawClass* Object::void_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
-RawClass* Object::never_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
 RawClass* Object::type_arguments_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
 RawClass* Object::patch_class_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
 RawClass* Object::function_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
@@ -762,6 +762,14 @@ void Object::Init(Isolate* isolate) {
   cls.set_num_type_arguments(0);
   isolate->object_store()->set_null_class(cls);
 
+  // Allocate and initialize Never class.
+  cls = Class::New<Instance, RTN::Instance>(kNeverCid, isolate);
+  cls.set_num_type_arguments(0);
+  cls.set_is_finalized();
+  cls.set_is_declaration_loaded();
+  cls.set_is_type_finalized();
+  isolate->object_store()->set_never_class(cls);
+
   // Allocate and initialize the free list element class.
   cls =
       Class::New<FreeListElement::FakeInstance,
@@ -1071,13 +1079,6 @@ void Object::Init(Isolate* isolate) {
   cls.set_is_type_finalized();
   void_class_ = cls.raw();
 
-  cls = Class::New<Instance, RTN::Instance>(kNeverCid, isolate);
-  cls.set_num_type_arguments(0);
-  cls.set_is_finalized();
-  cls.set_is_declaration_loaded();
-  cls.set_is_type_finalized();
-  never_class_ = cls.raw();
-
   cls = Class::New<Type, RTN::Type>(isolate);
   cls.set_is_finalized();
   cls.set_is_declaration_loaded();
@@ -1096,9 +1097,6 @@ void Object::Init(Isolate* isolate) {
   void_type_->SetIsFinalized();
   void_type_->ComputeHash();
   void_type_->SetCanonical();
-
-  cls = never_class_;
-  *never_type_ = Type::NewNonParameterizedType(cls);
 
   // Since TypeArguments objects are passed as function arguments, make them
   // behave as Dart instances, although they are just VM objects.
@@ -1249,7 +1247,7 @@ void Object::Init(Isolate* isolate) {
 
 void Object::FinishInit(Isolate* isolate) {
   // The type testing stubs we initialize in AbstractType objects for the
-  // canonical type of kDynamicCid/kVoidCid/kNeverCid need to be set in this
+  // canonical type of kDynamicCid/kVoidCid need to be set in this
   // method, which is called after StubCode::InitOnce().
   Code& code = Code::Handle();
 
@@ -1258,9 +1256,6 @@ void Object::FinishInit(Isolate* isolate) {
 
   code = TypeTestingStubGenerator::DefaultCodeForType(*void_type_);
   void_type_->SetTypeTestingStub(code);
-
-  code = TypeTestingStubGenerator::DefaultCodeForType(*never_type_);
-  never_type_->SetTypeTestingStub(code);
 }
 
 void Object::Cleanup() {
@@ -1270,7 +1265,6 @@ void Object::Cleanup() {
   class_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
   dynamic_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
   void_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
-  never_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
   type_arguments_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
   patch_class_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
   function_class_ = reinterpret_cast<RawClass*>(RAW_NULL);
@@ -1373,7 +1367,6 @@ void Object::FinalizeVMIsolate(Isolate* isolate) {
   SET_CLASS_NAME(class, Class);
   SET_CLASS_NAME(dynamic, Dynamic);
   SET_CLASS_NAME(void, Void);
-  SET_CLASS_NAME(never, Never);
   SET_CLASS_NAME(type_arguments, TypeArguments);
   SET_CLASS_NAME(patch_class, PatchClass);
   SET_CLASS_NAME(function, Function);
@@ -1410,12 +1403,13 @@ void Object::FinalizeVMIsolate(Isolate* isolate) {
   SET_CLASS_NAME(unhandled_exception, UnhandledException);
   SET_CLASS_NAME(unwind_error, UnwindError);
 
-  // Set up names for object array and one byte string class which are
-  // pre-allocated in the vm isolate also.
+  // Set up names for classes which are also pre-allocated in the vm isolate.
   cls = isolate->object_store()->array_class();
   cls.set_name(Symbols::_List());
   cls = isolate->object_store()->one_byte_string_class();
   cls.set_name(Symbols::OneByteString());
+  cls = isolate->object_store()->never_class();
+  cls.set_name(Symbols::Never());
 
   // Set up names for the pseudo-classes for free list elements and forwarding
   // corpses. Mainly this makes VM debugging easier.
@@ -1852,6 +1846,14 @@ RawError* Object::Init(Isolate* isolate,
     RegisterClass(cls, Symbols::Null(), core_lib);
     pending_classes.Add(cls);
 
+    cls = Class::New<Instance, RTN::Instance>(kNeverCid, isolate);
+    cls.set_num_type_arguments(0);
+    cls.set_is_finalized();
+    cls.set_is_declaration_loaded();
+    cls.set_is_type_finalized();
+    cls.set_name(Symbols::Never());
+    object_store->set_never_class(cls);
+
     ASSERT(!library_prefix_cls.IsNull());
     RegisterPrivateClass(library_prefix_cls, Symbols::_LibraryPrefix(),
                          core_lib);
@@ -2191,6 +2193,13 @@ RawError* Object::Init(Isolate* isolate,
     type = object_store->object_type();
     cls.set_super_type(type);
 
+    cls = object_store->never_class();
+    type = Type::New(cls, Object::null_type_arguments(),
+                     TokenPosition::kNoSource, Nullability::kNonNullable);
+    type.SetIsFinalized();
+    type ^= type.Canonicalize();
+    object_store->set_never_type(type);
+
     // Create and cache commonly used type arguments <int>, <double>,
     // <String>, <String, dynamic> and <String, String>.
     type_args = TypeArguments::New(1);
@@ -2487,6 +2496,9 @@ RawError* Object::Init(Isolate* isolate,
 
     cls = Class::New<Instance, RTN::Instance>(kNullCid, isolate);
     object_store->set_null_class(cls);
+
+    cls = Class::New<Instance, RTN::Instance>(kNeverCid, isolate);
+    object_store->set_never_class(cls);
 
     cls = Class::New<Capability, RTN::Capability>(isolate);
     cls = Class::New<ReceivePort, RTN::ReceivePort>(isolate);
@@ -12121,8 +12133,6 @@ RawLibrary* Library::NewLibraryHelper(const String& url, bool import_core_lib) {
   // Force the url to have a hash code.
   url.Hash();
   const bool dart_scheme = url.StartsWith(Symbols::DartScheme());
-  const bool dart_private_scheme =
-      dart_scheme && url.StartsWith(Symbols::DartSchemePrivate());
   const Library& result = Library::Handle(zone, Library::New());
   result.StorePointer(&result.raw_ptr()->name_, Symbols::Empty().raw());
   result.StorePointer(&result.raw_ptr()->url_, url.raw());
@@ -12144,10 +12154,7 @@ RawLibrary* Library::NewLibraryHelper(const String& url, bool import_core_lib) {
   result.set_flags(0);
   result.set_is_in_fullsnapshot(false);
   result.set_is_nnbd(false);
-  if (dart_private_scheme) {
-    // Never debug dart:_ libraries.
-    result.set_debuggable(false);
-  } else if (dart_scheme) {
+  if (dart_scheme) {
     // Only debug dart: libraries if we have been requested to show invisible
     // frames.
     result.set_debuggable(FLAG_show_invisible_frames);
@@ -18348,7 +18355,7 @@ RawAbstractType* AbstractType::NormalizeFutureOrType(Heap::Space space) const {
           ASSERT(!cls.IsNull());
           const TypeArguments& type_args =
               TypeArguments::Handle(TypeArguments::New(1));
-          type_args.SetTypeAt(0, never_type());
+          type_args.SetTypeAt(0, Type::Handle(object_store->never_type()));
           Type& type =
               Type::Handle(Type::New(cls, type_args, TokenPosition::kNoSource,
                                      Nullability::kNonNullable));
@@ -18957,8 +18964,7 @@ void AbstractType::SetTypeTestingStub(const Code& stub) const {
   if (stub.IsNull()) {
     // This only happens during bootstrapping when creating Type objects before
     // we have the instructions.
-    ASSERT(type_class_id() == kDynamicCid || type_class_id() == kVoidCid ||
-           type_class_id() == kNeverCid);
+    ASSERT(type_class_id() == kDynamicCid || type_class_id() == kVoidCid);
     StoreNonPointer(&raw_ptr()->type_test_stub_entry_point_, 0);
   } else {
     StoreNonPointer(&raw_ptr()->type_test_stub_entry_point_, stub.EntryPoint());
@@ -18979,7 +18985,7 @@ RawType* Type::VoidType() {
 }
 
 RawType* Type::NeverType() {
-  return Object::never_type().raw();
+  return Isolate::Current()->object_store()->never_type();
 }
 
 RawType* Type::ObjectType() {
@@ -19628,9 +19634,7 @@ bool Type::CheckIsCanonical(Thread* thread) const {
 #endif  // DEBUG
 
 void Type::EnumerateURIs(URIs* uris) const {
-  // N.B. Not all types with kNeverCid answer true to IsNeverType, but none of
-  // them have a URI.
-  if (IsDynamicType() || IsVoidType() || (type_class_id() == kNeverCid)) {
+  if (IsDynamicType() || IsVoidType() || IsNeverType()) {
     return;
   }
   Thread* thread = Thread::Current();
@@ -19814,7 +19818,7 @@ bool TypeRef::IsEquivalent(const Instance& other,
   return !ref_type.IsNull() && ref_type.IsEquivalent(other, kind, trail);
 }
 
-RawTypeRef* TypeRef::InstantiateFrom(
+RawAbstractType* TypeRef::InstantiateFrom(
     const TypeArguments& instantiator_type_arguments,
     const TypeArguments& function_type_arguments,
     intptr_t num_free_fun_type_params,
@@ -23540,40 +23544,45 @@ RawStackTrace* StackTrace::New(const Array& code_array,
   return result.raw();
 }
 
-#if defined(DART_PRECOMPILER) || defined(DART_PRECOMPILED_RUNTIME)
-static void PrintStackTraceFrameBodyFromDSO(ZoneTextBuffer* buffer,
-                                            uword call_addr) {
-  uword dso_base;
-  char* dso_name;
-  if (NativeSymbolResolver::LookupSharedObject(call_addr, &dso_base,
-                                               &dso_name)) {
-    uword symbol_start;
-    if (auto const symbol_name =
-            NativeSymbolResolver::LookupSymbolName(call_addr, &symbol_start)) {
-      uword symbol_offset = call_addr - symbol_start;
-      buffer->Printf(" %s+0x%" Px "", symbol_name, symbol_offset);
-      NativeSymbolResolver::FreeSymbolName(symbol_name);
-    } else {
-      buffer->Printf(" %s", dso_name);
-    }
-    NativeSymbolResolver::FreeSymbolName(dso_name);
+#if defined(DART_PRECOMPILED_RUNTIME)
+static void PrintNonSymbolicStackFrameBody(ZoneTextBuffer* buffer,
+                                           uword call_addr,
+                                           uword isolate_instructions,
+                                           uword vm_instructions) {
+  const word vm_offset = call_addr - vm_instructions;
+  const word isolate_offset = call_addr - isolate_instructions;
+  // Pick the closest instructions section start before the call address.
+  if (vm_offset > 0 && (isolate_offset < 0 || vm_offset < isolate_offset)) {
+    buffer->Printf(" %s+0x%" Px "", kVmSnapshotInstructionsAsmSymbol,
+                   vm_offset);
+  } else if (isolate_offset > 0) {
+    buffer->Printf(" %s+0x%" Px "", kIsolateSnapshotInstructionsAsmSymbol,
+                   isolate_offset);
   } else {
-    buffer->Printf(" <unknown>");
+    uword dso_base;
+    char* dso_name;
+    if (NativeSymbolResolver::LookupSharedObject(call_addr, &dso_base,
+                                                 &dso_name)) {
+      buffer->Printf(" %s", dso_name);
+      NativeSymbolResolver::FreeSymbolName(dso_name);
+    } else {
+      buffer->Printf(" <unknown>");
+    }
   }
   buffer->Printf("\n");
 }
 #endif
 
-static void PrintStackTraceFrameIndex(ZoneTextBuffer* buffer,
-                                      intptr_t frame_index) {
+static void PrintSymbolicStackFrameIndex(ZoneTextBuffer* buffer,
+                                         intptr_t frame_index) {
   buffer->Printf("#%-6" Pd "", frame_index);
 }
 
-static void PrintStackTraceFrameBody(ZoneTextBuffer* buffer,
-                                     const char* function_name,
-                                     const char* url,
-                                     intptr_t line = -1,
-                                     intptr_t column = -1) {
+static void PrintSymbolicStackFrameBody(ZoneTextBuffer* buffer,
+                                        const char* function_name,
+                                        const char* url,
+                                        intptr_t line = -1,
+                                        intptr_t column = -1) {
   buffer->Printf(" %s (%s", function_name, url);
   if (line >= 0) {
     buffer->Printf(":%" Pd "", line);
@@ -23584,11 +23593,11 @@ static void PrintStackTraceFrameBody(ZoneTextBuffer* buffer,
   buffer->Printf(")\n");
 }
 
-static void PrintStackTraceFrame(Zone* zone,
-                                 ZoneTextBuffer* buffer,
-                                 const Function& function,
-                                 TokenPosition token_pos,
-                                 intptr_t frame_index) {
+static void PrintSymbolicStackFrame(Zone* zone,
+                                    ZoneTextBuffer* buffer,
+                                    const Function& function,
+                                    TokenPosition token_pos,
+                                    intptr_t frame_index) {
   ASSERT(!function.IsNull());
   const auto& script = Script::Handle(zone, function.script());
   auto& handle = String::Handle(zone, function.QualifiedUserVisibleName());
@@ -23611,13 +23620,14 @@ static void PrintStackTraceFrame(Zone* zone,
     script.GetTokenLocation(token_pos.SourcePosition(), &line, &column);
   }
 
-  PrintStackTraceFrameIndex(buffer, frame_index);
-  PrintStackTraceFrameBody(buffer, function_name, url, line, column);
+  PrintSymbolicStackFrameIndex(buffer, frame_index);
+  PrintSymbolicStackFrameBody(buffer, function_name, url, line, column);
 }
 
-const char* StackTrace::ToDartCString(const StackTrace& stack_trace_in) {
-  auto const zone = Thread::Current()->zone();
-  auto& stack_trace = StackTrace::Handle(zone, stack_trace_in.raw());
+const char* StackTrace::ToCString() const {
+  auto const T = Thread::Current();
+  auto const zone = T->zone();
+  auto& stack_trace = StackTrace::Handle(zone, this->raw());
   auto& function = Function::Handle(zone);
   auto& code_object = Object::Handle(zone);
   auto& code = Code::Handle(zone);
@@ -23626,6 +23636,30 @@ const char* StackTrace::ToDartCString(const StackTrace& stack_trace_in) {
   GrowableArray<const Function*> inlined_functions;
   GrowableArray<TokenPosition> inlined_token_positions;
   ZoneTextBuffer buffer(zone, 1024);
+
+#if defined(DART_PRECOMPILED_RUNTIME)
+  auto const isolate_instructions = reinterpret_cast<uword>(
+      T->isolate_group()->source()->snapshot_instructions);
+  auto const vm_instructions = reinterpret_cast<uword>(
+      Dart::vm_isolate()->group()->source()->snapshot_instructions);
+  if (FLAG_dwarf_stack_traces_mode) {
+    // The Dart standard requires the output of StackTrace.toString to include
+    // all pending activations with precise source locations (i.e., to expand
+    // inlined frames and provide line and column numbers).
+    buffer.Printf(
+        "Warning: This VM has been configured to produce stack traces "
+        "that violate the Dart standard.\n");
+    // This prologue imitates Android's debuggerd to make it possible to paste
+    // the stack trace into ndk-stack.
+    buffer.Printf(
+        "*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***\n");
+    OSThread* thread = OSThread::Current();
+    buffer.Printf("pid: %" Pd ", tid: %" Pd ", name %s\n", OS::ProcessId(),
+                  OSThread::ThreadIdToIntPtr(thread->id()), thread->name());
+    buffer.Printf("isolate_instructions: %" Px "", isolate_instructions);
+    buffer.Printf(" vm_instructions: %" Px "\n", vm_instructions);
+  }
+#endif
 
   // Iterate through the stack frames and create C string description
   // for each frame.
@@ -23653,15 +23687,45 @@ const char* StackTrace::ToDartCString(const StackTrace& stack_trace_in) {
           ASSERT(code.IsFunctionCode());
           function = code.function();
           const uword pc = code.PayloadStart() + pc_offset;
-          if (function.IsNull()) {
 #if defined(DART_PRECOMPILED_RUNTIME)
-            PrintStackTraceFrameIndex(&buffer, frame_index);
-            PrintStackTraceFrameBodyFromDSO(&buffer, pc - 1);
+          // When printing non-symbolic frames, we normally print call
+          // addresses, not return addresses, by subtracting one from the PC to
+          // get an address within the preceding instruction.
+          //
+          // The one exception is a normal closure registered as a listener on a
+          // future. In this case, the returned pc_offset is 0, as the closure
+          // is invoked with the value of the resolved future. Thus, we must
+          // report the return address, as returning a value before the closure
+          // payload will cause failures to decode the frame using DWARF info.
+          const bool is_future_listener = pc_offset == 0;
+          const uword call_addr = is_future_listener ? pc : pc - 1;
+          if (FLAG_dwarf_stack_traces_mode) {
+            // If we have access to the owning function and it would be
+            // invisible in a symbolic stack trace, don't show this frame.
+            // (We can't do the same for inlined functions, though.)
+            if (!FLAG_show_invisible_frames && !function.IsNull() &&
+                !function.is_visible()) {
+              continue;
+            }
+            // This output is formatted like Android's debuggerd. Note debuggerd
+            // prints call addresses instead of return addresses.
+            buffer.Printf("    #%02" Pd " abs %" Pp "", frame_index, call_addr);
+            PrintNonSymbolicStackFrameBody(
+                &buffer, call_addr, isolate_instructions, vm_instructions);
             frame_index++;
-#else
-            UNREACHABLE();
+            continue;
+          } else if (function.IsNull()) {
+            // We can't print the symbolic information since the owner was not
+            // retained, so instead print the static symbol + offset like the
+            // non-symbolic stack traces.
+            PrintSymbolicStackFrameIndex(&buffer, frame_index);
+            PrintNonSymbolicStackFrameBody(
+                &buffer, call_addr, isolate_instructions, vm_instructions);
+            frame_index++;
+            continue;
+          }
 #endif
-          } else if (code.is_optimized() && stack_trace.expand_inlined()) {
+          if (code.is_optimized() && stack_trace.expand_inlined()) {
             code.GetInlinedFunctionsAtReturnAddress(
                 pc_offset, &inlined_functions, &inlined_token_positions);
             ASSERT(inlined_functions.length() >= 1);
@@ -23669,13 +23733,14 @@ const char* StackTrace::ToDartCString(const StackTrace& stack_trace_in) {
               const auto& inlined = *inlined_functions[j];
               auto const pos = inlined_token_positions[j];
               if (FLAG_show_invisible_frames || function.is_visible()) {
-                PrintStackTraceFrame(zone, &buffer, inlined, pos, frame_index);
+                PrintSymbolicStackFrame(zone, &buffer, inlined, pos,
+                                        frame_index);
                 frame_index++;
               }
             }
           } else if (FLAG_show_invisible_frames || function.is_visible()) {
             auto const pos = code.GetTokenIndexOfPC(pc);
-            PrintStackTraceFrame(zone, &buffer, function, pos, frame_index);
+            PrintSymbolicStackFrame(zone, &buffer, function, pos, frame_index);
             frame_index++;
           }
         } else {
@@ -23685,7 +23750,7 @@ const char* StackTrace::ToDartCString(const StackTrace& stack_trace_in) {
           if (FLAG_show_invisible_frames || function.is_visible()) {
             uword pc = bytecode.PayloadStart() + pc_offset;
             auto const pos = bytecode.GetTokenIndexOfPC(pc);
-            PrintStackTraceFrame(zone, &buffer, function, pos, frame_index);
+            PrintSymbolicStackFrame(zone, &buffer, function, pos, frame_index);
             frame_index++;
           }
         }
@@ -23699,83 +23764,6 @@ const char* StackTrace::ToDartCString(const StackTrace& stack_trace_in) {
   } while (!stack_trace.IsNull());
 
   return buffer.buffer();
-}
-
-const char* StackTrace::ToDwarfCString(const StackTrace& stack_trace_in) {
-#if defined(DART_PRECOMPILER) || defined(DART_PRECOMPILED_RUNTIME)
-  auto const T = Thread::Current();
-  auto const zone = T->zone();
-  auto& stack_trace = StackTrace::Handle(zone, stack_trace_in.raw());
-  auto& code = Object::Handle(zone);
-  ZoneTextBuffer buffer(zone, 1024);
-
-  // The Dart standard requires the output of StackTrace.toString to include
-  // all pending activations with precise source locations (i.e., to expand
-  // inlined frames and provide line and column numbers).
-  buffer.Printf(
-      "Warning: This VM has been configured to produce stack traces "
-      "that violate the Dart standard.\n");
-  // This prologue imitates Android's debuggerd to make it possible to paste
-  // the stack trace into ndk-stack.
-  buffer.Printf(
-      "*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***\n");
-  OSThread* thread = OSThread::Current();
-  buffer.Printf("pid: %" Pd ", tid: %" Pd ", name %s\n", OS::ProcessId(),
-                OSThread::ThreadIdToIntPtr(thread->id()), thread->name());
-  auto const isolate_instructions =
-      T->isolate_group()->source()->snapshot_instructions;
-  auto const vm_instructions =
-      Dart::vm_isolate()->group()->source()->snapshot_instructions;
-  buffer.Printf("isolate_instructions: %" Px "",
-                reinterpret_cast<uintptr_t>(isolate_instructions));
-  buffer.Printf(" vm_instructions: %" Px "\n",
-                reinterpret_cast<uintptr_t>(vm_instructions));
-  intptr_t frame_index = 0;
-  uint32_t frame_skip = 0;
-  do {
-    for (intptr_t i = frame_skip; i < stack_trace.Length(); i++) {
-      code = stack_trace.CodeAtFrame(i);
-      if (code.IsNull()) {
-        // Check for a null function, which indicates a gap in a StackOverflow
-        // or OutOfMemory trace.
-        if ((i < (stack_trace.Length() - 1)) &&
-            (stack_trace.CodeAtFrame(i + 1) != Code::null())) {
-          buffer.AddString("...\n...\n");
-          ASSERT(stack_trace.PcOffsetAtFrame(i) != Smi::null());
-          // To account for gap frames.
-          frame_index += Smi::Value(stack_trace.PcOffsetAtFrame(i));
-        }
-      } else if (code.raw() == StubCode::AsynchronousGapMarker().raw()) {
-        buffer.AddString("<asynchronous suspension>\n");
-        // The frame immediately after the asynchronous gap marker is the
-        // identical to the frame above the marker. Skip the frame to enhance
-        // the readability of the trace.
-        i++;
-      } else {
-        intptr_t pc_offset = Smi::Value(stack_trace.PcOffsetAtFrame(i));
-        // This output is formatted like Android's debuggerd. Note debuggerd
-        // prints call addresses instead of return addresses.
-        uword start = code.IsBytecode() ? Bytecode::Cast(code).PayloadStart()
-                                        : Code::Cast(code).PayloadStart();
-        uword return_addr = start + pc_offset;
-        uword call_addr = return_addr - 1;
-        buffer.Printf("    #%02" Pd " abs %" Pp "", frame_index, call_addr);
-        PrintStackTraceFrameBodyFromDSO(&buffer, call_addr);
-        frame_index++;
-      }
-    }
-    // Follow the link.
-    frame_skip = stack_trace.skip_sync_start_in_parent_stack()
-                     ? StackTrace::kSyncAsyncCroppedFrames
-                     : 0;
-    stack_trace = stack_trace.async_link();
-  } while (!stack_trace.IsNull());
-
-  return buffer.buffer();
-#else
-  UNREACHABLE();
-  return NULL;
-#endif  // defined(DART_PRECOMPILER) || defined(DART_PRECOMPILED_RUNTIME)
 }
 
 static void DwarfStackTracesHandler(bool value) {
@@ -23795,15 +23783,6 @@ DEFINE_FLAG_HANDLER(DwarfStackTracesHandler,
                     dwarf_stack_traces,
                     "Omit CodeSourceMaps in precompiled snapshots and don't "
                     "symbolize stack traces in the precompiled runtime.");
-
-const char* StackTrace::ToCString() const {
-#if defined(DART_PRECOMPILED_RUNTIME)
-  if (FLAG_dwarf_stack_traces_mode) {
-    return ToDwarfCString(*this);
-  }
-#endif
-  return ToDartCString(*this);
-}
 
 void RegExp::set_pattern(const String& pattern) const {
   StorePointer(&raw_ptr()->pattern_, pattern.raw());

@@ -274,6 +274,9 @@ IsolateGroup::~IsolateGroup() {
   // Ensure we destroy the heap before the other members.
   heap_ = nullptr;
   ASSERT(marking_stack_ == nullptr);
+
+  delete reverse_pc_lookup_cache_;
+  reverse_pc_lookup_cache_ = nullptr;
 }
 
 void IsolateGroup::RegisterIsolate(Isolate* isolate) {
@@ -643,6 +646,15 @@ NoReloadScope::~NoReloadScope() {
   isolate_->no_reload_scope_depth_.fetch_sub(1);
   ASSERT(isolate_->no_reload_scope_depth_ >= 0);
 #endif  // !defined(PRODUCT) && !defined(DART_PRECOMPILED_RUNTIME)
+}
+
+Bequest::~Bequest() {
+  IsolateGroup* isolate_group = IsolateGroup::Current();
+  CHECK_ISOLATE_GROUP(isolate_group);
+  NoSafepointScope no_safepoint_scope;
+  ApiState* state = isolate_group->api_state();
+  ASSERT(state != nullptr);
+  state->FreePersistentHandle(handle_);
 }
 
 void Isolate::RegisterClass(const Class& cls) {
@@ -1039,6 +1051,11 @@ MessageHandler::MessageStatus IsolateMessageHandler::HandleMessage(
     msg_obj = message->raw_obj();
     // We should only be sending RawObjects that can be converted to CObjects.
     ASSERT(ApiObjectConverter::CanConvert(msg_obj.raw()));
+  } else if (message->IsBequest()) {
+    Bequest* bequest = message->bequest();
+    PersistentHandle* handle = bequest->handle();
+    const Object& obj = Object::Handle(zone, handle->raw());
+    msg_obj = obj.raw();
   } else {
     MessageSnapshotReader reader(message.get(), thread);
     msg_obj = reader.ReadObject();
@@ -1451,9 +1468,6 @@ Isolate::~Isolate() {
   // TODO(32796): Re-enable assertion.
   // RELEASE_ASSERT(reload_context_ == NULL);
 #endif  // !defined(PRODUCT) && !defined(DART_PRECOMPILED_RUNTIME)
-
-  delete reverse_pc_lookup_cache_;
-  reverse_pc_lookup_cache_ = nullptr;
 
   if (FLAG_enable_interpreter) {
     delete background_compiler_;
@@ -2374,6 +2388,12 @@ void Isolate::Shutdown() {
   // Then, proceed with low-level teardown.
   Isolate::UnMarkIsolateReady(this);
   LowLevelShutdown();
+
+  if (bequest_.get() != nullptr) {
+    auto beneficiary = bequest_->beneficiary();
+    PortMap::PostMessage(Message::New(beneficiary, bequest_.release(),
+                                      Message::kNormalPriority));
+  }
 
   // Now we can unregister from the thread, invoke cleanup callback, delete the
   // isolate (and possibly the isolate group).

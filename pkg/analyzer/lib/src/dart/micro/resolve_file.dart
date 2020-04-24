@@ -41,6 +41,13 @@ import 'package:collection/collection.dart';
 import 'package:meta/meta.dart';
 import 'package:yaml/yaml.dart';
 
+class FileContext {
+  final AnalysisOptionsImpl analysisOptions;
+  final FileState file;
+
+  FileContext(this.analysisOptions, this.file);
+}
+
 class FileResolver {
   final PerformanceLog logger;
   final ResourceProvider resourceProvider;
@@ -82,9 +89,7 @@ class FileResolver {
     _throwIfNotAbsoluteNormalizedPath(path);
 
     return logger.run('Get errors for $path', () {
-      var fileContext = logger.run('Get file $path', () {
-        return _createFileContext(path);
-      });
+      var fileContext = getFileContext(path, withLog: true);
       var file = fileContext.file;
 
       var errorsSignatureBuilder = ApiSignature();
@@ -127,10 +132,33 @@ class FileResolver {
     });
   }
 
+  FileContext getFileContext(String path, {bool withLog = false}) {
+    FileContext perform() {
+      var analysisOptions = _getAnalysisOptions(path);
+
+      _createContext(analysisOptions);
+
+      var file = fsState.getFileForPath(path);
+      return FileContext(analysisOptions, file);
+    }
+
+    if (withLog) {
+      return logger.run('Get file $path', () {
+        try {
+          return getFileContext(path);
+        } finally {
+          fsState.logStatistics();
+        }
+      });
+    } else {
+      return perform();
+    }
+  }
+
   String getLibraryLinkedSignature(String path) {
     _throwIfNotAbsoluteNormalizedPath(path);
 
-    var fileContext = _createFileContext(path);
+    var fileContext = getFileContext(path);
     var file = fileContext.file;
     return file.libraryCycle.signatureStr;
   }
@@ -139,9 +167,7 @@ class FileResolver {
     _throwIfNotAbsoluteNormalizedPath(path);
 
     return logger.run('Resolve $path', () {
-      var fileContext = logger.run('Get file $path', () {
-        return _createFileContext(path);
-      });
+      var fileContext = getFileContext(path, withLog: true);
       var file = fileContext.file;
 
       libraryContext.load2(file);
@@ -234,22 +260,23 @@ class FileResolver {
     }
 
     if (analysisContext == null) {
-      logger.run('Create AnalysisContext', () {
-        var root = ContextRootImpl(
-          resourceProvider,
-          resourceProvider.getFolder(workspace.root),
-        );
+      var rootFolder = resourceProvider.getFolder(workspace.root);
+      var root = ContextRootImpl(
+        resourceProvider,
+        rootFolder,
+      );
 
-        analysisContext = MicroAnalysisContextImpl(
-          this,
-          root,
-          analysisOptions,
-          DeclaredVariables(),
-          sourceFactory,
-          resourceProvider,
-          workspace: workspace,
-        );
-      });
+      root.included.add(rootFolder);
+
+      analysisContext = MicroAnalysisContextImpl(
+        this,
+        root,
+        analysisOptions,
+        DeclaredVariables(),
+        sourceFactory,
+        resourceProvider,
+        workspace: workspace,
+      );
     }
 
     if (libraryContext == null) {
@@ -263,15 +290,6 @@ class FileResolver {
         analysisContext.declaredVariables,
       );
     }
-  }
-
-  _FileContext _createFileContext(String path) {
-    var analysisOptions = _getAnalysisOptions(path);
-
-    _createContext(analysisOptions);
-
-    var file = fsState.getFileForPath(path);
-    return _FileContext(analysisOptions, file);
   }
 
   File _findOptionsFile(Folder folder) {
@@ -357,13 +375,6 @@ class FileResolverTestView {
   void addResolvedFile(String path) {
     resolvedFiles.add(path);
   }
-}
-
-class _FileContext {
-  final AnalysisOptionsImpl analysisOptions;
-  final FileState file;
-
-  _FileContext(this.analysisOptions, this.file);
 }
 
 class _LibraryContext {

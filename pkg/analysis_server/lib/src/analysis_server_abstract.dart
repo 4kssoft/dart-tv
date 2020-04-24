@@ -47,10 +47,11 @@ import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/generated/sdk.dart';
 import 'package:analyzer/src/services/available_declarations.dart';
 import 'package:analyzer/src/util/glob.dart';
+import 'package:nnbd_migration/api_for_analysis_server/driver_provider.dart';
 
 /// Implementations of [AbstractAnalysisServer] implement a server that listens
 /// on a [CommunicationChannel] for analysis messages and process them.
-abstract class AbstractAnalysisServer {
+abstract class AbstractAnalysisServer implements DriverProvider {
   /// The options of this server instance.
   AnalysisServerOptions options;
 
@@ -127,6 +128,7 @@ abstract class AbstractAnalysisServer {
   ];
 
   /// The [ResourceProvider] using which paths are converted into [Resource]s.
+  @override
   final OverlayResourceProvider resourceProvider;
 
   /// The next modification stamp for a changed file in the [resourceProvider].
@@ -281,6 +283,10 @@ abstract class AbstractAnalysisServer {
     }
     return null;
   }
+
+  @override
+  AnalysisSession getAnalysisSession(String path) =>
+      getAnalysisDriver(path).currentSession;
 
   DartdocDirectiveInfo getDartdocDirectiveInfoFor(ResolvedUnitResult result) {
     return declarationsTracker

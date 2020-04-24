@@ -6,16 +6,17 @@ import 'package:analysis_server/protocol/protocol_generated.dart';
 import 'package:analysis_server/src/edit/fix/dartfix_listener.dart';
 import 'package:analysis_server/src/edit/fix/dartfix_registrar.dart';
 import 'package:analysis_server/src/edit/fix/fix_code_task.dart';
-import 'package:analysis_server/src/edit/nnbd_migration/instrumentation_listener.dart';
-import 'package:analysis_server/src/edit/nnbd_migration/migration_state.dart';
-import 'package:analysis_server/src/edit/preview/http_preview_server.dart';
 import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer_plugin/protocol/protocol_common.dart';
 import 'package:charcode/charcode.dart';
-import 'package:nnbd_migration/nnbd_migration.dart';
+import 'package:nnbd_migration/api_for_analysis_server/dartfix_listener_interface.dart';
+import 'package:nnbd_migration/api_for_analysis_server/http_preview_server.dart';
+import 'package:nnbd_migration/api_for_analysis_server/instrumentation_listener.dart';
+import 'package:nnbd_migration/api_for_analysis_server/migration_state.dart';
+import 'package:nnbd_migration/api_for_analysis_server/nnbd_migration.dart';
 import 'package:pub_semver/pub_semver.dart';
 import 'package:source_span/source_span.dart';
 import 'package:yaml/yaml.dart';
@@ -37,7 +38,7 @@ class NonNullableFix extends FixCodeTask {
 
   final int preferredPort;
 
-  final DartFixListener listener;
+  final DartFixListenerInterface listener;
 
   /// The root of the included paths.
   ///
@@ -92,7 +93,7 @@ class NonNullableFix extends FixCodeTask {
   @override
   Future<void> finish() async {
     final state = MigrationState(
-        migration, includedRoot, listener, instrumentationListener, adapter);
+        migration, includedRoot, listener, instrumentationListener);
     await state.refresh();
 
     if (server == null) {
@@ -240,7 +241,7 @@ environment:
     reset();
     await rerunFunction(changedPaths);
     final state = MigrationState(
-        migration, includedRoot, listener, instrumentationListener, adapter);
+        migration, includedRoot, listener, instrumentationListener);
     await state.refresh();
     return state;
   }
@@ -290,7 +291,7 @@ environment:
 }
 
 class NullabilityMigrationAdapter implements NullabilityMigrationListener {
-  final DartFixListener listener;
+  final DartFixListenerInterface listener;
 
   NullabilityMigrationAdapter(this.listener);
 
