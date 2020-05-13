@@ -96,15 +96,17 @@ Future<InitializedCompilerState> initializeIncrementalCompiler(
 }
 
 Future<InitializedCompilerState> initializeCompiler(
-    InitializedCompilerState oldState,
-    Uri sdkSummary,
-    Uri librariesSpecificationUri,
-    Uri packagesFile,
-    List<Uri> additionalDills,
-    Target target,
-    FileSystem fileSystem,
-    Iterable<String> experiments,
-    Map<String, String> environmentDefines) async {
+  InitializedCompilerState oldState,
+  Uri sdkSummary,
+  Uri librariesSpecificationUri,
+  Uri packagesFile,
+  List<Uri> additionalDills,
+  Target target,
+  FileSystem fileSystem,
+  Iterable<String> experiments,
+  Map<String, String> environmentDefines, {
+  bool verbose: false,
+}) async {
   // TODO(sigmund): use incremental compiler when it supports our use case.
   // Note: it is common for the summary worker to invoke the compiler with the
   // same input summary URIs, but with different contents, so we'd need to be
@@ -120,7 +122,8 @@ Future<InitializedCompilerState> initializeCompiler(
     ..environmentDefines = environmentDefines
     ..experimentalFlags = parseExperimentalFlags(
         parseExperimentalArguments(experiments),
-        onError: (e) => throw e);
+        onError: (e) => throw e)
+    ..verbose = verbose;
 
   ProcessedOptions processedOpts = new ProcessedOptions(options: options);
 
