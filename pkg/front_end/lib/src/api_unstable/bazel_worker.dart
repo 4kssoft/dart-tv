@@ -71,7 +71,8 @@ Future<InitializedCompilerState> initializeIncrementalCompiler(
     Iterable<String> experiments,
     bool outlineOnly,
     Map<String, String> environmentDefines,
-    {bool trackNeededDillLibraries: false}) async {
+    {bool trackNeededDillLibraries: false,
+    bool verbose: false}) async {
   List<Component> outputLoadedAdditionalDills =
       new List<Component>(additionalDills.length);
   Map<ExperimentalFlag, bool> experimentalFlags = parseExperimentalFlags(
@@ -92,7 +93,8 @@ Future<InitializedCompilerState> initializeIncrementalCompiler(
       outlineOnly: outlineOnly,
       omitPlatform: true,
       trackNeededDillLibraries: trackNeededDillLibraries,
-      environmentDefines: environmentDefines);
+      environmentDefines: environmentDefines,
+      verbose: verbose);
 }
 
 Future<InitializedCompilerState> initializeCompiler(

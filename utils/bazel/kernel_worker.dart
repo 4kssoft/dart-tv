@@ -293,7 +293,8 @@ Future<ComputeKernelResult> computeKernel(List<String> args,
         (parsedArgs['enable-experiment'] as List<String>),
         summaryOnly,
         environmentDefines,
-        trackNeededDillLibraries: recordUsedInputs);
+        trackNeededDillLibraries: recordUsedInputs,
+        verbose: verbose);
   } else {
     state = await fe.initializeCompiler(
         // TODO(sigmund): pass an old state once we can make use of it.
