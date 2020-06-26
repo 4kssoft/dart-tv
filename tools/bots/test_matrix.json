@@ -1066,7 +1066,7 @@
       "steps": [
         {
           "name": "create results",
-          "script": "tools/bots/create_synthetic_results.dart",
+          "script": "tools/bots/create_ci_test_data.dart",
           "arguments": ["-nci-test-data"],
           "testRunner": true
         }
