@@ -1066,8 +1066,11 @@
       "steps": [
         {
           "name": "create results",
-          "script": "tools/bots/create_ci_test_data.dart",
-          "arguments": ["-nci-test-data"],
+          "script": "sdk/bin/dart",
+          "arguments": [
+            "tools/bots/create_ci_test_data.dart",
+            "-nci-test-data"
+          ],
           "testRunner": true
         }
       ]
