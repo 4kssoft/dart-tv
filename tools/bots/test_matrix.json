@@ -419,6 +419,12 @@
     ]
   },
   "configurations": {
+    "ci-test-data": {
+      "options": {
+          "compiler": "none",
+          "builder-tag": "ci-test-data"
+      }
+    },
     "unittest-(linux|win|mac)": {
       "options": {
         "compiler": "dartk",
@@ -1054,6 +1060,18 @@
     }
   },
   "builder_configurations": [
+    {
+      "builders": ["ci-test-data"],
+      "meta": { "description": "creates synthetic results for testing" },
+      "steps": [
+        {
+          "name": "create results",
+          "script": "tools/bots/create_synthetic_results.dart",
+          "arguments": ["-nci-test-data"],
+          "testRunner": true
+        }
+      ]
+    },
     {
       "builders": [
         "front-end-linux-release-x64",
