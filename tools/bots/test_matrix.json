@@ -1065,8 +1065,17 @@
       "meta": { "description": "creates synthetic results for testing" },
       "steps": [
         {
+          "name": "build dart",
+          "script": "tools/build.py",
+          "arguments": [
+            "--mode=release",
+            "--arch=x64",
+            "runtime"
+          ]
+        },
+        {
           "name": "create results",
-          "script": "sdk/bin/dart",
+          "script": "out/ReleaseX64/dart",
           "arguments": [
             "tools/bots/create_ci_test_data.dart",
             "-nci-test-data"
