@@ -95,7 +95,7 @@
       "name": "boolean_selector",
       "rootUri": "../third_party/pkg/boolean_selector",
       "packageUri": "lib/",
-      "languageVersion": "2.4"
+      "languageVersion": "2.10"
     },
     {
       "name": "build_integration",
@@ -375,7 +375,7 @@
       "name": "matcher",
       "rootUri": "../third_party/pkg/matcher",
       "packageUri": "lib/",
-      "languageVersion": "2.7"
+      "languageVersion": "2.10"
     },
     {
       "name": "meta",
@@ -446,19 +446,19 @@
       "name": "path",
       "rootUri": "../third_party/pkg/path",
       "packageUri": "lib/",
-      "languageVersion": "2.0"
+      "languageVersion": "2.10"
     },
     {
       "name": "pedantic",
       "rootUri": "../third_party/pkg/pedantic",
       "packageUri": "lib/",
-      "languageVersion": "2.1"
+      "languageVersion": "2.10"
     },
     {
       "name": "pool",
       "rootUri": "../third_party/pkg/pool",
       "packageUri": "lib/",
-      "languageVersion": "2.0"
+      "languageVersion": "2.10"
     },
     {
       "name": "protobuf",
@@ -536,19 +536,19 @@
       "name": "source_map_stack_trace",
       "rootUri": "../third_party/pkg/source_map_stack_trace",
       "packageUri": "lib/",
-      "languageVersion": "2.7"
+      "languageVersion": "2.10"
     },
     {
       "name": "source_maps",
       "rootUri": "../third_party/pkg/source_maps",
       "packageUri": "lib/",
-      "languageVersion": "2.0"
+      "languageVersion": "2.10"
     },
     {
       "name": "source_span",
       "rootUri": "../third_party/pkg/source_span",
       "packageUri": "lib/",
-      "languageVersion": "2.6"
+      "languageVersion": "2.10"
     },
     {
       "name": "sourcemap_testing",
@@ -566,7 +566,7 @@
       "name": "stack_trace",
       "rootUri": "../third_party/pkg/stack_trace",
       "packageUri": "lib/",
-      "languageVersion": "2.0"
+      "languageVersion": "2.10"
     },
     {
       "name": "stagehand",
@@ -584,13 +584,13 @@
       "name": "stream_channel",
       "rootUri": "../third_party/pkg/stream_channel",
       "packageUri": "lib/",
-      "languageVersion": "2.2"
+      "languageVersion": "2.10"
     },
     {
       "name": "string_scanner",
       "rootUri": "../third_party/pkg/string_scanner",
       "packageUri": "lib/",
-      "languageVersion": "2.0"
+      "languageVersion": "2.10"
     },
     {
       "name": "sync_http",
@@ -608,25 +608,25 @@
       "name": "term_glyph",
       "rootUri": "../third_party/pkg/term_glyph",
       "packageUri": "lib/",
-      "languageVersion": "1.8"
+      "languageVersion": "2.10"
     },
     {
       "name": "test",
       "rootUri": "../third_party/pkg/test/pkgs/test",
       "packageUri": "lib/",
-      "languageVersion": "2.7"
+      "languageVersion": "2.10"
     },
     {
       "name": "test_api",
       "rootUri": "../third_party/pkg/test/pkgs/test_api",
       "packageUri": "lib/",
-      "languageVersion": "2.7"
+      "languageVersion": "2.10"
     },
     {
       "name": "test_core",
       "rootUri": "../third_party/pkg/test/pkgs/test_core",
       "packageUri": "lib/",
-      "languageVersion": "2.7"
+      "languageVersion": "2.10"
     },
     {
       "name": "test_descriptor",
