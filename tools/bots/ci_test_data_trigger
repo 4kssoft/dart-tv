@@ -1,0 +1,11 @@
+Modify this file to trigger a run of the builder the uses
+tools/bots/create_ci_test_data.dart to create synthetic
+test results.
+
+- Test new builder
+- Test after bug fix
+- Another bug fix
+- Also build dart
+- create new baseline build
+- trigger build with three commits
+- trigger build to test result database support
