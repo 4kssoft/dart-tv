@@ -8,3 +8,4 @@ test results.
 - Also build dart
 - create new baseline build
 - trigger build with three commits
+- trigger build to test result database support
