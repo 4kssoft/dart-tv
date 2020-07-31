@@ -14,7 +14,7 @@ import 'package:args/args.dart';
 const suite = "ci-test-data";
 
 const results = [
-  Result("test_a", "Pass"),
+  Result("test_a", "CompileTimeError"),
   Result("test_b", "Pass"),
 ];
 
