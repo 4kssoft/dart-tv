@@ -38,3 +38,4 @@ ci-test-data branch:
 - commit with no test changes
 - no change, prepare for bisection test
 - another empty change
+- third empty change to prepare for bisection test
