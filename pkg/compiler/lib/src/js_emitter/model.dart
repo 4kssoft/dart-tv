@@ -225,9 +225,13 @@ class StaticField {
   final bool isFinal;
   final bool isLazy;
   final bool isInitializedByConstant;
+  final bool usesNonNullableInitialization;
 
   StaticField(this.element, this.name, this.getterName, this.holder, this.code,
-      {this.isFinal, this.isLazy, this.isInitializedByConstant: false});
+      {this.isFinal,
+      this.isLazy,
+      this.isInitializedByConstant: false,
+      this.usesNonNullableInitialization: false});
 
   @override
   String toString() {
@@ -261,6 +265,7 @@ class Class implements FieldContainer {
   final List<Field> staticFieldsForReflection;
   final bool hasRtiField; // Per-instance runtime type information pseudo-field.
   final bool onlyForRti;
+  final bool onlyForConstructor;
   final bool isDirectlyInstantiated;
   final bool isNative;
   final bool isClosureBaseClass; // Common base class for closures.
@@ -303,12 +308,14 @@ class Class implements FieldContainer {
       this.functionTypeIndex,
       {this.hasRtiField,
       this.onlyForRti,
+      this.onlyForConstructor,
       this.isDirectlyInstantiated,
       this.isNative,
       this.isClosureBaseClass,
       this.isSoftDeferred = false,
       this.isSuperMixinApplication}) {
     assert(onlyForRti != null);
+    assert(onlyForConstructor != null);
     assert(isDirectlyInstantiated != null);
     assert(isNative != null);
     assert(isClosureBaseClass != null);
@@ -355,6 +362,7 @@ class MixinApplication extends Class {
       js.Expression functionTypeIndex,
       {bool hasRtiField,
       bool onlyForRti,
+      bool onlyForConstructor,
       bool isDirectlyInstantiated})
       : super(
             element,
@@ -371,6 +379,7 @@ class MixinApplication extends Class {
             functionTypeIndex,
             hasRtiField: hasRtiField,
             onlyForRti: onlyForRti,
+            onlyForConstructor: onlyForConstructor,
             isDirectlyInstantiated: isDirectlyInstantiated,
             isNative: false,
             isClosureBaseClass: false,

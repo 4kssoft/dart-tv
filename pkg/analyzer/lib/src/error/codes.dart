@@ -16,167 +16,6 @@ export 'package:analyzer/src/dart/error/todo_codes.dart';
 // ignore_for_file: slash_for_doc_comments
 
 /**
- * The error codes used for compile time errors caused by constant evaluation
- * that would throw an exception when run in checked mode. The client of the
- * analysis engine is responsible for determining how these errors should be
- * presented to the user (for example, a command-line compiler might elect to
- * treat these errors differently depending whether it is compiling it "checked"
- * mode).
- */
-class CheckedModeCompileTimeErrorCode extends AnalyzerErrorCode {
-  // TODO(paulberry): improve the text of these error messages so that it's
-  // clear to the user that the error is coming from constant evaluation (and
-  // hence the constant needs to be a subtype of the annotated type) as opposed
-  // to static type analysis (which only requires that the two types be
-  // assignable).  Also consider populating the "correction" field for these
-  // errors.
-
-  /**
-   * 16.12.2 Const: It is a compile-time error if evaluation of a constant
-   * object results in an uncaught exception being thrown.
-   */
-  static const CheckedModeCompileTimeErrorCode
-      CONST_CONSTRUCTOR_FIELD_TYPE_MISMATCH = CheckedModeCompileTimeErrorCode(
-          'CONST_CONSTRUCTOR_FIELD_TYPE_MISMATCH',
-          "A value of type '{0}' can't be assigned to the field '{1}', which "
-              "has type '{2}'.");
-
-  /**
-   * Parameters:
-   * 0: The type of the runtime value of the argument
-   * 1: The static type of the parameter
-   */
-  // #### Description
-  //
-  // The analyzer produces this diagnostic when the runtime type of a constant
-  // value can't be assigned to the static type of a constant constructor's
-  // parameter.
-  //
-  // #### Example
-  //
-  // The following code produces this diagnostic because the runtime type of `i`
-  // is `int`, which can't be assigned to the static type of `s`:
-  //
-  // ```dart
-  // class C {
-  //   final String s;
-  //
-  //   const C(this.s);
-  // }
-  //
-  // const dynamic i = 0;
-  //
-  // void f() {
-  //   const C([!i!]);
-  // }
-  // ```
-  //
-  // #### Common fixes
-  //
-  // Pass a value of the correct type to the constructor:
-  //
-  // ```dart
-  // class C {
-  //   final String s;
-  //
-  //   const C(this.s);
-  // }
-  //
-  // const dynamic i = 0;
-  //
-  // void f() {
-  //   const C('$i');
-  // }
-  // ```
-  static const CheckedModeCompileTimeErrorCode
-      CONST_CONSTRUCTOR_PARAM_TYPE_MISMATCH = CheckedModeCompileTimeErrorCode(
-          'CONST_CONSTRUCTOR_PARAM_TYPE_MISMATCH',
-          "A value of type '{0}' can't be assigned to a parameter of type "
-              "'{1}'.",
-          hasPublishedDocs: true);
-
-  /**
-   * 7.6.1 Generative Constructors: In checked mode, it is a dynamic type error
-   * if o is not <b>null</b> and the interface of the class of <i>o</i> is not a
-   * subtype of the static type of the field <i>v</i>.
-   *
-   * 16.12.2 Const: It is a compile-time error if evaluation of a constant
-   * object results in an uncaught exception being thrown.
-   *
-   * Parameters:
-   * 0: the name of the type of the initializer expression
-   * 1: the name of the type of the field
-   */
-  static const CheckedModeCompileTimeErrorCode
-      CONST_FIELD_INITIALIZER_NOT_ASSIGNABLE = CheckedModeCompileTimeErrorCode(
-          'CONST_FIELD_INITIALIZER_NOT_ASSIGNABLE',
-          "The initializer type '{0}' can't be assigned to the field type "
-              "'{1}'.");
-
-  /**
-   * Parameters:
-   * 0: the type of the object being assigned.
-   * 1: the type of the variable being assigned to
-   */
-  // #### Description
-  //
-  // The analyzer produces this diagnostic when the evaluation of a constant
-  // expression would result in a `CastException`.
-  //
-  // #### Examples
-  //
-  // The following code produces this diagnostic because the value of `x` is an
-  // `int`, which can't be assigned to `y` because an `int` isn't a `String`:
-  //
-  // ```dart
-  // const Object x = 0;
-  // const String y = [!x!];
-  // ```
-  //
-  // #### Common fixes
-  //
-  // If the declaration of the constant is correct, then change the value being
-  // assigned to be of the correct type:
-  //
-  // ```dart
-  // const Object x = 0;
-  // const String y = '$x';
-  // ```
-  //
-  // If the assigned value is correct, then change the declaration to have the
-  // correct type:
-  //
-  // ```dart
-  // const Object x = 0;
-  // const int y = x;
-  // ```
-  static const CheckedModeCompileTimeErrorCode VARIABLE_TYPE_MISMATCH =
-      CheckedModeCompileTimeErrorCode(
-          'VARIABLE_TYPE_MISMATCH',
-          "A value of type '{0}' can't be assigned to a variable of type "
-              "'{1}'.",
-          hasPublishedDocs: true);
-
-  /**
-   * Initialize a newly created error code to have the given [name]. The message
-   * associated with the error will be created from the given [message]
-   * template. The correction associated with the error will be created from the
-   * given [correction] template.
-   */
-  const CheckedModeCompileTimeErrorCode(String name, String message,
-      {String correction, bool hasPublishedDocs})
-      : super.temporary(name, message,
-            correction: correction, hasPublishedDocs: hasPublishedDocs);
-
-  @override
-  ErrorSeverity get errorSeverity =>
-      ErrorType.CHECKED_MODE_COMPILE_TIME_ERROR.severity;
-
-  @override
-  ErrorType get type => ErrorType.CHECKED_MODE_COMPILE_TIME_ERROR;
-}
-
-/**
  * The error codes used for compile time errors. The convention for this class
  * is for the name of the error code to indicate the problem that caused the
  * error to be generated and for the error message to explain what is wrong and,
@@ -1447,6 +1286,73 @@ class CompileTimeErrorCode extends AnalyzerErrorCode {
    * 16.12.2 Const: It is a compile-time error if evaluation of a constant
    * object results in an uncaught exception being thrown.
    */
+  static const CompileTimeErrorCode CONST_CONSTRUCTOR_FIELD_TYPE_MISMATCH =
+      CompileTimeErrorCode(
+    'CONST_CONSTRUCTOR_FIELD_TYPE_MISMATCH',
+    "In a const constructor, a value of type '{0}' can't be assigned to the "
+        "field '{1}', which has type '{2}'.",
+    correction: "Try using a subtype, or removing the keyword 'const'.",
+  );
+
+  /**
+   * Parameters:
+   * 0: The type of the runtime value of the argument
+   * 1: The static type of the parameter
+   */
+  // #### Description
+  //
+  // The analyzer produces this diagnostic when the runtime type of a constant
+  // value can't be assigned to the static type of a constant constructor's
+  // parameter.
+  //
+  // #### Example
+  //
+  // The following code produces this diagnostic because the runtime type of `i`
+  // is `int`, which can't be assigned to the static type of `s`:
+  //
+  // ```dart
+  // class C {
+  //   final String s;
+  //
+  //   const C(this.s);
+  // }
+  //
+  // const dynamic i = 0;
+  //
+  // void f() {
+  //   const C([!i!]);
+  // }
+  // ```
+  //
+  // #### Common fixes
+  //
+  // Pass a value of the correct type to the constructor:
+  //
+  // ```dart
+  // class C {
+  //   final String s;
+  //
+  //   const C(this.s);
+  // }
+  //
+  // const dynamic i = 0;
+  //
+  // void f() {
+  //   const C('$i');
+  // }
+  // ```
+  static const CompileTimeErrorCode CONST_CONSTRUCTOR_PARAM_TYPE_MISMATCH =
+      CompileTimeErrorCode(
+          'CONST_CONSTRUCTOR_PARAM_TYPE_MISMATCH',
+          "A value of type '{0}' can't be assigned to a parameter of type "
+              "'{1}' in a const constructor.",
+          correction: "Try using a subtype, or removing the keyword 'const'.",
+          hasPublishedDocs: true);
+
+  /**
+   * 16.12.2 Const: It is a compile-time error if evaluation of a constant
+   * object results in an uncaught exception being thrown.
+   */
   static const CompileTimeErrorCode CONST_CONSTRUCTOR_THROWS_EXCEPTION =
       CompileTimeErrorCode('CONST_CONSTRUCTOR_THROWS_EXCEPTION',
           "Const constructors can't throw exceptions.",
@@ -1669,6 +1575,24 @@ class CompileTimeErrorCode extends AnalyzerErrorCode {
       'CONST_EVAL_TYPE_TYPE',
       "In constant expressions, operands of this operator must be of type "
           "'Type'.");
+  /**
+   * 7.6.1 Generative Constructors: In checked mode, it is a dynamic type error
+   * if o is not <b>null</b> and the interface of the class of <i>o</i> is not a
+   * subtype of the static type of the field <i>v</i>.
+   *
+   * 16.12.2 Const: It is a compile-time error if evaluation of a constant
+   * object results in an uncaught exception being thrown.
+   *
+   * Parameters:
+   * 0: the name of the type of the initializer expression
+   * 1: the name of the type of the field
+   */
+  static const CompileTimeErrorCode CONST_FIELD_INITIALIZER_NOT_ASSIGNABLE =
+      CompileTimeErrorCode(
+          'CONST_FIELD_INITIALIZER_NOT_ASSIGNABLE',
+          "The initializer type '{0}' can't be assigned to the field type "
+              "'{1}' in a const constructor.",
+          correction: "Try using a subtype, or removing the 'const' keyword");
 
   /**
    * 6.2 Formal Parameters: It is a compile-time error if a formal parameter is
@@ -5905,6 +5829,21 @@ class CompileTimeErrorCode extends AnalyzerErrorCode {
               "explicitly invoking a different constructor in '{0}'.");
 
   /**
+   * User friendly specialized error for [NON_GENERATIVE_CONSTRUCTOR]. This
+   * handles the case of `class E extends Exception` which will never work
+   * because [Exception] has no generative constructors.
+   */
+  static const CompileTimeErrorCode NO_GENERATIVE_CONSTRUCTORS_IN_SUPERCLASS =
+      CompileTimeErrorCode(
+          'NO_GENERATIVE_CONSTRUCTOR_IN_SUPERCLASS',
+          "The class '{0}' cannot extend '{1}' because '{1}' only has factory"
+              " constructors (no generative constructors), and '{0}' has at"
+              ' least one generative constructor.',
+          correction: 'Try implementing the class instead, adding a generative'
+              " (not factory) constructor to the superclass {0}, or a factory"
+              ' constructor to the subclass.');
+
+  /**
    * Parameters:
    * 0: the name of the superclass that does not define an implicitly invoked
    *    constructor
@@ -6636,13 +6575,38 @@ class CompileTimeErrorCode extends AnalyzerErrorCode {
    * Let <i>k</i> be a generative constructor. It is a compile-time error if
    * class <i>S</i> does not declare a generative constructor named <i>S</i>
    * (respectively <i>S.id</i>)
+   *
+   * Parameters:
+   * 0: the non-generative constructor
    */
   static const CompileTimeErrorCode NON_GENERATIVE_CONSTRUCTOR =
-      CompileTimeErrorCode('NON_GENERATIVE_CONSTRUCTOR',
-          "The generative constructor '{0}' expected, but factory found.",
+      CompileTimeErrorCode(
+          'NON_GENERATIVE_CONSTRUCTOR',
+          "The constructor '{0}' is a factory constructor, but must be a"
+              " generative constructor to be a valid superinitializer.",
           correction:
-              "Try calling a different constructor in the superclass, or "
+              "Try calling a different constructor of the superclass, or "
               "making the called constructor not be a factory constructor.");
+
+  /**
+   * An error code for when a class has no explicit constructor, and therefore
+   * a constructor is implicitly defined which uses a factory as a
+   * superinitializer. See [NON_GENERATIVE_CONSTRUCTOR].
+   *
+   * Parameters:
+   * 0: the name of the superclass
+   * 1: the name of the current class
+   * 2: the implicitly called factory constructor of the superclass
+   */
+  static const CompileTimeErrorCode NON_GENERATIVE_IMPLICIT_CONSTRUCTOR =
+      CompileTimeErrorCode(
+          'NON_GENERATIVE_IMPLICIT_CONSTRUCTOR',
+          "The default constructor of superclass '{0}' (called by the implicit"
+              " default constructor of '{1}') must be a generative constructor,"
+              " but factory found.",
+          correction: 'Try adding an explicit constructor that has a different'
+              " superinitializer or changing the superclass constructor '{2}'"
+              " to not be a factory constructor.");
 
   static const CompileTimeErrorCode NON_SYNC_FACTORY = CompileTimeErrorCode(
       'NON_SYNC_FACTORY',
@@ -9969,6 +9933,51 @@ class CompileTimeErrorCode extends AnalyzerErrorCode {
       hasPublishedDocs: true);
 
   /**
+   * Parameters:
+   * 0: the type of the object being assigned.
+   * 1: the type of the variable being assigned to
+   */
+  // #### Description
+  //
+  // The analyzer produces this diagnostic when the evaluation of a constant
+  // expression would result in a `CastException`.
+  //
+  // #### Examples
+  //
+  // The following code produces this diagnostic because the value of `x` is an
+  // `int`, which can't be assigned to `y` because an `int` isn't a `String`:
+  //
+  // ```dart
+  // const Object x = 0;
+  // const String y = [!x!];
+  // ```
+  //
+  // #### Common fixes
+  //
+  // If the declaration of the constant is correct, then change the value being
+  // assigned to be of the correct type:
+  //
+  // ```dart
+  // const Object x = 0;
+  // const String y = '$x';
+  // ```
+  //
+  // If the assigned value is correct, then change the declaration to have the
+  // correct type:
+  //
+  // ```dart
+  // const Object x = 0;
+  // const int y = x;
+  // ```
+  static const CompileTimeErrorCode VARIABLE_TYPE_MISMATCH =
+      CompileTimeErrorCode(
+          'VARIABLE_TYPE_MISMATCH',
+          "A value of type '{0}' can't be assigned to a const variable of type "
+              "'{1}'.",
+          correction: "Try using a subtype, or removing the 'const' keyword",
+          hasPublishedDocs: true);
+
+  /**
    * Let `C` be a generic class that declares a formal type parameter `X`, and
    * assume that `T` is a direct superinterface of `C`.
    *
@@ -10445,7 +10454,7 @@ class StaticWarningCode extends AnalyzerErrorCode {
           'INVALID_NULL_AWARE_OPERATOR',
           "The target expression can't be null, so the null-aware operator "
               "'{0}' can't be used.",
-          correction: "Try replace the operator '{0}' with '{1}'.",
+          correction: "Try replacing the operator '{0}' with '{1}'.",
           hasPublishedDocs: true);
 
   /**
@@ -10460,7 +10469,7 @@ class StaticWarningCode extends AnalyzerErrorCode {
           'INVALID_NULL_AWARE_OPERATOR_AFTER_SHORT_CIRCUIT',
           "The target expression can't be null because of short-circuiting, so "
               "the null-aware operator '{0}' can't be used.",
-          correction: "Try replace the operator '{0}' with '{1}'.",
+          correction: "Try replacing the operator '{0}' with '{1}'.",
           hasPublishedDocs: true);
 
   /**

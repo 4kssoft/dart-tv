@@ -59,6 +59,8 @@ import 'conflicting_type_variable_and_container_test.dart'
     as conflicting_type_variable_and_container;
 import 'conflicting_type_variable_and_member_test.dart'
     as conflicting_type_variable_and_member;
+import 'const_constructor_field_type_mismatch_test.dart'
+    as const_constructor_field_type_mismatch;
 import 'const_constructor_param_type_mismatch_test.dart'
     as const_constructor_param_type_mismatch;
 import 'const_constructor_with_field_initialized_by_non_const_test.dart'
@@ -77,6 +79,8 @@ import 'const_eval_type_bool_num_string_test.dart'
     as const_eval_type_bool_num_string;
 import 'const_eval_type_bool_test.dart' as const_eval_type_bool;
 import 'const_eval_type_num_test.dart' as const_eval_type_num;
+import 'const_field_initializer_not_assignable_test.dart'
+    as const_field_initializer_not_assignable;
 import 'const_formal_parameter_test.dart' as const_formal_parameter;
 import 'const_initialized_with_non_constant_value_from_deferred_library_test.dart'
     as const_initialized_with_non_constant_value_from_deferred_library;
@@ -230,6 +234,8 @@ import 'inference_failure_on_collection_literal_test.dart'
     as inference_failure_on_collection_literal;
 import 'inference_failure_on_function_return_type_test.dart'
     as inference_failure_on_function_return_type;
+import 'inference_failure_on_instance_creation_test.dart'
+    as inference_failure_on_instance_creation;
 import 'inference_failure_on_uninitialized_variable_test.dart'
     as inference_failure_on_uninitialized_variable;
 import 'inference_failure_on_untyped_parameter_test.dart'
@@ -380,6 +386,8 @@ import 'no_annotation_constructor_arguments_test.dart'
     as no_annotation_constructor_arguments;
 import 'no_combined_super_signature_test.dart' as no_combined_super_signature;
 import 'no_default_super_constructor_test.dart' as no_default_super_constructor;
+import 'no_generative_constructors_in_superclass_test.dart'
+    as no_generative_constructors_in_superclass;
 import 'non_abstract_class_inherits_abstract_member_test.dart'
     as non_abstract_class_inherits_abstract_member;
 import 'non_bool_condition_test.dart' as non_bool_condition;
@@ -411,6 +419,8 @@ import 'non_constant_map_value_test.dart' as non_constant_map_value;
 import 'non_constant_set_element_test.dart' as non_constant_set_element;
 import 'non_constant_type_argument_test.dart' as non_constant_type_argument;
 import 'non_generative_constructor_test.dart' as non_generative_constructor;
+import 'non_generative_implicit_constructor_test.dart'
+    as non_generative_implicit_constructor;
 import 'non_native_function_type_argument_to_pointer_test.dart'
     as non_native_function_type_argument_to_pointer;
 import 'non_null_opt_out_test.dart' as non_null_opt_out;
@@ -658,6 +668,7 @@ main() {
     conflicting_static_and_instance.main();
     conflicting_type_variable_and_container.main();
     conflicting_type_variable_and_member.main();
+    const_constructor_field_type_mismatch.main();
     const_constructor_param_type_mismatch.main();
     const_constructor_with_field_initialized_by_non_const.main();
     const_constructor_with_mixin_with_field.main();
@@ -670,6 +681,7 @@ main() {
     const_eval_type_bool_num_string.main();
     const_eval_type_bool.main();
     const_eval_type_num.main();
+    const_field_initializer_not_assignable.main();
     const_formal_parameter.main();
     const_initialized_with_non_constant_value_from_deferred_library.main();
     const_initialized_with_non_constant_value.main();
@@ -771,6 +783,7 @@ main() {
     inconsistent_language_version_override.main();
     inference_failure_on_collection_literal.main();
     inference_failure_on_function_return_type.main();
+    inference_failure_on_instance_creation.main();
     inference_failure_on_uninitialized_variable.main();
     inference_failure_on_untyped_parameter.main();
     initializer_for_non_existent_field.main();
@@ -872,6 +885,7 @@ main() {
     no_annotation_constructor_arguments.main();
     no_combined_super_signature.main();
     no_default_super_constructor.main();
+    no_generative_constructors_in_superclass.main();
     non_abstract_class_inherits_abstract_member.main();
     non_bool_condition.main();
     non_bool_expression.main();
@@ -892,6 +906,7 @@ main() {
     non_constant_set_element.main();
     non_constant_type_argument.main();
     non_generative_constructor.main();
+    non_generative_implicit_constructor.main();
     non_native_function_type_argument_to_pointer.main();
     non_null_opt_out.main();
     non_type_as_type_argument.main();

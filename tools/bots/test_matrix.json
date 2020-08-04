@@ -398,16 +398,16 @@
       }
     },
     "unittest-weak-asserts-no-sdk-(linux|mac|win)": {
-       "options": {
-         "compiler": "dartk",
-         "enable-asserts": true,
-         "mode": "release",
-         "runtime": "vm",
-         "timeout": 240,
-         "enable-experiment": [
-           "non-nullable"
-         ]
-       }
+      "options": {
+        "compiler": "dartk",
+        "enable-asserts": true,
+        "mode": "release",
+        "runtime": "vm",
+        "timeout": 240,
+        "enable-experiment": [
+          "non-nullable"
+        ]
+      }
     },
     "analyzer-unittest-asserts-(debug|product|release)-(linux|mac|win)": {
       "options": {
@@ -718,27 +718,43 @@
         "enable-experiment": [
           "non-nullable"
         ],
-	"gen-kernel-options": [
+        "gen-kernel-options": [
           "--no-sound-null-safety"
         ],
         "enable-asserts": true,
-	"vm-options": [
+        "vm-options": [
           "--no-sound-null-safety"
         ],
         "builder-tag": "vm_nnbd"
       }
     },
-    "dartkp-weak-asserts-win-(debug|product|release)-x64": {
+    "dartkp-weak-asserts-(linux|mac)-(debug|product|release)-simarm64": {
       "options": {
         "enable-experiment": [
           "non-nullable"
         ],
-	"gen-kernel-options": [
+        "gen-kernel-options": [
           "--no-sound-null-safety"
         ],
         "enable-asserts": true,
         "use-elf": true,
-	"vm-options": [
+        "vm-options": [
+          "--no-sound-null-safety"
+        ],
+        "builder-tag": "vm_nnbd"
+      }
+    },
+    "dartkp-weak-asserts-win-(debug|product|release)-(simarm64|x64)": {
+      "options": {
+        "enable-experiment": [
+          "non-nullable"
+        ],
+        "gen-kernel-options": [
+          "--no-sound-null-safety"
+        ],
+        "enable-asserts": true,
+        "use-elf": true,
+        "vm-options": [
           "--no-sound-null-safety"
         ],
         "builder-tag": "vm_nnbd"
@@ -750,7 +766,7 @@
           "non-nullable"
         ],
         "enable-asserts": true,
-	"vm-options": [
+        "vm-options": [
           "--no-sound-null-safety"
         ],
         "builder-tag": "vm_nnbd"
@@ -781,7 +797,22 @@
         "builder-tag": "vm_nnbd"
       }
     },
-    "dartkp-strong-win-(debug|product|release)-x64": {
+    "dartkp-strong-(linux|mac)-(debug|product|release)-simarm64": {
+      "options": {
+        "enable-experiment": [
+          "non-nullable"
+        ],
+        "gen-kernel-options": [
+          "--sound-null-safety"
+        ],
+        "use-elf": true,
+        "vm-options": [
+          "--sound-null-safety"
+        ],
+        "builder-tag": "vm_nnbd"
+      }
+    },
+    "dartkp-strong-win-(debug|product|release)-(simarm64|x64)": {
       "options": {
         "use-elf": true,
         "enable-experiment": [
@@ -1322,6 +1353,7 @@
     },
     {
       "builders": [
+        "vm-kernel-precomp-nnbd-linux-release-simarm64",
         "vm-kernel-precomp-nnbd-linux-release-x64"
       ],
       "meta": {
@@ -1378,7 +1410,9 @@
             "lib",
             "standalone/io",
             "vm"
-          ]
+          ],
+          "fileset": "vm-kernel",
+          "shards": 3
         }
       ]
     },
@@ -2567,20 +2601,28 @@
           ]
         },
         {
-          "name": "dart2js nnbd weak tests",
+          "name": "dart2js nnbd weak d8 tests",
           "arguments": [
             "-ndart2js-hostasserts-weak-linux-x64-d8",
             "--dart2js-batch",
             "language",
-            "corelib",
-            "dart2js",
-            "kernel"
+            "corelib"
           ],
           "shards": 6,
           "fileset": "web_platform_hostasserts_nnbd"
         },
         {
-          "name": "dart2js legacy weak lib tests",
+          "name": "dart2js nnbd weak chrome tests",
+          "arguments": [
+            "-ndart2js-hostasserts-weak-linux-x64-chrome",
+            "--dart2js-batch",
+            "dart2js"
+          ],
+          "shards": 3,
+          "fileset": "web_platform_hostasserts_nnbd"
+        },
+        {
+          "name": "dart2js nnbd weak lib tests",
           "arguments": [
             "-ndart2js-hostasserts-weak-linux-x64-chrome",
             "--dart2js-batch",
@@ -2590,7 +2632,7 @@
           "fileset": "web_platform_hostasserts_nnbd"
         },
         {
-          "name": "dart2js legacy weak co19 tests",
+          "name": "dart2js nnbd weak co19 tests",
           "arguments": [
             "-ndart2js-hostasserts-weak-linux-x64-chrome",
             "--dart2js-batch",
@@ -2600,16 +2642,24 @@
           "fileset": "web_platform_hostasserts_nnbd"
         },
         {
-          "name": "dart2js nnbd strong tests",
+          "name": "dart2js nnbd strong d8 tests",
           "arguments": [
             "-ndart2js-hostasserts-strong-linux-x64-d8",
             "--dart2js-batch",
             "language",
-            "corelib",
-            "dart2js",
-            "kernel"
+            "corelib"
           ],
           "shards": 6,
+          "fileset": "web_platform_hostasserts_nnbd"
+        },
+        {
+          "name": "dart2js nnbd strong chrome tests",
+          "arguments": [
+            "-ndart2js-hostasserts-strong-linux-x64-chrome",
+            "--dart2js-batch",
+            "dart2js"
+          ],
+          "shards": 3,
           "fileset": "web_platform_hostasserts_nnbd"
         },
         {

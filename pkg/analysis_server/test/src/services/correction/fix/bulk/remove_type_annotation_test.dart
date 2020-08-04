@@ -10,6 +10,8 @@ import 'bulk_fix_processor.dart';
 void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(RemoveDynamicTypeAnnotationTest);
+    defineReflectiveTests(RemoveSetterReturnTypeAnnotationTest);
+    defineReflectiveTests(RemoveTypeAnnotationOnClosureParamsTest);
   });
 }
 
@@ -36,6 +38,40 @@ f(void foo(x)) {
 f2({defaultValue}) {
   return null;
 }
+''');
+  }
+}
+
+@reflectiveTest
+class RemoveSetterReturnTypeAnnotationTest extends BulkFixProcessorTest {
+  @override
+  String get lintCode => LintNames.avoid_return_types_on_setters;
+
+  Future<void> test_singleFile() async {
+    await resolveTestUnit('''
+void set s(int s) {}
+void set s2(int s2) {}
+''');
+    await assertHasFix('''
+set s(int s) {}
+set s2(int s2) {}
+''');
+  }
+}
+
+@reflectiveTest
+class RemoveTypeAnnotationOnClosureParamsTest extends BulkFixProcessorTest {
+  @override
+  String get lintCode => LintNames.avoid_types_on_closure_parameters;
+
+  Future<void> test_singleFile() async {
+    await resolveTestUnit('''
+var x = ({Future<int> defaultValue}) => null;
+var y = (Future<int> defaultValue) => null;
+''');
+    await assertHasFix('''
+var x = ({defaultValue}) => null;
+var y = (defaultValue) => null;
 ''');
   }
 }

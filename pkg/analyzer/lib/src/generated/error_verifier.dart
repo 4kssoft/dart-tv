@@ -230,8 +230,8 @@ class ErrorVerifier extends RecursiveAstVisitor<void> {
         _requiredParametersVerifier = RequiredParametersVerifier(errorReporter),
         _duplicateDefinitionVerifier =
             DuplicateDefinitionVerifier(_currentLibrary, errorReporter) {
-    this._isInSystemLibrary = _currentLibrary.source.isInSystemLibrary;
-    this._hasExtUri = _currentLibrary.hasExtUri;
+    _isInSystemLibrary = _currentLibrary.source.isInSystemLibrary;
+    _hasExtUri = _currentLibrary.hasExtUri;
     _isInCatchClause = false;
     _isInStaticVariableDeclaration = false;
     _isInConstructorInitializer = false;
@@ -401,7 +401,6 @@ class ErrorVerifier extends RecursiveAstVisitor<void> {
       _duplicateDefinitionVerifier.checkClass(node);
       _checkForBuiltInIdentifierAsName(
           node.name, CompileTimeErrorCode.BUILT_IN_IDENTIFIER_AS_TYPE_NAME);
-      _checkForNoDefaultSuperConstructorImplicit(node);
       _checkForConflictingClassTypeVariableErrorCodes();
       TypeName superclass = node.extendsClause?.superclass;
       ImplementsClause implementsClause = node.implementsClause;
@@ -1250,7 +1249,8 @@ class ErrorVerifier extends RecursiveAstVisitor<void> {
     // class.
     if (!_checkForExtendsDisallowedClass(superclass) &&
         !_checkForImplementsClauseErrorCodes(implementsClause) &&
-        !_checkForAllMixinErrorCodes(withClause)) {
+        !_checkForAllMixinErrorCodes(withClause) &&
+        !_checkForNoGenerativeConstructorsInSuperclass(superclass)) {
       _checkForImplicitDynamicType(superclass);
       _checkForExtendsDeferredClass(superclass);
       _checkForRepeatedType(implementsClause?.interfaces,
@@ -1260,6 +1260,9 @@ class ErrorVerifier extends RecursiveAstVisitor<void> {
       _checkMixinInference(node, withClause);
       _checkForMixinWithConflictingPrivateMember(withClause, superclass);
       _checkForConflictingGenerics(node);
+      if (node is ClassDeclaration) {
+        _checkForNoDefaultSuperConstructorImplicit(node);
+      }
     }
   }
 
@@ -1537,8 +1540,21 @@ class ErrorVerifier extends RecursiveAstVisitor<void> {
       DartType expectedStaticType,
       ErrorCode errorCode) {
     if (!_typeSystem.isAssignableTo2(actualStaticType, expectedStaticType)) {
+      AstNode getErrorNode(AstNode node) {
+        if (node is CascadeExpression) {
+          return getErrorNode(node.target);
+        }
+        if (node is ParenthesizedExpression) {
+          return getErrorNode(node.expression);
+        }
+        return node;
+      }
+
       _errorReporter.reportErrorForNode(
-          errorCode, expression, [actualStaticType, expectedStaticType]);
+        errorCode,
+        getErrorNode(expression),
+        [actualStaticType, expectedStaticType],
+      );
       return false;
     }
     return true;
@@ -2447,8 +2463,7 @@ class ErrorVerifier extends RecursiveAstVisitor<void> {
       // TODO(paulberry): this error should be based on the actual type of the
       // constant, not the static type.  See dartbug.com/21119.
       _errorReporter.reportErrorForNode(
-          CheckedModeCompileTimeErrorCode
-              .CONST_FIELD_INITIALIZER_NOT_ASSIGNABLE,
+          CompileTimeErrorCode.CONST_FIELD_INITIALIZER_NOT_ASSIGNABLE,
           expression,
           [staticType, fieldType]);
     }
@@ -3388,9 +3403,9 @@ class ErrorVerifier extends RecursiveAstVisitor<void> {
     if (superUnnamedConstructor != null) {
       if (superUnnamedConstructor.isFactory) {
         _errorReporter.reportErrorForNode(
-            CompileTimeErrorCode.NON_GENERATIVE_CONSTRUCTOR,
+            CompileTimeErrorCode.NON_GENERATIVE_IMPLICIT_CONSTRUCTOR,
             declaration.name,
-            [superUnnamedConstructor]);
+            [superElement.name, _enclosingClass.name, superUnnamedConstructor]);
         return;
       }
       if (superUnnamedConstructor.isDefaultConstructor) {
@@ -3406,6 +3421,35 @@ class ErrorVerifier extends RecursiveAstVisitor<void> {
           declaration.name,
           [superType, _enclosingClass.displayName]);
     }
+  }
+
+  bool _checkForNoGenerativeConstructorsInSuperclass(TypeName superclass) {
+    InterfaceType superType = _enclosingClass.supertype;
+    if (superType == null) {
+      return false;
+    }
+    if (_enclosingClass.constructors
+        .every((constructor) => constructor.isFactory)) {
+      // A class with no generative constructors *can* be extended if the
+      // subclass has only factory constructors.
+      return false;
+    }
+    ClassElement superElement = superType.element;
+    if (superElement.constructors.isEmpty) {
+      // Exclude empty constructor set, which indicates other errors occurred.
+      return false;
+    }
+    if (superElement.constructors
+        .every((constructor) => constructor.isFactory)) {
+      // For `E extends Exception`, etc., this will never work, because it has
+      // no generative constructors. State this clearly to users.
+      _errorReporter.reportErrorForNode(
+          CompileTimeErrorCode.NO_GENERATIVE_CONSTRUCTORS_IN_SUPERCLASS,
+          superclass,
+          [_enclosingClass.name, superElement.name]);
+      return true;
+    }
+    return false;
   }
 
   /// Verify the given map [literal] either:
@@ -4142,6 +4186,11 @@ class ErrorVerifier extends RecursiveAstVisitor<void> {
       return;
     }
     ClassElement superElement = superType.element;
+    if (superElement.constructors
+        .every((constructor) => constructor.isFactory)) {
+      // Already reported [NO_GENERATIVE_CONSTRUCTORS_IN_SUPERCLASS].
+      return;
+    }
     ConstructorElement superUnnamedConstructor =
         superElement.unnamedConstructor;
     if (superUnnamedConstructor != null) {
@@ -4290,8 +4339,7 @@ class ErrorVerifier extends RecursiveAstVisitor<void> {
           [enclosingElement.displayName]);
     } else {
       _errorReporter.reportErrorForNode(
-          CompileTimeErrorCode
-              .UNQUALIFIED_REFERENCE_TO_NON_LOCAL_STATIC_MEMBER,
+          CompileTimeErrorCode.UNQUALIFIED_REFERENCE_TO_NON_LOCAL_STATIC_MEMBER,
           name,
           [enclosingElement.displayName]);
     }

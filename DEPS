@@ -44,11 +44,11 @@ vars = {
   # co19 is a cipd package. Use update.sh in tests/co19[_2] to update these
   # hashes. It requires access to the dart-build-access group, which EngProd
   # has.
-  "co19_rev": "0fb063ff4707dbd7893f13d5babc30cdb80abd91",
+  "co19_rev": "e3d6ccfe8fa278041316f7dc958fdd8c2b447b6c",
   "co19_2_rev": "e48b3090826cf40b8037648f19d211e8eab1b4b6",
 
   # The internal benchmarks to use. See go/dart-benchmarks-internal
-  "benchmarks_internal_rev": "171db4d6bcd4689ef3328eedc6ce3ffd21cea168",
+  "benchmarks_internal_rev": "1682e8c568cf1899a6da6b5993f0506949253b22",
   "checkout_benchmarks_internal": False,
 
   # As Flutter does, we use Fuchsia's GN and Clang toolchain. These revision
@@ -79,7 +79,7 @@ vars = {
   "collection_rev": "583693680fc067e34ca5b72503df25e8b80579f9",
   "convert_rev": "49bde5b371eb5c2c8e721557cf762f17c75e49fc",
   "crypto_rev": "7422fb2f6584fe1839eb30bc4ca56e9f9760b801",
-  "csslib_rev": "bf372d4fdc6dfa232ad93f77a0a3de0891edd04c",
+  "csslib_rev": "451448a9ac03f87a8d0377fc0b411d8c388a6cb4",
   "dart2js_info_tag" : "0.6.0",
 
   # Note: Updates to dart_style have to be coordinated with the infrastructure
