@@ -15,7 +15,7 @@ const suite = "ci-test-data";
 
 const results = [
   Result("test_a", "CompileTimeError"),
-  Result("test_b", "Pass"),
+  Result("test_b", "RuntimeError"),
 ];
 
 class Result {
