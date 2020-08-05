@@ -171,7 +171,8 @@ main(List<String> arguments) async {
     print(parser.usage);
     exit(1);
   }
-  var results = await loadResultsMap(options['results']);
+  var content = (await File(options['results']).readAsString()).trim();
+  var results = await parseResultsMap(content);
   if (results.isEmpty) {
     print("No test results provided, nothing to update.");
     return;

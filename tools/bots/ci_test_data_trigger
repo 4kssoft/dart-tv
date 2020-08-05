@@ -19,3 +19,4 @@ test results.
 - trigger build after merge
 - create 'green' build
 - No changes to test results, trigger build
+- Make builder green
