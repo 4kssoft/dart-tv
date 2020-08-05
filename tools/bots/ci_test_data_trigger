@@ -18,3 +18,4 @@ test results.
 - trigger bisection on test failure
 - trigger build after merge
 - create 'green' build
+- No changes to test results, trigger build
