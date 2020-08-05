@@ -20,3 +20,4 @@ test results.
 - create 'green' build
 - No changes to test results, trigger build
 - Make builder green
+- Trigger build
