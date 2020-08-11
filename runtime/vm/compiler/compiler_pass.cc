@@ -277,6 +277,7 @@ FlowGraph* CompilerPass::RunForceOptimizedPipeline(
 #if defined(DART_PRECOMPILER)
   if (mode == kAOT) {
     INVOKE_PASS(SerializeGraph);
+    INVOKE_PASS(OutputWasm);
   }
 #endif
   if (FLAG_late_round_trip_serialization) {
@@ -365,6 +366,7 @@ FlowGraph* CompilerPass::RunPipeline(PipelineMode mode,
     // If we are serializing the flow graph, do it now before we start
     // doing register allocation.
     INVOKE_PASS(SerializeGraph);
+    INVOKE_PASS(OutputWasm);
   }
 #endif
   if (FLAG_late_round_trip_serialization) {
@@ -578,5 +580,52 @@ COMPILER_PASS(RoundTripSerialization, {
   FlowGraphDeserializer::RoundTripSerialization(state);
   ASSERT(state->flow_graph() != nullptr);
 })
+
+// Hack: Compiler pass with no effect on the FlowGraph.
+// As a side effect, it acts as a driver program for testing
+// the WasmModuleBuilder.
+#if defined(DART_PRECOMPILER)
+COMPILER_PASS(OutputWasm, {
+  if (state->precompiler == nullptr) return state;
+  if (auto stream = state->precompiler->output_wasm_stream()) {
+    // Hack to only run for the first discovered flowgraph (one way to
+    // run only once).
+    static bool run_once = true;
+    if (!run_once) return state;
+    run_once = false;
+
+    auto file_write = Dart::file_write_callback();
+    ASSERT(file_write != nullptr);
+
+    const intptr_t kInitialBufferSize = 1 * MB;
+    TextBuffer buffer(kInitialBufferSize);
+    StackZone stack_zone(Thread::Current());
+
+    // Get Wasm module from the precompiler state.
+    wasm::WasmModuleBuilder* const module_builder =
+        state->precompiler->wasm_module_builder();
+
+    // Register new function which returns an i32.
+    wasm::Function* const fct =
+        module_builder->AddFunction("fct", module_builder->i32());
+
+    // Register two new locals of this function.
+    fct->AddLocal(wasm::Local::LocalKind::kParam, module_builder->i32(), "x");
+    fct->AddLocal(wasm::Local::LocalKind::kLocal, module_builder->f64(), "y");
+
+    // Add instructions to this function: compute 45 + 49.
+    wasm::BasicBlock* const block = fct->AddBlock(23);
+    block->instructions()->AddConstant(45);
+    block->instructions()->AddConstant(49);
+    block->instructions()->AddInt32Add();
+
+    // Serialize Wasm module.
+    auto sexp = state->precompiler->wasm_module_builder()->Serialize();
+    sexp->SerializeTo(stack_zone.GetZone(), &buffer, "");
+    // Output to file specified by the --output_wasm_to flag.
+    file_write(buffer.buf(), buffer.length(), stream);
+  }
+})
+#endif
 
 }  // namespace dart

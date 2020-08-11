@@ -41,6 +41,7 @@ namespace dart {
   V(OptimisticallySpecializeSmiPhis)                                           \
   V(OptimizeBranches)                                                          \
   V(OptimizeTypedDataAccesses)                                                 \
+  V(OutputWasm)                                                                \
   V(RangeAnalysis)                                                             \
   V(ReorderBlocks)                                                             \
   V(RoundTripSerialization)                                                    \

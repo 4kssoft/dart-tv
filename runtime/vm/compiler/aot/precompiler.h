@@ -12,6 +12,7 @@
 #include "vm/allocation.h"
 #include "vm/compiler/aot/dispatch_table_generator.h"
 #include "vm/compiler/assembler/assembler.h"
+#include "vm/compiler/assembler/assembler_wasm.h"
 #include "vm/hash_map.h"
 #include "vm/hash_table.h"
 #include "vm/object.h"
@@ -231,6 +232,7 @@ class Precompiler : public ValueObject {
   }
 
   void* il_serialization_stream() const { return il_serialization_stream_; }
+  void* output_wasm_stream() const { return output_wasm_stream_; }
 
   static Precompiler* Instance() { return singleton_; }
 
@@ -247,6 +249,10 @@ class Precompiler : public ValueObject {
   Phase phase() const { return phase_; }
 
   bool is_tracing() const { return is_tracing_; }
+
+  wasm::WasmModuleBuilder* wasm_module_builder() {
+    return &wasm_module_builder_;
+  }
 
  private:
   static Precompiler* singleton_;
@@ -328,6 +334,8 @@ class Precompiler : public ValueObject {
     il_serialization_stream_ = file;
   }
 
+  void set_output_wasm_stream(void* file) { output_wasm_stream_ = file; }
+
   Thread* thread() const { return thread_; }
   Zone* zone() const { return zone_; }
   Isolate* isolate() const { return isolate_; }
@@ -369,10 +377,13 @@ class Precompiler : public ValueObject {
 
   bool get_runtime_type_is_unique_;
   void* il_serialization_stream_;
+  void* output_wasm_stream_;
 
   Phase phase_ = Phase::kPreparation;
   PrecompilerTracer* tracer_ = nullptr;
   bool is_tracing_ = false;
+
+  wasm::WasmModuleBuilder wasm_module_builder_;
 };
 
 class FunctionsTraits {

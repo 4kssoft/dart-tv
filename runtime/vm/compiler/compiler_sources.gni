@@ -28,6 +28,8 @@ compiler_sources = [
   "assembler/assembler_base.h",
   "assembler/assembler_ia32.cc",
   "assembler/assembler_ia32.h",
+  "assembler/assembler_wasm.cc",
+  "assembler/assembler_wasm.h",
   "assembler/assembler_x64.cc",
   "assembler/assembler_x64.h",
   "assembler/object_pool_builder.h",

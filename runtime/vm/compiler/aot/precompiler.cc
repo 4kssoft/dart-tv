@@ -91,6 +91,11 @@ DEFINE_FLAG(charp,
             nullptr,
             "Serialize flow graphs to the given file");
 
+DEFINE_FLAG(charp,
+            output_wasm_to,
+            nullptr,
+            "Output generated Wasm module to the given file");
+
 DEFINE_FLAG(bool,
             populate_llvm_constant_pool,
             false,
@@ -180,7 +185,9 @@ Precompiler::Precompiler(Thread* thread)
       seen_table_selectors_(),
       error_(Error::Handle()),
       get_runtime_type_is_unique_(false),
-      il_serialization_stream_(nullptr) {
+      il_serialization_stream_(nullptr),
+      output_wasm_stream_(nullptr),
+      wasm_module_builder_(thread) {
   ASSERT(Precompiler::singleton_ == NULL);
   Precompiler::singleton_ = this;
 }
@@ -267,6 +274,14 @@ void Precompiler::DoCompileAll() {
           object_store->set_llvm_constant_pool(llvm_constants);
           object_store->set_llvm_function_pool(llvm_functions);
           object_store->set_llvm_constant_hash_table(llvm_constant_hash_table);
+        }
+      }
+
+      if (FLAG_output_wasm_to != nullptr &&
+          Dart::file_write_callback() != nullptr) {
+        if (auto file_open = Dart::file_open_callback()) {
+          auto file = file_open(FLAG_output_wasm_to, /*write=*/true);
+          set_output_wasm_stream(file);
         }
       }
 
@@ -382,6 +397,14 @@ void Precompiler::DoCompileAll() {
             AddFunction(function);
           }
         }
+      }
+
+      if (FLAG_output_wasm_to != nullptr &&
+          Dart::file_write_callback() != nullptr) {
+        if (auto file_close = Dart::file_close_callback()) {
+          file_close(output_wasm_stream());
+        }
+        set_output_wasm_stream(nullptr);
       }
 
       if (tracer_ != nullptr) {
