@@ -884,8 +884,12 @@ abstract class ClassBuilderImpl extends DeclarationBuilderImpl
 
     procedure.isAbstract = false;
     procedure.isNoSuchMethodForwarder = true;
+    procedure.isMemberSignature = false;
     procedure.isForwardingStub = false;
     procedure.isForwardingSemiStub = false;
+    procedure.memberSignatureOrigin = null;
+    procedure.forwardingStubInterfaceTarget = null;
+    procedure.forwardingStubSuperTarget = null;
   }
 
   Uri _getMemberUri(Member member) {
@@ -1416,6 +1420,7 @@ abstract class ClassBuilderImpl extends DeclarationBuilderImpl
 
   @override
   void checkMixinApplication(ClassHierarchy hierarchy, CoreTypes coreTypes) {
+    TypeEnvironment typeEnvironment = new TypeEnvironment(coreTypes, hierarchy);
     // A mixin declaration can only be applied to a class that implements all
     // the declaration's superclass constraints.
     InterfaceType supertype = cls.supertype.asInterfaceType;
@@ -1425,7 +1430,13 @@ abstract class ClassBuilderImpl extends DeclarationBuilderImpl
           substitution.substituteSupertype(constraint).asInterfaceType;
       InterfaceType implementedInterface = hierarchy.getTypeAsInstanceOf(
           supertype, requiredInterface.classNode, library.library, coreTypes);
-      if (implementedInterface != requiredInterface) {
+      if (implementedInterface == null ||
+          !typeEnvironment.areMutualSubtypes(
+              implementedInterface,
+              requiredInterface,
+              library.isNonNullableByDefault
+                  ? SubtypeCheckMode.withNullabilities
+                  : SubtypeCheckMode.ignoringNullabilities)) {
         library.addProblem(
             templateMixinApplicationIncompatibleSupertype.withArguments(
                 supertype,

@@ -71,7 +71,29 @@ main() {
     ]);
   }
 
-  Future<void> test_compute_prefixStart_hasPrefix() async {
+  Future<void> test_compute_prefixStart_beforeToken_identifier() async {
+    await _compute('''
+const foo = 0;
+
+class A {
+  @fo^
+}
+''');
+    expect(_completionResult.prefixStart.line, 3);
+    expect(_completionResult.prefixStart.column, 3);
+  }
+
+  Future<void> test_compute_prefixStart_beforeToken_keyword() async {
+    await _compute('''
+import 'dart:async' h^;
+''');
+    _assertHasKeyword(text: 'hide');
+    _assertNoKeyword(text: 'show');
+    expect(_completionResult.prefixStart.line, 0);
+    expect(_completionResult.prefixStart.column, 20);
+  }
+
+  Future<void> test_compute_prefixStart_identifier() async {
     await _compute('''
 class A {
   String foobar;
@@ -416,6 +438,21 @@ part 'a.dart';
     _assertHasClass(text: 'A');
   }
 
+  Future<void> test_limitedResolution_inPart() async {
+    newFile('/workspace/dart/test/lib/a.dart', content: r'''
+part 'test.dart';
+class A {}
+''');
+
+    await _compute(r'''
+part of 'a.dart';
+^
+''');
+
+    _assertHasClass(text: 'int');
+    _assertHasClass(text: 'A');
+  }
+
   Future<void> test_limitedResolution_unit_function_body() async {
     _configureToCheckNotResolved(
       identifiers: {'print'},
@@ -537,6 +574,12 @@ import 'a.dart';
     return matching.single;
   }
 
+  CompletionSuggestion _assertHasKeyword({@required String text}) {
+    var matching = _matchingKeywordCompletions(text: text);
+    expect(matching, hasLength(1), reason: 'Expected exactly one completion');
+    return matching.single;
+  }
+
   CompletionSuggestion _assertHasLocalVariable({@required String text}) {
     var matching = _matchingCompletions(
       text: text,
@@ -613,6 +656,11 @@ import 'a.dart';
     expect(matching, isEmpty, reason: 'Expected zero completions');
   }
 
+  void _assertNoKeyword({@required String text}) {
+    var matching = _matchingKeywordCompletions(text: text);
+    expect(matching, isEmpty, reason: 'Expected zero completions');
+  }
+
   void _assertNoNamedArgument({@required String name}) {
     var matching = _matchingNamedArgumentSuggestions(name: name);
     expect(matching, isEmpty, reason: 'Expected zero completions');
@@ -676,6 +724,17 @@ import 'a.dart';
       }
 
       return true;
+    }).toList();
+  }
+
+  List<CompletionSuggestion> _matchingKeywordCompletions({
+    @required String text,
+  }) {
+    return _suggestions.where((e) {
+      if (e.completion != text) {
+        return false;
+      }
+      return e.kind == CompletionSuggestionKind.KEYWORD;
     }).toList();
   }
 

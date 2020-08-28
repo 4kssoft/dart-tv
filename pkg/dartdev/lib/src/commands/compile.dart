@@ -66,7 +66,7 @@ class CompileJSCommand extends DartdevCommand<int> {
 
   @override
   FutureOr<int> run() async {
-    if (!Sdk.checkArtifactExists(sdk.dart2js)) {
+    if (!Sdk.checkArtifactExists(sdk.dart2jsSnapshot)) {
       return 255;
     }
     final String librariesPath = path.absolute(
@@ -90,7 +90,7 @@ class CompileJSCommand extends DartdevCommand<int> {
       return -1;
     }
 
-    VmInteropHandler.run(sdk.dart2js, [
+    VmInteropHandler.run(sdk.dart2jsSnapshot, [
       '--libraries-spec=$librariesPath',
       ...argResults.arguments,
     ]);
@@ -152,7 +152,7 @@ class CompileSnapshotCommand extends DartdevCommand<int> {
 
     log.stdout('Compiling $sourcePath to $commandName file $outputFile.');
     // TODO(bkonyi): perform compilation in same process.
-    final process = await startProcess(sdk.dart, args);
+    final process = await startDartProcess(sdk, args);
     routeToStdout(process);
     return process.exitCode;
   }
@@ -242,6 +242,12 @@ class CompileCommand extends Command {
       help: 'to a JIT snapshot',
       fileExt: 'jit',
       formatName: 'app-jit',
+    ));
+    addSubcommand(CompileSnapshotCommand(
+      commandName: 'kernel',
+      help: 'to a kernel snapshot',
+      fileExt: 'dill',
+      formatName: 'kernel',
     ));
     addSubcommand(CompileNativeCommand(
       commandName: 'exe',

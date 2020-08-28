@@ -623,6 +623,8 @@ FunctionPtr TranslationHelper::LookupStaticMethodByKernelProcedure(
   } else {
     ASSERT(IsClass(enclosing));
     Class& klass = Class::Handle(Z, LookupClassByKernelClass(enclosing));
+    const auto& error = klass.EnsureIsFinalized(thread_);
+    ASSERT(error == Error::null());
     Function& function = Function::ZoneHandle(
         Z, klass.LookupFunctionAllowPrivate(procedure_name));
     CheckStaticLookup(function);
@@ -646,6 +648,8 @@ FunctionPtr TranslationHelper::LookupConstructorByKernelConstructor(
     const Class& owner,
     NameIndex constructor) {
   ASSERT(IsConstructor(constructor));
+  const auto& error = owner.EnsureIsFinalized(thread_);
+  ASSERT(error == Error::null());
   Function& function = Function::Handle(
       Z, owner.LookupConstructorAllowPrivate(DartConstructorName(constructor)));
   CheckStaticLookup(function);
@@ -663,6 +667,8 @@ FunctionPtr TranslationHelper::LookupConstructorByKernelConstructor(
 
   String& new_name =
       String::ZoneHandle(Z, Symbols::FromConcatAll(thread_, pieces));
+  const auto& error = owner.EnsureIsFinalized(thread_);
+  ASSERT(error == Error::null());
   FunctionPtr function = owner.LookupConstructorAllowPrivate(new_name);
   ASSERT(function != Object::null());
   return function;
@@ -672,9 +678,10 @@ FunctionPtr TranslationHelper::LookupMethodByMember(NameIndex target,
                                                     const String& method_name) {
   NameIndex kernel_class = EnclosingName(target);
   Class& klass = Class::Handle(Z, LookupClassByKernelClass(kernel_class));
-
-  Function& function =
-      Function::Handle(Z, klass.LookupFunctionAllowPrivate(method_name));
+  Function& function = Function::Handle(Z);
+  if (klass.EnsureIsFinalized(thread_) == Error::null()) {
+    function = klass.LookupFunctionAllowPrivate(method_name);
+  }
 #ifdef DEBUG
   if (function.IsNull()) {
     THR_Print("Unable to find \'%s\' in %s\n", method_name.ToCString(),
@@ -1096,6 +1103,10 @@ void ProcedureHelper::ReadUntilExcluding(Field field) {
       if (++next_read_ == field) return;
       FALL_THROUGH;
     case kForwardingStubInterfaceTarget:
+      helper_->ReadCanonicalNameReference();
+      if (++next_read_ == field) return;
+      FALL_THROUGH;
+    case kMemberSignatureTarget:
       helper_->ReadCanonicalNameReference();
       if (++next_read_ == field) return;
       FALL_THROUGH;
@@ -1825,8 +1836,9 @@ void LoadingUnitsMetadataHelper::ReadMetadata(intptr_t node_offset) {
     unit.set_id(id);
 
     intptr_t parent_id = helper_->ReadUInt();
+    RELEASE_ASSERT(parent_id < id);
     parent ^= loading_units.At(parent_id);
-    ASSERT(parent.IsNull() == (parent_id == 0));
+    RELEASE_ASSERT(parent.IsNull() == (parent_id == 0));
     unit.set_parent(parent);
 
     intptr_t library_count = helper_->ReadUInt();
@@ -1995,6 +2007,16 @@ NameIndex KernelReaderHelper::ReadCanonicalNameReference() {
   return reader_.ReadCanonicalNameReference();
 }
 
+NameIndex KernelReaderHelper::ReadInterfaceMemberNameReference() {
+  NameIndex name_index = reader_.ReadCanonicalNameReference();
+  NameIndex origin_name_index = reader_.ReadCanonicalNameReference();
+  if (!FLAG_precompiled_mode && origin_name_index != NameIndex::kInvalidName) {
+    // Reference to a skipped member signature target, return the origin target.
+    return origin_name_index;
+  }
+  return name_index;
+}
+
 StringIndex KernelReaderHelper::ReadNameAsStringIndex() {
   StringIndex name_index = ReadStringReference();  // read name index.
   if ((H.StringSize(name_index) >= 1) && H.CharacterAt(name_index, 0) == '_') {
@@ -2061,6 +2083,11 @@ void KernelReaderHelper::SkipConstantReference() {
 
 void KernelReaderHelper::SkipCanonicalNameReference() {
   ReadUInt();
+}
+
+void KernelReaderHelper::SkipInterfaceMemberNameReference() {
+  SkipCanonicalNameReference();
+  SkipCanonicalNameReference();
 }
 
 void KernelReaderHelper::ReportUnexpectedTag(const char* variant, Tag tag) {
@@ -2286,35 +2313,35 @@ void KernelReaderHelper::SkipExpression() {
       ReadPosition();                // read position.
       SkipExpression();              // read receiver.
       SkipName();                    // read name.
-      SkipCanonicalNameReference();  // read interface_target_reference.
+      SkipInterfaceMemberNameReference();  // read interface_target_reference.
       return;
     case kPropertySet:
       ReadPosition();                // read position.
       SkipExpression();              // read receiver.
       SkipName();                    // read name.
       SkipExpression();              // read value.
-      SkipCanonicalNameReference();  // read interface_target_reference.
+      SkipInterfaceMemberNameReference();  // read interface_target_reference.
       return;
     case kSuperPropertyGet:
       ReadPosition();                // read position.
       SkipName();                    // read name.
-      SkipCanonicalNameReference();  // read interface_target_reference.
+      SkipInterfaceMemberNameReference();  // read interface_target_reference.
       return;
     case kSuperPropertySet:
       ReadPosition();                // read position.
       SkipName();                    // read name.
       SkipExpression();              // read value.
-      SkipCanonicalNameReference();  // read interface_target_reference.
+      SkipInterfaceMemberNameReference();  // read interface_target_reference.
       return;
     case kDirectPropertyGet:
       ReadPosition();                // read position.
       SkipExpression();              // read receiver.
-      SkipCanonicalNameReference();  // read target_reference.
+      SkipInterfaceMemberNameReference();  // read target_reference.
       return;
     case kDirectPropertySet:
       ReadPosition();                // read position.
       SkipExpression();              // read receiver.
-      SkipCanonicalNameReference();  // read target_reference.
+      SkipInterfaceMemberNameReference();  // read target_reference.
       SkipExpression();              // read value·
       return;
     case kStaticGet:
@@ -2331,18 +2358,18 @@ void KernelReaderHelper::SkipExpression() {
       SkipExpression();              // read receiver.
       SkipName();                    // read name.
       SkipArguments();               // read arguments.
-      SkipCanonicalNameReference();  // read interface_target_reference.
+      SkipInterfaceMemberNameReference();  // read interface_target_reference.
       return;
     case kSuperMethodInvocation:
       ReadPosition();                // read position.
       SkipName();                    // read name.
       SkipArguments();               // read arguments.
-      SkipCanonicalNameReference();  // read interface_target_reference.
+      SkipInterfaceMemberNameReference();  // read interface_target_reference.
       return;
     case kDirectMethodInvocation:
       ReadPosition();                // read position.
       SkipExpression();              // read receiver.
-      SkipCanonicalNameReference();  // read target_reference.
+      SkipInterfaceMemberNameReference();  // read target_reference.
       SkipArguments();               // read arguments.
       return;
     case kStaticInvocation:
@@ -3552,6 +3579,8 @@ void TypeTranslator::SetupFunctionParameters(
     // Read ith variable declaration.
     VariableDeclarationHelper helper(helper_);
     helper.ReadUntilExcluding(VariableDeclarationHelper::kType);
+    // The required flag should only be set on named parameters.
+    ASSERT(!helper.IsRequired());
     const AbstractType& type = BuildTypeWithoutFinalization();  // read type.
     Tag tag = helper_->ReadTag();  // read (first part of) initializer.
     if (tag == kSomething) {

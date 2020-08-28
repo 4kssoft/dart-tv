@@ -5,8 +5,7 @@
 import 'package:analyzer/src/error/codes.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
-import 'driver_resolution.dart';
-import 'with_null_safety_mixin.dart';
+import 'context_collection_resolution.dart';
 
 main() {
   defineReflectiveSuite(() {
@@ -16,7 +15,7 @@ main() {
 }
 
 @reflectiveTest
-class SimpleIdentifierResolutionTest extends DriverResolutionTest {
+class SimpleIdentifierResolutionTest extends PubPackageResolutionTest {
   test_dynamic_explicitCore() async {
     await assertNoErrorsInCode(r'''
 import 'dart:core';
@@ -28,7 +27,8 @@ main() {
 
     assertSimpleIdentifier(
       findNode.simple('dynamic;'),
-      element: dynamicElement,
+      readElement: dynamicElement,
+      writeElement: null,
       type: 'Type',
     );
   }
@@ -46,7 +46,8 @@ main() {
 
     assertSimpleIdentifier(
       findNode.simple('dynamic;'),
-      element: null,
+      readElement: null,
+      writeElement: null,
       type: 'dynamic',
     );
   }
@@ -60,7 +61,8 @@ main() {
 
     assertSimpleIdentifier(
       findNode.simple('dynamic;'),
-      element: dynamicElement,
+      readElement: dynamicElement,
+      writeElement: null,
       type: 'Type',
     );
   }

@@ -20,7 +20,7 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import '../../../generated/elements_types_mixin.dart';
 import '../../../utils.dart';
-import '../resolution/driver_resolution.dart';
+import '../resolution/context_collection_resolution.dart';
 import 'base.dart';
 
 main() {
@@ -38,7 +38,7 @@ final isVoidType = TypeMatcher<VoidTypeImpl>();
 
 /// Integration tests for resolution.
 @reflectiveTest
-class AnalysisDriverResolutionTest extends DriverResolutionTest
+class AnalysisDriverResolutionTest extends PubPackageResolutionTest
     with ElementsTypesMixin {
   void assertDeclaredVariableType(SimpleIdentifier node, String expected) {
     VariableElement element = node.staticElement;
@@ -250,7 +250,7 @@ const a = 1;
   }
 
   test_annotation_onDirective_part() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 part of 'test.dart';
 ''');
     addTestFile(r'''
@@ -273,7 +273,7 @@ const a = 1;
   }
 
   test_annotation_onDirective_partOf() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 part 'test.dart';
 ''');
     addTestFile(r'''
@@ -394,7 +394,7 @@ class C {
   }
 
   test_annotation_prefixed_classField() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 class A {
   static const a = 1;
 }
@@ -433,7 +433,7 @@ main() {}
   }
 
   test_annotation_prefixed_constructor() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 class A {
   const A(int a, {int b});
 }
@@ -474,7 +474,7 @@ main() {}
   }
 
   test_annotation_prefixed_constructor_named() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 class A {
   const A.named(int a, {int b});
 }
@@ -517,7 +517,7 @@ main() {}
   }
 
   test_annotation_prefixed_topLevelVariable() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 const topAnnotation = 1;
 ''');
     addTestFile(r'''
@@ -949,8 +949,6 @@ main() {
       itemElement1 = itemElement;
 
       expect(closureElement.returnType, typeProvider.nullType);
-      // TODO(scheglov) Make this null.
-//      expect(closureElement.type.element, same(closureElement));
       assertType(closureElement.type, closureTypeStr);
       expect(closure.staticType, same(closureElement.type));
 
@@ -991,7 +989,6 @@ main() {
       expect(itemElement, isNot(same(itemElement1)));
 
       expect(closureElement.returnType, typeProvider.nullType);
-      expect(closureElement.type.element, same(closureElement));
       assertType(closureElement.type, closureTypeStr);
       expect(closure.staticType, same(closureElement.type));
 
@@ -1059,12 +1056,11 @@ class C {
     ClassDeclaration c = unit.declarations[0];
     FieldDeclaration declaration = c.members[0];
     VariableDeclaration field = declaration.fields.variables[0];
-    FunctionElement fieldInitializer = field.declaredElement.initializer;
 
     FunctionExpressionInvocation invocation = field.initializer;
     FunctionExpression closure = invocation.function.unParenthesized;
     FunctionElementImpl closureElement = closure.declaredElement;
-    expect(closureElement.enclosingElement, same(fieldInitializer));
+    expect(closureElement, isNotNull);
   }
 
   test_closure_inTopLevelVariable() async {
@@ -1076,13 +1072,11 @@ var v = (() => 42)();
 
     TopLevelVariableDeclaration declaration = unit.declarations[0];
     VariableDeclaration variable = declaration.variables.variables[0];
-    TopLevelVariableElement variableElement = variable.declaredElement;
-    FunctionElement variableInitializer = variableElement.initializer;
 
     FunctionExpressionInvocation invocation = variable.initializer;
     FunctionExpression closure = invocation.function.unParenthesized;
     FunctionElementImpl closureElement = closure.declaredElement;
-    expect(closureElement.enclosingElement, same(variableInitializer));
+    expect(closureElement, isNotNull);
   }
 
   test_conditionalExpression() async {
@@ -1395,7 +1389,7 @@ class B<U> {
   }
 
   test_deferredImport_loadLibrary_invocation() async {
-    newFile('/test/lib/a.dart');
+    newFile('$testPackageLibPath/a.dart');
     addTestFile(r'''
 import 'a.dart' deferred as a;
 main() {
@@ -1419,7 +1413,7 @@ main() {
   }
 
   test_deferredImport_loadLibrary_invocation_argument() async {
-    newFile('/test/lib/a.dart');
+    newFile('$testPackageLibPath/a.dart');
     addTestFile(r'''
 import 'a.dart' deferred as a;
 var b = 1;
@@ -1453,7 +1447,7 @@ main() {
   }
 
   test_deferredImport_loadLibrary_tearOff() async {
-    newFile('/test/lib/a.dart');
+    newFile('$testPackageLibPath/a.dart');
     addTestFile(r'''
 import 'a.dart' deferred as a;
 main() {
@@ -1476,7 +1470,7 @@ main() {
   }
 
   test_deferredImport_variable() async {
-    newFile('/test/lib/a.dart', content: 'var v = 0;');
+    newFile('$testPackageLibPath/a.dart', content: 'var v = 0;');
     addTestFile(r'''
 import 'a.dart' deferred as a;
 main() async {
@@ -1516,7 +1510,7 @@ main() async {
   }
 
   test_directive_export() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 class MyClass {}
 int myVar;
 int get myGetter => 0;
@@ -1564,7 +1558,7 @@ export 'a.dart' show MyClass, myVar, myGetter, mySetter, Unresolved;
   }
 
   test_directive_import_hide() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 class MyClass {}
 int myVar;
 int get myGetter => 0;
@@ -1612,7 +1606,7 @@ import 'a.dart' hide MyClass, myVar, myGetter, mySetter, Unresolved;
   }
 
   test_directive_import_show() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 class MyClass {}
 int myVar;
 int get myGetter => 0;
@@ -2172,7 +2166,7 @@ var b = new C.named(2);
   }
 
   test_instanceCreation_prefixed() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 class C<T> {
   C(T p);
   C.named(T p);
@@ -3580,7 +3574,7 @@ main() {
 
   @failingTest
   test_invalid_nonTypeAsType_topLevelFunction_prefixed() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 int T() => 0;
 ''');
     addTestFile(r'''
@@ -3648,7 +3642,7 @@ main() {
 
   @failingTest
   test_invalid_nonTypeAsType_topLevelVariable_prefixed() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 int T;
 ''');
     addTestFile(r'''
@@ -5630,7 +5624,7 @@ const b = C.named(); // ref
   }
 
   test_optionalConst_prefixed() async {
-    newFile('/test/lib/a.dart', content: r'''
+    newFile('$testPackageLibPath/a.dart', content: r'''
 class C {
   const C();
   const C.named();
@@ -6154,7 +6148,7 @@ main(double computation(int p)) {
   }
 
   test_prefixedIdentifier_importPrefix_className() async {
-    newFile('/test/lib/lib.dart', content: '''
+    newFile('$testPackageLibPath/lib.dart', content: '''
 class MyClass {}
 typedef void MyFunctionTypeAlias();
 int myTopVariable;
@@ -7751,9 +7745,9 @@ main() {
   }
 
   test_typeAnnotation_prefixed() async {
-    newFile('/test/lib/a.dart', content: 'class A {}');
-    newFile('/test/lib/b.dart', content: "export 'a.dart';");
-    newFile('/test/lib/c.dart', content: "export 'a.dart';");
+    newFile('$testPackageLibPath/a.dart', content: 'class A {}');
+    newFile('$testPackageLibPath/b.dart', content: "export 'a.dart';");
+    newFile('$testPackageLibPath/c.dart', content: "export 'a.dart';");
     addTestFile(r'''
 import 'b.dart' as b;
 import 'c.dart' as c;
@@ -8415,10 +8409,11 @@ main() {
       SimpleIdentifier identifier = prefixed.identifier;
       assertSimpleIdentifier(
         identifier,
-        element: elementMatcher(
+        readElement: elementMatcher(
           objectHashCode,
           isLegacy: isNullSafetySdkAndLegacyLibrary,
         ),
+        writeElement: null,
         type: 'int',
       );
     }
@@ -8612,8 +8607,9 @@ main() {
 class DriverResolutionWithExperimentsTest extends BaseAnalysisDriverTest {
   @override
   AnalysisOptionsImpl createAnalysisOptions() => super.createAnalysisOptions()
-    ..contextFeatures = FeatureSet.fromEnableFlags(
-      [EnableString.triple_shift],
+    ..contextFeatures = FeatureSet.fromEnableFlags2(
+      sdkLanguageVersion: ExperimentStatus.testingSdkLanguageVersion,
+      flags: [EnableString.triple_shift],
     );
 
   test_binaryExpression_gtGtGt() async {

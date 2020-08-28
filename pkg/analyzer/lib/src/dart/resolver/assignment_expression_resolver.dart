@@ -18,6 +18,7 @@ import 'package:analyzer/src/dart/resolver/resolution_result.dart';
 import 'package:analyzer/src/dart/resolver/type_property_resolver.dart';
 import 'package:analyzer/src/error/codes.dart';
 import 'package:analyzer/src/error/nullable_dereference_verifier.dart';
+import 'package:analyzer/src/generated/migration.dart';
 import 'package:analyzer/src/generated/resolver.dart';
 import 'package:analyzer/src/task/strong/checker.dart';
 import 'package:meta/meta.dart';
@@ -46,6 +47,10 @@ class AssignmentExpressionResolver {
 
   bool get _isNonNullableByDefault => _typeSystem.isNonNullableByDefault;
 
+  MigrationResolutionHooks get _migrationResolutionHooks {
+    return _resolver.migrationResolutionHooks;
+  }
+
   NullableDereferenceVerifier get _nullableDereferenceVerifier =>
       _resolver.nullableDereferenceVerifier;
 
@@ -57,10 +62,22 @@ class AssignmentExpressionResolver {
     var left = node.leftHandSide;
     var right = node.rightHandSide;
 
+    // Case `id = e`.
+    // Consider an assignment of the form `id = e`, where `id` is an identifier.
+    if (left is SimpleIdentifier) {
+      var leftLookup = _resolver.nameScope.lookup2(left.name);
+      // When the lexical lookup yields a local variable `v`.
+      var leftGetter = leftLookup.getter;
+      if (leftGetter is VariableElement) {
+        _resolve_SimpleIdentifier_LocalVariable(node, left, leftGetter, right);
+        return;
+      }
+    }
+
     left?.accept(_resolver);
     left = node.leftHandSide;
 
-    var leftLocalVariable = _flowAnalysis?.assignmentExpression(node);
+    _flowAnalysis?.assignmentExpression(node);
 
     TokenType operator = node.operator.type;
     if (operator == TokenType.EQ ||
@@ -76,12 +93,7 @@ class AssignmentExpressionResolver {
     _resolve1(node);
     _resolve2(node);
 
-    _flowAnalysis?.assignmentExpression_afterRight(
-        node,
-        leftLocalVariable,
-        operator == TokenType.QUESTION_QUESTION_EQ
-            ? node.rightHandSide.staticType
-            : node.staticType);
+    _flowAnalysis?.assignmentExpression_afterRight(node);
   }
 
   /// Set the static type of [node] to be the least upper bound of the static
@@ -180,6 +192,32 @@ class AssignmentExpressionResolver {
     return type;
   }
 
+  /// Record that the static type of the given node is the given type.
+  ///
+  /// @param expression the node whose type is to be recorded
+  /// @param type the static type of the node
+  ///
+  /// TODO(scheglov) this is duplication
+  void _recordStaticType(Expression expression, DartType type) {
+    if (_resolver.migrationResolutionHooks != null) {
+      // TODO(scheglov) type cannot be null
+      type = _migrationResolutionHooks.modifyExpressionType(
+        expression,
+        type ?? DynamicTypeImpl.instance,
+      );
+    }
+
+    // TODO(scheglov) type cannot be null
+    if (type == null) {
+      expression.staticType = DynamicTypeImpl.instance;
+    } else {
+      expression.staticType = type;
+      if (_typeSystem.isBottom(type)) {
+        _flowAnalysis?.flow?.handleExit();
+      }
+    }
+  }
+
   void _resolve1(AssignmentExpressionImpl node) {
     Token operator = node.operator;
     TokenType operatorType = operator.type;
@@ -190,7 +228,7 @@ class AssignmentExpressionResolver {
       return;
     }
 
-    _assignmentShared.checkLateFinalAlreadyAssigned(leftHandSide);
+    _assignmentShared.checkFinalAlreadyAssigned(leftHandSide);
 
     // For any compound assignments to a void or nullable variable, report it.
     // Example: `y += voidFn()`, not allowed.
@@ -275,6 +313,7 @@ class AssignmentExpressionResolver {
         operator,
         rightType,
         type,
+        operatorElement,
       );
       _inferenceHelper.recordStaticType(node, type);
 
@@ -288,6 +327,47 @@ class AssignmentExpressionResolver {
       }
     }
     _resolver.nullShortingTermination(node);
+  }
+
+  void _resolve_SimpleIdentifier_LocalVariable(
+    AssignmentExpressionImpl node,
+    SimpleIdentifier left,
+    VariableElement leftElement,
+    Expression right,
+  ) {
+    left.staticElement = leftElement;
+
+    var leftType = _resolver.localVariableTypeProvider.getType(left);
+    // TODO(scheglov) Set the type only when `operator != TokenType.EQ`.
+    _recordStaticType(left, leftType);
+
+    var operator = node.operator.type;
+    if (operator != TokenType.EQ) {
+      _resolver.checkReadOfNotAssignedLocalVariable(left);
+    }
+
+    if (operator == TokenType.EQ ||
+        operator == TokenType.QUESTION_QUESTION_EQ) {
+      InferenceContext.setType(right, leftType);
+    }
+
+    var flow = _flowAnalysis?.flow;
+    if (flow != null && operator == TokenType.QUESTION_QUESTION_EQ) {
+      flow.ifNullExpression_rightBegin(left);
+    }
+
+    right?.accept(_resolver);
+    right = node.rightHandSide;
+
+    _resolve1(node);
+    _resolve2(node);
+
+    if (flow != null) {
+      flow.write(leftElement, node.staticType);
+      if (node.operator.type == TokenType.QUESTION_QUESTION_EQ) {
+        flow.ifNullExpression_end();
+      }
+    }
   }
 
   /// If the given [type] is a type parameter, resolve it to the type that
@@ -324,18 +404,31 @@ class AssignmentExpressionShared {
 
   ErrorReporter get _errorReporter => _resolver.errorReporter;
 
-  void checkLateFinalAlreadyAssigned(Expression left) {
+  void checkFinalAlreadyAssigned(Expression left) {
     var flow = _flowAnalysis?.flow;
     if (flow != null && left is SimpleIdentifier) {
       var element = left.staticElement;
-      if (element is LocalVariableElement &&
-          element.isLate &&
-          element.isFinal) {
-        if (flow.isAssigned(element)) {
-          _errorReporter.reportErrorForNode(
-            CompileTimeErrorCode.LATE_FINAL_LOCAL_ALREADY_ASSIGNED,
-            left,
-          );
+      if (element is VariableElement) {
+        var assigned = _flowAnalysis.isDefinitelyAssigned(left, element);
+        var unassigned = _flowAnalysis.isDefinitelyUnassigned(left, element);
+
+        if (element.isFinal) {
+          if (element.isLate) {
+            if (assigned) {
+              _errorReporter.reportErrorForNode(
+                CompileTimeErrorCode.LATE_FINAL_LOCAL_ALREADY_ASSIGNED,
+                left,
+              );
+            }
+          } else {
+            if (!unassigned) {
+              _errorReporter.reportErrorForNode(
+                CompileTimeErrorCode.ASSIGNMENT_TO_FINAL_LOCAL,
+                left,
+                [element.name],
+              );
+            }
+          }
         }
       }
     }

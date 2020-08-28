@@ -705,18 +705,12 @@ class PrecompilerCompilerConfiguration extends CompilerConfiguration
       if (_configuration.useElf) ...[
         "--snapshot-kind=app-aot-elf",
         "--elf=$tempDir/out.aotsnapshot",
+        // Only splitting with a ELF to avoid having to setup compilation of
+        // multiple assembly files in the test harness.
+        "--loading-unit-manifest=$tempDir/ignored.json",
       ] else ...[
         "--snapshot-kind=app-aot-assembly",
         "--assembly=$tempDir/out.S",
-      ],
-      // Only splitting with a ELF to avoid having to setup compilation of
-      // multiple assembly files in the test harness. Only splitting tests of
-      // deferred imports because splitting currently requires disable bare
-      // instructions mode, and we want to continue testing bare instructions
-      // mode.
-      if (_configuration.useElf && arguments.last.contains("deferred")) ...[
-        "--loading-unit-manifest=$tempDir/ignored.json",
-        "--use-bare-instructions=false",
       ],
       if (_isAndroid && _isArm) '--no-sim-use-hardfp',
       if (_configuration.isMinified) '--obfuscate',
@@ -1080,15 +1074,8 @@ abstract class VMKernelCompilerMixin {
     var pkgVmDir = Platform.script.resolve('../../../pkg/vm').toFilePath();
     var genKernel = '$pkgVmDir/tool/gen_kernel$shellScriptExtension';
 
-    var useAbiVersion = arguments.firstWhere(
-        (arg) => arg.startsWith('--use-abi-version='),
-        orElse: () => null);
-
     var kernelBinariesFolder = '${_configuration.buildDirectory}';
-    if (useAbiVersion != null) {
-      var version = useAbiVersion.split('=')[1];
-      kernelBinariesFolder += '/dart-sdk/lib/_internal/abiversions/$version';
-    } else if (_useSdk) {
+    if (_useSdk) {
       kernelBinariesFolder += '/dart-sdk/lib/_internal';
     }
 
@@ -1119,10 +1106,8 @@ abstract class VMKernelCompilerMixin {
       ..._configuration.genKernelOptions,
     ];
 
-    var batchArgs = [if (useAbiVersion != null) useAbiVersion];
-
     return VMKernelCompilationCommand(dillFile, bootstrapDependencies(),
-        genKernel, args, environmentOverrides, batchArgs,
+        genKernel, args, environmentOverrides,
         alwaysCompile: true);
   }
 }

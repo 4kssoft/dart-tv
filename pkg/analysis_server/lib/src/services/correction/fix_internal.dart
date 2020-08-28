@@ -79,6 +79,7 @@ import 'package:analysis_server/src/services/correction/dart/insert_semicolon.da
 import 'package:analysis_server/src/services/correction/dart/make_class_abstract.dart';
 import 'package:analysis_server/src/services/correction/dart/make_field_not_final.dart';
 import 'package:analysis_server/src/services/correction/dart/make_final.dart';
+import 'package:analysis_server/src/services/correction/dart/make_return_type_nullable.dart';
 import 'package:analysis_server/src/services/correction/dart/make_variable_not_final.dart';
 import 'package:analysis_server/src/services/correction/dart/move_type_arguments_to_class.dart';
 import 'package:analysis_server/src/services/correction/dart/organize_imports.dart';
@@ -132,6 +133,7 @@ import 'package:analysis_server/src/services/correction/dart/replace_with_filled
 import 'package:analysis_server/src/services/correction/dart/replace_with_identifier.dart';
 import 'package:analysis_server/src/services/correction/dart/replace_with_interpolation.dart';
 import 'package:analysis_server/src/services/correction/dart/replace_with_is_empty.dart';
+import 'package:analysis_server/src/services/correction/dart/replace_with_not_null_aware.dart';
 import 'package:analysis_server/src/services/correction/dart/replace_with_null_aware.dart';
 import 'package:analysis_server/src/services/correction/dart/replace_with_tear_off.dart';
 import 'package:analysis_server/src/services/correction/dart/replace_with_var.dart';
@@ -513,6 +515,9 @@ class FixProcessor extends BaseProcessor {
       ImportLibrary.forTopLevelVariable,
       ImportLibrary.forType,
     ],
+    CompileTimeErrorCode.INVALID_OVERRIDE: [
+      DataDriven.newInstance,
+    ],
     CompileTimeErrorCode.MIXIN_OF_NON_CLASS: [
       ImportLibrary.forType,
     ],
@@ -534,6 +539,9 @@ class FixProcessor extends BaseProcessor {
     ],
     CompileTimeErrorCode.NOT_A_TYPE: [
       ImportLibrary.forType,
+    ],
+    CompileTimeErrorCode.NOT_ENOUGH_POSITIONAL_ARGUMENTS: [
+      DataDriven.newInstance,
     ],
     CompileTimeErrorCode.TYPE_TEST_WITH_UNDEFINED_NAME: [
       ImportLibrary.forType,
@@ -564,11 +572,24 @@ class FixProcessor extends BaseProcessor {
       ImportLibrary.forType,
     ],
     CompileTimeErrorCode.UNDEFINED_METHOD: [
+      DataDriven.newInstance,
       ImportLibrary.forFunction,
       ImportLibrary.forType,
     ],
     CompileTimeErrorCode.UNDEFINED_NAMED_PARAMETER: [
       ChangeArgumentName.newInstance,
+    ],
+    CompileTimeErrorCode.WRONG_NUMBER_OF_TYPE_ARGUMENTS: [
+      DataDriven.newInstance,
+    ],
+    CompileTimeErrorCode.WRONG_NUMBER_OF_TYPE_ARGUMENTS_CONSTRUCTOR: [
+      DataDriven.newInstance,
+    ],
+    CompileTimeErrorCode.WRONG_NUMBER_OF_TYPE_ARGUMENTS_EXTENSION: [
+      DataDriven.newInstance,
+    ],
+    CompileTimeErrorCode.WRONG_NUMBER_OF_TYPE_ARGUMENTS_METHOD: [
+      DataDriven.newInstance,
     ],
     HintCode.DEPRECATED_MEMBER_USE: [
       DataDriven.newInstance,
@@ -750,6 +771,12 @@ class FixProcessor extends BaseProcessor {
     CompileTimeErrorCode.NULLABLE_TYPE_IN_WITH_CLAUSE: [
       RemoveQuestionMark.newInstance,
     ],
+    CompileTimeErrorCode.RETURN_OF_INVALID_TYPE_FROM_FUNCTION: [
+      MakeReturnTypeNullable.newInstance,
+    ],
+    CompileTimeErrorCode.RETURN_OF_INVALID_TYPE_FROM_METHOD: [
+      MakeReturnTypeNullable.newInstance,
+    ],
     CompileTimeErrorCode.TYPE_TEST_WITH_UNDEFINED_NAME: [
       ChangeTo.classOrMixin,
       CreateClass.newInstance,
@@ -841,6 +868,9 @@ class FixProcessor extends BaseProcessor {
     CompileTimeErrorCode.WRONG_NUMBER_OF_TYPE_ARGUMENTS_CONSTRUCTOR: [
       MoveTypeArgumentsToClass.newInstance,
       RemoveTypeArguments.newInstance,
+    ],
+    CompileTimeErrorCode.YIELD_OF_INVALID_TYPE: [
+      MakeReturnTypeNullable.newInstance,
     ],
 
     HintCode.CAN_BE_NULL_AFTER_NULL_AWARE: [
@@ -1003,6 +1033,9 @@ class FixProcessor extends BaseProcessor {
     ],
     StaticWarningCode.DEAD_NULL_AWARE_EXPRESSION: [
       RemoveDeadIfNull.newInstance,
+    ],
+    StaticWarningCode.INVALID_NULL_AWARE_OPERATOR: [
+      ReplaceWithNotNullAware.newInstance,
     ],
     StaticWarningCode.MISSING_ENUM_CONSTANT_IN_SWITCH: [
       AddMissingEnumCaseClauses.newInstance,

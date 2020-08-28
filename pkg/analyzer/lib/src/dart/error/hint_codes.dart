@@ -20,7 +20,7 @@ class HintCode extends AnalyzerErrorCode {
    */
   static const HintCode CAN_BE_NULL_AFTER_NULL_AWARE = HintCode(
       'CAN_BE_NULL_AFTER_NULL_AWARE',
-      "The target expression uses '?.', so its value can be null.",
+      "The receiver uses '?.', so its value can be null.",
       correction: "Replace the '.' with a '?.' in the invocation.");
 
   /**
@@ -560,6 +560,15 @@ class HintCode extends AnalyzerErrorCode {
       correction: "Try specifying the type of the parameter.");
 
   /**
+   * Parameters:
+   * 0: the name of the annotation
+   * 1: the list of valid targets
+   */
+  static const HintCode INVALID_ANNOTATION_TARGET = HintCode(
+      'INVALID_ANNOTATION_TARGET',
+      "The annotation '{0}' can only be used on {1}");
+
+  /**
    * This hint is generated anywhere a @factory annotation is associated with
    * anything other than a method.
    */
@@ -993,46 +1002,6 @@ class HintCode extends AnalyzerErrorCode {
       "The member '{0}' is annotated with '{1}', but this annotation is only "
           "meaningful on declarations of public members.",
       hasPublishedDocs: true);
-
-  /**
-   * Hint for the `x is double` type checks.
-   */
-  static const HintCode IS_DOUBLE = HintCode(
-      'IS_DOUBLE',
-      "When compiled to JS, this test might return true when the left hand "
-          "side is an int.",
-      correction: "Try testing for 'num' instead.");
-
-  /**
-   * Hint for the `x is int` type checks.
-   */
-  // TODO(brianwilkerson) This hint isn't being generated. Decide whether to
-  //  generate it or remove it.
-  static const HintCode IS_INT = HintCode(
-      'IS_INT',
-      "When compiled to JS, this test might return true when the left hand "
-          "side is a double.",
-      correction: "Try testing for 'num' instead.");
-
-  /**
-   * Hint for the `x is! double` type checks.
-   */
-  static const HintCode IS_NOT_DOUBLE = HintCode(
-      'IS_NOT_DOUBLE',
-      "When compiled to JS, this test might return false when the left hand "
-          "side is an int.",
-      correction: "Try testing for 'num' instead.");
-
-  /**
-   * Hint for the `x is! int` type checks.
-   */
-  // TODO(brianwilkerson) This hint isn't being generated. Decide whether to
-  //  generate it or remove it.
-  static const HintCode IS_NOT_INT = HintCode(
-      'IS_NOT_INT',
-      "When compiled to JS, this test might return false when the left hand "
-          "side is a double.",
-      correction: "Try testing for 'num' instead.");
 
   /**
    * Generate a hint for an element that is annotated with `@JS(...)` whose
@@ -1573,10 +1542,9 @@ class HintCode extends AnalyzerErrorCode {
    */
   static const HintCode RECEIVER_OF_TYPE_NEVER = HintCode(
       'RECEIVER_OF_TYPE_NEVER',
-      'The receiver expression is of type Never, and will never complete '
-          'with a value.',
-      correction: 'Try checking for throw expressions or type errors in the'
-          ' target expression');
+      "The receiver is of type 'Never', and will never complete with a value.",
+      correction: "Try checking for throw expressions or type errors in the "
+          "receiver");
 
   /**
    * No parameters.
@@ -1584,11 +1552,10 @@ class HintCode extends AnalyzerErrorCode {
   // #### Description
   //
   // The analyzer produces this diagnostic when an `as` expression inside a
-  // [constant context](#constant-context) is found in code that has an SDK
-  // constraint whose lower bound is less than 2.3.2. Using an `as` expression
-  // in a [constant context](#constant-context) wasn't supported in earlier
-  // versions, so this code won't be able to run against earlier versions of the
-  // SDK.
+  // [constant context][] is found in code that has an SDK constraint whose
+  // lower bound is less than 2.3.2. Using an `as` expression in a
+  // [constant context][] wasn't supported in earlier versions, so this code
+  // won't be able to run against earlier versions of the SDK.
   //
   // #### Examples
   //
@@ -1621,7 +1588,7 @@ class HintCode extends AnalyzerErrorCode {
   //
   // If you need to support older versions of the SDK, then either rewrite the
   // code to not use an `as` expression, or change the code so that the `as`
-  // expression isn't in a [constant context](#constant-context):
+  // expression isn't in a [constant context][]:
   //
   // ```dart
   // num x = 3;
@@ -1696,11 +1663,11 @@ class HintCode extends AnalyzerErrorCode {
   // #### Description
   //
   // The analyzer produces this diagnostic when any use of the `&`, `|`, or `^`
-  // operators on the class `bool` inside a
-  // [constant context](#constant-context) is found in code that has an SDK
-  // constraint whose lower bound is less than 2.3.2. Using these operators in a
-  // [constant context](#constant-context) wasn't supported in earlier versions,
-  // so this code won't be able to run against earlier versions of the SDK.
+  // operators on the class `bool` inside a [constant context][] is found in
+  // code that has an SDK constraint whose lower bound is less than 2.3.2. Using
+  // these operators in a [constant context][] wasn't supported in earlier
+  // versions, so this code won't be able to run against earlier versions of the
+  // SDK.
   //
   // #### Examples
   //
@@ -1734,7 +1701,7 @@ class HintCode extends AnalyzerErrorCode {
   //
   // If you need to support older versions of the SDK, then either rewrite the
   // code to not use these operators, or change the code so that the expression
-  // isn't in a [constant context](#constant-context):
+  // isn't in a [constant context][]:
   //
   // ```dart
   // const bool a = true;
@@ -1755,11 +1722,10 @@ class HintCode extends AnalyzerErrorCode {
   // #### Description
   //
   // The analyzer produces this diagnostic when the operator `==` is used on a
-  // non-primitive type inside a [constant context](#constant-context) is found
-  // in code that has an SDK constraint whose lower bound is less than 2.3.2.
-  // Using this operator in a [constant context](#constant-context) wasn't
-  // supported in earlier versions, so this code won't be able to run against
-  // earlier versions of the SDK.
+  // non-primitive type inside a [constant context][] is found in code that has
+  // an SDK constraint whose lower bound is less than 2.3.2. Using this operator
+  // in a [constant context][] wasn't supported in earlier versions, so this
+  // code won't be able to run against earlier versions of the SDK.
   //
   // #### Examples
   //
@@ -1794,7 +1760,7 @@ class HintCode extends AnalyzerErrorCode {
   //
   // If you need to support older versions of the SDK, then either rewrite the
   // code to not use the `==` operator, or change the code so that the
-  // expression isn't in a [constant context](#constant-context):
+  // expression isn't in a [constant context][]:
   //
   // ```dart
   // class C {}
@@ -1934,11 +1900,10 @@ class HintCode extends AnalyzerErrorCode {
   // #### Description
   //
   // The analyzer produces this diagnostic when an `is` expression inside a
-  // [constant context](#constant-context) is found in code that has an SDK
-  // constraint whose lower bound is less than 2.3.2. Using an `is` expression
-  // in a [constant context](#constant-context) wasn't supported in earlier
-  // versions, so this code won't be able to run against earlier versions of the
-  // SDK.
+  // [constant context][] is found in code that has an SDK constraint whose
+  // lower bound is less than 2.3.2. Using an `is` expression in a
+  // [constant context][] wasn't supported in earlier versions, so this code
+  // won't be able to run against earlier versions of the SDK.
   //
   // #### Examples
   //
@@ -1972,7 +1937,7 @@ class HintCode extends AnalyzerErrorCode {
   // If you need to support older versions of the SDK, then either rewrite the
   // code to not use the `is` operator, or, if that isn't possible, change the
   // code so that the `is` expression isn't in a
-  // [constant context](#constant-context):
+  // [constant context][]:
   //
   // ```dart
   // const x = 4;
@@ -2155,11 +2120,10 @@ class HintCode extends AnalyzerErrorCode {
   // #### Description
   //
   // The analyzer produces this diagnostic when an if or spread element inside
-  // a [constant context](#constant-context) is found in code that has an
-  // SDK constraint whose lower bound is less than 2.5.0. Using an if or
-  // spread element inside a [constant context](#constant-context) wasn't
-  // supported in earlier versions, so this code won't be able to run against
-  // earlier versions of the SDK.
+  // a [constant context][] is found in code that has an SDK constraint whose
+  // lower bound is less than 2.5.0. Using an if or spread element inside a
+  // [constant context][] wasn't supported in earlier versions, so this code
+  // won't be able to run against earlier versions of the SDK.
   //
   // #### Examples
   //
@@ -2199,7 +2163,7 @@ class HintCode extends AnalyzerErrorCode {
   // ```
   //
   // If that isn't possible, change the code so that the element isn't in a
-  // [constant context](#constant-context):
+  // [constant context][]:
   //
   // ```dart
   // const a = [1, 2];

@@ -474,6 +474,10 @@ class _DartUnitHighlightsComputerVisitor extends RecursiveAstVisitor<void> {
 
   @override
   void visitFieldDeclaration(FieldDeclaration node) {
+    computer._addRegion_token(
+        node.abstractKeyword, HighlightRegionType.BUILT_IN);
+    computer._addRegion_token(
+        node.externalKeyword, HighlightRegionType.BUILT_IN);
     computer._addRegion_token(node.staticKeyword, HighlightRegionType.BUILT_IN);
     super.visitFieldDeclaration(node);
   }
@@ -749,6 +753,13 @@ class _DartUnitHighlightsComputerVisitor extends RecursiveAstVisitor<void> {
   void visitThisExpression(ThisExpression node) {
     computer._addRegion_token(node.thisKeyword, HighlightRegionType.KEYWORD);
     super.visitThisExpression(node);
+  }
+
+  @override
+  void visitTopLevelVariableDeclaration(TopLevelVariableDeclaration node) {
+    computer._addRegion_token(
+        node.externalKeyword, HighlightRegionType.BUILT_IN);
+    super.visitTopLevelVariableDeclaration(node);
   }
 
   @override

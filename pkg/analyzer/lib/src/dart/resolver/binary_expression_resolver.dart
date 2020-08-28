@@ -136,13 +136,13 @@ class BinaryExpressionResolver {
     left = node.leftOperand;
 
     var flow = _flowAnalysis?.flow;
-    flow?.equalityOp_rightBegin(left);
+    flow?.equalityOp_rightBegin(left, left.staticType);
 
     var right = node.rightOperand;
     right.accept(_resolver);
     right = node.rightOperand;
 
-    flow?.equalityOp_end(node, right, notEqual: notEqual);
+    flow?.equalityOp_end(node, right, right.staticType, notEqual: notEqual);
 
     _resolveUserDefinableElement(
       node,
@@ -270,6 +270,7 @@ class BinaryExpressionResolver {
     var right = node.rightOperand;
 
     left.accept(_resolver);
+    left = node.leftOperand; // In case it was rewritten
 
     var operator = node.operator;
     _resolveUserDefinableElement(node, operator.lexeme);
@@ -279,7 +280,13 @@ class BinaryExpressionResolver {
       // If this is a user-defined operator, set the right operand context
       // using the operator method's parameter type.
       var rightParam = invokeType.parameters[0];
-      InferenceContext.setType(right, rightParam.type);
+      InferenceContext.setType(
+          right,
+          _typeSystem.refineNumericInvocationContext(
+              left.staticType,
+              node.staticElement,
+              InferenceContext.getContext(node),
+              rightParam.type));
     }
 
     right.accept(_resolver);
@@ -363,6 +370,7 @@ class BinaryExpressionResolver {
         node.operator.type,
         node.rightOperand.staticType,
         staticType,
+        node.staticElement,
       );
     }
     _inferenceHelper.recordStaticType(node, staticType);

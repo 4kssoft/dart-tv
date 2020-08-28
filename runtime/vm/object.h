@@ -71,7 +71,7 @@ REUSABLE_HANDLE_LIST(REUSABLE_FORWARD_DECLARATION)
 #undef REUSABLE_FORWARD_DECLARATION
 
 class Symbols;
-class ZoneTextBuffer;
+class BaseTextBuffer;
 
 #if defined(DEBUG)
 #define CHECK_HANDLE() CheckHandle();
@@ -900,6 +900,7 @@ enum class Nullability : int8_t {
   kNullable = 0,
   kNonNullable = 1,
   kLegacy = 2,
+  // Adjust kNullabilityBitSize in clustered_snapshot.cc if adding new values.
 };
 
 // Equality kind between types.
@@ -2478,7 +2479,7 @@ class Function : public Object {
   const char* NameCString(NameVisibility name_visibility) const;
 
   void PrintName(const NameFormattingParams& params,
-                 ZoneTextBuffer* printer) const;
+                 BaseTextBuffer* printer) const;
   StringPtr QualifiedScrubbedName() const;
   StringPtr QualifiedUserVisibleName() const;
 
@@ -2552,7 +2553,7 @@ class Function : public Object {
   StringPtr UserVisibleSignature() const;
 
   void PrintSignature(NameVisibility name_visibility,
-                      ZoneTextBuffer* printer) const;
+                      BaseTextBuffer* printer) const;
 
   // Returns true if the signature of this function is instantiated, i.e. if it
   // does not involve generic parameter types or generic result type.
@@ -2594,6 +2595,9 @@ class Function : public Object {
   void SetParameterTypeAt(intptr_t index, const AbstractType& value) const;
   ArrayPtr parameter_types() const { return raw_ptr()->parameter_types_; }
   void set_parameter_types(const Array& value) const;
+  static intptr_t parameter_types_offset() {
+    return OFFSET_OF(FunctionLayout, parameter_types_);
+  }
 
   // Parameter names are valid for all valid parameter indices, and are not
   // limited to named optional parameters. If there are parameter flags (eg
@@ -2604,6 +2608,9 @@ class Function : public Object {
   void SetParameterNameAt(intptr_t index, const String& value) const;
   ArrayPtr parameter_names() const { return raw_ptr()->parameter_names_; }
   void set_parameter_names(const Array& value) const;
+  static intptr_t parameter_names_offset() {
+    return OFFSET_OF(FunctionLayout, parameter_names_);
+  }
 
   // The required flags are stored at the end of the parameter_names. The flags
   // are packed into SMIs, but omitted if they're 0.
@@ -2625,6 +2632,9 @@ class Function : public Object {
     return raw_ptr()->type_parameters_;
   }
   void set_type_parameters(const TypeArguments& value) const;
+  static intptr_t type_parameters_offset() {
+    return OFFSET_OF(FunctionLayout, type_parameters_);
+  }
   intptr_t NumTypeParameters(Thread* thread) const;
   intptr_t NumTypeParameters() const {
     return NumTypeParameters(Thread::Current());
@@ -2745,6 +2755,11 @@ class Function : public Object {
   // Enclosing function of this local function.
   FunctionPtr parent_function() const;
 
+  // Enclosed generated closure function of this local function.
+  // This will only work after the closure function has been allocated in the
+  // isolate's object_store.
+  FunctionPtr GetGeneratedClosure() const;
+
   // Enclosing outermost function of this local function.
   FunctionPtr GetOutermostFunction() const;
 
@@ -2773,6 +2788,20 @@ class Function : public Object {
     return kind() == FunctionLayout::kInvokeFieldDispatcher;
   }
 
+  bool IsDynamicInvokeFieldDispatcher() const {
+    return IsInvokeFieldDispatcher() &&
+           IsDynamicInvocationForwarderName(name());
+  }
+
+  // Performs all the checks that don't require the current thread first, to
+  // avoid retrieving it unless they all pass. If you have a handle on the
+  // current thread, call the version that takes one instead.
+  bool IsDynamicClosureCallDispatcher() const {
+    if (!IsDynamicInvokeFieldDispatcher()) return false;
+    return IsDynamicClosureCallDispatcher(Thread::Current());
+  }
+  bool IsDynamicClosureCallDispatcher(Thread* thread) const;
+
   bool IsDynamicInvocationForwarder() const {
     return kind() == FunctionLayout::kDynamicInvocationForwarder;
   }
@@ -2800,6 +2829,10 @@ class Function : public Object {
   InstancePtr ImplicitStaticClosure() const;
 
   InstancePtr ImplicitInstanceClosure(const Instance& receiver) const;
+
+  // Returns the target of the implicit closure or null if the target is now
+  // invalid (e.g., mismatched argument shapes after a reload).
+  FunctionPtr ImplicitClosureTarget(Zone* zone) const;
 
   intptr_t ComputeClosureHash() const;
 
@@ -2843,8 +2876,7 @@ class Function : public Object {
   // Whether this function can receive an invocation where the number and names
   // of arguments have not been checked.
   bool CanReceiveDynamicInvocation() const {
-    return (IsClosureFunction() && ClosureBodiesContainNonCovariantChecks()) ||
-           IsFfiTrampoline();
+    return IsFfiTrampoline() || IsDynamicClosureCallDispatcher();
   }
 
   bool HasThisParameter() const {
@@ -2953,22 +2985,28 @@ class Function : public Object {
 
   uint32_t packed_fields() const { return raw_ptr()->packed_fields_; }
   void set_packed_fields(uint32_t packed_fields) const;
+  static intptr_t packed_fields_offset() {
+    return OFFSET_OF(FunctionLayout, packed_fields_);
+  }
+  // Reexported so they can be used by the flow graph builders.
+  using PackedHasNamedOptionalParameters =
+      FunctionLayout::PackedHasNamedOptionalParameters;
+  using PackedNumFixedParameters = FunctionLayout::PackedNumFixedParameters;
+  using PackedNumOptionalParameters =
+      FunctionLayout::PackedNumOptionalParameters;
 
   bool HasOptionalParameters() const {
-    return FunctionLayout::PackedNumOptionalParameters::decode(
-               raw_ptr()->packed_fields_) > 0;
+    return PackedNumOptionalParameters::decode(raw_ptr()->packed_fields_) > 0;
   }
   bool HasOptionalNamedParameters() const {
     return HasOptionalParameters() &&
-           FunctionLayout::PackedHasNamedOptionalParameters::decode(
-               raw_ptr()->packed_fields_);
+           PackedHasNamedOptionalParameters::decode(raw_ptr()->packed_fields_);
   }
   bool HasOptionalPositionalParameters() const {
     return HasOptionalParameters() && !HasOptionalNamedParameters();
   }
   intptr_t NumOptionalParameters() const {
-    return FunctionLayout::PackedNumOptionalParameters::decode(
-        raw_ptr()->packed_fields_);
+    return PackedNumOptionalParameters::decode(raw_ptr()->packed_fields_);
   }
   void SetNumOptionalParameters(intptr_t num_optional_parameters,
                                 bool are_optional_positional) const;
@@ -3792,7 +3830,7 @@ class Function : public Object {
   void PrintSignatureParameters(Thread* thread,
                                 Zone* zone,
                                 NameVisibility name_visibility,
-                                ZoneTextBuffer* printer) const;
+                                BaseTextBuffer* printer) const;
 
   // Returns true if the type of the formal parameter at the given position in
   // this function is contravariant with the type of the other formal parameter
@@ -7528,6 +7566,9 @@ class TypeArguments : public Instance {
   // architecture.
   static const intptr_t kHashBits = 30;
 
+  // Hash value for a type argument vector consisting solely of dynamic types.
+  static const intptr_t kAllDynamicHash = 1;
+
   intptr_t Length() const;
   AbstractTypePtr TypeAt(intptr_t index) const;
   AbstractTypePtr TypeAtNullSafe(intptr_t index) const;
@@ -7583,7 +7624,7 @@ class TypeArguments : public Instance {
       intptr_t from_index,
       intptr_t len,
       NameVisibility name_visibility,
-      ZoneTextBuffer* printer,
+      BaseTextBuffer* printer,
       NameDisambiguation name_disambiguation = NameDisambiguation::kNo) const;
 
   // Check if the subvector of length 'len' starting at 'from_index' of this
@@ -7742,6 +7783,7 @@ class TypeArguments : public Instance {
     return 0;
   }
   intptr_t Hash() const;
+  intptr_t HashForRange(intptr_t from_index, intptr_t len) const;
 
   static TypeArgumentsPtr New(intptr_t len, Heap::Space space = Heap::kOld);
 
@@ -7910,7 +7952,7 @@ class AbstractType : public Instance {
   // type arguments, if any.
   void PrintName(
       NameVisibility visibility,
-      ZoneTextBuffer* printer,
+      BaseTextBuffer* printer,
       NameDisambiguation name_disambiguation = NameDisambiguation::kNo) const;
 
   // Add the class name and URI of each occuring type to the uris
@@ -7996,6 +8038,11 @@ class AbstractType : public Instance {
   // Returns the type argument of this (possibly nested) 'FutureOr' type.
   // Returns unmodified type if this type is not a 'FutureOr' type.
   AbstractTypePtr UnwrapFutureOr() const;
+
+  // Returns true if catching this type will catch all exceptions.
+  // Exception objects are guaranteed to be non-nullable, so
+  // non-nullable Object is also a catch-all type.
+  bool IsCatchAllType() const { return IsDynamicType() || IsObjectType(); }
 
   // Check the subtype relationship.
   bool IsSubtypeOf(const AbstractType& other,
@@ -9556,6 +9603,9 @@ class Array : public Instance {
   }
 
   bool IsImmutable() const { return raw()->GetClassId() == kImmutableArrayCid; }
+
+  // Position of element type in type arguments.
+  static const intptr_t kElementTypeTypeArgPos = 0;
 
   virtual TypeArgumentsPtr GetTypeArguments() const {
     return raw_ptr()->type_arguments_;
@@ -11321,7 +11371,7 @@ inline void TypeParameter::SetHash(intptr_t value) const {
 }
 
 inline intptr_t TypeArguments::Hash() const {
-  if (IsNull()) return 0;
+  if (IsNull()) return kAllDynamicHash;
   intptr_t result = Smi::Value(raw_ptr()->hash_);
   if (result != 0) {
     return result;

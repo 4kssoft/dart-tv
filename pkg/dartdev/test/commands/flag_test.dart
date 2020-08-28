@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'dart:io';
+
 import 'package:args/args.dart';
 import 'package:args/command_runner.dart';
 import 'package:dartdev/dartdev.dart';
@@ -34,7 +36,12 @@ void command() {
         .commands
         .forEach((String commandKey, Command command) {
       if (command.argParser != null) {
-        expect(command.argParser.usageLineLength, isNull);
+        if (command.name == 'run') {
+          expect(command.argParser.usageLineLength,
+              stdout.hasTerminal ? stdout.terminalColumns : null);
+        } else {
+          expect(command.argParser.usageLineLength, isNull);
+        }
       }
     });
   });

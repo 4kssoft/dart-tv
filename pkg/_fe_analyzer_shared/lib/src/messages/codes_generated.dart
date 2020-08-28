@@ -60,6 +60,7 @@ const Code<Null> codeAbstractExternalField = messageAbstractExternalField;
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const MessageCode messageAbstractExternalField = const MessageCode(
     "AbstractExternalField",
+    index: 110,
     message: r"""Fields can't be declared both 'abstract' and 'external'.""",
     tip: r"""Try removing the 'abstract' or 'external' keyword.""");
 
@@ -89,6 +90,7 @@ const Code<Null> codeAbstractLateField = messageAbstractLateField;
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const MessageCode messageAbstractLateField = const MessageCode(
     "AbstractLateField",
+    index: 108,
     message: r"""Abstract fields cannot be late.""",
     tip: r"""Try removing the 'abstract' or 'late' keyword.""");
 
@@ -134,6 +136,7 @@ const Code<Null> codeAbstractStaticField = messageAbstractStaticField;
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const MessageCode messageAbstractStaticField = const MessageCode(
     "AbstractStaticField",
+    index: 107,
     message: r"""Static fields can't be declared 'abstract'.""",
     tip: r"""Try removing the 'abstract' or 'static' keyword.""");
 
@@ -176,6 +179,16 @@ const MessageCode messageAnnotationOnFunctionTypeTypeVariable =
     const MessageCode("AnnotationOnFunctionTypeTypeVariable",
         message:
             r"""A type variable on a function type can't have annotations.""");
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Null> codeAnnotationOnTypeArgument = messageAnnotationOnTypeArgument;
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const MessageCode messageAnnotationOnTypeArgument = const MessageCode(
+    "AnnotationOnTypeArgument",
+    index: 111,
+    message:
+        r"""Type arguments can't have annotations because they aren't declarations.""");
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const Code<Null> codeAnonymousBreakTargetOutsideFunction =
@@ -2537,6 +2550,29 @@ const MessageCode messageEqualityCannotBeEqualityOperand = const MessageCode(
     tip: r"""Try putting parentheses around one of the comparisons.""");
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Template<Message Function(Uri uri_, String string)>
+    templateExceptionReadingFile =
+    const Template<Message Function(Uri uri_, String string)>(
+        messageTemplate: r"""Exception when reading '#uri': #string""",
+        withArguments: _withArgumentsExceptionReadingFile);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Message Function(Uri uri_, String string)> codeExceptionReadingFile =
+    const Code<Message Function(Uri uri_, String string)>(
+  "ExceptionReadingFile",
+  templateExceptionReadingFile,
+);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+Message _withArgumentsExceptionReadingFile(Uri uri_, String string) {
+  String uri = relativizeUri(uri_);
+  if (string.isEmpty) throw 'No string provided';
+  return new Message(codeExceptionReadingFile,
+      message: """Exception when reading '${uri}': ${string}""",
+      arguments: {'uri': uri_, 'string': string});
+}
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const Template<Message Function(String string)> templateExpectedAfterButGot =
     const Template<Message Function(String string)>(
         messageTemplate: r"""Expected '#string' after this.""",
@@ -2913,6 +2949,49 @@ Message _withArgumentsExperimentNotEnabled(String string, String string2) {
 }
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Null> codeExperimentNotEnabledNoFlag =
+    messageExperimentNotEnabledNoFlag;
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const MessageCode messageExperimentNotEnabledNoFlag = const MessageCode(
+    "ExperimentNotEnabledNoFlag",
+    analyzerCodes: <String>["ParserErrorCode.EXPERIMENT_NOT_ENABLED"],
+    message:
+        r"""This requires the null safety language feature, which is experimental.""",
+    tip:
+        r"""You can enable the experiment using the '--enable-experiment=non-nullable' command line option.""");
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Template<Message Function(String string2)>
+    templateExperimentNotEnabledNoFlagInvalidLanguageVersion =
+    const Template<Message Function(String string2)>(
+        messageTemplate:
+            r"""This requires the null safety language feature, which is experimental and requires language version of #string2 or higher.""",
+        tipTemplate:
+            r"""You can enable the experiment using the '--enable-experiment=non-nullable' command line option.""",
+        withArguments:
+            _withArgumentsExperimentNotEnabledNoFlagInvalidLanguageVersion);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Message Function(String string2)>
+    codeExperimentNotEnabledNoFlagInvalidLanguageVersion =
+    const Code<Message Function(String string2)>(
+        "ExperimentNotEnabledNoFlagInvalidLanguageVersion",
+        templateExperimentNotEnabledNoFlagInvalidLanguageVersion,
+        analyzerCodes: <String>["ParserErrorCode.EXPERIMENT_NOT_ENABLED"]);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+Message _withArgumentsExperimentNotEnabledNoFlagInvalidLanguageVersion(
+    String string2) {
+  if (string2.isEmpty) throw 'No string provided';
+  return new Message(codeExperimentNotEnabledNoFlagInvalidLanguageVersion,
+      message:
+          """This requires the null safety language feature, which is experimental and requires language version of ${string2} or higher.""",
+      tip: """You can enable the experiment using the '--enable-experiment=non-nullable' command line option.""",
+      arguments: {'string2': string2});
+}
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const Code<Null> codeExplicitExtensionArgumentMismatch =
     messageExplicitExtensionArgumentMismatch;
 
@@ -3271,6 +3350,7 @@ const Code<Null> codeExternalLateField = messageExternalLateField;
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const MessageCode messageExternalLateField = const MessageCode(
     "ExternalLateField",
+    index: 109,
     message: r"""External fields cannot be late.""",
     tip: r"""Try removing the 'external' or 'late' keyword.""");
 
@@ -5421,6 +5501,27 @@ const MessageCode messageJsInteropAnonymousFactoryPositionalParameters =
         tip: r"""Try replacing them with named parameters instead.""");
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Null> codeJsInteropEnclosingClassJSAnnotation =
+    messageJsInteropEnclosingClassJSAnnotation;
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const MessageCode messageJsInteropEnclosingClassJSAnnotation = const MessageCode(
+    "JsInteropEnclosingClassJSAnnotation",
+    message:
+        r"""Member has a JS interop annotation but the enclosing class does not.""",
+    tip: r"""Try adding the annotation to the enclosing class.""");
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Null> codeJsInteropEnclosingClassJSAnnotationContext =
+    messageJsInteropEnclosingClassJSAnnotationContext;
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const MessageCode messageJsInteropEnclosingClassJSAnnotationContext =
+    const MessageCode("JsInteropEnclosingClassJSAnnotationContext",
+        severity: Severity.context,
+        message: r"""This is the enclosing class.""");
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const Code<Null> codeJsInteropIndexNotSupported =
     messageJsInteropIndexNotSupported;
 
@@ -6381,16 +6482,6 @@ Message _withArgumentsNonNullableNotAssignedError(String name) {
 }
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
-const Code<Null> codeNonNullableOptOut = messageNonNullableOptOut;
-
-// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
-const MessageCode messageNonNullableOptOut = const MessageCode(
-    "NonNullableOptOut",
-    message: r"""Null safety features are disabled for this library.""",
-    tip:
-        r"""Try removing the `@dart=` annotation or setting the language version higher.""");
-
-// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const Code<Null> codeNonNullableOptOutComment = messageNonNullableOptOutComment;
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
@@ -6399,6 +6490,62 @@ const MessageCode messageNonNullableOptOutComment = const MessageCode(
     severity: Severity.context,
     message:
         r"""This is the annotation that opts out this library from null safety features.""");
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Template<
+    Message Function(
+        String
+            string)> templateNonNullableOptOutExplicit = const Template<
+        Message Function(String string)>(
+    messageTemplate: r"""Null safety features are disabled for this library.""",
+    tipTemplate:
+        r"""Try removing the `@dart=` annotation or setting the language version to #string or higher.""",
+    withArguments: _withArgumentsNonNullableOptOutExplicit);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Message Function(String string)> codeNonNullableOptOutExplicit =
+    const Code<Message Function(String string)>(
+  "NonNullableOptOutExplicit",
+  templateNonNullableOptOutExplicit,
+);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+Message _withArgumentsNonNullableOptOutExplicit(String string) {
+  if (string.isEmpty) throw 'No string provided';
+  return new Message(codeNonNullableOptOutExplicit,
+      message: """Null safety features are disabled for this library.""",
+      tip:
+          """Try removing the `@dart=` annotation or setting the language version to ${string} or higher.""",
+      arguments: {'string': string});
+}
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Template<
+    Message Function(
+        String
+            string)> templateNonNullableOptOutImplicit = const Template<
+        Message Function(String string)>(
+    messageTemplate: r"""Null safety features are disabled for this library.""",
+    tipTemplate:
+        r"""Try removing the package language version or setting the language version to #string or higher.""",
+    withArguments: _withArgumentsNonNullableOptOutImplicit);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Message Function(String string)> codeNonNullableOptOutImplicit =
+    const Code<Message Function(String string)>(
+  "NonNullableOptOutImplicit",
+  templateNonNullableOptOutImplicit,
+);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+Message _withArgumentsNonNullableOptOutImplicit(String string) {
+  if (string.isEmpty) throw 'No string provided';
+  return new Message(codeNonNullableOptOutImplicit,
+      message: """Null safety features are disabled for this library.""",
+      tip:
+          """Try removing the package language version or setting the language version to ${string} or higher.""",
+      arguments: {'string': string});
+}
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const Code<Null> codeNonPartOfDirectiveInPart = messageNonPartOfDirectiveInPart;

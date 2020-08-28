@@ -6,8 +6,7 @@ import 'package:analyzer/src/dart/error/syntactic_errors.dart';
 import 'package:analyzer/src/error/codes.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
-import 'driver_resolution.dart';
-import 'with_null_safety_mixin.dart';
+import 'context_collection_resolution.dart';
 
 main() {
   defineReflectiveSuite(() {
@@ -17,7 +16,7 @@ main() {
 }
 
 @reflectiveTest
-class PrefixExpressionResolutionTest extends DriverResolutionTest {
+class PrefixExpressionResolutionTest extends PubPackageResolutionTest {
   test_bang_bool_context() async {
     await assertNoErrorsInCode(r'''
 T f<T>() {
@@ -91,6 +90,23 @@ f(int x) {
     );
   }
 
+  test_plusPlus_double() async {
+    await assertNoErrorsInCode(r'''
+f(double x) {
+  ++x;
+}
+''');
+
+    assertPrefixExpression(
+      findNode.prefix('++x'),
+      element: elementMatcher(
+        doubleElement.getMethod('+'),
+        isLegacy: isNullSafetySdkAndLegacyLibrary,
+      ),
+      type: 'double',
+    );
+  }
+
   test_plusPlus_extensionOverride() async {
     await assertErrorsInCode(r'''
 class C {}
@@ -153,6 +169,23 @@ class M1 {
     );
   }
 
+  test_plusPlus_num() async {
+    await assertNoErrorsInCode(r'''
+f(num x) {
+  ++x;
+}
+''');
+
+    assertPrefixExpression(
+      findNode.prefix('++x'),
+      element: elementMatcher(
+        numElement.getMethod('+'),
+        isLegacy: isNullSafetySdkAndLegacyLibrary,
+      ),
+      type: 'num',
+    );
+  }
+
   test_tilde_int_localVariable() async {
     await assertNoErrorsInCode(r'''
 f(int x) {
@@ -174,6 +207,46 @@ f(int x) {
 @reflectiveTest
 class PrefixExpressionResolutionWithNullSafetyTest
     extends PrefixExpressionResolutionTest with WithNullSafetyMixin {
+  test_bang_no_nullShorting() async {
+    await assertErrorsInCode(r'''
+class A {
+  bool get foo => true;
+}
+
+void f(A? a) {
+  !a?.foo;
+}
+''', [
+      error(CompileTimeErrorCode.UNCHECKED_USE_OF_NULLABLE_VALUE, 55, 6),
+    ]);
+
+    assertPrefixExpression(
+      findNode.prefix('!a'),
+      element: boolElement.getMethod('!'),
+      type: 'bool',
+    );
+  }
+
+  test_minus_no_nullShorting() async {
+    await assertErrorsInCode(r'''
+class A {
+  int get foo => 0;
+}
+
+void f(A? a) {
+  -a?.foo;
+}
+''', [
+      error(CompileTimeErrorCode.UNCHECKED_USE_OF_NULLABLE_VALUE, 51, 6),
+    ]);
+
+    assertPrefixExpression(
+      findNode.prefix('-a'),
+      element: intElement.getMethod('unary-'),
+      type: 'int',
+    );
+  }
+
   test_plusPlus_depromote() async {
     await assertNoErrorsInCode(r'''
 class A {
@@ -211,6 +284,26 @@ f(A? a) {
       findNode.prefix('++a'),
       element: numElement.getMethod('+'),
       type: 'int?',
+    );
+  }
+
+  test_tilde_no_nullShorting() async {
+    await assertErrorsInCode(r'''
+class A {
+  int get foo => 0;
+}
+
+void f(A? a) {
+  ~a?.foo;
+}
+''', [
+      error(CompileTimeErrorCode.UNCHECKED_USE_OF_NULLABLE_VALUE, 51, 6),
+    ]);
+
+    assertPrefixExpression(
+      findNode.prefix('~a'),
+      element: intElement.getMethod('~'),
+      type: 'int',
     );
   }
 }

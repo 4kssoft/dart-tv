@@ -3,11 +3,11 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analyzer/dart/element/type.dart';
+import 'package:analyzer/src/dart/error/syntactic_errors.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
-import 'driver_resolution.dart';
-import 'with_null_safety_mixin.dart';
+import 'context_collection_resolution.dart';
 
 main() {
   defineReflectiveSuite(() {
@@ -17,7 +17,7 @@ main() {
 }
 
 @reflectiveTest
-class PostfixExpressionResolutionTest extends DriverResolutionTest {
+class PostfixExpressionResolutionTest extends PubPackageResolutionTest {
   test_dec_localVariable() async {
     await assertNoErrorsInCode(r'''
 f(int x) {
@@ -32,6 +32,23 @@ f(int x) {
         isLegacy: isNullSafetySdkAndLegacyLibrary,
       ),
       type: 'int',
+    );
+  }
+
+  test_inc_double() async {
+    await assertNoErrorsInCode(r'''
+f(double x) {
+  x++;
+}
+''');
+
+    assertPostfixExpression(
+      findNode.postfix('x++'),
+      element: elementMatcher(
+        doubleElement.getMethod('+'),
+        isLegacy: isNullSafetySdkAndLegacyLibrary,
+      ),
+      type: 'double',
     );
   }
 
@@ -52,6 +69,23 @@ f(int x) {
     );
   }
 
+  test_inc_num() async {
+    await assertNoErrorsInCode(r'''
+f(num x) {
+  x++;
+}
+''');
+
+    assertPostfixExpression(
+      findNode.postfix('x++'),
+      element: elementMatcher(
+        numElement.getMethod('+'),
+        isLegacy: isNullSafetySdkAndLegacyLibrary,
+      ),
+      type: 'num',
+    );
+  }
+
   test_inc_property_differentTypes() async {
     await assertNoErrorsInCode(r'''
 int get x => 0;
@@ -65,7 +99,8 @@ f() {
 
     assertSimpleIdentifier(
       findNode.simple('x++'),
-      element: findElement.topSet('x'),
+      readElement: findElement.topGet('x'),
+      writeElement: findElement.topSet('x'),
       type: 'num',
     );
 
@@ -202,6 +237,38 @@ int g() => f(null)!;
       findNode.postfix('f(null)!'),
       element: null,
       type: 'int',
+    );
+  }
+
+  test_nullCheck_superExpression() async {
+    await assertErrorsInCode(r'''
+class A {
+  int foo() => 0;
+}
+
+class B extends A {
+  void bar() {
+    super!.foo();
+  }
+}
+''', [
+      error(ParserErrorCode.MISSING_ASSIGNABLE_SELECTOR, 70, 6),
+    ]);
+
+    assertTypeDynamic(findNode.super_('super!'));
+
+    assertPostfixExpression(
+      findNode.postfix('super!'),
+      element: null,
+      type: 'dynamic',
+    );
+
+    assertMethodInvocation2(
+      findNode.methodInvocation('foo();'),
+      element: null,
+      typeArgumentTypes: [],
+      invokeType: 'dynamic',
+      type: 'dynamic',
     );
   }
 

@@ -8,7 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "bin/abi_version.h"
 #include "bin/dartdev_isolate.h"
 #include "bin/error_exit.h"
 #include "bin/options.h"
@@ -373,33 +372,6 @@ bool Options::ProcessVMDebuggingOptions(const char* arg,
   return false;
 }
 
-int Options::target_abi_version_ = Options::kAbiVersionUnset;
-bool Options::ProcessAbiVersionOption(const char* arg,
-                                      CommandLineOptions* vm_options) {
-  const char* value = OptionProcessor::ProcessOption(arg, "--use_abi_version=");
-  if (value == NULL) {
-    return false;
-  }
-  int ver = 0;
-  for (int i = 0; value[i] != '\0'; ++i) {
-    if (value[i] >= '0' && value[i] <= '9') {
-      ver = (ver * 10) + value[i] - '0';
-    } else {
-      Syslog::PrintErr("--use_abi_version must be an int\n");
-      return false;
-    }
-  }
-  if (ver < AbiVersion::GetOldestSupported() ||
-      ver > AbiVersion::GetCurrent()) {
-    Syslog::PrintErr("--use_abi_version must be between %d and %d inclusive\n",
-                     AbiVersion::GetOldestSupported(),
-                     AbiVersion::GetCurrent());
-    return false;
-  }
-  target_abi_version_ = ver;
-  return true;
-}
-
 bool Options::ProcessEnableExperimentOption(const char* arg,
                                             CommandLineOptions* vm_options) {
   const char* value =
@@ -633,7 +605,15 @@ int Options::ParseArguments(int argc,
   }
 
   if (!Options::disable_dart_dev() && enable_vm_service_) {
-    dart_options->AddArgument("--launch-dds");
+    const char* dds_format_str = "--launch-dds=%s:%d";
+    size_t size = snprintf(nullptr, 0, dds_format_str, vm_service_server_ip(),
+                           vm_service_server_port());
+    // Make room for '\0'.
+    ++size;
+    char* dds_uri = new char[size];
+    snprintf(dds_uri, size, dds_format_str, vm_service_server_ip(),
+             vm_service_server_port());
+    dart_options->AddArgument(dds_uri);
   }
 
   // Verify consistency of arguments.

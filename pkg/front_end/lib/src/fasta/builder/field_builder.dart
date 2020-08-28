@@ -399,11 +399,16 @@ class SourceFieldBuilder extends MemberBuilderImpl implements FieldBuilder {
 
   DartType get builtType => fieldType;
 
-  @override
-  List<ClassMember> get localMembers => _fieldEncoding.getLocalMembers(this);
+  List<ClassMember> _localMembers;
+  List<ClassMember> _localSetters;
 
   @override
-  List<ClassMember> get localSetters => _fieldEncoding.getLocalSetters(this);
+  List<ClassMember> get localMembers =>
+      _localMembers ??= _fieldEncoding.getLocalMembers(this);
+
+  @override
+  List<ClassMember> get localSetters =>
+      _localSetters ??= _fieldEncoding.getLocalSetters(this);
 
   static String createFieldName(FieldNameType type, String name,
       {bool isInstanceMember,
@@ -1410,7 +1415,7 @@ class AbstractOrExternalFieldEncoding implements FieldEncoding {
     _getter
       ..isStatic = !isInstanceMember
       ..isExtensionMember = isExtensionMember
-      ..isAbstract = isAbstract
+      ..isAbstract = isAbstract && !isExternal
       ..isExternal = isExternal;
     // TODO(johnniwinther): How can the name already have been computed?
     _getter.name ??= new Name(getterName, libraryBuilder.library);
@@ -1428,7 +1433,7 @@ class AbstractOrExternalFieldEncoding implements FieldEncoding {
       _setter
         ..isStatic = !isInstanceMember
         ..isExtensionMember = isExtensionMember
-        ..isAbstract = isAbstract
+        ..isAbstract = isAbstract && !isExternal
         ..isExternal = isExternal;
       // TODO(johnniwinther): How can the name already have been computed?
       _setter?.name ??= new Name(setterName, libraryBuilder.library);

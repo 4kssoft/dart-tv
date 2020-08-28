@@ -1763,6 +1763,10 @@ class BodyBuilder extends ScopeListener<JumpTarget>
       } else if (left is Generator) {
         push(left.buildBinaryOperation(token, name, right));
       } else {
+        if (left is ProblemBuilder) {
+          ProblemBuilder problem = left;
+          left = buildProblem(problem.message, problem.charOffset, noLength);
+        }
         assert(left is Expression);
         push(forest.createBinary(fileOffset, left, name, right));
       }
@@ -2065,6 +2069,10 @@ class BodyBuilder extends ScopeListener<JumpTarget>
       Name n = new Name(name, libraryBuilder.nameOrigin);
       if (!isQualified && isDeclarationInstanceContext) {
         assert(declaration == null);
+        if (inLateFieldInitializer) {
+          // Implicit access on 'this' is allowed in a late field initializer.
+          return new ThisPropertyAccessGenerator(this, token, n);
+        }
         if (constantContext != ConstantContext.none || member.isField) {
           return new UnresolvedNameGenerator(this, token, n);
         }
@@ -3767,7 +3775,7 @@ class BodyBuilder extends ScopeListener<JumpTarget>
     debugEvent("IndexedExpression");
     Expression index = popForValue();
     Object receiver = pop();
-    bool isNullAware = optional('?.[', openSquareBracket) || question != null;
+    bool isNullAware = question != null;
     if (isNullAware && !libraryBuilder.isNonNullableByDefault) {
       reportMissingNonNullableSupport(openSquareBracket);
     }

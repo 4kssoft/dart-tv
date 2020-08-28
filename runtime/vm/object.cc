@@ -8,6 +8,7 @@
 
 #include "include/dart_api.h"
 #include "platform/assert.h"
+#include "platform/text_buffer.h"
 #include "platform/unaligned.h"
 #include "platform/unicode.h"
 #include "vm/bit_vector.h"
@@ -183,7 +184,7 @@ ClassPtr Object::weak_serialization_reference_class_ =
 
 const double MegamorphicCache::kLoadFactor = 0.50;
 
-static void AppendSubString(ZoneTextBuffer* buffer,
+static void AppendSubString(BaseTextBuffer* buffer,
                             const char* name,
                             intptr_t start_pos,
                             intptr_t len) {
@@ -1051,6 +1052,7 @@ void Object::Init(Isolate* isolate) {
                                     Smi::New(0));
     empty_type_arguments_->StoreSmi(&empty_type_arguments_->raw_ptr()->hash_,
                                     Smi::New(0));
+    empty_type_arguments_->ComputeHash();
     empty_type_arguments_->SetCanonical();
   }
 
@@ -3596,6 +3598,9 @@ FunctionPtr Function::GetMethodExtractor(const String& getter_name) const {
   const Function& closure_function =
       Function::Handle(ImplicitClosureFunction());
   const Class& owner = Class::Handle(closure_function.Owner());
+  if (owner.EnsureIsFinalized(Thread::Current()) != Error::null()) {
+    return Function::null();
+  }
   Function& result = Function::Handle(owner.LookupDynamicFunction(getter_name));
   if (result.IsNull()) {
     result = CreateMethodExtractor(getter_name);
@@ -3945,10 +3950,13 @@ static ObjectPtr ThrowNoSuchMethod(const Instance& receiver,
   args.SetAt(6, argument_names);
 
   const Library& libcore = Library::Handle(Library::CoreLibrary());
-  const Class& NoSuchMethodError =
+  const Class& cls =
       Class::Handle(libcore.LookupClass(Symbols::NoSuchMethodError()));
-  const Function& throwNew = Function::Handle(
-      NoSuchMethodError.LookupFunctionAllowPrivate(Symbols::ThrowNew()));
+  ASSERT(!cls.IsNull());
+  const auto& error = cls.EnsureIsFinalized(Thread::Current());
+  ASSERT(error == Error::null());
+  const Function& throwNew =
+      Function::Handle(cls.LookupFunctionAllowPrivate(Symbols::ThrowNew()));
   return DartEntry::InvokeFunction(throwNew, args);
 }
 
@@ -3964,10 +3972,12 @@ static ObjectPtr ThrowTypeError(const TokenPosition token_pos,
   args.SetAt(3, dst_name);
 
   const Library& libcore = Library::Handle(Library::CoreLibrary());
-  const Class& TypeError =
+  const Class& cls =
       Class::Handle(libcore.LookupClassAllowPrivate(Symbols::TypeError()));
-  const Function& throwNew = Function::Handle(
-      TypeError.LookupFunctionAllowPrivate(Symbols::ThrowNew()));
+  const auto& error = cls.EnsureIsFinalized(Thread::Current());
+  ASSERT(error == Error::null());
+  const Function& throwNew =
+      Function::Handle(cls.LookupFunctionAllowPrivate(Symbols::ThrowNew()));
   return DartEntry::InvokeFunction(throwNew, args);
 }
 
@@ -4990,9 +5000,9 @@ void Class::set_declaration_type(const Type& value) const {
   ASSERT(!value.IsNull() && value.IsCanonical() && value.IsOld());
   ASSERT((declaration_type() == Object::null()) ||
          (declaration_type() == value.raw()));  // Set during own finalization.
-  // Since declaration type is used as the runtime type of instances of a
-  // non-generic class, the nullability is set to kNonNullable instead of
-  // kLegacy when the non-nullable experiment is enabled.
+  // Since DeclarationType is used as the runtime type of instances of a
+  // non-generic class, its nullability must be kNonNullable.
+  // The exception is DeclarationType of Null which is kNullable.
   ASSERT(value.type_class_id() != kNullCid || value.IsNullable());
   ASSERT(value.type_class_id() == kNullCid || value.IsNonNullable());
   StorePointer(&raw_ptr()->declaration_type_, value.raw());
@@ -5335,9 +5345,7 @@ FunctionPtr Class::CheckFunctionType(const Function& func, MemberKind kind) {
 FunctionPtr Class::LookupFunction(const String& name, MemberKind kind) const {
   ASSERT(!IsNull());
   Thread* thread = Thread::Current();
-  if (EnsureIsFinalized(thread) != Error::null()) {
-    return Function::null();
-  }
+  RELEASE_ASSERT(is_finalized());
   REUSABLE_ARRAY_HANDLESCOPE(thread);
   REUSABLE_FUNCTION_HANDLESCOPE(thread);
   Array& funcs = thread->ArrayHandle();
@@ -5387,9 +5395,7 @@ FunctionPtr Class::LookupFunctionAllowPrivate(const String& name,
                                               MemberKind kind) const {
   ASSERT(!IsNull());
   Thread* thread = Thread::Current();
-  if (EnsureIsFinalized(thread) != Error::null()) {
-    return Function::null();
-  }
+  RELEASE_ASSERT(is_finalized());
   REUSABLE_ARRAY_HANDLESCOPE(thread);
   REUSABLE_FUNCTION_HANDLESCOPE(thread);
   REUSABLE_STRING_HANDLESCOPE(thread);
@@ -5862,14 +5868,13 @@ void TypeArguments::set_nullability(intptr_t value) const {
   StoreSmi(&raw_ptr()->nullability_, Smi::New(value));
 }
 
-intptr_t TypeArguments::ComputeHash() const {
-  if (IsNull()) return 0;
-  const intptr_t num_types = Length();
-  if (IsRaw(0, num_types)) return 0;
+intptr_t TypeArguments::HashForRange(intptr_t from_index, intptr_t len) const {
+  if (IsNull()) return kAllDynamicHash;
+  if (IsRaw(from_index, len)) return kAllDynamicHash;
   uint32_t result = 0;
   AbstractType& type = AbstractType::Handle();
-  for (intptr_t i = 0; i < num_types; i++) {
-    type = TypeAt(i);
+  for (intptr_t i = 0; i < len; i++) {
+    type = TypeAt(from_index + i);
     // The hash may be calculated during type finalization (for debugging
     // purposes only) while a type argument is still temporarily null.
     if (type.IsNull() || type.IsNullTypeRef()) {
@@ -5878,7 +5883,16 @@ intptr_t TypeArguments::ComputeHash() const {
     result = CombineHashes(result, type.Hash());
   }
   result = FinalizeHash(result, kHashBits);
-  SetHash(result);
+  return result;
+}
+
+intptr_t TypeArguments::ComputeHash() const {
+  if (IsNull()) return kAllDynamicHash;
+  const intptr_t num_types = Length();
+  const uint32_t result = HashForRange(0, num_types);
+  if (result != 0) {
+    SetHash(result);
+  }
   return result;
 }
 
@@ -5941,7 +5955,7 @@ void TypeArguments::PrintSubvectorName(
     intptr_t from_index,
     intptr_t len,
     NameVisibility name_visibility,
-    ZoneTextBuffer* printer,
+    BaseTextBuffer* printer,
     NameDisambiguation name_disambiguation /* = NameDisambiguation::kNo */)
     const {
   printer->AddString("<");
@@ -6959,6 +6973,26 @@ void Function::set_parent_function(const Function& value) const {
   }
 }
 
+FunctionPtr Function::GetGeneratedClosure() const {
+  const auto& closure_functions = GrowableObjectArray::Handle(
+      Isolate::Current()->object_store()->closure_functions());
+  auto& entry = Object::Handle();
+
+  for (auto i = (closure_functions.Length() - 1); i >= 0; i--) {
+    entry = closure_functions.At(i);
+
+    ASSERT(entry.IsFunction());
+
+    const auto& closure_function = Function::Cast(entry);
+    if (closure_function.parent_function() == raw() &&
+        closure_function.is_generated_body()) {
+      return closure_function.raw();
+    }
+  }
+
+  return Function::null();
+}
+
 // Enclosing outermost function of this local function.
 FunctionPtr Function::GetOutermostFunction() const {
   FunctionPtr parent = parent_function();
@@ -7408,6 +7442,7 @@ intptr_t Function::NameArrayLengthIncludingFlags(intptr_t num_parameters) {
 
 intptr_t Function::GetRequiredFlagIndex(intptr_t index,
                                         intptr_t* flag_mask) const {
+  ASSERT(flag_mask != nullptr);
   ASSERT(index >= num_fixed_parameters());
   index -= num_fixed_parameters();
   *flag_mask = 1 << (static_cast<uintptr_t>(index) %
@@ -8006,10 +8041,16 @@ static TypeArgumentsPtr RetrieveFunctionTypeArguments(
     if (function_type_args.raw() == Object::empty_type_arguments().raw()) {
       // There are no delayed type arguments, so set back to null.
       function_type_args = TypeArguments::null();
+    } else {
+      // We should never end up here when the receiver is a closure with delayed
+      // type arguments unless this dynamically called closure function was
+      // retrieved directly from the closure instead of going through
+      // DartEntry::ResolveCallable, which appropriately checks for this case.
+      ASSERT(args_desc.TypeArgsLen() == 0);
     }
   }
 
-  if (function_type_args.IsNull() && args_desc.TypeArgsLen() > 0) {
+  if (args_desc.TypeArgsLen() > 0) {
     function_type_args ^= args.At(0);
   }
 
@@ -8766,6 +8807,15 @@ bool Function::SafeToClosurize() const {
 #endif
 }
 
+bool Function::IsDynamicClosureCallDispatcher(Thread* thread) const {
+  if (!IsInvokeFieldDispatcher()) return false;
+  if (thread->isolate()->object_store()->closure_class() != Owner()) {
+    return false;
+  }
+  const auto& handle = String::Handle(thread->zone(), name());
+  return handle.Equals(Symbols::DynamicCall());
+}
+
 FunctionPtr Function::ImplicitClosureFunction() const {
   // Return the existing implicit closure function if any.
   if (implicit_closure_function() != Function::null()) {
@@ -8900,7 +8950,7 @@ StringPtr Function::UserVisibleSignature() const {
 void Function::PrintSignatureParameters(Thread* thread,
                                         Zone* zone,
                                         NameVisibility name_visibility,
-                                        ZoneTextBuffer* printer) const {
+                                        BaseTextBuffer* printer) const {
   AbstractType& param_type = AbstractType::Handle(zone);
   const intptr_t num_params = NumParameters();
   const intptr_t num_fixed_params = num_fixed_parameters();
@@ -8941,7 +8991,7 @@ void Function::PrintSignatureParameters(Thread* thread,
       if (num_opt_named_params > 0) {
         name = ParameterNameAt(i);
         printer->AddString(" ");
-        printer->AddString(name);
+        printer->AddString(name.ToCString());
       }
       if (i != (num_params - 1)) {
         printer->AddString(", ");
@@ -8983,6 +9033,25 @@ InstancePtr Function::ImplicitInstanceClosure(const Instance& receiver) const {
                       Object::null_type_arguments(), *this, context);
 }
 
+FunctionPtr Function::ImplicitClosureTarget(Zone* zone) const {
+  const auto& parent = Function::Handle(zone, parent_function());
+  const auto& func_name = String::Handle(zone, parent.name());
+  const auto& owner = Class::Handle(zone, parent.Owner());
+  const auto& error = owner.EnsureIsFinalized(Thread::Current());
+  ASSERT(error == Error::null());
+  auto& target = Function::Handle(zone, owner.LookupFunction(func_name));
+
+  if (!target.IsNull() && (target.raw() != parent.raw())) {
+    DEBUG_ASSERT(Isolate::Current()->HasAttemptedReload());
+    if ((target.is_static() != parent.is_static()) ||
+        (target.kind() != parent.kind())) {
+      target = Function::null();
+    }
+  }
+
+  return target.raw();
+}
+
 intptr_t Function::ComputeClosureHash() const {
   ASSERT(IsClosureFunction());
   const Class& cls = Class::Handle(Owner());
@@ -8993,7 +9062,7 @@ intptr_t Function::ComputeClosureHash() const {
 }
 
 void Function::PrintSignature(NameVisibility name_visibility,
-                              ZoneTextBuffer* printer) const {
+                              BaseTextBuffer* printer) const {
   Thread* thread = Thread::Current();
   Zone* zone = thread->zone();
   Isolate* isolate = thread->isolate();
@@ -9279,7 +9348,7 @@ StringPtr Function::QualifiedUserVisibleName() const {
 }
 
 void Function::PrintName(const NameFormattingParams& params,
-                         ZoneTextBuffer* printer) const {
+                         BaseTextBuffer* printer) const {
   // If |this| is the generated asynchronous body closure, use the
   // name of the parent function.
   Function& fun = Function::Handle(raw());
@@ -9672,65 +9741,76 @@ bool Function::MayHaveUncheckedEntryPoint() const {
 }
 
 const char* Function::ToCString() const {
-  NoSafepointScope no_safepoint;
   if (IsNull()) {
     return "Function: null";
   }
-  const char* static_str = is_static() ? " static" : "";
-  const char* abstract_str = is_abstract() ? " abstract" : "";
-  const char* kind_str = NULL;
-  const char* const_str = is_const() ? " const" : "";
+  Zone* zone = Thread::Current()->zone();
+  ZoneTextBuffer buffer(zone);
+  buffer.Printf("Function '%s':", String::Handle(zone, name()).ToCString());
+  if (is_static()) {
+    buffer.AddString(" static");
+  }
+  if (is_abstract()) {
+    buffer.AddString(" abstract");
+  }
   switch (kind()) {
     case FunctionLayout::kRegularFunction:
     case FunctionLayout::kClosureFunction:
     case FunctionLayout::kImplicitClosureFunction:
     case FunctionLayout::kGetterFunction:
     case FunctionLayout::kSetterFunction:
-      kind_str = "";
       break;
     case FunctionLayout::kSignatureFunction:
-      kind_str = " signature";
+      buffer.AddString(" signature");
       break;
     case FunctionLayout::kConstructor:
-      kind_str = is_static() ? " factory" : " constructor";
+      buffer.AddString(is_static() ? " factory" : " constructor");
       break;
     case FunctionLayout::kImplicitGetter:
-      kind_str = " getter";
+      buffer.AddString(" getter");
       break;
     case FunctionLayout::kImplicitSetter:
-      kind_str = " setter";
+      buffer.AddString(" setter");
       break;
     case FunctionLayout::kImplicitStaticGetter:
-      kind_str = " static-getter";
+      buffer.AddString(" static-getter");
       break;
     case FunctionLayout::kFieldInitializer:
-      kind_str = " field-initializer";
+      buffer.AddString(" field-initializer");
       break;
     case FunctionLayout::kMethodExtractor:
-      kind_str = " method-extractor";
+      buffer.AddString(" method-extractor");
       break;
     case FunctionLayout::kNoSuchMethodDispatcher:
-      kind_str = " no-such-method-dispatcher";
+      buffer.AddString(" no-such-method-dispatcher");
       break;
     case FunctionLayout::kDynamicInvocationForwarder:
-      kind_str = " dynamic-invocation-forwarder";
+      buffer.AddString(" dynamic-invocation-forwarder");
       break;
     case FunctionLayout::kInvokeFieldDispatcher:
-      kind_str = " invoke-field-dispatcher";
+      buffer.AddString(" invoke-field-dispatcher");
       break;
     case FunctionLayout::kIrregexpFunction:
-      kind_str = " irregexp-function";
+      buffer.AddString(" irregexp-function");
       break;
     case FunctionLayout::kFfiTrampoline:
-      kind_str = " ffi-trampoline-function";
+      buffer.AddString(" ffi-trampoline-function");
       break;
     default:
       UNREACHABLE();
   }
-  const char* function_name = String::Handle(name()).ToCString();
-  return OS::SCreate(Thread::Current()->zone(), "Function '%s':%s%s%s%s.",
-                     function_name, static_str, abstract_str, kind_str,
-                     const_str);
+  if (IsNoSuchMethodDispatcher() || IsInvokeFieldDispatcher()) {
+    const auto& args_desc_array = Array::Handle(zone, saved_args_desc());
+    const ArgumentsDescriptor args_desc(args_desc_array);
+    buffer.AddChar('[');
+    args_desc.PrintTo(&buffer);
+    buffer.AddChar(']');
+  }
+  if (is_const()) {
+    buffer.AddString(" const");
+  }
+  buffer.AddChar('.');
+  return buffer.buffer();
 }
 
 void ClosureData::set_context_scope(const ContextScope& value) const {
@@ -13900,11 +13980,13 @@ FunctionPtr Library::GetFunction(const GrowableArray<Library*>& libs,
       class_str = String::New(class_name);
       cls = lib.LookupClassAllowPrivate(class_str);
       if (!cls.IsNull()) {
-        func_str = String::New(function_name);
-        if (function_name[0] == '.') {
-          func_str = String::Concat(class_str, func_str);
+        if (cls.EnsureIsFinalized(thread) == Error::null()) {
+          func_str = String::New(function_name);
+          if (function_name[0] == '.') {
+            func_str = String::Concat(class_str, func_str);
+          }
+          func = cls.LookupFunctionAllowPrivate(func_str);
         }
-        func = cls.LookupFunctionAllowPrivate(func_str);
       }
     }
     if (!func.IsNull()) {
@@ -14682,7 +14764,7 @@ ExceptionHandlersPtr ExceptionHandlers::New(const Array& handled_types_data) {
 }
 
 const char* ExceptionHandlers::ToCString() const {
-#define FORMAT1 "%" Pd " => %#x  (%" Pd " types) (outer %d) %s\n"
+#define FORMAT1 "%" Pd " => %#x  (%" Pd " types) (outer %d)%s%s\n"
 #define FORMAT2 "  %d. %s\n"
   if (num_entries() == 0) {
     return "empty ExceptionHandlers\n";
@@ -14697,9 +14779,11 @@ const char* ExceptionHandlers::ToCString() const {
     handled_types = GetHandledTypes(i);
     const intptr_t num_types =
         handled_types.IsNull() ? 0 : handled_types.Length();
-    len += Utils::SNPrint(NULL, 0, FORMAT1, i, info.handler_pc_offset,
-                          num_types, info.outer_try_index,
-                          info.is_generated != 0 ? "(generated)" : "");
+    len += Utils::SNPrint(
+        NULL, 0, FORMAT1, i, info.handler_pc_offset, num_types,
+        info.outer_try_index,
+        ((info.needs_stacktrace != 0) ? " (needs stack trace)" : ""),
+        ((info.is_generated != 0) ? " (generated)" : ""));
     for (int k = 0; k < num_types; k++) {
       type ^= handled_types.At(k);
       ASSERT(!type.IsNull());
@@ -14715,10 +14799,11 @@ const char* ExceptionHandlers::ToCString() const {
     handled_types = GetHandledTypes(i);
     const intptr_t num_types =
         handled_types.IsNull() ? 0 : handled_types.Length();
-    num_chars +=
-        Utils::SNPrint((buffer + num_chars), (len - num_chars), FORMAT1, i,
-                       info.handler_pc_offset, num_types, info.outer_try_index,
-                       info.is_generated != 0 ? "(generated)" : "");
+    num_chars += Utils::SNPrint(
+        (buffer + num_chars), (len - num_chars), FORMAT1, i,
+        info.handler_pc_offset, num_types, info.outer_try_index,
+        ((info.needs_stacktrace != 0) ? " (needs stack trace)" : ""),
+        ((info.is_generated != 0) ? " (generated)" : ""));
     for (int k = 0; k < num_types; k++) {
       type ^= handled_types.At(k);
       num_chars += Utils::SNPrint((buffer + num_chars), (len - num_chars),
@@ -16163,8 +16248,8 @@ void Code::set_static_calls_target_table(const Array& value) const {
 }
 
 ObjectPoolPtr Code::GetObjectPool() const {
-#if defined(DART_PRECOMPILED_RUNTIME)
-  if (FLAG_use_bare_instructions) {
+#if defined(DART_PRECOMPILER) || defined(DART_PRECOMPILED_RUNTIME)
+  if (FLAG_precompiled_mode && FLAG_use_bare_instructions) {
     return Isolate::Current()->object_store()->global_object_pool();
   }
 #endif
@@ -19217,14 +19302,14 @@ StringPtr AbstractType::UserVisibleName() const {
 
 void AbstractType::PrintName(
     NameVisibility name_visibility,
-    ZoneTextBuffer* printer,
+    BaseTextBuffer* printer,
     NameDisambiguation name_disambiguation /* = NameDisambiguation::kNo */)
     const {
   ASSERT(name_visibility != kScrubbedName);
   Thread* thread = Thread::Current();
   Zone* zone = thread->zone();
   Class& cls = Class::Handle(zone);
-  String& class_name = String::Handle(zone);
+  String& name_str = String::Handle(zone);
   if (IsTypeParameter()) {
     const TypeParameter& param = TypeParameter::Cast(*this);
 
@@ -19246,7 +19331,8 @@ void AbstractType::PrintName(
       }
     }
 
-    printer->AddString(String::Handle(zone, param.name()));
+    name_str = param.name();
+    printer->AddString(name_str.ToCString());
     printer->AddString(NullabilitySuffix(name_visibility));
     return;
   }
@@ -19272,10 +19358,10 @@ void AbstractType::PrintName(
     }
     // Instead of printing the actual signature, use the typedef name with
     // its type arguments, if any.
-    class_name = cls.Name();  // Typedef name.
+    name_str = cls.Name();  // Typedef name.
     if (!IsFinalized() || IsBeingFinalized()) {
       // TODO(regis): Check if this is dead code.
-      printer->AddString(class_name);
+      printer->AddString(name_str.ToCString());
       printer->AddString(NullabilitySuffix(name_visibility));
       return;
     }
@@ -19284,8 +19370,8 @@ void AbstractType::PrintName(
   // Do not print the full vector, but only the declared type parameters.
   num_type_params = cls.NumTypeParameters();
   if (name_visibility == kInternalName) {
-    class_name = cls.Name();
-    printer->AddString(class_name);
+    name_str = cls.Name();
+    printer->AddString(name_str.ToCString());
   } else {
     ASSERT(name_visibility == kUserVisibleName);
     // Map internal types to their corresponding public interfaces.
@@ -20298,7 +20384,7 @@ void Type::EnumerateURIs(URIs* uris) const {
 
 intptr_t Type::ComputeHash() const {
   ASSERT(IsFinalized());
-  uint32_t result = 1;
+  uint32_t result = 0;
   result = CombineHashes(result, type_class_id());
   // A legacy type should have the same hash as its non-nullable version to be
   // consistent with the definition of type equality in Dart code.
@@ -20307,7 +20393,20 @@ intptr_t Type::ComputeHash() const {
     type_nullability = Nullability::kNonNullable;
   }
   result = CombineHashes(result, static_cast<uint32_t>(type_nullability));
-  result = CombineHashes(result, TypeArguments::Handle(arguments()).Hash());
+  uint32_t type_args_hash = TypeArguments::kAllDynamicHash;
+  if (arguments() != TypeArguments::null()) {
+    // Only include hashes of type arguments corresponding to type parameters.
+    // This prevents obtaining different hashes depending on the location of
+    // TypeRefs in the super class type argument vector.
+    const TypeArguments& type_args = TypeArguments::Handle(arguments());
+    const Class& cls = Class::Handle(type_class());
+    const intptr_t num_type_params = cls.NumTypeParameters();
+    if (num_type_params > 0) {
+      const intptr_t from_index = cls.NumTypeArguments() - num_type_params;
+      type_args_hash = type_args.HashForRange(from_index, num_type_params);
+    }
+  }
+  result = CombineHashes(result, type_args_hash);
   if (IsFunctionType()) {
     AbstractType& type = AbstractType::Handle();
     const Function& sig_fun = Function::Handle(signature());
@@ -21018,18 +21117,21 @@ void TypeParameter::set_flags(uint8_t flags) const {
 const char* TypeParameter::ToCString() const {
   Thread* thread = Thread::Current();
   ZoneTextBuffer printer(thread->zone());
+  auto& name_str = String::Handle(thread->zone(), name());
   printer.Printf("TypeParameter: name ");
-  printer.AddString(String::Handle(name()));
+  printer.AddString(name_str.ToCString());
   printer.AddString(NullabilitySuffix(kInternalName));
   printer.Printf("; index: %" Pd ";", index());
   if (IsFunctionTypeParameter()) {
     const Function& function = Function::Handle(parameterized_function());
     printer.Printf(" function: ");
-    printer.AddString(String::Handle(function.name()));
+    name_str = function.name();
+    printer.AddString(name_str.ToCString());
   } else {
     const Class& cls = Class::Handle(parameterized_class());
     printer.Printf(" class: ");
-    printer.AddString(String::Handle(cls.Name()));
+    name_str = cls.Name();
+    printer.AddString(name_str.ToCString());
   }
   printer.Printf("; bound: ");
   const AbstractType& upper_bound = AbstractType::Handle(bound());
@@ -24098,8 +24200,9 @@ const char* TransferableTypedData::ToCString() const {
 }
 
 intptr_t Closure::NumTypeParameters(Thread* thread) const {
-  if (delayed_type_arguments() != Object::null_type_arguments().raw() &&
-      delayed_type_arguments() != Object::empty_type_arguments().raw()) {
+  // Only check for empty here, as the null TAV is used to mean that the
+  // closed-over delayed type parameters were all of dynamic type.
+  if (delayed_type_arguments() != Object::empty_type_arguments().raw()) {
     return 0;
   } else {
     const auto& closure_function = Function::Handle(thread->zone(), function());
@@ -24317,7 +24420,7 @@ StackTracePtr StackTrace::New(const Array& code_array,
 
 #if defined(DART_PRECOMPILED_RUNTIME)
 // Prints the best representation(s) for the call address.
-static void PrintNonSymbolicStackFrameBody(ZoneTextBuffer* buffer,
+static void PrintNonSymbolicStackFrameBody(BaseTextBuffer* buffer,
                                            uword call_addr,
                                            uword isolate_instructions,
                                            uword vm_instructions,
@@ -24353,12 +24456,12 @@ static void PrintNonSymbolicStackFrameBody(ZoneTextBuffer* buffer,
 }
 #endif
 
-static void PrintSymbolicStackFrameIndex(ZoneTextBuffer* buffer,
+static void PrintSymbolicStackFrameIndex(BaseTextBuffer* buffer,
                                          intptr_t frame_index) {
   buffer->Printf("#%-6" Pd "", frame_index);
 }
 
-static void PrintSymbolicStackFrameBody(ZoneTextBuffer* buffer,
+static void PrintSymbolicStackFrameBody(BaseTextBuffer* buffer,
                                         const char* function_name,
                                         const char* url,
                                         intptr_t line = -1,
@@ -24374,7 +24477,7 @@ static void PrintSymbolicStackFrameBody(ZoneTextBuffer* buffer,
 }
 
 static void PrintSymbolicStackFrame(Zone* zone,
-                                    ZoneTextBuffer* buffer,
+                                    BaseTextBuffer* buffer,
                                     const Function& function,
                                     TokenPosition token_pos,
                                     intptr_t frame_index) {

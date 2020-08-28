@@ -243,6 +243,16 @@ ExperimentNotEnabled:
   tip: "Try updating your pubspec.yaml to set the minimum SDK constraint to #string2 or higher, and running 'pub get'."
   analyzerCode: ParserErrorCode.EXPERIMENT_NOT_ENABLED
 
+ExperimentNotEnabledNoFlag:
+  template: "This requires the null safety language feature, which is experimental."
+  tip: "You can enable the experiment using the '--enable-experiment=non-nullable' command line option."
+  analyzerCode: ParserErrorCode.EXPERIMENT_NOT_ENABLED
+
+ExperimentNotEnabledNoFlagInvalidLanguageVersion:
+  template: "This requires the null safety language feature, which is experimental and requires language version of #string2 or higher."
+  tip: "You can enable the experiment using the '--enable-experiment=non-nullable' command line option."
+  analyzerCode: ParserErrorCode.EXPERIMENT_NOT_ENABLED
+
 EmptyNamedParameterList:
   template: "Named parameter lists cannot be empty."
   tip: "Try adding a named parameter to the list."
@@ -366,7 +376,9 @@ MultipleExtends:
   template: "Each class definition can have at most one extends clause."
   tip: "Try choosing one superclass and define your class to implement (or mix in) the others."
   analyzerCode: ParserErrorCode.MULTIPLE_EXTENDS_CLAUSES
-  script: "class A extends B extends C {}"
+  script:
+    - "class B{} class C{} class A extends B extends C {}"
+    - "class B{} class C{} class A extends B, C {}"
 
 MultipleWith:
   index: 24
@@ -555,7 +567,9 @@ AbstractClassMember:
     - "abstract class C {abstract static var f;}"
 
 AbstractExternalField:
+  index: 110
   template: "Fields can't be declared both 'abstract' and 'external'."
+  analyzerCode: ParserErrorCode.ABSTRACT_EXTERNAL_FIELD
   tip: "Try removing the 'abstract' or 'external' keyword."
   configuration: nnbd-strong
   script:
@@ -563,7 +577,9 @@ AbstractExternalField:
     - "abstract class C {external abstract var f;}"
 
 AbstractStaticField:
+  index: 107
   template: "Static fields can't be declared 'abstract'."
+  analyzerCode: ParserErrorCode.ABSTRACT_STATIC_FIELD
   tip: "Try removing the 'abstract' or 'static' keyword."
   configuration: nnbd-strong
   script:
@@ -593,7 +609,9 @@ AbstractFieldConstructorInitializer:
     - "abstract class C {abstract var f; C() : this.f = 0;}"
 
 AbstractLateField:
+  index: 108
   template: "Abstract fields cannot be late."
+  analyzerCode: ParserErrorCode.ABSTRACT_LATE_FIELD
   tip: "Try removing the 'abstract' or 'late' keyword."
   configuration: nnbd-strong
   script:
@@ -801,7 +819,9 @@ ExternalFieldConstructorInitializer:
     - "abstract class C {external var f; C() : this.f = 0;}"
 
 ExternalLateField:
+  index: 109
   template: "External fields cannot be late."
+  analyzerCode: ParserErrorCode.EXTERNAL_LATE_FIELD
   tip: "Try removing the 'external' or 'late' keyword."
   configuration: nnbd-strong
   script:
@@ -2201,6 +2221,13 @@ TypeVariableSameNameAsEnclosing:
   template: "A type variable can't have the same name as its enclosing declaration."
   analyzerCode: CONFLICTING_TYPE_VARIABLE_AND_CLASS
 
+AnnotationOnTypeArgument:
+  template: "Type arguments can't have annotations because they aren't declarations."
+  analyzerCode: ParserErrorCode.ANNOTATION_ON_TYPE_ARGUMENT
+  index: 111
+  script:
+    - "class A<E> {} class C { m() => new A<@Object() C>(); }"
+
 AnnotationOnFunctionTypeTypeVariable:
   template: "A type variable on a function type can't have annotations."
   script:
@@ -3540,6 +3567,9 @@ CantReadFile:
     main() {
     }
 
+ExceptionReadingFile:
+  template: "Exception when reading '#uri': #string"
+
 PackagesFileFormat:
   template: "Problem in packages configuration file: #string"
   external: test/packages_format_error_test.dart
@@ -4063,12 +4093,13 @@ FieldNonNullableWithoutInitializerError:
 FieldNonNullableNotInitializedByConstructorError:
   template: "This constructor should initialize field '#name' because its type '#type' doesn't allow null."
 
-NonNullableOptOut:
+NonNullableOptOutExplicit:
   template: "Null safety features are disabled for this library."
-  # Used to be this:
-  # tip: "Try removing the `@dart=` annotation or setting the language version higher."
-  # Once the version number is locked in, we can write something like that again.
-  tip: "Try removing the `@dart=` annotation or setting the language version higher."
+  tip: "Try removing the `@dart=` annotation or setting the language version to #string or higher."
+
+NonNullableOptOutImplicit:
+  template: "Null safety features are disabled for this library."
+  tip: "Try removing the package language version or setting the language version to #string or higher."
 
 NonNullableOptOutComment:
   template: "This is the annotation that opts out this library from null safety features."
@@ -4089,6 +4120,14 @@ NullableMixinError:
 JsInteropAnonymousFactoryPositionalParameters:
   template: "Factory constructors for @anonymous JS interop classes should not contain any positional parameters."
   tip: "Try replacing them with named parameters instead."
+
+JsInteropEnclosingClassJSAnnotation:
+  template: "Member has a JS interop annotation but the enclosing class does not."
+  tip: "Try adding the annotation to the enclosing class."
+
+JsInteropEnclosingClassJSAnnotationContext:
+  template: "This is the enclosing class."
+  severity: CONTEXT
 
 JsInteropIndexNotSupported:
   template: "JS interop classes do not support [] and []= operator methods."

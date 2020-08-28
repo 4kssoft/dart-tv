@@ -5,16 +5,17 @@
 import 'package:analyzer/src/error/codes.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
-import '../dart/resolution/driver_resolution.dart';
+import '../dart/resolution/context_collection_resolution.dart';
 
 main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(CouldNotInferTest);
+    defineReflectiveTests(CouldNotInferWithNullSafetyTest);
   });
 }
 
 @reflectiveTest
-class CouldNotInferTest extends DriverResolutionTest {
+class CouldNotInferTest extends PubPackageResolutionTest {
   test_constructors_inferenceFBounded() async {
     await assertErrorsInCode('''
 class C<T> {}
@@ -135,7 +136,7 @@ void main() {
   }
 
   test_functionType_parameterIsObject_returnIsBound_prefixedFunction() async {
-    newFile('/test/lib/a.dart', content: '''
+    newFile('$testPackageLibPath/a.dart', content: '''
 external T f<T extends num>(T a, T b);
 ''');
     await assertErrorsInCode('''
@@ -229,10 +230,10 @@ class Foo<T extends Pattern> {
   U method<U extends T>(U u) => u;
 }
 main() {
-  new Foo<String>()./*error:COULD_NOT_INFER*/method(42);
+  new Foo<String>().method(42);
 }
 ''', [
-      error(CompileTimeErrorCode.COULD_NOT_INFER, 122, 6),
+      error(CompileTimeErrorCode.COULD_NOT_INFER, 97, 6),
     ]);
   }
 
@@ -245,5 +246,26 @@ main() { new C().f(<S>(S s) => s); }
 ''', [
       error(CompileTimeErrorCode.COULD_NOT_INFER, 52, 1),
     ]);
+  }
+}
+
+@reflectiveTest
+class CouldNotInferWithNullSafetyTest extends PubPackageResolutionTest
+    with WithNullSafetyMixin {
+  test_constructor_nullSafe_fromLegacy() async {
+    newFile('$testPackageLibPath/a.dart', content: '''
+class C<T extends Object> {
+  C(T t);
+}
+''');
+
+    await assertNoErrorsInCode('''
+// @dart = 2.8
+import 'a.dart';
+
+void f(dynamic a) {
+  C(a);
+}
+''');
   }
 }

@@ -2,27 +2,102 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'package:analyzer/dart/analysis/declared_variables.dart';
-import 'package:analyzer/dart/analysis/features.dart';
-import 'package:analyzer/src/dart/analysis/experiments.dart';
 import 'package:analyzer/src/error/codes.dart';
-import 'package:analyzer/src/generated/engine.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
-import '../dart/resolution/driver_resolution.dart';
-import '../dart/resolution/with_null_safety_mixin.dart';
+import '../dart/resolution/context_collection_resolution.dart';
 
 main() {
   defineReflectiveSuite(() {
+    defineReflectiveTests(ConstEvalThrowsExceptionTest_language24);
     defineReflectiveTests(ConstEvalThrowsExceptionTest);
     defineReflectiveTests(ConstEvalThrowsExceptionWithNullSafetyTest);
-    defineReflectiveTests(ConstEvalThrowsExceptionWithConstantUpdateTest);
   });
 }
 
 @reflectiveTest
-class ConstEvalThrowsExceptionTest extends DriverResolutionTest {
+class ConstEvalThrowsExceptionTest extends PubPackageResolutionTest
+    with ConstEvalThrowsExceptionTestCases {
+  @override
+  bool get _constant_update_2018 => true;
+
+  test_binaryMinus_null() async {
+    await assertErrorsInCode('''
+const dynamic D = null;
+const C = D - 5;
+''', [
+      error(CompileTimeErrorCode.CONST_EVAL_THROWS_EXCEPTION, 34, 5),
+    ]);
+
+    await assertErrorsInCode('''
+const dynamic D = null;
+const C = 5 - D;
+''', [
+      error(CompileTimeErrorCode.CONST_EVAL_THROWS_EXCEPTION, 34, 5),
+    ]);
+  }
+
+  test_binaryPlus_null() async {
+    await assertErrorsInCode('''
+const dynamic D = null;
+const C = D + 5;
+''', [
+      error(CompileTimeErrorCode.CONST_EVAL_THROWS_EXCEPTION, 34, 5),
+    ]);
+
+    await assertErrorsInCode('''
+const dynamic D = null;
+const C = 5 + D;
+''', [
+      error(CompileTimeErrorCode.CONST_EVAL_THROWS_EXCEPTION, 34, 5),
+    ]);
+  }
+
+  test_eqEq_nonPrimitiveRightOperand() async {
+    await assertNoErrorsInCode('''
+const c = const T.eq(1, const Object());
+class T {
+  final Object value;
+  const T.eq(Object o1, Object o2) : value = o1 == o2;
+}
+''');
+  }
+
+  test_fromEnvironment_ifElement() async {
+    await assertNoErrorsInCode('''
+const b = bool.fromEnvironment('foo');
+
+main() {
+  const l1 = [1, 2, 3];
+  const l2 = [if (b) ...l1];
+  print(l2);
+}
+''');
+  }
+}
+
+@reflectiveTest
+class ConstEvalThrowsExceptionTest_language24 extends PubPackageResolutionTest
+    with ConstEvalThrowsExceptionTestCases {
+  @override
+  bool get _constant_update_2018 => false;
+
+  @override
+  void setUp() {
+    super.setUp();
+    writeTestPackageConfig(
+      PackageConfigFileBuilder(),
+      languageVersion: '2.4',
+    );
+  }
+}
+
+@reflectiveTest
+mixin ConstEvalThrowsExceptionTestCases on PubPackageResolutionTest {
+  /// The expected state of this feature in the test.
+  bool get _constant_update_2018;
+
   test_assertInitializerThrows() async {
     await assertErrorsInCode(r'''
 class A {
@@ -36,7 +111,7 @@ var v = const A(3, 2);
 
   test_CastError_intToDouble_constructor_importAnalyzedAfter() async {
     // See dartbug.com/35993
-    newFile('/test/lib/other.dart', content: '''
+    newFile('$testPackageLibPath/other.dart', content: '''
 class Foo {
   final double value;
 
@@ -60,13 +135,13 @@ void main() {
 }
 ''');
     var otherFileResult =
-        await resolveFile(convertPath('/test/lib/other.dart'));
+        await resolveFile(convertPath('$testPackageLibPath/other.dart'));
     expect(otherFileResult.errors, isEmpty);
   }
 
   test_CastError_intToDouble_constructor_importAnalyzedBefore() async {
     // See dartbug.com/35993
-    newFile('/test/lib/other.dart', content: '''
+    newFile('$testPackageLibPath/other.dart', content: '''
 class Foo {
   final double value;
 
@@ -90,12 +165,12 @@ void main() {
 }
 ''');
     var otherFileResult =
-        await resolveFile(convertPath('/test/lib/other.dart'));
+        await resolveFile(convertPath('$testPackageLibPath/other.dart'));
     expect(otherFileResult.errors, isEmpty);
   }
 
   test_default_constructor_arg_empty_map_import() async {
-    newFile('/test/lib/other.dart', content: '''
+    newFile('$testPackageLibPath/other.dart', content: '''
 class C {
   final Map<String, int> m;
   const C({this.m = const <String, int>{}})
@@ -112,7 +187,7 @@ main() {
       error(HintCode.UNUSED_LOCAL_VARIABLE, 37, 1),
     ]);
     var otherFileResult =
-        await resolveFile(convertPath('/test/lib/other.dart'));
+        await resolveFile(convertPath('$testPackageLibPath/other.dart'));
     assertErrorsInList(
       otherFileResult.errors,
       expectedErrorsByNullability(
@@ -193,7 +268,7 @@ var b2 = const bool.fromEnvironment('x', defaultValue: 1);
   test_fromEnvironment_bool_badDefault_whenDefined() async {
     // The type of the defaultValue needs to be correct even when the default
     // value isn't used (because the variable is defined in the environment).
-    driver.declaredVariables = DeclaredVariables.fromMap({'x': 'true'});
+    declaredVariables = {'x': 'true'};
     await assertErrorsInCode('''
 var b = const bool.fromEnvironment('x', defaultValue: 1);
 ''', [
@@ -208,7 +283,7 @@ var b = const bool.fromEnvironment('x', defaultValue: 1);
 const dynamic nil = null;
 const c = [if (1 < 0) nil + 1];
 ''',
-        analysisOptions.experimentStatus.constant_update_2018
+        _constant_update_2018
             ? []
             : [
                 error(CompileTimeErrorCode.NON_CONSTANT_LIST_ELEMENT, 37, 18),
@@ -221,7 +296,7 @@ const c = [if (1 < 0) nil + 1];
 const dynamic nonBool = 3;
 const c = const [if (nonBool) 'a'];
 ''',
-        analysisOptions.experimentStatus.constant_update_2018
+        _constant_update_2018
             ? [
                 error(CompileTimeErrorCode.CONST_EVAL_THROWS_EXCEPTION, 48, 7),
               ]
@@ -237,7 +312,7 @@ const c = const [if (nonBool) 'a'];
 const dynamic nonBool = null;
 const c = const {if (nonBool) 'a' : 1};
 ''',
-        analysisOptions.experimentStatus.constant_update_2018
+        _constant_update_2018
             ? [
                 error(CompileTimeErrorCode.CONST_EVAL_THROWS_EXCEPTION, 51, 7),
               ]
@@ -253,7 +328,7 @@ const c = const {if (nonBool) 'a' : 1};
 const dynamic nonBool = 'a';
 const c = const {if (nonBool) 3};
 ''',
-        analysisOptions.experimentStatus.constant_update_2018
+        _constant_update_2018
             ? [
                 error(CompileTimeErrorCode.CONST_EVAL_THROWS_EXCEPTION, 50, 7),
               ]
@@ -269,7 +344,7 @@ const c = const {if (nonBool) 3};
 const dynamic nil = null;
 const c = [if (0 < 1) 3 else nil + 1];
 ''',
-        analysisOptions.experimentStatus.constant_update_2018
+        _constant_update_2018
             ? []
             : [
                 error(CompileTimeErrorCode.NON_CONSTANT_LIST_ELEMENT, 37, 25),
@@ -277,7 +352,7 @@ const c = [if (0 < 1) 3 else nil + 1];
   }
 
   test_invalid_constructorFieldInitializer_fromSeparateLibrary() async {
-    newFile('/test/lib/lib.dart', content: r'''
+    newFile('$testPackageLibPath/lib.dart', content: r'''
 class A<T> {
   final int f;
   const A() : f = T.foo;
@@ -360,70 +435,6 @@ const C = !D;
 ''', [
       error(CompileTimeErrorCode.CONST_EVAL_THROWS_EXCEPTION, 34, 2),
     ]);
-  }
-}
-
-@reflectiveTest
-class ConstEvalThrowsExceptionWithConstantUpdateTest
-    extends ConstEvalThrowsExceptionTest {
-  @override
-  AnalysisOptionsImpl get analysisOptions => AnalysisOptionsImpl()
-    ..contextFeatures = FeatureSet.fromEnableFlags(
-      [EnableString.constant_update_2018],
-    );
-
-  test_binaryMinus_null() async {
-    await assertErrorsInCode('''
-const dynamic D = null;
-const C = D - 5;
-''', [
-      error(CompileTimeErrorCode.CONST_EVAL_THROWS_EXCEPTION, 34, 5),
-    ]);
-
-    await assertErrorsInCode('''
-const dynamic D = null;
-const C = 5 - D;
-''', [
-      error(CompileTimeErrorCode.CONST_EVAL_THROWS_EXCEPTION, 34, 5),
-    ]);
-  }
-
-  test_binaryPlus_null() async {
-    await assertErrorsInCode('''
-const dynamic D = null;
-const C = D + 5;
-''', [
-      error(CompileTimeErrorCode.CONST_EVAL_THROWS_EXCEPTION, 34, 5),
-    ]);
-
-    await assertErrorsInCode('''
-const dynamic D = null;
-const C = 5 + D;
-''', [
-      error(CompileTimeErrorCode.CONST_EVAL_THROWS_EXCEPTION, 34, 5),
-    ]);
-  }
-
-  test_eqEq_nonPrimitiveRightOperand() async {
-    await assertNoErrorsInCode('''
-const c = const T.eq(1, const Object());
-class T {
-  final Object value;
-  const T.eq(Object o1, Object o2) : value = o1 == o2;
-}
-''');
-  }
-
-  test_fromEnvironment_ifElement() async {
-    await assertNoErrorsInCode('''
-const b = bool.fromEnvironment('foo');
-
-main() {
-  const l1 = [1, 2, 3];
-  const l2 = [if (b) ...l1];
-  print(l2);
-}
-''');
   }
 }
 

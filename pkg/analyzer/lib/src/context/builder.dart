@@ -83,6 +83,9 @@ class ContextBuilder {
   /// interface.
   PerformanceLog performanceLog;
 
+  /// If `true`, additional analysis data useful for testing is stored.
+  bool retainDataForTesting = false;
+
   /// The byte store used by any analysis drivers created through this interface.
   ByteStore byteStore;
 
@@ -114,17 +117,19 @@ class ContextBuilder {
     final sf = createSourceFactory(path, options, summaryData: summaryData);
 
     AnalysisDriver driver = AnalysisDriver(
-        analysisDriverScheduler,
-        performanceLog,
-        resourceProvider,
-        byteStore,
-        fileContentOverlay,
-        contextRoot,
-        sf,
-        options,
-        packages: createPackageMap(path),
-        enableIndex: enableIndex,
-        externalSummaries: summaryData);
+      analysisDriverScheduler,
+      performanceLog,
+      resourceProvider,
+      byteStore,
+      fileContentOverlay,
+      contextRoot,
+      sf,
+      options,
+      packages: createPackageMap(path),
+      enableIndex: enableIndex,
+      externalSummaries: summaryData,
+      retainDataForTesting: retainDataForTesting,
+    );
 
     // Set API AnalysisContext for the driver.
     var apiContextRoots = api.ContextLocator(
@@ -225,6 +230,20 @@ class ContextBuilder {
           resourceProvider: resourceProvider);
     }
 
+    DartSdk folderSdk;
+    {
+      String sdkPath = sdkManager.defaultSdkDirectory;
+      SdkDescription description = SdkDescription(sdkPath);
+      folderSdk = sdkManager.getSdk(description, () {
+        var sdk = FolderBasedDartSdk(
+          resourceProvider,
+          resourceProvider.getFolder(sdkPath),
+        );
+        sdk.analysisOptions = analysisOptions;
+        return sdk;
+      });
+    }
+
     if (workspace != null) {
       var partialSourceFactory = workspace.createSourceFactory(null, null);
       var embedderYamlSource = partialSourceFactory.forUri(
@@ -237,22 +256,17 @@ class ContextBuilder {
             EmbedderYamlLocator.forLibFolder(libFolder);
         Map<Folder, YamlMap> embedderMap = locator.embedderYamls;
         if (embedderMap.isNotEmpty) {
-          EmbedderSdk embedderSdk = EmbedderSdk(resourceProvider, embedderMap);
+          EmbedderSdk embedderSdk = EmbedderSdk(
+            resourceProvider,
+            embedderMap,
+            languageVersion: folderSdk.languageVersion,
+          );
           return embedderSdk;
         }
       }
     }
 
-    String sdkPath = sdkManager.defaultSdkDirectory;
-    SdkDescription description = SdkDescription(sdkPath);
-    return sdkManager.getSdk(description, () {
-      var sdk = FolderBasedDartSdk(
-        resourceProvider,
-        resourceProvider.getFolder(sdkPath),
-      );
-      sdk.analysisOptions = analysisOptions;
-      return sdk;
-    });
+    return folderSdk;
   }
 
   /// Return the analysis options that should be used to analyze code in the

@@ -1353,16 +1353,6 @@ abstract class Configuration implements AstNode {
   /// Set the token for the left parenthesis to the given [token].
   set leftParenthesis(Token token);
 
-  /// Return the URI of the implementation library to be used if the condition
-  /// is true.
-  @deprecated
-  StringLiteral get libraryUri;
-
-  /// Set the URI of the implementation library to be used if the condition is
-  /// true to the given [uri].
-  @deprecated
-  set libraryUri(StringLiteral uri);
-
   /// Return the name of the declared variable whose value is being used in the
   /// condition.
   DottedName get name;
@@ -1438,9 +1428,6 @@ abstract class ConstructorDeclaration implements ClassMember {
 
   @override
   ConstructorElement get declaredElement;
-
-  /// Set the element associated with this constructor to the given [element].
-  set element(ConstructorElement element);
 
   /// Return the token for the 'external' keyword to the given [token].
   Token get externalKeyword;
@@ -2131,7 +2118,21 @@ abstract class ExtensionOverride implements Expression {
 /// The declaration of one or more fields of the same type.
 ///
 ///    fieldDeclaration ::=
-///        'static'? [VariableDeclarationList] ';'
+///        'static' 'const' <type>? <staticFinalDeclarationList>
+///      | 'static' 'final' <type>? <staticFinalDeclarationList>
+///      | 'static' 'late' 'final' <type>? <initializedIdentifierList>
+///      | 'static' 'late'? <varOrType> <initializedIdentifierList>
+///      | 'covariant' 'late'? <varOrType> <initializedIdentifierList>
+///      | 'late'? 'final' <type>? <initializedIdentifierList>
+///      | 'late'? <varOrType> <initializedIdentifierList>
+///      | 'external' ('static'? <finalVarOrType> | 'covariant' <varOrType>)
+///            <identifierList>
+///      | 'abstract' (<finalVarOrType> | 'covariant' <varOrType>)
+///            <identifierList>
+///
+/// (Note: there is no <fieldDeclaration> production in the grammar; this is a
+/// subset of the grammar production <declaration>, which encompasses everything
+/// that can appear inside a class declaration except methods).
 ///
 /// Prior to the 'extension-methods' experiment, these nodes were always
 /// children of a class declaration. When the experiment is enabled, these nodes
@@ -2139,11 +2140,17 @@ abstract class ExtensionOverride implements Expression {
 ///
 /// Clients may not extend, implement or mix-in this class.
 abstract class FieldDeclaration implements ClassMember {
+  /// The `abstract` keyword, or `null` if the keyword was not used.
+  Token get abstractKeyword;
+
   /// The 'covariant' keyword, or `null` if the keyword was not used.
   Token get covariantKeyword;
 
   /// Set the token for the 'covariant' keyword to the given [token].
   set covariantKeyword(Token token);
+
+  /// The `external` keyword, or `null` if the keyword was not used.
+  Token get externalKeyword;
 
   /// Return the fields being declared.
   VariableDeclarationList get fields;
@@ -2367,10 +2374,6 @@ abstract class FormalParameter implements AstNode {
   /// Return `true` if this parameter is both a required and positional
   /// parameter.
   bool get isRequiredPositional;
-
-  /// Return the kind of this parameter.
-  @deprecated
-  ParameterKind get kind;
 
   /// Return the annotations associated with this parameter.
   NodeList<Annotation> get metadata;
@@ -2661,9 +2664,6 @@ abstract class FunctionExpression implements Expression {
   /// Return the element associated with the function, or `null` if the AST
   /// structure has not been resolved.
   ExecutableElement get declaredElement;
-
-  /// Set the element associated with the function to the given [element].
-  set element(ExecutableElement element);
 
   /// Return the parameters associated with the function, or `null` if the
   /// function is part of a top-level getter.
@@ -3268,8 +3268,7 @@ abstract class IndexExpression
 ///        ('new' | 'const')? [TypeName] ('.' [SimpleIdentifier])? [ArgumentList]
 ///
 /// Clients may not extend, implement or mix-in this class.
-abstract class InstanceCreationExpression
-    implements Expression, ConstructorReferenceNode {
+abstract class InstanceCreationExpression implements Expression {
   /// Return the list of arguments to the constructor.
   ArgumentList get argumentList;
 
@@ -3295,14 +3294,6 @@ abstract class InstanceCreationExpression
   /// Set the 'new' or 'const' keyword used to indicate how an object should be
   /// created to the given [token].
   set keyword(Token token);
-
-  @Deprecated('Use constructorName.staticElement')
-  @override
-  ConstructorElement get staticElement;
-
-  @Deprecated('Use constructorName.staticElement')
-  @override
-  set staticElement(ConstructorElement staticElement);
 }
 
 /// An integer literal expression.
@@ -4011,11 +4002,6 @@ abstract class NodeList<E extends AstNode> implements List<E> {
 
   /// Return the node that is the parent of each of the elements in the list.
   AstNode get owner;
-
-  /// Set the node that is the parent of each of the elements in the list to the
-  /// given [node].
-  @deprecated // Never intended for public use.
-  set owner(AstNode node);
 
   /// Return the node at the given [index] in the list or throw a [RangeError]
   /// if [index] is out of bounds.
@@ -4939,11 +4925,21 @@ abstract class ThrowExpression implements Expression {
 /// The declaration of one or more top-level variables of the same type.
 ///
 ///    topLevelVariableDeclaration ::=
-///        ('final' | 'const') type? staticFinalDeclarationList ';'
-///      | variableDeclaration ';'
+///        ('final' | 'const') <type>? <staticFinalDeclarationList> ';'
+///      | 'late' 'final' <type>? <initializedIdentifierList> ';'
+///      | 'late'? <varOrType> <initializedIdentifierList> ';'
+///      | 'external' <finalVarOrType> <identifierList> ';'
+///
+/// (Note: there is no <topLevelVariableDeclaration> production in the grammar;
+/// this is a subset of the grammar production <topLevelDeclaration>, which
+/// encompasses everything that can appear inside a Dart file after part
+/// directives).
 ///
 /// Clients may not extend, implement or mix-in this class.
 abstract class TopLevelVariableDeclaration implements CompilationUnitMember {
+  /// The `external` keyword, or `null` if the keyword was not used.
+  Token get externalKeyword;
+
   /// Return the semicolon terminating the declaration.
   Token get semicolon;
 
@@ -5156,14 +5152,6 @@ abstract class TypeParameterList implements AstNode {
 ///
 /// Clients may not extend, implement or mix-in this class.
 abstract class UriBasedDirective implements Directive {
-  /// Return the source to which the URI was resolved.
-  @deprecated
-  Source get source;
-
-  /// Set the source to which the URI was resolved to the given [source].
-  @deprecated
-  set source(Source source);
-
   /// Return the URI referenced by this directive.
   StringLiteral get uri;
 

@@ -83,8 +83,6 @@ import 'forwarding_node.dart' show ForwardingNode;
 
 import 'kernel_builder.dart' show ImplicitFieldType;
 
-const bool useConsolidated = true;
-
 const DebugLogger debug =
     const bool.fromEnvironment("debug.hierarchy") ? const DebugLogger() : null;
 
@@ -243,17 +241,6 @@ abstract class ClassMember {
   void registerOverrideDependency(ClassMember overriddenMember);
 }
 
-/// Returns true if [a] is a class member conflict with [b].  [a] is assumed to
-/// be declared in the class, [b] is assumed to be inherited.
-///
-/// See the section named "Class Member Conflicts" in [Dart Programming
-/// Language Specification](
-/// ../../../../../../docs/language/dartLangSpec.tex#classMemberConflicts).
-bool isInheritanceConflict(ClassMember a, ClassMember b) {
-  if (a.isStatic) return true;
-  return a.isProperty != b.isProperty;
-}
-
 bool hasSameSignature(FunctionNode a, FunctionNode b) {
   List<TypeParameter> aTypeParameters = a.typeParameters;
   List<TypeParameter> bTypeParameters = b.typeParameters;
@@ -346,9 +333,6 @@ class ClassHierarchyBuilder implements ClassHierarchyBase {
 
   Types types;
 
-  Map<ClassMember, Map<ClassMember, ClassMember>> inheritanceConflictCache =
-      new Map.identity();
-
   ClassHierarchyBuilder(this.objectClassBuilder, this.loader, this.coreTypes)
       : objectClass = objectClassBuilder.cls,
         futureClass = coreTypes.futureClass,
@@ -362,7 +346,6 @@ class ClassHierarchyBuilder implements ClassHierarchyBase {
     substitutions.clear();
     _overrideChecks.clear();
     _delayedTypeComputations.clear();
-    inheritanceConflictCache.clear();
     _delayedMemberChecks.clear();
   }
 
@@ -651,35 +634,10 @@ class ClassHierarchyNodeBuilder {
       classBuilder.library.loader == hierarchy.loader;
 
   ClassMember checkInheritanceConflict(ClassMember a, ClassMember b) {
-    hierarchy.inheritanceConflictCache[a] ??= new Map.identity();
-    if (hierarchy.inheritanceConflictCache[a].containsKey(b)) {
-      return hierarchy.inheritanceConflictCache[a][b];
-    }
-
-    if (a.hasDeclarations) {
-      ClassMember result;
-      for (int i = 0; i < a.declarations.length; i++) {
-        ClassMember d = checkInheritanceConflict(a.declarations[i], b);
-        result ??= d;
-      }
-      hierarchy.inheritanceConflictCache[a][b] = result;
-      return result;
-    }
-    if (b.hasDeclarations) {
-      ClassMember result;
-      for (int i = 0; i < b.declarations.length; i++) {
-        ClassMember d = checkInheritanceConflict(a, b.declarations[i]);
-        result ??= d;
-      }
-      hierarchy.inheritanceConflictCache[a][b] = result;
-      return result;
-    }
-    if (isInheritanceConflict(a, b)) {
+    if (a.isStatic || a.isProperty != b.isProperty) {
       reportInheritanceConflict(a, b);
-      hierarchy.inheritanceConflictCache[a][b] = a;
       return a;
     }
-    hierarchy.inheritanceConflictCache[a][b] = null;
     return null;
   }
 
@@ -710,7 +668,6 @@ class ClassHierarchyNodeBuilder {
 
       for (ClassMember classMember
           in toSet(declaredMember.classBuilder, overriddenMembers)) {
-        assert(useConsolidated || !classMember.hasDeclarations);
         Member overriddenMember = classMember.getMember(hierarchy);
         Substitution classSubstitution;
         if (classBuilder.cls != overriddenMember.enclosingClass) {
@@ -922,7 +879,6 @@ class ClassHierarchyNodeBuilder {
     List<VariableDeclaration> declaredNamed = declaredFunction.namedParameters;
     for (ClassMember overriddenMember
         in toSet(declaredMember.classBuilder, overriddenMembers)) {
-      assert(useConsolidated || !overriddenMember.hasDeclarations);
       Member bMember = overriddenMember.getMember(hierarchy);
       if (bMember is! Procedure) {
         debug?.log("Giving up 1");
@@ -1247,7 +1203,6 @@ class ClassHierarchyNodeBuilder {
       void inferFrom(ClassMember classMember) {
         if (inferredType is InvalidType) return;
 
-        assert(useConsolidated || !classMember.hasDeclarations);
         Member overriddenMember = classMember.getMember(hierarchy);
         DartType inheritedType;
         if (overriddenMember is Procedure) {
@@ -1326,7 +1281,6 @@ class ClassHierarchyNodeBuilder {
     Field declaredField = declaredMember.getMember(hierarchy);
     for (ClassMember overriddenMember
         in toSet(declaredMember.classBuilder, overriddenMembers)) {
-      assert(useConsolidated || !overriddenMember.hasDeclarations);
       Member bTarget = overriddenMember.getMember(hierarchy);
       if (bTarget is Procedure) {
         if (bTarget.isSetter) {
@@ -1461,8 +1415,7 @@ class ClassHierarchyNodeBuilder {
 
   void recordAbstractMember(ClassMember member) {
     abstractMembers ??= <ClassMember>[];
-    if (member.hasDeclarations &&
-        (!useConsolidated || classBuilder == member.classBuilder)) {
+    if (member.hasDeclarations && classBuilder == member.classBuilder) {
       abstractMembers.addAll(member.declarations);
     } else {
       abstractMembers.add(member);
@@ -1763,7 +1716,7 @@ class ClassHierarchyNodeBuilder {
     void registerOverrideCheck(
         ClassMember member, ClassMember overriddenMember) {
       if (overriddenMember.hasDeclarations &&
-          (!useConsolidated || classBuilder == overriddenMember.classBuilder)) {
+          classBuilder == overriddenMember.classBuilder) {
         for (int i = 0; i < overriddenMember.declarations.length; i++) {
           hierarchy.registerOverrideCheck(
               classBuilder, member, overriddenMember.declarations[i]);
@@ -1941,8 +1894,7 @@ class ClassHierarchyNodeBuilder {
                 }
                 if (classMember.hasDeclarations) {
                   if (interfaceMember.hasDeclarations &&
-                      (!useConsolidated ||
-                          interfaceMember.classBuilder == classBuilder)) {
+                      interfaceMember.classBuilder == classBuilder) {
                     addAllDeclarationsTo(
                         interfaceMember, classMember.declarations);
                   } else {
@@ -2056,6 +2008,30 @@ class ClassHierarchyNodeBuilder {
         checkMemberVsSetter(classSetter, interfaceMember);
       }
 
+      if (classMember != null &&
+          interfaceMember != null &&
+          classMember != interfaceMember) {
+        if (classMember.isAbstract == interfaceMember.isAbstract) {
+          // TODO(johnniwinther): Ensure that we don't have both class and
+          //  interface members that can give rise to a forwarding stub in
+          //  the current class. We might already have registered a delayed
+          //  member computation for the [classMember] that we're replacing
+          //  and therefore create two stubs for this member.
+          classMember = interfaceMember;
+        }
+      }
+      if (classSetter != null &&
+          interfaceSetter != null &&
+          classSetter != interfaceSetter) {
+        if (classSetter.isAbstract == interfaceSetter.isAbstract) {
+          // TODO(johnniwinther): Ensure that we don't have both class and
+          //  interface members that can give rise to a forwarding stub in
+          //  the current class. We might already have registered a delayed
+          //  member computation for the [classMember] that we're replacing
+          //  and therefore create two stubs for this member.
+          classSetter = interfaceSetter;
+        }
+      }
       if (classMember != null) {
         classMemberMap[name] = classMember;
       }
@@ -2669,7 +2645,10 @@ abstract class DelayedMember implements ClassMember {
   final Name name;
 
   DelayedMember(this.classBuilder, this.declarations, this.isProperty,
-      this.isSetter, this.modifyKernel, this.isExplicitlyAbstract, this.name);
+      this.isSetter, this.modifyKernel, this.isExplicitlyAbstract, this.name) {
+    assert(declarations.every((element) => element.isProperty == isProperty),
+        "isProperty mismatch for $this");
+  }
 
   @override
   bool get isSourceDeclaration => false;
@@ -2767,12 +2746,14 @@ abstract class DelayedMember implements ClassMember {
 /// implementation is the first element of [declarations].
 class InheritedImplementationInterfaceConflict extends DelayedMember {
   Member combinedMemberSignatureResult;
+  final ClassMember concreteMember;
 
   @override
   final bool isInheritableConflict;
 
   InheritedImplementationInterfaceConflict(
       ClassBuilder parent,
+      this.concreteMember,
       List<ClassMember> declarations,
       bool isProperty,
       bool isSetter,
@@ -2780,29 +2761,34 @@ class InheritedImplementationInterfaceConflict extends DelayedMember {
       bool isAbstract,
       Name name,
       {this.isInheritableConflict = true})
-      : super(parent, declarations, isProperty, isSetter, modifyKernel,
+      : assert(!concreteMember.isAbstract),
+        super(parent, declarations, isProperty, isSetter, modifyKernel,
             isAbstract, name);
 
   @override
   bool isObjectMember(ClassBuilder objectClass) {
-    return declarations.first.isObjectMember(objectClass);
+    return concreteMember.isObjectMember(objectClass);
   }
 
   @override
   String toString() {
     return "InheritedImplementationInterfaceConflict("
-        "${classBuilder.fullNameForErrors}, "
+        "${classBuilder.fullNameForErrors}, $concreteMember, "
         "[${declarations.join(', ')}])";
   }
 
   @override
-  int get hashCode => super.hashCode + isInheritableConflict.hashCode * 11;
+  int get hashCode =>
+      super.hashCode +
+      concreteMember.hashCode * 11 +
+      isInheritableConflict.hashCode * 13;
 
   @override
   bool operator ==(Object other) {
     if (identical(this, other)) return true;
     return super == other &&
         other is InheritedImplementationInterfaceConflict &&
+        concreteMember == other.concreteMember &&
         isInheritableConflict == other.isInheritableConflict;
   }
 
@@ -2812,11 +2798,12 @@ class InheritedImplementationInterfaceConflict extends DelayedMember {
       return combinedMemberSignatureResult;
     }
     if (!classBuilder.isAbstract) {
-      ClassMember concreteImplementation = declarations.first;
-      for (int i = 1; i < declarations.length; i++) {
-        new DelayedOverrideCheck(
-                classBuilder, concreteImplementation, declarations[i])
-            .check(hierarchy);
+      for (int i = 0; i < declarations.length; i++) {
+        if (concreteMember != declarations[i]) {
+          new DelayedOverrideCheck(
+                  classBuilder, concreteMember, declarations[i])
+              .check(hierarchy);
+        }
       }
     }
     return combinedMemberSignatureResult = new InterfaceConflict(classBuilder,
@@ -2828,14 +2815,8 @@ class InheritedImplementationInterfaceConflict extends DelayedMember {
   DelayedMember withParent(ClassBuilder parent) {
     return parent == this.classBuilder
         ? this
-        : new InheritedImplementationInterfaceConflict(
-            parent,
-            declarations.toList(),
-            isProperty,
-            isSetter,
-            modifyKernel,
-            isAbstract,
-            name);
+        : new InheritedImplementationInterfaceConflict(parent, concreteMember,
+            [this], isProperty, isSetter, modifyKernel, isAbstract, name);
   }
 
   static ClassMember combined(
@@ -2864,6 +2845,7 @@ class InheritedImplementationInterfaceConflict extends DelayedMember {
     } else {
       return new InheritedImplementationInterfaceConflict(
           parent,
+          concreteImplementation.concrete,
           declarations,
           concreteImplementation.isProperty,
           isSetter,
@@ -3399,8 +3381,7 @@ Set<ClassMember> toSet(
 void _toSet(ClassBuilder classBuilder, Iterable<ClassMember> members,
     Set<ClassMember> result) {
   for (ClassMember member in members) {
-    if (member.hasDeclarations &&
-        (!useConsolidated || classBuilder == member.classBuilder)) {
+    if (member.hasDeclarations && classBuilder == member.classBuilder) {
       _toSet(classBuilder, member.declarations, result);
     } else {
       result.add(member);

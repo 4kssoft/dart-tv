@@ -5,16 +5,20 @@
 import 'package:analyzer/src/error/codes.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
-import '../dart/resolution/driver_resolution.dart';
+import '../dart/resolution/context_collection_resolution.dart';
 
 main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(UndefinedGetterTest);
+    defineReflectiveTests(UndefinedGetterWithNullSafetyTest);
   });
 }
 
 @reflectiveTest
-class UndefinedGetterTest extends DriverResolutionTest {
+class UndefinedGetterTest extends PubPackageResolutionTest
+    with UndefinedGetterTestCases {}
+
+mixin UndefinedGetterTestCases on PubPackageResolutionTest {
   test_compoundAssignment_hasSetter_instance() async {
     await assertErrorsInCode('''
 class C {
@@ -222,14 +226,19 @@ mixin M {
   }
 
   test_nullMember_undefined() async {
-    await assertErrorsInCode(r'''
+    await assertErrorsInCode(
+        r'''
 m() {
   Null _null;
   _null.foo;
 }
-''', [
-      error(CompileTimeErrorCode.UNDEFINED_GETTER, 28, 3),
-    ]);
+''',
+        expectedErrorsByNullability(nullable: [
+          error(CompileTimeErrorCode.INVALID_USE_OF_NULL_VALUE, 22, 5),
+          error(CompileTimeErrorCode.UNDEFINED_GETTER, 28, 3),
+        ], legacy: [
+          error(CompileTimeErrorCode.UNDEFINED_GETTER, 28, 3),
+        ]));
   }
 
   test_object_call() async {
@@ -332,12 +341,78 @@ f() => A?.hashCode;
     await assertNoErrorsInCode(r'''
 class A<E> {
   E element;
+  A(this.element);
 }
 class B extends A<List> {
+  B(List element) : super(element);
   m() {
     element.last;
   }
 }
 ''');
+  }
+}
+
+@reflectiveTest
+class UndefinedGetterWithNullSafetyTest extends PubPackageResolutionTest
+    with WithNullSafetyMixin, UndefinedGetterTestCases {
+  test_get_from_abstract_field_final_valid() async {
+    await assertNoErrorsInCode('''
+abstract class A {
+  abstract final int x;
+}
+int f(A a) => a.x;
+''');
+  }
+
+  test_get_from_abstract_field_valid() async {
+    await assertNoErrorsInCode('''
+abstract class A {
+  abstract int x;
+}
+int f(A a) => a.x;
+''');
+  }
+
+  test_get_from_external_field_final_valid() async {
+    await assertNoErrorsInCode('''
+class A {
+  external final int x;
+}
+int f(A a) => a.x;
+''');
+  }
+
+  test_get_from_external_field_valid() async {
+    await assertNoErrorsInCode('''
+class A {
+  external int x;
+}
+int f(A a) => a.x;
+''');
+  }
+
+  test_get_from_external_static_field_final_valid() async {
+    await assertNoErrorsInCode('''
+class A {
+  external static final int x;
+}
+int f() => A.x;
+''');
+  }
+
+  test_get_from_external_static_field_valid() async {
+    await assertNoErrorsInCode('''
+class A {
+  external static int x;
+}
+int f() => A.x;
+''');
+  }
+
+  @override
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/42957')
+  test_typeLiteral_conditionalAccess() {
+    return super.test_typeLiteral_conditionalAccess();
   }
 }

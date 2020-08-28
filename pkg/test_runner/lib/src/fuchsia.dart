@@ -151,7 +151,7 @@ class FuchsiaEmulator {
     var result = await Process.run(fpubTool, [packageFile]);
     if (result.exitCode != 0) {
       _stop();
-      _throwResult('Publishing package', result);
+      throw _formatFailedResult('Publishing package', result);
     }
 
     // Verify that the publication was successful by running hello_test.dart.
@@ -164,7 +164,7 @@ class FuchsiaEmulator {
         _getSshArgs(mode, ['/pkg/data/pkg/testing/test/hello_test.dart']));
     if (result.exitCode != 0 || result.stdout != 'Hello, World!\n') {
       _stop();
-      _throwResult('Verifying publication', result);
+      throw _formatFailedResult('Verifying publication', result);
     }
     DebugLogger.info('Publication successful');
   }
@@ -182,10 +182,12 @@ class FuchsiaEmulator {
           emulatorPidPattern.firstMatch(result.stdout as String)?.group(1) ??
               "");
       if (result.exitCode != 0 || emuPid == null) {
-        _throwResult('Searching for emulator process', result);
+        DebugLogger.info(
+            _formatFailedResult('Searching for emulator process', result));
+      } else {
+        Process.killPid(emuPid);
+        DebugLogger.info('Fuchsia emulator stopped');
       }
-      Process.killPid(emuPid);
-      DebugLogger.info('Fuchsia emulator stopped');
     }
 
     if (_server != null) {
@@ -197,9 +199,11 @@ class FuchsiaEmulator {
       // to manually kill this process, using fserve.sh again.
       var result = Process.runSync(fserveTool, ['--kill']);
       if (result.exitCode != 0) {
-        _throwResult('Killing package manager', result);
+        DebugLogger.info(
+            _formatFailedResult('Killing package manager', result));
+      } else {
+        DebugLogger.info('Fuchsia package server stopped');
       }
-      DebugLogger.info('Fuchsia package server stopped');
     }
   }
 
@@ -210,8 +214,8 @@ class FuchsiaEmulator {
     return output;
   }
 
-  void _throwResult(String name, ProcessResult result) {
-    throw '$name failed with exit code: ${result.exitCode}\n\n' +
+  String _formatFailedResult(String name, ProcessResult result) {
+    return '$name failed with exit code: ${result.exitCode}\n\n' +
         _formatOutputs(result.stdout as String, result.stderr as String);
   }
 }

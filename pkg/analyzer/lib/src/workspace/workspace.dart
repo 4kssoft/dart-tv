@@ -38,6 +38,11 @@ abstract class Workspace {
 /// understand whether arbitrary file paths represent libraries declared within
 /// a given package in a Workspace.
 abstract class WorkspacePackage {
+  /// Return the experiments enabled for all files in the package.
+  ///
+  /// Return `null` if this package does not have enabled experiments.
+  List<String> get enabledExperiments => null;
+
   String get root;
 
   Workspace get workspace;

@@ -79,6 +79,8 @@ mixin ResolutionTest implements ResourceProviderMixin {
 
   InterfaceType get stringType => typeProvider.stringType;
 
+  String get testFilePath => '/test/lib/test.dart';
+
   TypeProvider get typeProvider => result.typeProvider;
 
   TypeSystemImpl get typeSystem => result.typeSystem;
@@ -89,7 +91,7 @@ mixin ResolutionTest implements ResourceProviderMixin {
   VoidType get voidType => VoidTypeImpl.instance;
 
   void addTestFile(String content) {
-    newFile('/test/lib/test.dart', content: content);
+    newFile(testFilePath, content: content);
   }
 
   void assertAssignment(
@@ -289,6 +291,21 @@ mixin ResolutionTest implements ResourceProviderMixin {
     assertErrorsInList(result.errors, expectedErrors);
   }
 
+  void assertErrorsInResult(List<ExpectedError> expectedErrors) {
+    assertErrorsInResolvedUnit(result, expectedErrors);
+  }
+
+  void assertExtensionOverride(
+    ExtensionOverride node, {
+    @required Object element,
+    @required String extendedType,
+    @required List<String> typeArgumentTypes,
+  }) {
+    assertElement(node, element);
+    assertType(node.extendedType, extendedType);
+    assertElementTypeStrings(node.typeArgumentTypes, typeArgumentTypes);
+  }
+
   void assertFunctionExpressionInvocation(
     FunctionExpressionInvocation node, {
     @required ExecutableElement element,
@@ -445,7 +462,7 @@ mixin ResolutionTest implements ResourceProviderMixin {
 
   void assertMethodInvocation(
     MethodInvocation invocation,
-    Element expectedElement,
+    Object expectedElement,
     String expectedInvokeType, {
     String expectedMethodNameType,
     String expectedNameType,
@@ -456,7 +473,11 @@ mixin ResolutionTest implements ResourceProviderMixin {
 
     // TODO(scheglov) Check for Member.
     var element = invocation.methodName.staticElement;
-    expect(element?.declaration, same(expectedElement));
+    if (expectedElement is Element) {
+      expect(element?.declaration, same(expectedElement));
+    } else {
+      expect(element, expectedElement);
+    }
 
     // TODO(scheglov) Should we enforce this?
 //    if (expectedNameType == null) {
@@ -512,6 +533,10 @@ mixin ResolutionTest implements ResourceProviderMixin {
     await resolveTestFile();
 
     assertErrorsInResolvedUnit(result, const []);
+  }
+
+  void assertNoErrorsInResult() {
+    assertErrorsInResult(const []);
   }
 
   void assertParameterElement(
@@ -573,11 +598,30 @@ mixin ResolutionTest implements ResourceProviderMixin {
 
   void assertSimpleIdentifier(
     SimpleIdentifier node, {
-    @required Object element,
+    @required Object readElement,
+    @required Object writeElement,
     @required String type,
   }) {
-    assertElement(node.staticElement, element);
-    assertType(node, type);
+    var isRead = node.inGetterContext();
+    var isWrite = node.inSetterContext();
+    if (isRead && isWrite) {
+      // TODO(scheglov) enable this
+//      assertElement(node.auxiliaryElements?.staticElement, readElement);
+      assertElement(node.staticElement, writeElement);
+    } else if (isRead) {
+      assertElement(node.staticElement, readElement);
+    } else {
+      expect(isWrite, isTrue);
+      assertElement(node.staticElement, writeElement);
+    }
+
+    if (isRead) {
+      assertType(node, type);
+    } else {
+      // TODO(scheglov) enforce this
+//      expect(type, isNull);
+//      assertTypeNull(node);
+    }
   }
 
   void assertSubstitution(
@@ -765,17 +809,31 @@ mixin ResolutionTest implements ResourceProviderMixin {
 
   Future<ResolvedUnitResult> resolveFile(String path);
 
-  /// Put the [code] into the test file, and resolve it.
-  Future<void> resolveTestCode(String code) async {
-    addTestFile(code);
-    await resolveTestFile();
-  }
+  /// Resolve the file with the [path] into [result].
+  Future<void> resolveFile2(String path) async {
+    path = convertPath(path);
 
-  Future<void> resolveTestFile() async {
-    var path = convertPath('/test/lib/test.dart');
     result = await resolveFile(path);
+    expect(result.state, ResultState.VALID);
+
     findNode = FindNode(result.content, result.unit);
     findElement = FindElement(result.unit);
+  }
+
+  /// Create a new file with the [path] and [content], resolve it into [result].
+  Future<void> resolveFileCode(String path, String content) {
+    newFile(path, content: content);
+    return resolveFile2(path);
+  }
+
+  /// Put the [code] into the test file, and resolve it.
+  Future<void> resolveTestCode(String code) {
+    addTestFile(code);
+    return resolveTestFile();
+  }
+
+  Future<void> resolveTestFile() {
+    return resolveFile2(testFilePath);
   }
 
   /// Choose the type display string, depending on whether the [result] is
@@ -804,11 +862,11 @@ mixin ResolutionTest implements ResourceProviderMixin {
     }
   }
 
-  _ElementMatcher _elementMatcher(Object elementOrMatcher) {
+  Matcher _elementMatcher(Object elementOrMatcher) {
     if (elementOrMatcher is Element) {
       return _ElementMatcher(this, declaration: elementOrMatcher);
     } else {
-      return elementOrMatcher;
+      return wrapMatcher(elementOrMatcher);
     }
   }
 

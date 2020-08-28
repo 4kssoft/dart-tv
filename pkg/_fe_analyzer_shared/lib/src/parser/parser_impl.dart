@@ -1903,10 +1903,7 @@ class Parser {
           const ['extend', 'on'].contains(token.next.lexeme)) {
         reportRecoverableError(
             token.next, codes.templateExpectedInstead.withArguments('extends'));
-        Token incorrectExtendsKeyword = token.next;
-        token = computeType(incorrectExtendsKeyword, /* required = */ true)
-            .ensureTypeNotVoid(incorrectExtendsKeyword, this);
-        listener.handleClassExtends(incorrectExtendsKeyword);
+        token = parseClassExtendsSeenExtendsClause(token.next, token);
       } else {
         token = parseClassExtendsOpt(token);
       }
@@ -1966,14 +1963,35 @@ class Parser {
     // extends <typeNotVoid>
     Token next = token.next;
     if (optional('extends', next)) {
-      Token extendsKeyword = next;
-      token = computeType(next, /* required = */ true)
-          .ensureTypeNotVoid(next, this);
-      listener.handleClassExtends(extendsKeyword);
+      token = parseClassExtendsSeenExtendsClause(next, token);
     } else {
       listener.handleNoType(token);
-      listener.handleClassExtends(/* extendsKeyword = */ null);
+      listener.handleClassExtends(
+          /* extendsKeyword = */ null,
+          /* typeCount = */ 1);
     }
+    return token;
+  }
+
+  Token parseClassExtendsSeenExtendsClause(Token extendsKeyword, Token token) {
+    Token next = extendsKeyword;
+    token =
+        computeType(next, /* required = */ true).ensureTypeNotVoid(next, this);
+    int count = 1;
+
+    // Error recovery: extends <typeNotVoid>, <typeNotVoid> [...]
+    if (optional(',', token.next)) {
+      reportRecoverableError(token.next, codes.messageMultipleExtends);
+
+      while (optional(',', token.next)) {
+        next = token.next;
+        token = computeType(next, /* required = */ true)
+            .ensureTypeNotVoid(next, this);
+        count++;
+      }
+    }
+
+    listener.handleClassExtends(extendsKeyword, count);
     return token;
   }
 
@@ -4596,8 +4614,7 @@ class Parser {
               assert(optional('(', token.next));
             }
           } else if (identical(type, TokenType.OPEN_PAREN) ||
-              identical(type, TokenType.OPEN_SQUARE_BRACKET) ||
-              identical(type, TokenType.QUESTION_PERIOD_OPEN_SQUARE_BRACKET)) {
+              identical(type, TokenType.OPEN_SQUARE_BRACKET)) {
             token = parseArgumentOrIndexStar(
                 token, typeArg, /* checkedNullAware = */ false);
           } else if (identical(type, TokenType.QUESTION)) {
@@ -4661,8 +4678,7 @@ class Parser {
           identical(nextType, TokenType.QUESTION) ||
           identical(nextType, TokenType.OPEN_PAREN) ||
           identical(nextType, TokenType.OPEN_SQUARE_BRACKET) ||
-          identical(nextType, TokenType.QUESTION_PERIOD) ||
-          identical(nextType, TokenType.QUESTION_PERIOD_OPEN_SQUARE_BRACKET)) {
+          identical(nextType, TokenType.QUESTION_PERIOD)) {
         return SELECTOR_PRECEDENCE;
       }
       return POSTFIX_PRECEDENCE;
@@ -4808,7 +4824,7 @@ class Parser {
         if (isConditional) potentialNullAware = false;
       }
 
-      if (optional('[', next) || optional('?.[', next) || potentialNullAware) {
+      if (optional('[', next) || potentialNullAware) {
         assert(typeArg == noTypeParamOrArg);
         Token openSquareBracket = next;
         Token question;
@@ -5259,10 +5275,8 @@ class Parser {
     Token next = token.next;
     if (optional('{', next)) {
       if (typeParamOrArg.typeArgumentCount > 2) {
-        listener.handleRecoverableError(
-            codes.messageSetOrMapLiteralTooManyTypeArguments,
-            start.next,
-            token);
+        reportRecoverableErrorWithEnd(start.next, token,
+            codes.messageSetOrMapLiteralTooManyTypeArguments);
       }
       return parseLiteralSetOrMapSuffix(token, constKeyword);
     }
@@ -7131,6 +7145,11 @@ class Parser {
     // Find a non-synthetic token on which to report the error.
     token = findNonZeroLengthToken(token);
     listener.handleRecoverableError(message, token, token);
+  }
+
+  void reportRecoverableErrorWithEnd(
+      Token startToken, Token endToken, codes.Message message) {
+    listener.handleRecoverableError(message, startToken, endToken);
   }
 
   void reportRecoverableErrorWithToken(

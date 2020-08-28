@@ -9,6 +9,7 @@ part of dart2js.js_emitter.program_builder;
 ///
 /// The code for the containing (used) methods must exist in the `universe`.
 class Collector {
+  final CompilerOptions _options;
   final JCommonElements _commonElements;
   final JElementEnvironment _elementEnvironment;
   final OutputUnitData _outputUnitData;
@@ -23,10 +24,11 @@ class Collector {
   final Sorter _sorter;
 
   final Set<ClassEntity> neededClasses = {};
+  final Set<ClassEntity> neededClassTypes = {};
   final Set<ClassEntity> classesOnlyNeededForRti = {};
-  // This field is set in [computeNeededDeclarations].
-  Set<ClassEntity> classesOnlyNeededForConstructor;
+  final Set<ClassEntity> classesOnlyNeededForConstructor = {};
   final Map<OutputUnit, List<ClassEntity>> outputClassLists = {};
+  final Map<OutputUnit, List<ClassEntity>> outputClassTypeLists = {};
   final Map<OutputUnit, List<ConstantValue>> outputConstantLists = {};
   final Map<OutputUnit, List<MemberEntity>> outputStaticLists = {};
   final Map<OutputUnit, List<FieldEntity>> outputStaticNonFinalFieldLists = {};
@@ -41,6 +43,7 @@ class Collector {
   final List<ClassEntity> nativeClassesAndSubclasses = [];
 
   Collector(
+      this._options,
       this._commonElements,
       this._elementEnvironment,
       this._outputUnitData,
@@ -134,10 +137,30 @@ class Collector {
     }
   }
 
+  Map<OutputUnit, List<ClassEntity>> get _outputListsForClassType {
+    if (_options.deferClassTypes) {
+      return outputClassTypeLists;
+    } else {
+      return outputClassLists;
+    }
+  }
+
   /// Compute all the classes and typedefs that must be emitted.
   void computeNeededDeclarations() {
     Set<ClassEntity> backendTypeHelpers =
         getBackendTypeHelpers(_commonElements).toSet();
+
+    /// A class type is 'shadowed' if the class is needed for direct
+    /// instantiation in one OutputUnit while its type is needed in another
+    /// OutputUnit.
+    bool isClassTypeShadowed(ClassEntity cls) {
+      return !backendTypeHelpers.contains(cls) &&
+          _rtiNeededClasses.contains(cls) &&
+          !classesOnlyNeededForRti.contains(cls) &&
+          _options.deferClassTypes &&
+          _outputUnitData.outputUnitForClass(cls) !=
+              _outputUnitData.outputUnitForClassType(cls);
+    }
 
     // Compute needed classes.
     Set<ClassEntity> instantiatedClasses =
@@ -147,18 +170,11 @@ class Collector {
             .where(computeClassFilter(backendTypeHelpers))
             .toSet();
 
-    void addClassWithSuperclasses(ClassEntity cls) {
-      neededClasses.add(cls);
-      for (ClassEntity superclass = _elementEnvironment.getSuperClass(cls);
-          superclass != null;
-          superclass = _elementEnvironment.getSuperClass(superclass)) {
-        neededClasses.add(superclass);
-      }
-    }
-
     void addClassesWithSuperclasses(Iterable<ClassEntity> classes) {
       for (ClassEntity cls in classes) {
-        addClassWithSuperclasses(cls);
+        neededClasses.add(cls);
+        _elementEnvironment.forEachSuperClass(
+            cls, (superClass) => neededClasses.add(superClass));
       }
     }
 
@@ -173,10 +189,11 @@ class Collector {
     neededClasses.addAll(mixinClasses);
 
     // 3. Add classes only needed for their constructors.
-    classesOnlyNeededForConstructor = _codegenWorld.constructorReferences
-        .where((cls) => !neededClasses.contains(cls))
-        .toSet();
-    neededClasses.addAll(classesOnlyNeededForConstructor);
+    for (var cls in _codegenWorld.constructorReferences) {
+      if (neededClasses.add(cls)) {
+        classesOnlyNeededForConstructor.add(cls);
+      }
+    }
 
     // 4. Find all classes needed for rti.
     // It is important that this is the penultimate step, at this point,
@@ -189,18 +206,16 @@ class Collector {
       if (backendTypeHelpers.contains(cls)) continue;
       while (cls != null && !neededClasses.contains(cls)) {
         if (!classesOnlyNeededForRti.add(cls)) break;
+        // TODO(joshualitt) delete classesOnlyNeededForRti when the
+        // no-defer-class_types flag is removed.
+        neededClassTypes.add(cls);
         cls = _elementEnvironment.getSuperClass(cls);
       }
     }
 
-    neededClasses.addAll(classesOnlyNeededForRti);
-
-    // 5. Finally, sort the classes.
-    List<ClassEntity> sortedClasses = _sorter.sortClasses(neededClasses);
-
-    for (ClassEntity cls in sortedClasses) {
+    // 5. Sort classes and add them to their respective OutputUnits.
+    for (ClassEntity cls in _sorter.sortClasses(neededClasses)) {
       if (_nativeData.isNativeOrExtendsNative(cls) &&
-          !classesOnlyNeededForRti.contains(cls) &&
           !classesOnlyNeededForConstructor.contains(cls)) {
         // For now, native classes and related classes cannot be deferred.
         nativeClassesAndSubclasses.add(cls);
@@ -213,6 +228,21 @@ class Collector {
             .putIfAbsent(_outputUnitData.outputUnitForClass(cls), () => [])
             .add(cls);
       }
+    }
+
+    // 6. Collect any class types 'shadowed' by direct instantiation.
+    for (ClassEntity cls in _rtiNeededClasses) {
+      if (isClassTypeShadowed(cls)) {
+        neededClassTypes.add(cls);
+      }
+    }
+
+    // 7. Sort classes needed for type checking and then add them to their
+    // respective OutputUnits.
+    for (ClassEntity cls in _sorter.sortClasses(neededClassTypes)) {
+      _outputListsForClassType
+          .putIfAbsent(_outputUnitData.outputUnitForClassType(cls), () => [])
+          .add(cls);
     }
   }
 
@@ -286,6 +316,11 @@ class Collector {
     });
     neededClasses.forEach((ClassEntity element) {
       OutputUnit unit = _outputUnitData.outputUnitForClass(element);
+      LibraryEntity library = element.library;
+      outputLibraryLists.putIfAbsent(unit, () => {}).add(library);
+    });
+    neededClassTypes.forEach((ClassEntity element) {
+      OutputUnit unit = _outputUnitData.outputUnitForClassType(element);
       LibraryEntity library = element.library;
       outputLibraryLists.putIfAbsent(unit, () => {}).add(library);
     });

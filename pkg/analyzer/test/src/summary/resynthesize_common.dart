@@ -8,7 +8,6 @@ import 'package:analyzer/dart/analysis/declared_variables.dart';
 import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/element/element.dart';
-import 'package:analyzer/dart/element/nullability_suffix.dart';
 import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/src/dart/element/element.dart';
@@ -6062,6 +6061,20 @@ extension E on int {
 ''');
   }
 
+  test_field_abstract() async {
+    featureSet = enableNnbd;
+    var library = await checkLibrary('''
+abstract class C {
+  abstract int i;
+}
+''');
+    checkElementText(library, '''
+abstract class C {
+  abstract int i;
+}
+''');
+  }
+
   test_field_covariant() async {
     var library = await checkLibrary('''
 class C {
@@ -6088,6 +6101,20 @@ class C {
    * Docs
    */
   dynamic x;
+}
+''');
+  }
+
+  test_field_external() async {
+    featureSet = enableNnbd;
+    var library = await checkLibrary('''
+abstract class C {
+  external int i;
+}
+''');
+    checkElementText(library, '''
+abstract class C {
+  external int i;
 }
 ''');
   }
@@ -10233,6 +10260,16 @@ bool f() {}
 ''');
   }
 
+  test_top_level_variable_external() async {
+    featureSet = enableNnbd;
+    var library = await checkLibrary('''
+external int i;
+''');
+    checkElementText(library, '''
+external int i;
+''');
+  }
+
   test_type_arguments_explicit_dynamic_dynamic() async {
     var library = await checkLibrary('Map<dynamic, dynamic> m;');
     checkElementText(library, r'''
@@ -10516,42 +10553,6 @@ Null* d;
 Never d;
 ''',
         annotateNullability: true);
-  }
-
-  @deprecated
-  test_type_param_generic_function_type_nullability_legacy() async {
-    featureSet = disableNnbd;
-    var library = await checkLibrary('''
-T f<T>(T t) {}
-var g = f;
-''');
-    checkElementText(library, '''
-T Function<T>(T) g;
-T f<T>(T t) {}
-''');
-    var g = library.definingCompilationUnit.topLevelVariables[0];
-    var t = (g.type as FunctionType).typeFormals[0];
-    // TypeParameterElement.type has a nullability suffix of `star` regardless
-    // of whether it appears in a migrated library.
-    expect(t.type.nullabilitySuffix, NullabilitySuffix.star);
-  }
-
-  @deprecated
-  test_type_param_generic_function_type_nullability_migrated() async {
-    featureSet = enableNnbd;
-    var library = await checkLibrary('''
-T f<T>(T t) {}
-var g = f;
-''');
-    checkElementText(library, '''
-T Function<T>(T) g;
-T f<T>(T t) {}
-''');
-    var g = library.definingCompilationUnit.topLevelVariables[0];
-    var t = (g.type as FunctionType).typeFormals[0];
-    // TypeParameterElement.type has a nullability suffix of `star` regardless
-    // of whether it appears in a migrated library.
-    expect(t.type.nullabilitySuffix, NullabilitySuffix.star);
   }
 
   test_type_param_ref_nullability_none() async {
@@ -11790,15 +11791,15 @@ const A<int> a;
     InstanceCreationExpression
       argumentList: ArgumentList
       constructorName: ConstructorName
+        staticElement: ConstructorMember
+          base: self::@class::A::@constructor::•
+          substitution: {T: int}
         type: TypeName
           name: SimpleIdentifier
             staticElement: self::@class::A
             staticType: null
             token: A
           type: A<int>
-      staticElement: ConstructorMember
-        base: self::@class::A::@constructor::•
-        substitution: {T: int}
       staticType: A<int>
 ''',
         withFullyResolvedAst: true);

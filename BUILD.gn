@@ -163,7 +163,7 @@ if (is_fuchsia) {
     manifest = "build/fuchsia/dart.cmx"
 
     resource_files = [
-      ".packages",
+      ".dart_tool/package_config.json",
       "pkg/testing/test/hello_test.dart",
       "tools/addlatexhash.dart",
     ]
@@ -185,6 +185,7 @@ if (is_fuchsia) {
       "third_party/pkg/path",
       "third_party/pkg/pool",
       "third_party/pkg/stack_trace",
+      "third_party/pkg/string_scanner",
       "third_party/pkg/typed_data",
     ]
 

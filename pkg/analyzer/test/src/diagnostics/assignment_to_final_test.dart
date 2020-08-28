@@ -5,8 +5,7 @@
 import 'package:analyzer/src/error/codes.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
-import '../dart/resolution/driver_resolution.dart';
-import '../dart/resolution/with_null_safety_mixin.dart';
+import '../dart/resolution/context_collection_resolution.dart';
 
 main() {
   defineReflectiveSuite(() {
@@ -16,7 +15,7 @@ main() {
 }
 
 @reflectiveTest
-class AssignmentToFinalTest extends DriverResolutionTest {
+class AssignmentToFinalTest extends PubPackageResolutionTest {
   test_instanceVariable() async {
     await assertErrorsInCode('''
 class A {
@@ -71,5 +70,72 @@ class A {
   }
 }
 ''');
+  }
+
+  test_set_abstract_field_final_invalid() async {
+    await assertErrorsInCode('''
+abstract class A {
+  abstract final int x;
+}
+void f(A a, int x) {
+  a.x = x;
+}
+''', [
+      error(CompileTimeErrorCode.ASSIGNMENT_TO_FINAL, 70, 1),
+    ]);
+  }
+
+  test_set_abstract_field_final_overridden_valid() async {
+    await assertNoErrorsInCode('''
+abstract class A {
+  abstract final int x;
+}
+abstract class B extends A {
+  void set x(int value);
+}
+void f(B b, int x) {
+  b.x = x; // ok because setter provided in derived class
+}
+''');
+  }
+
+  test_set_external_field_final_invalid() async {
+    await assertErrorsInCode('''
+class A {
+  external final int x;
+}
+void f(A a, int x) {
+  a.x = x;
+}
+''', [
+      error(CompileTimeErrorCode.ASSIGNMENT_TO_FINAL, 61, 1),
+    ]);
+  }
+
+  test_set_external_field_final_overridden_valid() async {
+    await assertNoErrorsInCode('''
+class A {
+  external final int x;
+}
+abstract class B extends A {
+  void set x(int value);
+}
+void f(B b, int x) {
+  b.x = x; // ok because setter provided in derived class
+}
+''');
+  }
+
+  test_set_external_static_field_final_invalid() async {
+    await assertErrorsInCode('''
+class A {
+  external static final int x;
+}
+void f(int x) {
+  A.x = x;
+}
+''', [
+      error(CompileTimeErrorCode.ASSIGNMENT_TO_FINAL, 63, 1),
+    ]);
   }
 }

@@ -5,7 +5,6 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/error/error.dart';
 import 'package:analyzer/error/listener.dart';
@@ -116,8 +115,6 @@ class FileResolver {
       resetTimeout: libraryContextResetTimeout,
     );
   }
-
-  FeatureSet get defaultFeatureSet => FeatureSet.fromEnableFlags([]);
 
   /// Update the resolver to reflect the fact that the file with the given
   /// [path] was changed. We need to make sure that when this file, of any file
@@ -306,7 +303,7 @@ class FileResolver {
             contextObjects.inheritanceManager,
             libraryFile,
             resourceProvider,
-            (String path) => resourceProvider.getFile(path).readAsStringSync(),
+            (file) => file.getContentWithSameDigest(),
           );
 
           results = performance.run('analyze', (performance) {
@@ -589,12 +586,7 @@ class _LibraryContext {
           for (var file in libraryFile.libraryFiles) {
             var isSynthetic = !file.exists;
 
-            var content = '';
-            try {
-              var resource = resourceProvider.getFile(file.path);
-              content = resource.readAsStringSync();
-            } catch (_) {}
-
+            var content = file.getContentWithSameDigest();
             performance.getDataInt('parseCount').increment();
             performance.getDataInt('parseLength').add(content.length);
 

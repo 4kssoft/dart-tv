@@ -31,6 +31,11 @@ const String _appName = 'dartdev';
 const String _dartDirectoryName = '.dart';
 const String _settingsFileName = 'dartdev.json';
 const String _trackingId = 'UA-26406144-37';
+const String _readmeFileName = 'README.txt';
+const String _readmeFileContents = '''
+The present directory contains user-level settings for the
+Dart programming language (https://dart.dev).
+''';
 
 const String eventCategory = 'dartdev';
 const String exitCodeParam = 'exitCode';
@@ -46,7 +51,9 @@ Analytics createAnalyticsInstance(bool disableAnalytics) {
   }
 
   // Dartdev tests pass a hidden 'disable-dartdev-analytics' flag which is
-  // handled here
+  // handled here.
+  // Also, stdout.hasTerminal is checked, if there is no terminal we infer that
+  // a machine is running dartdev so we return analytics shouldn't be set.
   if (disableAnalytics) {
     instance = DisabledAnalytics(_trackingId, _appName);
     return instance;
@@ -69,6 +76,13 @@ Analytics createAnalyticsInstance(bool disableAnalytics) {
       instance = DisabledAnalytics(_trackingId, _appName);
       return instance;
     }
+  }
+
+  var readmeFile =
+      File('${settingsDir.absolute.path}${path.separator}$_readmeFileName');
+  if (!readmeFile.existsSync()) {
+    readmeFile.createSync();
+    readmeFile.writeAsStringSync(_readmeFileContents);
   }
 
   var settingsFile = File(path.join(settingsDir.path, _settingsFileName));
@@ -124,6 +138,10 @@ Directory getDartStorageDirectory() {
   return Directory(path.join(homeDir.path, _dartDirectoryName));
 }
 
+/// The method used by dartdev to determine if this machine is a bot such as a
+/// CI machine.
+bool isBot() => telemetry.isRunningOnBot();
+
 class DartdevAnalytics extends AnalyticsImpl {
   DartdevAnalytics(String trackingId, File settingsFile, String appName)
       : super(
@@ -136,12 +154,21 @@ class DartdevAnalytics extends AnalyticsImpl {
 
   @override
   bool get enabled {
-    if (telemetry.isRunningOnBot()) {
+    // Don't enable if the user hasn't been shown the disclosure or if this
+    // machine is bot.
+    if (!disclosureShownOnTerminal || isBot()) {
       return false;
     }
 
     // If there's no explicit setting (enabled or disabled) then we don't send.
     return (properties['enabled'] as bool) ?? false;
+  }
+
+  bool get disclosureShownOnTerminal =>
+      (properties['disclosureShown'] as bool) ?? false;
+
+  set disclosureShownOnTerminal(bool value) {
+    properties['disclosureShown'] = value;
   }
 }
 

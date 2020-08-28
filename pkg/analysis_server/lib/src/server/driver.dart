@@ -349,7 +349,12 @@ class Driver implements ServerStarter {
     analysisServerOptions.configurationOverrides = sdkConfig;
 
     // ML model configuration.
-    final bool enableCompletionModel = results[ENABLE_COMPLETION_MODEL];
+    // TODO(brianwilkerson) Uncomment the line below and delete the second line
+    //  when there is a new completion model to query. Until then we ignore the
+    //  flag to enable the model so that we can't try to read from a file that
+    //  doesn't exist.
+//    final bool enableCompletionModel = results[ENABLE_COMPLETION_MODEL];
+    final enableCompletionModel = false;
     analysisServerOptions.completionModelFolder =
         results[COMPLETION_MODEL_FOLDER];
     if (results.wasParsed(ENABLE_COMPLETION_MODEL) && !enableCompletionModel) {
@@ -470,13 +475,14 @@ class Driver implements ServerStarter {
         MulticastInstrumentationService(allInstrumentationServices);
 
     instrumentationService.logVersion(
-        results[TRAIN_USING] != null
-            ? 'training-0'
-            : _readUuid(instrumentationService),
-        analysisServerOptions.clientId,
-        analysisServerOptions.clientVersion,
-        PROTOCOL_VERSION,
-        defaultSdk.sdkVersion);
+      results[TRAIN_USING] != null
+          ? 'training-0'
+          : _readUuid(instrumentationService),
+      analysisServerOptions.clientId,
+      analysisServerOptions.clientVersion,
+      PROTOCOL_VERSION,
+      defaultSdk.languageVersion.toString(),
+    );
     AnalysisEngine.instance.instrumentationService = instrumentationService;
 
     int diagnosticServerPort;

@@ -5,10 +5,10 @@
 import 'dart:io';
 
 import 'package:test/test.dart';
-
 import 'package:vm_snapshot_analysis/instruction_sizes.dart'
     as instruction_sizes;
 import 'package:vm_snapshot_analysis/program_info.dart';
+import 'package:vm_snapshot_analysis/treemap.dart';
 import 'package:vm_snapshot_analysis/utils.dart';
 
 import 'utils.dart';
@@ -368,8 +368,6 @@ void main() async {
               diffToJson(diff),
               equals({
                 '#type': 'library',
-                '@stubs': {'#type': 'library'},
-                '@unknown': {'#type': 'library'},
                 'package:input': {
                   '#type': 'package',
                   'package:input/input.dart': {
@@ -419,8 +417,6 @@ void main() async {
               diffToJson(diff),
               equals({
                 '#type': 'library',
-                '@stubs': {'#type': 'library'},
-                '@unknown': {'#type': 'library'},
                 'package:input': {
                   '#type': 'package',
                   'package:input/input.dart': {
@@ -622,8 +618,6 @@ void main() async {
                   '#type': 'package',
                   'package:input/input.dart': {
                     '#type': 'library',
-                    '#size': lessThan(0),
-                    'K': {'#size': isA<int>(), '#type': 'class'},
                     '::': {
                       '#type': 'class',
                       'makeSomeClosures': {
@@ -641,6 +635,40 @@ void main() async {
         });
       });
     });
+
+    test('treemap', () async {
+      await withV8Profile('treemap', testSource, (profileJson) async {
+        final infoJson = await loadJson(File(profileJson));
+        final info = await loadProgramInfoFromJson(infoJson,
+            collapseAnonymousClosures: true);
+        final treemap = treemapFromInfo(info);
+
+        List<Map<String, dynamic>> childrenOf(Map<String, dynamic> node) =>
+            (node['children'] as List).cast();
+
+        String nameOf(Map<String, dynamic> node) => node['n'];
+
+        Map<String, dynamic> findChild(Map<String, dynamic> node, String name) {
+          return childrenOf(node)
+              .firstWhere((child) => nameOf(child) == name, orElse: () => null);
+        }
+
+        Set<String> childrenNames(Map<String, dynamic> node) {
+          return childrenOf(node).map(nameOf).toSet();
+        }
+
+        // Verify that we don't include package names twice into paths
+        // while building the treemap.
+        if (Platform.isWindows) {
+          // Note: in Windows we don't consider main.dart part of package:input
+          // for some reason.
+          expect(findChild(treemap, 'package:input/input.dart'), isNotNull);
+        } else {
+          expect(childrenNames(findChild(treemap, 'package:input')),
+              equals({'<self>', 'main.dart', 'input.dart'}));
+        }
+      });
+    });
   });
 }
 
@@ -655,10 +683,48 @@ Future withV8Profile(String prefix, Map<String, String> source,
 // On Windows there is some issue with interpreting entry point URI as a package URI
 // it instead gets interpreted as a file URI - which breaks comparison. So we
 // simply ignore entry point library (main.dart).
+// Additionally this function removes all nodes with the size below
+// the given threshold.
 Map<String, dynamic> diffToJson(ProgramInfo diff,
     {bool keepOnlyInputPackage = false}) {
   final diffJson = diff.toJson();
   diffJson.removeWhere((key, _) =>
       keepOnlyInputPackage ? key != 'package:input' : key.startsWith('file:'));
-  return diffJson;
+
+  // Rebuild the diff JSON discarding all nodes with size below threshold.
+  const smallChangeThreshold = 16;
+  Map<String, dynamic> discardSmallChanges(Map<String, dynamic> map) {
+    final result = <String, dynamic>{};
+
+    // First recursively process all children (skipping #type and #size keys).
+    for (var key in map.keys) {
+      if (key == '#type' || key == '#size') continue;
+      final value = discardSmallChanges(map[key]);
+      if (value != null) {
+        result[key] = value;
+      }
+    }
+
+    // Check if this node own #size is above the threshold and copy it
+    // into the result if it is.
+    final size = map['#size'] ?? 0;
+    if (size.abs() > smallChangeThreshold) {
+      result['#size'] = size;
+    }
+
+    // If the node has no children and its own size does not pass the threshold
+    // drop it.
+    if (result.isEmpty) {
+      return null;
+    }
+
+    // We decided that this node is meaningful - preserve its type.
+    if (map.containsKey('#type')) {
+      result['#type'] = map['#type'];
+    }
+
+    return result;
+  }
+
+  return discardSmallChanges(diffJson);
 }

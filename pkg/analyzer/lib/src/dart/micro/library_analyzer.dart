@@ -26,7 +26,6 @@ import 'package:analyzer/src/dart/resolver/legacy_type_asserter.dart';
 import 'package:analyzer/src/dart/resolver/resolution_visitor.dart';
 import 'package:analyzer/src/error/best_practices_verifier.dart';
 import 'package:analyzer/src/error/codes.dart';
-import 'package:analyzer/src/error/dart2js_verifier.dart';
 import 'package:analyzer/src/error/dead_code_verifier.dart';
 import 'package:analyzer/src/error/imports_verifier.dart';
 import 'package:analyzer/src/error/inheritance_override.dart';
@@ -84,7 +83,7 @@ class LibraryAnalyzer {
 
   final Set<ConstantEvaluationTarget> _constants = {};
 
-  final String Function(String path) getFileContent;
+  final String Function(FileState file) getFileContent;
 
   LibraryAnalyzer(
     this._analysisOptions,
@@ -125,7 +124,7 @@ class LibraryAnalyzer {
     });
 
     // Resolve URIs in directives to corresponding sources.
-    FeatureSet featureSet = units[_library].featureSet;
+    FeatureSet featureSet = units.values.first.featureSet;
 
     performance.run('resolveUriDirectives', (performance) {
       units.forEach((file, unit) {
@@ -139,7 +138,7 @@ class LibraryAnalyzer {
     });
 
     performance.run('resolveDirectives', (performance) {
-      _resolveDirectives(units, forCompletion);
+      _resolveDirectives(units, completionPath);
     });
 
     performance.run('resolveFiles', (performance) {
@@ -237,7 +236,7 @@ class LibraryAnalyzer {
     if (_analysisOptions.lint) {
       performance.run('computeLints', (performance) {
         var allUnits = _library.libraryFiles.map((file) {
-          var content = _getFileContent(file.path);
+          var content = getFileContent(file);
           return LinterContextUnit(content, units[file]);
         }).toList();
         for (int i = 0; i < allUnits.length; i++) {
@@ -266,12 +265,7 @@ class LibraryAnalyzer {
 
     unit.accept(DeadCodeVerifier(errorReporter));
 
-    // Dart2js analysis.
-    if (_analysisOptions.dart2jsHint) {
-      unit.accept(Dart2JSVerifier(errorReporter));
-    }
-
-    var content = _getFileContent(file.path);
+    var content = getFileContent(file);
     unit.accept(
       BestPracticesVerifier(
         errorReporter,
@@ -453,15 +447,6 @@ class LibraryAnalyzer {
     });
   }
 
-  /// Catch all exceptions from the `getFileContent` function.
-  String _getFileContent(String path) {
-    try {
-      return getFileContent(path);
-    } catch (_) {
-      return '';
-    }
-  }
-
   WorkspacePackage _getPackage(CompilationUnit unit) {
     final libraryPath = _library.source.fullName;
     Workspace workspace =
@@ -521,7 +506,7 @@ class LibraryAnalyzer {
     @required FileState file,
     @required OperationPerformanceImpl performance,
   }) {
-    String content = _getFileContent(file.path);
+    String content = getFileContent(file);
 
     performance.getDataInt('count').increment();
     performance.getDataInt('length').add(content.length);
@@ -538,14 +523,16 @@ class LibraryAnalyzer {
 
   void _resolveDirectives(
     Map<FileState, CompilationUnit> units,
-    bool forCompletion,
+    String completionPath,
   ) {
-    CompilationUnit definingCompilationUnit = units[_library];
-    definingCompilationUnit.element = _libraryElement.definingCompilationUnit;
-
-    if (forCompletion) {
+    if (completionPath != null) {
+      var completionUnit = units.values.first;
+      completionUnit.element = _unitElementWithPath(completionPath);
       return;
     }
+
+    CompilationUnit definingCompilationUnit = units[_library];
+    definingCompilationUnit.element = _libraryElement.definingCompilationUnit;
 
     bool matchNodeElement(Directive node, Element element) {
       return node.keyword.offset == element.nameOffset;
@@ -764,6 +751,15 @@ class LibraryAnalyzer {
         directive.uriSource = defaultSource;
       }
     }
+  }
+
+  CompilationUnitElement _unitElementWithPath(String path) {
+    for (var unitElement in _libraryElement.units) {
+      if (unitElement.source.fullName == path) {
+        return unitElement;
+      }
+    }
+    return null;
   }
 
   /// Validate that the feature set associated with the compilation [unit] is

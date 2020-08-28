@@ -221,10 +221,8 @@ static bool OnIsolateInitialize(void** child_callback_data, char** error) {
   if (Dart_IsError(result)) goto failed;
 
   if (isolate_run_app_snapshot) {
-    if (Dart_IsVMFlagSet("support_service") || !Dart_IsPrecompiledRuntime()) {
-      result = Loader::InitForSnapshot(script_uri, isolate_data);
-      if (Dart_IsError(result)) goto failed;
-    }
+    result = Loader::InitForSnapshot(script_uri, isolate_data);
+    if (Dart_IsError(result)) goto failed;
   } else {
     result = DartUtils::ResolveScript(Dart_NewStringFromCString(script_uri));
     if (Dart_IsError(result)) return result != nullptr;
@@ -333,10 +331,8 @@ static Dart_Isolate IsolateSetupHelper(Dart_Isolate isolate,
   }
 
   if (isolate_run_app_snapshot) {
-    if (Dart_IsVMFlagSet("support_service") || !Dart_IsPrecompiledRuntime()) {
-      Dart_Handle result = Loader::InitForSnapshot(script_uri, isolate_data);
-      CHECK_RESULT(result);
-    }
+    Dart_Handle result = Loader::InitForSnapshot(script_uri, isolate_data);
+    CHECK_RESULT(result);
 #if !defined(DART_PRECOMPILED_RUNTIME)
     if (is_main_isolate) {
       // Find the canonical uri of the app snapshot. We'll use this to decide if
@@ -386,10 +382,12 @@ static Dart_Isolate IsolateSetupHelper(Dart_Isolate isolate,
   const char* isolate_name = nullptr;
   result = Dart_StringToCString(Dart_DebugName(), &isolate_name);
   CHECK_RESULT(result);
-  if (strstr(isolate_name, "dartdev") != nullptr) {
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  if (strstr(isolate_name, DART_DEV_ISOLATE_NAME) != nullptr) {
     Dart_SetShouldPauseOnStart(false);
     Dart_SetShouldPauseOnExit(false);
   }
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
   // Make the isolate runnable so that it is ready to handle messages.
   Dart_ExitScope();
@@ -548,10 +546,13 @@ static Dart_Isolate CreateAndSetupServiceIsolate(const char* script_uri,
 
   // Load embedder specific bits and return.
   if (!VmService::Setup(
-          Options::vm_service_server_ip(), Options::vm_service_server_port(),
+          Options::disable_dart_dev() ? Options::vm_service_server_ip()
+                                      : "localhost",
+          Options::disable_dart_dev() ? Options::vm_service_server_port() : 0,
           Options::vm_service_dev_mode(), Options::vm_service_auth_disabled(),
           Options::vm_write_service_info_filename(), Options::trace_loading(),
-          Options::deterministic(), Options::enable_service_port_fallback())) {
+          Options::deterministic(), Options::enable_service_port_fallback(),
+          !Options::disable_dart_dev())) {
     *error = Utils::StrDup(VmService::GetErrorMessage());
     return NULL;
   }
@@ -568,6 +569,59 @@ static Dart_Isolate CreateAndSetupServiceIsolate(const char* script_uri,
   return NULL;
 #endif  // !defined(PRODUCT)
 }
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+
+static Dart_Isolate CreateAndSetupDartDevIsolate(const char* script_uri,
+                                                 const char* packages_config,
+                                                 Dart_IsolateFlags* flags,
+                                                 char** error,
+                                                 int* exit_code) {
+  int64_t start = Dart_TimelineGetMicros();
+
+  auto dartdev_path = DartDevIsolate::TryResolveDartDevSnapshotPath();
+  if (dartdev_path == nullptr) {
+    *error = Utils::StrDup("Unable to find DartDev snapshot");
+    return nullptr;
+  }
+
+  const uint8_t* isolate_snapshot_data = core_isolate_snapshot_data;
+  const uint8_t* isolate_snapshot_instructions =
+      core_isolate_snapshot_instructions;
+
+  auto isolate_group_data =
+      new IsolateGroupData(DART_DEV_ISOLATE_NAME, packages_config, nullptr,
+                           /*isolate_run_app_snapshot*/ false);
+  uint8_t* application_kernel_buffer = NULL;
+  intptr_t application_kernel_buffer_size = 0;
+  dfe.ReadScript(dartdev_path.get(), &application_kernel_buffer,
+                 &application_kernel_buffer_size);
+  isolate_group_data->SetKernelBufferNewlyOwned(application_kernel_buffer,
+                                                application_kernel_buffer_size);
+
+  auto isolate_data = new IsolateData(isolate_group_data);
+  Dart_Isolate isolate = nullptr;
+  isolate = Dart_CreateIsolateGroup(
+      DART_DEV_ISOLATE_NAME, DART_DEV_ISOLATE_NAME, isolate_snapshot_data,
+      isolate_snapshot_instructions, flags, isolate_group_data, isolate_data,
+      error);
+
+  Dart_Isolate created_isolate = nullptr;
+  if (isolate == nullptr) {
+    delete isolate_data;
+    delete isolate_group_data;
+  } else {
+    created_isolate = IsolateSetupHelper(
+        isolate, false, DART_DEV_ISOLATE_NAME, packages_config,
+        /*isolate_run_app_snapshot*/ false, flags, error, exit_code);
+  }
+  int64_t end = Dart_TimelineGetMicros();
+  Dart_TimelineEvent("CreateAndSetupDartDevIsolate", start, end,
+                     Dart_Timeline_Event_Duration, 0, NULL, NULL);
+  return created_isolate;
+}
+
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
 // Returns newly created Isolate on success, NULL on failure.
 static Dart_Isolate CreateIsolateGroupAndSetupHelper(
@@ -726,10 +780,19 @@ static Dart_Isolate CreateIsolateGroupAndSetup(const char* script_uri,
                                        &exit_code);
   }
 #endif  // !defined(EXCLUDE_CFE_AND_KERNEL_PLATFORM)
+
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  if (strcmp(script_uri, DART_DEV_ISOLATE_NAME) == 0) {
+    return CreateAndSetupDartDevIsolate(script_uri, package_config, flags,
+                                        error, &exit_code);
+  }
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+
   if (strcmp(script_uri, DART_VM_SERVICE_ISOLATE_NAME) == 0) {
     return CreateAndSetupServiceIsolate(script_uri, package_config, flags,
                                         error, &exit_code);
   }
+
   bool is_main_isolate = false;
   return CreateIsolateGroupAndSetupHelper(is_main_isolate, script_uri, main,
                                           package_config, flags, callback_data,
@@ -836,14 +899,13 @@ bool RunMainIsolate(const char* script_name, CommandLineOptions* dart_options) {
   // Call CreateIsolateGroupAndSetup which creates an isolate and loads up
   // the specified application script.
   char* error = NULL;
-  bool is_main_isolate = true;
   int exit_code = 0;
   Dart_IsolateFlags flags;
   Dart_IsolateFlagsInitialize(&flags);
 
   Dart_Isolate isolate = CreateIsolateGroupAndSetupHelper(
-      is_main_isolate, script_name, "main", Options::packages_file(), &flags,
-      NULL /* callback_data */, &error, &exit_code);
+      /* is_main_isolate */ true, script_name, "main", Options::packages_file(),
+      &flags, NULL /* callback_data */, &error, &exit_code);
 
   if (isolate == NULL) {
     Syslog::PrintErr("%s\n", error);
@@ -1167,7 +1229,7 @@ void main(int argc, char** argv) {
 // they might affect how the platform is loaded.
 #if !defined(DART_PRECOMPILED_RUNTIME)
   if (script_name != nullptr) {
-    dfe.Init(Options::target_abi_version());
+    dfe.Init();
     uint8_t* application_kernel_buffer = NULL;
     intptr_t application_kernel_buffer_size = 0;
     dfe.ReadScript(script_name, &application_kernel_buffer,
