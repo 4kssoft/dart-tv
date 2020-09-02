@@ -300,7 +300,7 @@ class CompletionTest extends AbstractLspAnalysisServerTest {
     expect(item.detail.toLowerCase(), contains('deprecated'));
   }
 
-  Future<void> test_isDeprecated_supported() async {
+  Future<void> test_isDeprecated_supportedFlag() async {
     final content = '''
     class MyClass {
       @deprecated
@@ -314,7 +314,7 @@ class CompletionTest extends AbstractLspAnalysisServerTest {
     ''';
 
     await initialize(
-        textDocumentCapabilities: withCompletionItemDeprecatedSupport(
+        textDocumentCapabilities: withCompletionItemDeprecatedFlagSupport(
             emptyTextDocumentClientCapabilities));
     await openFile(mainFileUri, withoutMarkers(content));
     final res = await getCompletion(mainFileUri, positionFromMarker(content));
@@ -324,6 +324,55 @@ class CompletionTest extends AbstractLspAnalysisServerTest {
     // If the client says it supports the deprecated flag, we should not show
     // deprecated in the details.
     expect(item.detail, isNot(contains('deprecated')));
+  }
+
+  Future<void> test_isDeprecated_supportedTag() async {
+    final content = '''
+    class MyClass {
+      @deprecated
+      String abcdefghij;
+    }
+
+    main() {
+      MyClass a;
+      a.abc^
+    }
+    ''';
+
+    await initialize(
+        textDocumentCapabilities: withCompletionItemTagSupport(
+            emptyTextDocumentClientCapabilities,
+            [CompletionItemTag.Deprecated]));
+    await openFile(mainFileUri, withoutMarkers(content));
+    final res = await getCompletion(mainFileUri, positionFromMarker(content));
+    final item = res.singleWhere((c) => c.label == 'abcdefghij');
+    expect(item.tags, contains(CompletionItemTag.Deprecated));
+    // If the client says it supports the deprecated tag, we should not show
+    // deprecated in the details.
+    expect(item.detail, isNot(contains('deprecated')));
+  }
+
+  Future<void> test_namedArg_offsetBeforeCompletionTarget() async {
+    // This test checks for a previous bug where the completion target was a
+    // symbol far after the cursor offset (`aaaa` here) and caused the whole
+    // identifier to be used as the `targetPrefix` which would filter out
+    // other symbol.
+    // https://github.com/Dart-Code/Dart-Code/issues/2672#issuecomment-666085575
+    final content = '''
+    void main() {
+      myFunction(
+        ^
+        aaaa: '',
+      );
+    }
+
+    void myFunction({String aaaa, String aaab, String aaac}) {}
+    ''';
+
+    await initialize();
+    await openFile(mainFileUri, withoutMarkers(content));
+    final res = await getCompletion(mainFileUri, positionFromMarker(content));
+    expect(res.any((c) => c.label == 'aaab: '), isTrue);
   }
 
   Future<void> test_namedArg_plainText() async {
@@ -948,6 +997,41 @@ main() {
   var a = MyExportedClass.myStaticDateTimeField
 }
     '''));
+  }
+
+  /// This test reproduces a bug where the pathKey hash used in
+  /// available_declarations.dart would not change with the contents of the file
+  /// (as it always used 0 as the modification stamp) which would prevent
+  /// completion including items from files that were open (had overlays).
+  /// https://github.com/Dart-Code/Dart-Code/issues/2286#issuecomment-658597532
+  Future<void> test_suggestionSets_modifiedFiles() async {
+    final otherFilePath = join(projectFolderPath, 'lib', 'other_file.dart');
+    final otherFileUri = Uri.file(otherFilePath);
+
+    final mainFileContent = 'MyOtherClass^';
+    final initialAnalysis = waitForAnalysisComplete();
+    await initialize(
+        workspaceCapabilities:
+            withApplyEditSupport(emptyWorkspaceClientCapabilities));
+    await openFile(mainFileUri, withoutMarkers(mainFileContent));
+    await initialAnalysis;
+
+    // Start with a blank file.
+    newFile(otherFilePath, content: '');
+    await openFile(otherFileUri, '');
+    await pumpEventQueue(times: 5000);
+
+    // Reopen the file with a class definition.
+    await closeFile(otherFileUri);
+    await openFile(otherFileUri, 'class MyOtherClass {}');
+    await pumpEventQueue(times: 5000);
+
+    // Ensure the class appears in completion.
+    final completions =
+        await getCompletion(mainFileUri, positionFromMarker(mainFileContent));
+    final matching =
+        completions.where((c) => c.label == 'MyOtherClass').toList();
+    expect(matching, hasLength(1));
   }
 
   Future<void> test_suggestionSets_namedConstructors() async {

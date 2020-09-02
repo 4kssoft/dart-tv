@@ -563,7 +563,9 @@ class CodeShapeDataCollector extends RecursiveAstVisitor<void> {
     _visitChildren(node, {
       'documentationComment': node.documentationComment,
       'metadata': node.metadata,
+      'abstractKeyword': node.abstractKeyword,
       'covariantKeyword': node.covariantKeyword,
+      'externalKeyword': node.externalKeyword,
       'staticKeyword': node.staticKeyword,
       'fields': node.fields,
     });
@@ -1194,6 +1196,7 @@ class CodeShapeDataCollector extends RecursiveAstVisitor<void> {
     _visitChildren(node, {
       'documentationComment': node.documentationComment,
       'metadata': node.metadata,
+      'externalKeyword': node.externalKeyword,
       'variables': node.variables,
     });
     super.visitTopLevelVariableDeclaration(node);

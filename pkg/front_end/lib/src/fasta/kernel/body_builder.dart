@@ -696,6 +696,7 @@ class BodyBuilder extends ScopeListener<JumpTarget>
 
   @override
   void endClassFields(
+      Token abstractToken,
       Token externalToken,
       Token staticToken,
       Token covariantToken,
@@ -707,6 +708,10 @@ class BodyBuilder extends ScopeListener<JumpTarget>
     debugEvent("Fields");
     if (!libraryBuilder.isNonNullableByDefault) {
       reportNonNullableModifierError(lateToken);
+      if (abstractToken != null) {
+        handleRecoverableError(
+            fasta.messageAbstractClassMember, abstractToken, abstractToken);
+      }
       if (externalToken != null) {
         handleRecoverableError(
             fasta.messageExternalField, externalToken, externalToken);
@@ -1758,6 +1763,10 @@ class BodyBuilder extends ScopeListener<JumpTarget>
       } else if (left is Generator) {
         push(left.buildBinaryOperation(token, name, right));
       } else {
+        if (left is ProblemBuilder) {
+          ProblemBuilder problem = left;
+          left = buildProblem(problem.message, problem.charOffset, noLength);
+        }
         assert(left is Expression);
         push(forest.createBinary(fileOffset, left, name, right));
       }
@@ -2060,6 +2069,10 @@ class BodyBuilder extends ScopeListener<JumpTarget>
       Name n = new Name(name, libraryBuilder.nameOrigin);
       if (!isQualified && isDeclarationInstanceContext) {
         assert(declaration == null);
+        if (inLateFieldInitializer) {
+          // Implicit access on 'this' is allowed in a late field initializer.
+          return new ThisPropertyAccessGenerator(this, token, n);
+        }
         if (constantContext != ConstantContext.none || member.isField) {
           return new UnresolvedNameGenerator(this, token, n);
         }
@@ -2455,6 +2468,13 @@ class BodyBuilder extends ScopeListener<JumpTarget>
     if (member is FieldBuilder) {
       FieldBuilder fieldBuilder = member;
       inLateFieldInitializer = fieldBuilder.isLate;
+      if (fieldBuilder.isAbstract) {
+        addProblem(
+            fasta.messageAbstractFieldInitializer, token.charOffset, noLength);
+      } else if (fieldBuilder.isExternal) {
+        addProblem(
+            fasta.messageExternalFieldInitializer, token.charOffset, noLength);
+      }
     } else {
       inLateFieldInitializer = false;
     }
@@ -3755,7 +3775,7 @@ class BodyBuilder extends ScopeListener<JumpTarget>
     debugEvent("IndexedExpression");
     Expression index = popForValue();
     Object receiver = pop();
-    bool isNullAware = optional('?.[', openSquareBracket) || question != null;
+    bool isNullAware = question != null;
     if (isNullAware && !libraryBuilder.isNonNullableByDefault) {
       reportMissingNonNullableSupport(openSquareBracket);
     }
@@ -4284,7 +4304,7 @@ class BodyBuilder extends ScopeListener<JumpTarget>
     if (type is TypeAliasBuilder) {
       errorName = debugName(type.name, name);
       TypeAliasBuilder aliasBuilder = type;
-      int numberOfTypeParameters = aliasBuilder.typeVariables?.length ?? 0;
+      int numberOfTypeParameters = aliasBuilder.typeVariablesCount;
       int numberOfTypeArguments = typeArguments?.length ?? 0;
       if (typeArguments != null &&
           numberOfTypeParameters != numberOfTypeArguments) {
@@ -4307,7 +4327,7 @@ class BodyBuilder extends ScopeListener<JumpTarget>
           typeArgumentBuilders.add(unresolvedType?.builder);
         }
       } else {
-        if (aliasBuilder.typeVariables?.isNotEmpty ?? false) {
+        if (aliasBuilder.typeVariablesCount > 0) {
           // Raw generic type alias used for instance creation, needs inference.
           ClassBuilder classBuilder;
           if (type is ClassBuilder) {
@@ -4519,11 +4539,11 @@ class BodyBuilder extends ScopeListener<JumpTarget>
   }
 
   @override
-  void beginThenControlFlow(Token token) {
+  void handleThenControlFlow(Token token) {
     Expression condition = popForValue();
     enterThenForTypePromotion(condition);
     push(condition);
-    super.beginThenControlFlow(token);
+    super.handleThenControlFlow(token);
   }
 
   @override
@@ -5866,7 +5886,21 @@ class BodyBuilder extends ScopeListener<JumpTarget>
         ];
       }
       initializedFields[name] = assignmentOffset;
-      if (builder.isFinal && builder.hasInitializer) {
+      if (builder.isAbstract) {
+        return <Initializer>[
+          buildInvalidInitializer(
+              buildProblem(fasta.messageAbstractFieldConstructorInitializer,
+                  fieldNameOffset, name.length),
+              fieldNameOffset)
+        ];
+      } else if (builder.isExternal) {
+        return <Initializer>[
+          buildInvalidInitializer(
+              buildProblem(fasta.messageExternalFieldConstructorInitializer,
+                  fieldNameOffset, name.length),
+              fieldNameOffset)
+        ];
+      } else if (builder.isFinal && builder.hasInitializer) {
         addProblem(
             fasta.templateFinalInstanceVariableAlreadyInitialized
                 .withArguments(name),

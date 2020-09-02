@@ -97,7 +97,7 @@ class BaseTest {
   bool get usePreviewDart2 => false;
 
   /// Normalize text with bullets.
-  String bulletToDash(item) => '$item'.replaceAll('•', '-');
+  String bulletToDash(StringSink item) => '$item'.replaceAll('•', '-');
 
   /// Start a driver for the given [source], optionally providing additional
   /// [args] and an [options] file path. The value of [options] defaults to an
@@ -1110,7 +1110,7 @@ class OptionsTest extends BaseTest {
 
     // missing_return: error
     var undefined_function = AnalysisError(
-        TestSource(), 0, 1, StaticTypeWarningCode.UNDEFINED_FUNCTION, [
+        TestSource(), 0, 1, CompileTimeErrorCode.UNDEFINED_FUNCTION, [
       ['x']
     ]);
     expect(processorFor(undefined_function).severity, ErrorSeverity.WARNING);

@@ -139,6 +139,9 @@ typedef Future ServerStartCallback();
 /// Called when the server should be stopped.
 typedef Future ServerStopCallback();
 
+/// Called when DDS has connected.
+typedef Future<void> DdsConnectedCallback();
+
 /// Called when the service is exiting.
 typedef Future CleanupCallback();
 
@@ -166,8 +169,9 @@ typedef Future<Uri> ServerInformamessage_routertionCallback();
 /// Called when we need information about the server.
 typedef Uri? ServerInformationCallback();
 
-/// Called when we want to [enable] or disable the web server.
-typedef Future<Uri?> WebServerControlCallback(bool enable);
+/// Called when we want to [enable] or disable the web server or silence VM
+/// service console messages.
+typedef Future<Uri?> WebServerControlCallback(bool enable, bool? silenceOutput);
 
 /// Called when we want to [enable] or disable new websocket connections to the
 /// server.
@@ -177,6 +181,7 @@ typedef void WebServerAcceptNewWebSocketConnectionsCallback(bool enable);
 class VMServiceEmbedderHooks {
   static ServerStartCallback? serverStart;
   static ServerStopCallback? serverStop;
+  static DdsConnectedCallback? ddsConnected;
   static CleanupCallback? cleanup;
   static CreateTempDirCallback? createTempDir;
   static DeleteDirCallback? deleteDir;
@@ -219,6 +224,8 @@ class VMService extends MessageRouter {
 
   final devfs = DevFS();
 
+  Uri? vmServiceUri;
+
   Uri? get ddsUri => _ddsUri;
   Uri? _ddsUri;
 
@@ -243,6 +250,7 @@ class VMService extends MessageRouter {
     }
     acceptNewWebSocketConnections(false);
     _ddsUri = Uri.parse(uri);
+    await VMServiceEmbedderHooks?.ddsConnected!();
     return encodeSuccess(message);
   }
 
@@ -344,6 +352,19 @@ class VMService extends MessageRouter {
     return encodeSuccess(message);
   }
 
+  String _getWebSocketTarget(Message message) {
+    Uri uri = ((_ddsUri != null) ? _ddsUri : vmServiceUri)!;
+    uri = uri.replace(scheme: 'ws', pathSegments: [
+      // Strip empty path segment which causes an extra / to be inserted.
+      ...uri.pathSegments.where((e) => e.isNotEmpty),
+      'ws',
+    ]);
+    return encodeResult(message, {
+      'type': 'WebSocketTarget',
+      'uri': uri.toString(),
+    });
+  }
+
   void _addClient(Client client) {
     assert(client.streams.isEmpty);
     assert(client.services.isEmpty);
@@ -416,7 +437,8 @@ class VMService extends MessageRouter {
     }
   }
 
-  Future<void> _serverMessageHandler(int code, SendPort sp, bool enable) async {
+  Future<void> _serverMessageHandler(
+      int code, SendPort sp, bool enable, bool? silenceOutput) async {
     switch (code) {
       case Constants.WEB_SERVER_CONTROL_MESSAGE_ID:
         final webServerControl = VMServiceEmbedderHooks.webServerControl;
@@ -424,7 +446,7 @@ class VMService extends MessageRouter {
           sp.send(null);
           return;
         }
-        final uri = await webServerControl(enable);
+        final uri = await webServerControl(enable, silenceOutput);
         sp.send(uri);
         break;
       case Constants.SERVER_INFO_MESSAGE_ID:
@@ -512,27 +534,27 @@ class VMService extends MessageRouter {
         _exit();
         return;
       }
-      if (message.length == 3) {
-        final opcode = message[0];
-        if (opcode == Constants.METHOD_CALL_FROM_NATIVE) {
-          _handleNativeRpcCall(message[1], message[2]);
+      final opcode = message[0];
+      if (message.length == 3 && opcode == Constants.METHOD_CALL_FROM_NATIVE) {
+        _handleNativeRpcCall(message[1], message[2]);
+        return;
+      }
+      if (message.length == 4) {
+        if ((opcode == Constants.WEB_SERVER_CONTROL_MESSAGE_ID) ||
+            (opcode == Constants.SERVER_INFO_MESSAGE_ID)) {
+          // This is a message interacting with the web server.
+          _serverMessageHandler(message[0], message[1], message[2], message[3]);
           return;
         } else {
-          // This is a message interacting with the web server.
-          assert((opcode == Constants.WEB_SERVER_CONTROL_MESSAGE_ID) ||
-              (opcode == Constants.SERVER_INFO_MESSAGE_ID));
-          _serverMessageHandler(message[0], message[1], message[2]);
+          // This is a message informing us of the birth or death of an
+          // isolate.
+          _controlMessageHandler(
+              message[0], message[1], message[2], message[3]);
           return;
         }
       }
-      if (message.length == 4) {
-        // This is a message informing us of the birth or death of an
-        // isolate.
-        _controlMessageHandler(message[0], message[1], message[2], message[3]);
-        return;
-      }
+      print('Internal vm-service error: ignoring illegal message: $message');
     }
-    print('Internal vm-service error: ignoring illegal message: $message');
   }
 
   VMService._internal() : eventPort = isolateControlPort {
@@ -764,6 +786,9 @@ class VMService extends MessageRouter {
       if (message.method == 'getSupportedProtocols') {
         return await _getSupportedProtocols(message);
       }
+      if (message.method == 'getWebSocketTarget') {
+        return _getWebSocketTarget(message);
+      }
       if (devfs.shouldHandleMessage(message)) {
         return await devfs.handleMessage(message);
       }
@@ -808,7 +833,12 @@ void _onStart() native 'VMService_OnStart';
 void _onExit() native 'VMService_OnExit';
 
 /// Notify the VM that the server's address has changed.
-void onServerAddressChange(String? address)
+void onServerAddressChange(String? address) {
+  VMService().vmServiceUri = (address != null) ? Uri.parse(address) : null;
+  _onServerAddressChange(address);
+}
+
+void _onServerAddressChange(String? address)
     native 'VMService_OnServerAddressChange';
 
 /// Subscribe to a service stream.

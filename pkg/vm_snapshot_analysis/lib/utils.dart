@@ -3,9 +3,6 @@
 // BSD-style license that can be found in the LICENSE file.
 library vm_snapshot_analysis.utils;
 
-import 'dart:io';
-import 'dart:convert';
-
 import 'package:vm_snapshot_analysis/ascii_table.dart';
 import 'package:vm_snapshot_analysis/program_info.dart';
 import 'package:vm_snapshot_analysis/instruction_sizes.dart'
@@ -13,17 +10,8 @@ import 'package:vm_snapshot_analysis/instruction_sizes.dart'
 import 'package:vm_snapshot_analysis/treemap.dart';
 import 'package:vm_snapshot_analysis/v8_profile.dart' as v8_profile;
 
-Future<Object> loadJson(File input) async {
-  return await input
-      .openRead()
-      .transform(utf8.decoder)
-      .transform(json.decoder)
-      .first;
-}
-
-Future<ProgramInfo> loadProgramInfo(File input,
-    {bool collapseAnonymousClosures = false}) async {
-  final json = await loadJson(input);
+ProgramInfo loadProgramInfoFromJson(Object json,
+    {bool collapseAnonymousClosures = false}) {
   if (v8_profile.Snapshot.isV8HeapSnapshot(json)) {
     return v8_profile.toProgramInfo(v8_profile.Snapshot.fromJson(json),
         collapseAnonymousClosures: collapseAnonymousClosures);
@@ -34,16 +22,21 @@ Future<ProgramInfo> loadProgramInfo(File input,
 }
 
 /// Compare two size profiles and return result of the comparison as a treemap.
-Future<Map<String, dynamic>> buildComparisonTreemap(File oldJson, File newJson,
+Map<String, dynamic> buildComparisonTreemap(Object oldJson, Object newJson,
     {TreemapFormat format = TreemapFormat.collapsed,
-    bool collapseAnonymousClosures = false}) async {
-  final oldSizes = await loadProgramInfo(oldJson,
+    bool collapseAnonymousClosures = false}) {
+  final oldSizes = loadProgramInfoFromJson(oldJson,
       collapseAnonymousClosures: collapseAnonymousClosures);
-  final newSizes = await loadProgramInfo(newJson,
+  final newSizes = loadProgramInfoFromJson(newJson,
       collapseAnonymousClosures: collapseAnonymousClosures);
 
+  return compareProgramInfo(oldSizes, newSizes, format: format);
+}
+
+Map<String, dynamic> compareProgramInfo(
+    ProgramInfo oldSizes, ProgramInfo newSizes,
+    {TreemapFormat format = TreemapFormat.collapsed}) {
   final diff = computeDiff(oldSizes, newSizes);
-
   return treemapFromInfo(diff, format: format);
 }
 
@@ -119,4 +112,13 @@ void printHistogram(ProgramInfo info, Histogram histogram,
         ' (${formatPercent(visibleSize, totalSize)} of total)');
   }
   print('Total: ${totalSize} bytes');
+}
+
+List<String> partsForPath(String path) {
+  final parts = path.split('/');
+  if (parts.first.startsWith('package:')) {
+    // Convert dot separated package name into a path from which this package originated.
+    parts.replaceRange(0, 1, parts.first.split('.'));
+  }
+  return parts;
 }

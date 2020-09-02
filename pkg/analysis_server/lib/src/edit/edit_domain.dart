@@ -11,17 +11,17 @@ import 'package:analysis_server/src/analysis_server.dart';
 import 'package:analysis_server/src/collections.dart';
 import 'package:analysis_server/src/computer/import_elements_computer.dart';
 import 'package:analysis_server/src/domain_abstract.dart';
-import 'package:analysis_server/src/edit/edit_bulk_fixes.dart'
-    show EditBulkFixes;
 import 'package:analysis_server/src/edit/edit_dartfix.dart' show EditDartFix;
 import 'package:analysis_server/src/edit/fix/dartfix_info.dart' show allFixes;
 import 'package:analysis_server/src/plugin/plugin_manager.dart';
 import 'package:analysis_server/src/plugin/result_converter.dart';
-import 'package:analysis_server/src/protocol_server.dart' hide Element;
+import 'package:analysis_server/src/protocol_server.dart'
+    hide AnalysisError, Element;
 import 'package:analysis_server/src/services/completion/postfix/postfix_completion.dart';
 import 'package:analysis_server/src/services/completion/statement/statement_completion.dart';
 import 'package:analysis_server/src/services/correction/assist.dart';
 import 'package:analysis_server/src/services/correction/assist_internal.dart';
+import 'package:analysis_server/src/services/correction/bulk_fix_processor.dart';
 import 'package:analysis_server/src/services/correction/change_workspace.dart';
 import 'package:analysis_server/src/services/correction/fix.dart';
 import 'package:analysis_server/src/services/correction/fix/analysis_options/fix_generator.dart';
@@ -95,12 +95,27 @@ class EditDomainHandler extends AbstractRequestHandler {
 
   Future bulkFixes(Request request) async {
     //
-    // Compute fixes
+    // Compute bulk fixes
     //
     try {
-      var bulkFix = EditBulkFixes(server, request);
-      var response = await bulkFix.compute();
+      var params = EditBulkFixesParams.fromRequest(request);
+      for (var file in params.included) {
+        if (server.sendResponseErrorIfInvalidFilePath(request, file)) {
+          return;
+        }
+      }
 
+      var paths = <String>[];
+      for (var include in params.included) {
+        var resource = server.resourceProvider.getResource(include);
+        resource.collectDartFilePaths(paths);
+      }
+
+      var workspace = DartChangeWorkspace(server.currentSessions);
+      var processor = BulkFixProcessor(workspace);
+      var changeBuilder = await processor.fixErrorsInLibraries(paths);
+      var response = EditBulkFixesResult(changeBuilder.sourceChange.edits)
+          .toResponse(request.id);
       server.sendResponse(response);
     } catch (exception, stackTrace) {
       server.sendServerErrorNotification('Exception while getting bulk fixes',
@@ -1294,3 +1309,15 @@ class _RefactoringManager {
 /// [_RefactoringManager] throws instances of this class internally to stop
 /// processing in a manager that was reset.
 class _ResetError {}
+
+extension ResourceExtension on Resource {
+  void collectDartFilePaths(List<String> paths) {
+    if (this is File && AnalysisEngine.isDartFileName(path)) {
+      paths.add(path);
+    } else if (this is Folder) {
+      for (var child in (this as Folder).getChildren()) {
+        child.collectDartFilePaths(paths);
+      }
+    }
+  }
+}

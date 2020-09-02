@@ -857,10 +857,12 @@ abstract class ClassBuilderImpl extends DeclarationBuilderImpl
       Member noSuchMethodInterface, KernelTarget target, Procedure procedure) {
     String prefix =
         procedure.isGetter ? 'get:' : procedure.isSetter ? 'set:' : '';
+    String invocationName = prefix + procedure.name.name;
+    if (procedure.isSetter) invocationName += '=';
     Expression invocation = target.backendTarget.instantiateInvocation(
         target.loader.coreTypes,
         new ThisExpression(),
-        prefix + procedure.name.name,
+        invocationName,
         new Arguments.forwarded(procedure.function, library.library),
         procedure.fileOffset,
         /*isSuper=*/ false);
@@ -882,8 +884,12 @@ abstract class ClassBuilderImpl extends DeclarationBuilderImpl
 
     procedure.isAbstract = false;
     procedure.isNoSuchMethodForwarder = true;
+    procedure.isMemberSignature = false;
     procedure.isForwardingStub = false;
     procedure.isForwardingSemiStub = false;
+    procedure.memberSignatureOrigin = null;
+    procedure.forwardingStubInterfaceTarget = null;
+    procedure.forwardingStubSuperTarget = null;
   }
 
   Uri _getMemberUri(Member member) {
@@ -1414,20 +1420,27 @@ abstract class ClassBuilderImpl extends DeclarationBuilderImpl
 
   @override
   void checkMixinApplication(ClassHierarchy hierarchy, CoreTypes coreTypes) {
+    TypeEnvironment typeEnvironment = new TypeEnvironment(coreTypes, hierarchy);
     // A mixin declaration can only be applied to a class that implements all
     // the declaration's superclass constraints.
     InterfaceType supertype = cls.supertype.asInterfaceType;
     Substitution substitution = Substitution.fromSupertype(cls.mixedInType);
     for (Supertype constraint in cls.mixedInClass.superclassConstraints()) {
-      InterfaceType interface =
+      InterfaceType requiredInterface =
           substitution.substituteSupertype(constraint).asInterfaceType;
-      if (hierarchy.getTypeAsInstanceOf(
-              supertype, interface.classNode, library.library, coreTypes) !=
-          interface) {
+      InterfaceType implementedInterface = hierarchy.getTypeAsInstanceOf(
+          supertype, requiredInterface.classNode, library.library, coreTypes);
+      if (implementedInterface == null ||
+          !typeEnvironment.areMutualSubtypes(
+              implementedInterface,
+              requiredInterface,
+              library.isNonNullableByDefault
+                  ? SubtypeCheckMode.withNullabilities
+                  : SubtypeCheckMode.ignoringNullabilities)) {
         library.addProblem(
             templateMixinApplicationIncompatibleSupertype.withArguments(
                 supertype,
-                interface,
+                requiredInterface,
                 cls.mixedInType.asInterfaceType,
                 library.isNonNullableByDefault),
             cls.fileOffset,

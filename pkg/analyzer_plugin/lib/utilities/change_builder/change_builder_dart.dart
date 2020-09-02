@@ -19,10 +19,10 @@ typedef ImportPrefixGenerator = String Function(Uri);
 /// A [ChangeBuilder] used to build changes in Dart files.
 ///
 /// Clients may not extend, implement or mix-in this class.
+@Deprecated('Use ChangeBuilder')
 abstract class DartChangeBuilder implements ChangeBuilder {
   /// Initialize a newly created change builder.
-  ///
-  /// TODO(scheglov) Replace this constructor with using workspace.
+  @Deprecated('Use ChangeBuilder(session: session)')
   factory DartChangeBuilder(AnalysisSession session) = DartChangeBuilderImpl;
 
   /// Use the [buildFileEdit] function to create a collection of edits to the
@@ -31,6 +31,7 @@ abstract class DartChangeBuilder implements ChangeBuilder {
   ///
   /// If [importPrefixGenerator] is provided, it will be asked to generate an
   /// import prefix for every newly imported library.
+  @Deprecated('Use ChangeBuilder.addDartFileEdit')
   @override
   Future<void> addFileEdit(
       String path, void Function(DartFileEditBuilder builder) buildFileEdit,
@@ -206,8 +207,16 @@ abstract class DartEditBuilder implements EditBuilder {
   ///
   /// If a [type] and [typeGroupName] are both provided, then the type of the
   /// parameter will be included in a linked edit.
+  ///
+  /// If [isCovariant] is `true` then the keyword `covariant` will be included
+  /// in the parameter declaration.
+  ///
+  /// If [isRequiredNamed] is `true` then either the keyword `required` or the
+  /// annotation `@required` will be included in the parameter declaration.
   void writeParameter(String name,
-      {ExecutableElement methodBeingCopied,
+      {bool isCovariant,
+      bool isRequiredNamed,
+      ExecutableElement methodBeingCopied,
       String nameGroupName,
       DartType type,
       String typeGroupName});

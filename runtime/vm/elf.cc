@@ -962,35 +962,8 @@ class DwarfElfStream : public DwarfWriteStream {
         stream_(ASSERT_NOTNULL(stream)),
         address_map_(address_map) {}
 
-  void sleb128(intptr_t value) {
-    bool is_last_part = false;
-    while (!is_last_part) {
-      uint8_t part = value & 0x7F;
-      value >>= 7;
-      if ((value == 0 && (part & 0x40) == 0) ||
-          (value == static_cast<intptr_t>(-1) && (part & 0x40) != 0)) {
-        is_last_part = true;
-      } else {
-        part |= 0x80;
-      }
-      stream_->WriteFixed(part);
-    }
-  }
-
-  void uleb128(uintptr_t value) {
-    bool is_last_part = false;
-    while (!is_last_part) {
-      uint8_t part = value & 0x7F;
-      value >>= 7;
-      if (value == 0) {
-        is_last_part = true;
-      } else {
-        part |= 0x80;
-      }
-      stream_->WriteFixed(part);
-    }
-  }
-
+  void sleb128(intptr_t value) { stream_->Write(value); }
+  void uleb128(uintptr_t value) { stream_->WriteUnsigned(value); }
   void u1(uint8_t value) { stream_->WriteFixed(value); }
   // Can't use WriteFixed for these, as we may not be at aligned positions.
   void u2(uint16_t value) { stream_->WriteBytes(&value, sizeof(value)); }
@@ -1125,17 +1098,20 @@ void Elf::FinalizeDwarfSections() {
   // Need these to turn offsets into relocated addresses.
   auto const vm_start =
       symbol_to_address_map.LookupValue(kVmSnapshotInstructionsAsmSymbol);
-  ASSERT(vm_start > 0);
+  // vm_start is absent in deferred loading peices.
   auto const isolate_start =
       symbol_to_address_map.LookupValue(kIsolateSnapshotInstructionsAsmSymbol);
   ASSERT(isolate_start > 0);
   auto const vm_text = FindSectionForAddress(vm_start);
-  ASSERT(vm_text != nullptr);
+  // vm_text is absent in deferred loading peices.
   auto const isolate_text = FindSectionForAddress(isolate_start);
   ASSERT(isolate_text != nullptr);
 
   SnapshotTextObjectNamer namer(zone_);
   const auto& codes = dwarf_->codes();
+  if (codes.length() == 0) {
+    return;
+  }
   for (intptr_t i = 0; i < codes.length(); i++) {
     const auto& code = *codes[i];
     auto const name = namer.SnapshotNameFor(i, code);
@@ -1300,7 +1276,8 @@ Section* Elf::GenerateBuildId() {
     auto const name = kBuildIdSegmentNames[i];
     auto const symbol = LookupSymbol(dynstrtab_, dynsym_, name);
     if (symbol == nullptr) {
-      FATAL1("No symbol %s found for expected segment\n", name);
+      stream.WriteFixed(static_cast<uint32_t>(0));
+      continue;
     }
     auto const bits = sections_[symbol->section_index]->AsBitsContainer();
     if (bits == nullptr) {

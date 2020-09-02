@@ -1,0 +1,12 @@
+class Animal {
+  Animal({required this.numberOfLegs});
+  final int numberOfLegs;
+}
+
+@valueClass
+class Cat extends Animal {
+  final int numberOfWhiskers;
+}
+
+const String valueClass = "valueClass";
+main() {}

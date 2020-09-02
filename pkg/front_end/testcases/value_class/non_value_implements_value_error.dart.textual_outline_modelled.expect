@@ -1,0 +1,11 @@
+@valueClass
+class Animal {
+  final int numberOfLegs;
+}
+
+class Cat implements Animal {
+  final int numberOfLegs;
+}
+
+const String valueClass = "valueClass";
+main() {}

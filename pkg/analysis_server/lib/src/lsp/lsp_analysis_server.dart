@@ -258,46 +258,44 @@ class LspAnalysisServer extends AbstractAnalysisServer {
   /// Handle a [message] that was read from the communication channel.
   void handleMessage(Message message) {
     performance.logRequestTiming(null);
-    runZonedGuarded(() {
-      ServerPerformanceStatistics.serverRequests.makeCurrentWhile(() async {
-        try {
-          if (message is ResponseMessage) {
-            handleClientResponse(message);
-          } else if (message is RequestMessage) {
-            final result = await messageHandler.handleMessage(message);
-            if (result.isError) {
-              sendErrorResponse(message, result.error);
-            } else {
-              channel.sendResponse(ResponseMessage(
-                  id: message.id,
-                  result: result.result,
-                  jsonrpc: jsonRpcVersion));
-            }
-          } else if (message is NotificationMessage) {
-            final result = await messageHandler.handleMessage(message);
-            if (result.isError) {
-              sendErrorResponse(message, result.error);
-            }
+    runZonedGuarded(() async {
+      try {
+        if (message is ResponseMessage) {
+          handleClientResponse(message);
+        } else if (message is RequestMessage) {
+          final result = await messageHandler.handleMessage(message);
+          if (result.isError) {
+            sendErrorResponse(message, result.error);
           } else {
-            showErrorMessageToUser('Unknown message type');
+            channel.sendResponse(ResponseMessage(
+                id: message.id,
+                result: result.result,
+                jsonrpc: jsonRpcVersion));
           }
-        } catch (error, stackTrace) {
-          final errorMessage = message is ResponseMessage
-              ? 'An error occurred while handling the response to request ${message.id}'
-              : message is RequestMessage
-                  ? 'An error occurred while handling ${message.method} request'
-                  : message is NotificationMessage
-                      ? 'An error occurred while handling ${message.method} notification'
-                      : 'Unknown message type';
-          sendErrorResponse(
-              message,
-              ResponseError(
-                code: ServerErrorCodes.UnhandledError,
-                message: errorMessage,
-              ));
-          logException(errorMessage, error, stackTrace);
+        } else if (message is NotificationMessage) {
+          final result = await messageHandler.handleMessage(message);
+          if (result.isError) {
+            sendErrorResponse(message, result.error);
+          }
+        } else {
+          showErrorMessageToUser('Unknown message type');
         }
-      });
+      } catch (error, stackTrace) {
+        final errorMessage = message is ResponseMessage
+            ? 'An error occurred while handling the response to request ${message.id}'
+            : message is RequestMessage
+                ? 'An error occurred while handling ${message.method} request'
+                : message is NotificationMessage
+                    ? 'An error occurred while handling ${message.method} notification'
+                    : 'Unknown message type';
+        sendErrorResponse(
+            message,
+            ResponseError(
+              code: ServerErrorCodes.UnhandledError,
+              message: errorMessage,
+            ));
+        logException(errorMessage, error, stackTrace);
+      }
     }, socketError);
   }
 
@@ -336,7 +334,8 @@ class LspAnalysisServer extends AbstractAnalysisServer {
   }
 
   void onOverlayCreated(String path, String content) {
-    resourceProvider.setOverlay(path, content: content, modificationStamp: 0);
+    resourceProvider.setOverlay(path,
+        content: content, modificationStamp: overlayModificationStamp++);
 
     _afterOverlayChanged(path, plugin.AddContentOverlay(content));
   }
@@ -361,7 +360,7 @@ class LspAnalysisServer extends AbstractAnalysisServer {
     }
 
     resourceProvider.setOverlay(path,
-        content: newContent, modificationStamp: 0);
+        content: newContent, modificationStamp: overlayModificationStamp++);
 
     _afterOverlayChanged(path, plugin.ChangeContentOverlay(edits));
   }
@@ -496,8 +495,8 @@ class LspAnalysisServer extends AbstractAnalysisServer {
   void setAnalysisRoots(List<String> includedPaths) {
     declarationsTracker?.discardContexts();
     final uniquePaths = HashSet<String>.of(includedPaths ?? const []);
-    contextManager.setRoots(uniquePaths.toList(), []);
     notificationManager.setAnalysisRoots(includedPaths, []);
+    contextManager.setRoots(uniquePaths.toList(), []);
     addContextsToDeclarationsTracker();
   }
 
@@ -518,7 +517,8 @@ class LspAnalysisServer extends AbstractAnalysisServer {
     // during normal analysis (for example dot folders are skipped over in
     // _handleWatchEventImpl).
     return contextManager.isInAnalysisRoot(file) &&
-        !contextManager.isContainedInDotFolder(file);
+        !contextManager.isContainedInDotFolder(file) &&
+        !contextManager.isIgnored(file);
   }
 
   /// Returns `true` if Flutter outlines should be sent for [file] with the
@@ -621,6 +621,7 @@ class LspInitializationOptions {
   final bool closingLabels;
   final bool outline;
   final bool flutterOutline;
+
   LspInitializationOptions(dynamic options)
       : onlyAnalyzeProjectsWithOpenFiles = options != null &&
             options['onlyAnalyzeProjectsWithOpenFiles'] == true,
@@ -660,6 +661,11 @@ class LspServerContextManagerCallbacks extends ContextManagerCallbacks {
       Folder folder, ContextRoot contextRoot, AnalysisOptions options) {
     var builder = createContextBuilder(folder, options);
     var analysisDriver = builder.buildDriver(contextRoot);
+    final textDocumentCapabilities =
+        analysisServer.clientCapabilities?.textDocument;
+    final supportedDiagnosticTags = HashSet<DiagnosticTag>.of(
+        textDocumentCapabilities?.publishDiagnostics?.tagSupport?.valueSet ??
+            []);
     analysisDriver.results.listen((result) {
       var path = result.path;
       if (analysisServer.shouldSendErrorsNotificationFor(path)) {
@@ -668,7 +674,12 @@ class LspServerContextManagerCallbacks extends ContextManagerCallbacks {
             result.errors
                 .where((e) => e.errorCode.type != ErrorType.TODO)
                 .toList(),
-            toDiagnostic);
+            (result, error, [severity]) => toDiagnostic(
+                  result,
+                  error,
+                  supportedTags: supportedDiagnosticTags,
+                  errorSeverity: severity,
+                ));
 
         analysisServer.publishDiagnostics(result.path, serverErrors);
       }
@@ -698,6 +709,7 @@ class LspServerContextManagerCallbacks extends ContextManagerCallbacks {
       }
     });
     analysisDriver.exceptions.listen(analysisServer.logExceptionResult);
+    analysisDriver.priorityFiles = analysisServer.priorityFiles.toList();
     analysisServer.driverMap[folder] = analysisDriver;
     return analysisDriver;
   }

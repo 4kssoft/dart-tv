@@ -1,0 +1,31 @@
+library /*isNonNullableByDefault*/;
+//
+// Problems in library:
+//
+// pkg/front_end/testcases/value_class/value_extends_non_value.dart:14:13: Error: Final field 'numberOfWhiskers' is not initialized.
+// Try to initialize the field in the declaration or in every constructor.
+//   final int numberOfWhiskers;
+//             ^^^^^^^^^^^^^^^^
+//
+import self as self;
+import "dart:core" as core;
+
+class Animal extends core::Object {
+  final field core::int numberOfLegs;
+  constructor •({required core::int numberOfLegs = #C1}) → self::Animal
+    : self::Animal::numberOfLegs = numberOfLegs, super core::Object::•()
+    ;
+}
+class Cat extends self::Animal {
+  final field core::int numberOfWhiskers = null;
+  synthetic constructor •({required core::int numberOfWhiskers, core::int numberOfLegs}) → self::Cat
+    : self::Cat::numberOfWhiskers = numberOfWhiskers, super self::Animal::•(numberOfLegs)
+    ;
+}
+static const field core::String valueClass = #C2;
+static method main() → dynamic {}
+
+constants  {
+  #C1 = null
+  #C2 = "valueClass"
+}

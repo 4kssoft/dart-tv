@@ -6,6 +6,7 @@ import 'dart:collection';
 import 'dart:core';
 
 import 'package:analyzer/file_system/file_system.dart';
+import 'package:analyzer/src/dart/analysis/experiments.dart';
 import 'package:analyzer/src/file_system/file_system.dart';
 import 'package:analyzer/src/generated/sdk.dart';
 import 'package:analyzer/src/generated/source.dart';
@@ -483,8 +484,40 @@ class BazelWorkspacePackage extends WorkspacePackage {
   @override
   final BazelWorkspace workspace;
 
+  bool _enabledExperimentsReady = false;
+  List<String> _enabledExperiments;
+
   BazelWorkspacePackage(String packageName, this.root, this.workspace)
-      : this._uriPrefix = 'package:$packageName/';
+      : _uriPrefix = 'package:$packageName/';
+
+  @override
+  List<String> get enabledExperiments {
+    if (_enabledExperimentsReady) {
+      return _enabledExperiments;
+    }
+
+    try {
+      _enabledExperimentsReady = true;
+      var buildContent = workspace.provider
+          .getFolder(root)
+          .getChildAssumingFile('BUILD')
+          .readAsStringSync();
+      var hasNonNullableFlag = buildContent
+          .split('\n')
+          .map((e) => e.trim())
+          .where((e) => !e.startsWith('#'))
+          .map((e) => e.replaceAll(' ', ''))
+          .join()
+          .contains('dart_package(null_safety=True');
+      if (hasNonNullableFlag) {
+        _enabledExperiments = [EnableString.non_nullable];
+      }
+    } on FileSystemException {
+      // ignored
+    }
+
+    return _enabledExperiments;
+  }
 
   @override
   bool contains(Source source) {
@@ -505,4 +538,10 @@ class BazelWorkspacePackage extends WorkspacePackage {
     // learning exactly which package [filePath] is contained in.
     return workspace.findPackageFor(filePath).root == root;
   }
+
+  @override
+  // TODO(brianwilkerson) Implement this by looking in the BUILD file for 'deps'
+  //  lists.
+  Map<String, List<Folder>> packagesAvailableTo(String libraryPath) =>
+      <String, List<Folder>>{};
 }

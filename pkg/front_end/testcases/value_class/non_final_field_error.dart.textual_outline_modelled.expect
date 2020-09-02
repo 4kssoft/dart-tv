@@ -1,0 +1,7 @@
+@valueClass
+class Animal {
+  int numberOfLegs;
+}
+
+const String valueClass = "valueClass";
+main() {}

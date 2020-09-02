@@ -241,7 +241,7 @@ class _PhysicalFolder extends _PhysicalResource implements Folder {
 
   @override
   Stream<WatchEvent> get changes =>
-      DirectoryWatcher(_entry.path).events.handleError((error) {},
+      DirectoryWatcher(_entry.path).events.handleError((Object error) {},
           test: (error) =>
               error is io.FileSystemException &&
               // Don't suppress "Directory watcher closed," so the outer
@@ -375,14 +375,17 @@ abstract class _PhysicalResource implements Resource {
   Context get pathContext => io.Platform.isWindows ? windows : posix;
 
   @override
+  ResourceProvider get provider => PhysicalResourceProvider.INSTANCE;
+
+  @override
   String get shortName => pathContext.basename(path);
 
   @override
-  bool operator ==(other) {
+  bool operator ==(Object other) {
     if (runtimeType != other.runtimeType) {
       return false;
     }
-    return path == other.path;
+    return path == (other as _PhysicalResource).path;
   }
 
   @override

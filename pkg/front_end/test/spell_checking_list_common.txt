@@ -446,6 +446,10 @@ clashing
 class
 classes
 classic
+classification
+classifications
+classifies
+classify
 clause
 clauses
 clean
@@ -1911,6 +1915,7 @@ nature
 nearest
 necessarily
 necessary
+necessity
 need
 needed
 needing
@@ -2643,6 +2648,7 @@ setting
 settings
 settled
 setup
+seventh
 several
 severity
 shadow

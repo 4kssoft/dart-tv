@@ -376,7 +376,6 @@ void KernelLoader::InitializeFields(UriToSourceTable* uri_to_source_table) {
   const intptr_t source_table_size = helper_.SourceTableSize();
   const Array& scripts =
       Array::Handle(Z, Array::New(source_table_size, Heap::kOld));
-  patch_classes_ = Array::New(source_table_size, Heap::kOld);
 
   // Copy the Kernel string offsets out of the binary and into the VM's heap.
   ASSERT(program_->string_table_offset() >= 0);
@@ -489,11 +488,7 @@ KernelLoader::KernelLoader(const Script& script,
       expression_evaluation_library_(Library::Handle(Z)) {
   ASSERT(T.active_class_ == &active_class_);
   T.finalize_ = false;
-
-  const Array& scripts = Array::Handle(Z, kernel_program_info_.scripts());
-  patch_classes_ = Array::New(scripts.Length(), Heap::kOld);
   library_kernel_data_ = kernel_data.raw();
-
   H.InitFromKernelProgramInfo(kernel_program_info_);
 }
 
@@ -1952,7 +1947,16 @@ void KernelLoader::LoadProcedure(const Library& library,
   ProcedureHelper procedure_helper(&helper_);
 
   procedure_helper.ReadUntilExcluding(ProcedureHelper::kAnnotations);
-  if (procedure_helper.IsRedirectingFactoryConstructor()) {
+  // CFE adds 'member signature' abstract functions to a legacy class deriving
+  // or implementing an opted-in interface. The signature of these functions is
+  // legacy erased and used as the target of interface calls. They are used for
+  // static reasoning about the program by CFE, but not really needed by the VM.
+  // In certain situations (e.g. issue 162073826), a large number of these
+  // additional functions can cause strain on the VM. They are therefore skipped
+  // in jit mode and their associated origin function is used instead as
+  // interface call target.
+  if (procedure_helper.IsRedirectingFactoryConstructor() ||
+      (!FLAG_precompiled_mode && procedure_helper.IsMemberSignature())) {
     helper_.SetOffset(procedure_end);
     return;
   }
@@ -2107,6 +2111,13 @@ const Object& KernelLoader::ClassForScriptAt(const Class& klass,
                                              intptr_t source_uri_index) {
   const Script& correct_script = Script::Handle(Z, ScriptAt(source_uri_index));
   if (klass.script() != correct_script.raw()) {
+    // Lazily create the [patch_classes_] array in case we need it.
+    if (patch_classes_.IsNull()) {
+      const Array& scripts = Array::Handle(Z, kernel_program_info_.scripts());
+      ASSERT(!scripts.IsNull());
+      patch_classes_ = Array::New(scripts.Length(), Heap::kOld);
+    }
+
     // Use cache for patch classes. This works best for in-order usages.
     PatchClass& patch_class = PatchClass::ZoneHandle(Z);
     patch_class ^= patch_classes_.At(source_uri_index);
@@ -2244,6 +2255,7 @@ void KernelLoader::GenerateFieldAccessors(const Class& klass,
   getter.set_accessor_field(field);
   getter.set_is_extension_member(field.is_extension_member());
   H.SetupFieldAccessorFunction(klass, getter, field_type);
+  T.SetupUnboxingInfoMetadataForFieldAccessors(getter, library_kernel_offset_);
 
   if (field.NeedsSetter()) {
     // Only static fields can be const.
@@ -2265,6 +2277,8 @@ void KernelLoader::GenerateFieldAccessors(const Class& klass,
     setter.set_accessor_field(field);
     setter.set_is_extension_member(field.is_extension_member());
     H.SetupFieldAccessorFunction(klass, setter, field_type);
+    T.SetupUnboxingInfoMetadataForFieldAccessors(setter,
+                                                 library_kernel_offset_);
   }
 }
 

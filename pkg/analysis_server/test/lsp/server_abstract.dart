@@ -227,7 +227,7 @@ mixin ClientCapabilitiesHelperMixin {
     });
   }
 
-  TextDocumentClientCapabilities withCompletionItemDeprecatedSupport(
+  TextDocumentClientCapabilities withCompletionItemDeprecatedFlagSupport(
     TextDocumentClientCapabilities source,
   ) {
     return extendTextDocumentCapabilities(source, {
@@ -260,10 +260,34 @@ mixin ClientCapabilitiesHelperMixin {
     });
   }
 
+  TextDocumentClientCapabilities withCompletionItemTagSupport(
+    TextDocumentClientCapabilities source,
+    List<CompletionItemTag> tags,
+  ) {
+    return extendTextDocumentCapabilities(source, {
+      'completion': {
+        'completionItem': {
+          'tagSupport': {'valueSet': tags.map((k) => k.toJson()).toList()}
+        }
+      }
+    });
+  }
+
   ClientCapabilitiesWorkspace withConfigurationSupport(
     ClientCapabilitiesWorkspace source,
   ) {
     return extendWorkspaceCapabilities(source, {'configuration': true});
+  }
+
+  TextDocumentClientCapabilities withDiagnosticTagSupport(
+    TextDocumentClientCapabilities source,
+    List<DiagnosticTag> tags,
+  ) {
+    return extendTextDocumentCapabilities(source, {
+      'publishDiagnostics': {
+        'tagSupport': {'valueSet': tags.map((k) => k.toJson()).toList()}
+      }
+    });
   }
 
   ClientCapabilitiesWorkspace withDidChangeConfigurationDynamicRegistration(
@@ -1008,13 +1032,13 @@ mixin LspAnalysisServerTestMixin implements ClientCapabilitiesHelperMixin {
 
   /// Calls the supplied function and responds to any `workspace/configuration`
   /// request with the supplied config.
-  Future<ResponseMessage> provideConfig(
-      Future<ResponseMessage> Function() f, Map<String, dynamic> config) {
+  Future<ResponseMessage> provideConfig(Future<ResponseMessage> Function() f,
+      FutureOr<Map<String, dynamic>> config) {
     return handleExpectedRequest<ResponseMessage, ConfigurationParams,
         List<Map<String, dynamic>>>(
       Method.workspace_configuration,
       f,
-      handler: (configurationParams) => [config],
+      handler: (configurationParams) async => [await config],
     );
   }
 

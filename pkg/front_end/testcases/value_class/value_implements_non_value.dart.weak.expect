@@ -1,0 +1,35 @@
+library /*isNonNullableByDefault*/;
+//
+// Problems in library:
+//
+// pkg/front_end/testcases/value_class/value_implements_non_value.dart:8:13: Error: Final field 'numberOfLegs' is not initialized.
+// Try to initialize the field in the declaration or in every constructor.
+//   final int numberOfLegs;
+//             ^^^^^^^^^^^^
+//
+// pkg/front_end/testcases/value_class/value_implements_non_value.dart:13:13: Error: Final field 'numberOfLegs' is not initialized.
+// Try to initialize the field in the declaration or in every constructor.
+//   final int numberOfLegs;
+//             ^^^^^^^^^^^^
+//
+import self as self;
+import "dart:core" as core;
+
+class Animal extends core::Object {
+  final field core::int numberOfLegs = null;
+  synthetic constructor •() → self::Animal
+    : super core::Object::•()
+    ;
+}
+class Cat extends core::Object implements self::Animal {
+  final field core::int numberOfLegs = null;
+  synthetic constructor •({required core::int numberOfLegs}) → self::Cat
+    : self::Cat::numberOfLegs = numberOfLegs, super core::Object::•()
+    ;
+}
+static const field core::String valueClass = #C1;
+static method main() → dynamic {}
+
+constants  {
+  #C1 = "valueClass"
+}

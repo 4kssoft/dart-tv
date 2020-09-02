@@ -24,10 +24,8 @@ import 'package:analyzer/src/dart/error/syntactic_errors.dart';
 import 'package:analyzer/src/dart/resolver/flow_analysis_visitor.dart';
 import 'package:analyzer/src/dart/resolver/legacy_type_asserter.dart';
 import 'package:analyzer/src/dart/resolver/resolution_visitor.dart';
-import 'package:analyzer/src/dart/resolver/scope.dart' show LibraryScope;
 import 'package:analyzer/src/error/best_practices_verifier.dart';
 import 'package:analyzer/src/error/codes.dart';
-import 'package:analyzer/src/error/dart2js_verifier.dart';
 import 'package:analyzer/src/error/dead_code_verifier.dart';
 import 'package:analyzer/src/error/imports_verifier.dart';
 import 'package:analyzer/src/error/inheritance_override.dart';
@@ -75,7 +73,6 @@ class LibraryAnalyzer {
 
   LibraryElement _libraryElement;
 
-  LibraryScope _libraryScope;
   final Map<FileState, LineInfo> _fileToLineInfo = {};
 
   final Map<FileState, IgnoreInfo> _fileToIgnoreInfo = {};
@@ -105,9 +102,7 @@ class LibraryAnalyzer {
 
   /// Compute analysis results for all units of the library.
   Map<FileState, UnitAnalysisResult> analyze() {
-    return PerformanceStatistics.analysis.makeCurrentWhile(() {
-      return analyzeSync();
-    });
+    return analyzeSync();
   }
 
   /// Compute analysis results for all units of the library.
@@ -123,7 +118,6 @@ class LibraryAnalyzer {
     timerLibraryAnalyzerFreshUnit.stop();
 
     _libraryElement = _elementFactory.libraryOfUri(_library.uriStr);
-    _libraryScope = LibraryScope(_libraryElement);
 
     // Resolve URIs in directives to corresponding sources.
     FeatureSet featureSet = units[_library].featureSet;
@@ -146,41 +140,35 @@ class LibraryAnalyzer {
     timerLibraryAnalyzerConst.stop();
 
     timerLibraryAnalyzerVerify.start();
-    PerformanceStatistics.errors.makeCurrentWhile(() {
-      units.forEach((file, unit) {
-        _computeVerifyErrors(file, unit);
-      });
+    units.forEach((file, unit) {
+      _computeVerifyErrors(file, unit);
     });
 
     if (_analysisOptions.hint) {
-      PerformanceStatistics.hints.makeCurrentWhile(() {
-        units.forEach((file, unit) {
-          {
-            var visitor = GatherUsedLocalElementsVisitor(_libraryElement);
-            unit.accept(visitor);
-            _usedLocalElementsList.add(visitor.usedElements);
-          }
-          {
-            var visitor = GatherUsedImportedElementsVisitor(_libraryElement);
-            unit.accept(visitor);
-            _usedImportedElementsList.add(visitor.usedElements);
-          }
-        });
-        units.forEach((file, unit) {
-          _computeHints(file, unit);
-        });
+      units.forEach((file, unit) {
+        {
+          var visitor = GatherUsedLocalElementsVisitor(_libraryElement);
+          unit.accept(visitor);
+          _usedLocalElementsList.add(visitor.usedElements);
+        }
+        {
+          var visitor = GatherUsedImportedElementsVisitor(_libraryElement);
+          unit.accept(visitor);
+          _usedImportedElementsList.add(visitor.usedElements);
+        }
+      });
+      units.forEach((file, unit) {
+        _computeHints(file, unit);
       });
     }
 
     if (_analysisOptions.lint) {
-      PerformanceStatistics.lints.makeCurrentWhile(() {
-        var allUnits = _library.libraryFiles
-            .map((file) => LinterContextUnit(file.content, units[file]))
-            .toList();
-        for (int i = 0; i < allUnits.length; i++) {
-          _computeLints(_library.libraryFiles[i], allUnits[i], allUnits);
-        }
-      });
+      var allUnits = _library.libraryFiles
+          .map((file) => LinterContextUnit(file.content, units[file]))
+          .toList();
+      for (int i = 0; i < allUnits.length; i++) {
+        _computeLints(_library.libraryFiles[i], allUnits[i], allUnits);
+      }
     }
 
     assert(units.values.every(LegacyTypeAsserter.assertLegacyTypes));
@@ -203,37 +191,41 @@ class LibraryAnalyzer {
   void _checkForInconsistentLanguageVersionOverride(
     Map<FileState, CompilationUnit> units,
   ) {
-    var libraryUnit = units.values.first;
+    var libraryEntry = units.entries.first;
+    var libraryUnit = libraryEntry.value;
     var libraryOverrideToken = libraryUnit.languageVersionToken;
 
-    for (var partEntry in units.entries.skip(1)) {
-      var partUnit = partEntry.value;
-      var partOverrideToken = partUnit.languageVersionToken;
-      if (libraryOverrideToken != null) {
-        if (partOverrideToken != null) {
-          if (partOverrideToken.major != libraryOverrideToken.major ||
-              partOverrideToken.minor != libraryOverrideToken.minor) {
-            _getErrorReporter(partEntry.key).reportErrorForToken(
-              CompileTimeErrorCode.INCONSISTENT_LANGUAGE_VERSION_OVERRIDE,
-              partOverrideToken,
-            );
+    var elementToUnit = <CompilationUnitElement, CompilationUnit>{};
+    for (var entry in units.entries) {
+      var unit = entry.value;
+      elementToUnit[unit.declaredElement] = unit;
+    }
+
+    for (var directive in libraryUnit.directives) {
+      if (directive is PartDirective) {
+        var partUnit = elementToUnit[directive.uriElement];
+        if (partUnit != null) {
+          var shouldReport = false;
+          var partOverrideToken = partUnit.languageVersionToken;
+          if (libraryOverrideToken != null) {
+            if (partOverrideToken != null) {
+              if (partOverrideToken.major != libraryOverrideToken.major ||
+                  partOverrideToken.minor != libraryOverrideToken.minor) {
+                shouldReport = true;
+              }
+            } else {
+              shouldReport = true;
+            }
+          } else if (partOverrideToken != null) {
+            shouldReport = true;
           }
-        } else {
-          var partDirectives = partUnit.directives;
-          for (var partOf in partDirectives.whereType<PartOfDirective>()) {
-            var partOffset = partOf.partKeyword.offset;
-            _getErrorReporter(partEntry.key).reportErrorForOffset(
+          if (shouldReport) {
+            _getErrorReporter(_library).reportErrorForNode(
               CompileTimeErrorCode.INCONSISTENT_LANGUAGE_VERSION_OVERRIDE,
-              partOffset,
-              partOf.ofKeyword.end - partOffset,
+              directive.uri,
             );
           }
         }
-      } else if (partOverrideToken != null) {
-        _getErrorReporter(partEntry.key).reportErrorForToken(
-          CompileTimeErrorCode.INCONSISTENT_LANGUAGE_VERSION_OVERRIDE,
-          partOverrideToken,
-        );
       }
     }
   }
@@ -270,11 +262,6 @@ class LibraryAnalyzer {
     }
 
     unit.accept(DeadCodeVerifier(errorReporter));
-
-    // Dart2js analysis.
-    if (_analysisOptions.dart2jsHint) {
-      unit.accept(Dart2JSVerifier(errorReporter));
-    }
 
     unit.accept(
       BestPracticesVerifier(
@@ -445,8 +432,8 @@ class LibraryAnalyzer {
         // non-internal code from importing internal code.
         bool privileged = false;
 
-        if (code == StaticTypeWarningCode.UNDEFINED_FUNCTION ||
-            code == StaticTypeWarningCode.UNDEFINED_PREFIXED_NAME) {
+        if (code == CompileTimeErrorCode.UNDEFINED_FUNCTION ||
+            code == CompileTimeErrorCode.UNDEFINED_PREFIXED_NAME) {
           // Special case a small number of errors in Flutter code which are
           // ignored. The erroneous code is found in a conditionally imported
           // library, which uses a special version of the "dart:ui" library
@@ -558,7 +545,7 @@ class LibraryAnalyzer {
 
     LineInfo lineInfo = unit.lineInfo;
     _fileToLineInfo[file] = lineInfo;
-    _fileToIgnoreInfo[file] = IgnoreInfo.calculateIgnores(content, lineInfo);
+    _fileToIgnoreInfo[file] = IgnoreInfo.forDart(unit, content);
 
     return unit;
   }
@@ -653,7 +640,7 @@ class LibraryAnalyzer {
                     [name]);
               } else if (libraryNameNode.name != name) {
                 libraryErrorReporter.reportErrorForNode(
-                    StaticWarningCode.PART_OF_DIFFERENT_LIBRARY,
+                    CompileTimeErrorCode.PART_OF_DIFFERENT_LIBRARY,
                     partUri,
                     [libraryNameNode.name, name]);
               }
@@ -661,7 +648,7 @@ class LibraryAnalyzer {
               Source source = nameOrSource.source;
               if (source != _library.source) {
                 libraryErrorReporter.reportErrorForNode(
-                    StaticWarningCode.PART_OF_DIFFERENT_LIBRARY,
+                    CompileTimeErrorCode.PART_OF_DIFFERENT_LIBRARY,
                     partUri,
                     [_library.uriStr, source.uri]);
               }
@@ -710,14 +697,14 @@ class LibraryAnalyzer {
         unitElement: unitElement,
         errorListener: errorListener,
         featureSet: unit.featureSet,
-        nameScope: _libraryScope,
+        nameScope: _libraryElement.scope,
         elementWalker: ElementWalker.forCompilationUnit(unitElement),
       ),
     );
 
     unit.accept(VariableResolverVisitor(
         _libraryElement, source, _typeProvider, errorListener,
-        nameScope: _libraryScope));
+        nameScope: _libraryElement.scope));
 
     // Nothing for RESOLVED_UNIT8?
     // Nothing for RESOLVED_UNIT9?

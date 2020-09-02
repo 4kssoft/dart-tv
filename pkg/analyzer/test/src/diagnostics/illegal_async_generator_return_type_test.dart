@@ -5,7 +5,7 @@
 import 'package:analyzer/src/error/codes.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
-import '../dart/resolution/driver_resolution.dart';
+import '../dart/resolution/context_collection_resolution.dart';
 
 main() {
   defineReflectiveSuite(() {
@@ -14,12 +14,12 @@ main() {
 }
 
 @reflectiveTest
-class IllegalAsyncGeneratorReturnTypeTest extends DriverResolutionTest {
+class IllegalAsyncGeneratorReturnTypeTest extends PubPackageResolutionTest {
   test_function_nonStream() async {
     await assertErrorsInCode('''
 int f() async* {}
 ''', [
-      error(StaticTypeWarningCode.ILLEGAL_ASYNC_GENERATOR_RETURN_TYPE, 0, 3),
+      error(CompileTimeErrorCode.ILLEGAL_ASYNC_GENERATOR_RETURN_TYPE, 0, 3),
     ]);
   }
 
@@ -35,7 +35,7 @@ import 'dart:async';
 abstract class SubStream<T> implements Stream<T> {}
 SubStream<int> f() async* {}
 ''', [
-      error(StaticTypeWarningCode.ILLEGAL_ASYNC_GENERATOR_RETURN_TYPE, 73, 14),
+      error(CompileTimeErrorCode.ILLEGAL_ASYNC_GENERATOR_RETURN_TYPE, 73, 14),
     ]);
   }
 
@@ -43,7 +43,7 @@ SubStream<int> f() async* {}
     await assertErrorsInCode('''
 void f() async* {}
 ''', [
-      error(StaticTypeWarningCode.ILLEGAL_ASYNC_GENERATOR_RETURN_TYPE, 0, 4),
+      error(CompileTimeErrorCode.ILLEGAL_ASYNC_GENERATOR_RETURN_TYPE, 0, 4),
     ]);
   }
 
@@ -53,7 +53,7 @@ class C {
   int f() async* {}
 }
 ''', [
-      error(StaticTypeWarningCode.ILLEGAL_ASYNC_GENERATOR_RETURN_TYPE, 12, 3),
+      error(CompileTimeErrorCode.ILLEGAL_ASYNC_GENERATOR_RETURN_TYPE, 12, 3),
     ]);
   }
 
@@ -65,7 +65,7 @@ class C {
   SubStream<int> f() async* {}
 }
 ''', [
-      error(StaticTypeWarningCode.ILLEGAL_ASYNC_GENERATOR_RETURN_TYPE, 85, 14),
+      error(CompileTimeErrorCode.ILLEGAL_ASYNC_GENERATOR_RETURN_TYPE, 85, 14),
     ]);
   }
 
@@ -75,7 +75,7 @@ class C {
   void f() async* {}
 }
 ''', [
-      error(StaticTypeWarningCode.ILLEGAL_ASYNC_GENERATOR_RETURN_TYPE, 12, 4),
+      error(CompileTimeErrorCode.ILLEGAL_ASYNC_GENERATOR_RETURN_TYPE, 12, 4),
     ]);
   }
 }

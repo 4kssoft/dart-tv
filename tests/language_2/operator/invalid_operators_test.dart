@@ -670,4 +670,11 @@ class Operators7 {
   // [cfe] Types parameters aren't allowed when defining an operator.
 }
 
+class Operators8 {
+  /*space*/ int operator []=(a, b) {}
+  //        ^^^
+  // [analyzer] COMPILE_TIME_ERROR.NON_VOID_RETURN_FOR_OPERATOR
+  // [cfe] unspecified
+}
+
 main() {}

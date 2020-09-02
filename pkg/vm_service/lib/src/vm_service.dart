@@ -28,7 +28,7 @@ export 'snapshot_graph.dart'
         HeapSnapshotObjectNoData,
         HeapSnapshotObjectNullData;
 
-const String vmServiceVersion = '3.35.0';
+const String vmServiceVersion = '3.38.0';
 
 /// @optional
 const String optional = 'optional';
@@ -160,6 +160,8 @@ Map<String, Function> _typeFactories = {
   'ProfileFunction': ProfileFunction.parse,
   'ProtocolList': ProtocolList.parse,
   'Protocol': Protocol.parse,
+  'ProcessMemoryUsage': ProcessMemoryUsage.parse,
+  'ProcessMemoryItem': ProcessMemoryItem.parse,
   'ReloadReport': ReloadReport.parse,
   'RetainingObject': RetainingObject.parse,
   'RetainingPath': RetainingPath.parse,
@@ -184,6 +186,7 @@ Map<String, Function> _typeFactories = {
   'Version': Version.parse,
   '@VM': VMRef.parse,
   'VM': VM.parse,
+  'WebSocketTarget': WebSocketTarget.parse,
 };
 
 Map<String, List<String>> _methodReturnTypes = {
@@ -209,6 +212,7 @@ Map<String, List<String>> _methodReturnTypes = {
   'getScripts': const ['ScriptList'],
   'getObject': const ['Obj'],
   'getRetainingPath': const ['RetainingPath'],
+  'getProcessMemoryUsage': const ['ProcessMemoryUsage'],
   'getStack': const ['Stack'],
   'getSupportedProtocols': const ['ProtocolList'],
   'getSourceReport': const ['SourceReport'],
@@ -217,6 +221,7 @@ Map<String, List<String>> _methodReturnTypes = {
   'getVMTimeline': const ['Timeline'],
   'getVMTimelineFlags': const ['TimelineFlags'],
   'getVMTimelineMicros': const ['Timestamp'],
+  'getWebSocketTarget': const ['WebSocketTarget'],
   'pause': const ['Success'],
   'kill': const ['Success'],
   'registerService': const ['Success'],
@@ -722,6 +727,13 @@ abstract class VmServiceInterface {
   Future<RetainingPath> getRetainingPath(
       String isolateId, String targetId, int limit);
 
+  /// Returns a description of major uses of memory known to the VM.
+  ///
+  /// Adding or removing buckets is considered a backwards-compatible change for
+  /// the purposes of versioning. A client must gracefully handle the removal or
+  /// addition of any bucket.
+  Future<ProcessMemoryUsage> getProcessMemoryUsage();
+
   /// The `getStack` RPC is used to retrieve the current execution stack and
   /// message queue for an isolate. The isolate does not need to be paused.
   ///
@@ -841,6 +853,13 @@ abstract class VmServiceInterface {
   ///
   /// See [Timestamp] and [getVMTimeline].
   Future<Timestamp> getVMTimelineMicros();
+
+  /// The `getWebSocketTarget` RPC returns the web socket URI that should be
+  /// used by VM service clients with WebSocket implementations that do not
+  /// follow redirects (e.g., `dart:html`'s [WebSocket]).
+  ///
+  /// See [WebSocketTarget].
+  Future<WebSocketTarget> getWebSocketTarget();
 
   /// The `pause` RPC is used to interrupt a running isolate. The RPC enqueues
   /// the interrupt request and potentially returns before the isolate is
@@ -1147,6 +1166,20 @@ abstract class VmServiceInterface {
   Future<Success> streamListen(String streamId);
 }
 
+class _PendingServiceRequest {
+  Future<Map<String, Object>> get future => _completer.future;
+  final _completer = Completer<Map<String, Object>>();
+
+  final dynamic originalId;
+
+  _PendingServiceRequest(this.originalId);
+
+  void complete(Map<String, Object> response) {
+    response['id'] = originalId;
+    _completer.complete(response);
+  }
+}
+
 /// A Dart VM Service Protocol connection that delegates requests to a
 /// [VmServiceInterface] implementation.
 ///
@@ -1170,8 +1203,7 @@ class VmServerConnection {
   final _doneCompleter = Completer<Null>();
 
   /// Pending service extension requests to this client by id.
-  final _pendingServiceExtensionRequests =
-      <String, Completer<Map<String, Object>>>{};
+  final _pendingServiceExtensionRequests = <dynamic, _PendingServiceRequest>{};
 
   VmServerConnection(this._requestStream, this._responseSink,
       this._serviceExtensionRegistry, this._serviceImplementation) {
@@ -1193,21 +1225,19 @@ class VmServerConnection {
     // multiple clients ids.
     var newId = '${_nextServiceRequestId++}:$originalId';
     request['id'] = newId;
-    var responseCompleter = Completer<Map<String, Object>>();
-    _pendingServiceExtensionRequests[newId] = responseCompleter;
+    var pendingRequest = _PendingServiceRequest(originalId);
+    _pendingServiceExtensionRequests[newId] = pendingRequest;
     _responseSink.add(request);
-    return responseCompleter.future;
+    return pendingRequest.future;
   }
 
   void _delegateRequest(Map<String, Object> request) async {
     try {
-      var id = request['id'] as String;
+      var id = request['id'];
       // Check if this is actually a response to a pending request.
       if (_pendingServiceExtensionRequests.containsKey(id)) {
-        // Restore the original request ID.
-        var originalId = id.substring(id.indexOf(':') + 1);
-        _pendingServiceExtensionRequests[id]
-            .complete(Map.of(request)..['id'] = originalId);
+        final pending = _pendingServiceExtensionRequests[id];
+        pending.complete(Map.of(request));
         return;
       }
       var method = request['method'] as String;
@@ -1359,6 +1389,9 @@ class VmServerConnection {
             params['limit'],
           );
           break;
+        case 'getProcessMemoryUsage':
+          response = await _serviceImplementation.getProcessMemoryUsage();
+          break;
         case 'getStack':
           response = await _serviceImplementation.getStack(
             params['isolateId'],
@@ -1394,6 +1427,9 @@ class VmServerConnection {
           break;
         case 'getVMTimelineMicros':
           response = await _serviceImplementation.getVMTimelineMicros();
+          break;
+        case 'getWebSocketTarget':
+          response = await _serviceImplementation.getWebSocketTarget();
           break;
         case 'pause':
           response = await _serviceImplementation.pause(
@@ -1823,6 +1859,10 @@ class VmService implements VmServiceInterface {
           {'isolateId': isolateId, 'targetId': targetId, 'limit': limit});
 
   @override
+  Future<ProcessMemoryUsage> getProcessMemoryUsage() =>
+      _call('getProcessMemoryUsage');
+
+  @override
   Future<Stack> getStack(String isolateId) =>
       _call('getStack', {'isolateId': isolateId});
 
@@ -1868,6 +1908,9 @@ class VmService implements VmServiceInterface {
 
   @override
   Future<Timestamp> getVMTimelineMicros() => _call('getVMTimelineMicros');
+
+  @override
+  Future<WebSocketTarget> getWebSocketTarget() => _call('getWebSocketTarget');
 
   @override
   Future<Success> pause(String isolateId) =>
@@ -1973,7 +2016,7 @@ class VmService implements VmServiceInterface {
 
   /// Invoke a specific service protocol extension method.
   ///
-  /// See https://api.dartlang.org/stable/dart-developer/dart-developer-library.html.
+  /// See https://api.dart.dev/stable/dart-developer/dart-developer-library.html.
   @override
   Future<Response> callServiceExtension(String method,
       {String isolateId, Map args}) {
@@ -4772,16 +4815,22 @@ class IsolateRef extends Response {
   /// A name identifying this isolate. Not guaranteed to be unique.
   String name;
 
+  /// Specifies whether the isolate was spawned by the VM or embedder for
+  /// internal use. If `false`, this isolate is likely running user code.
+  bool isSystemIsolate;
+
   IsolateRef({
     @required this.id,
     @required this.number,
     @required this.name,
+    @required this.isSystemIsolate,
   });
 
   IsolateRef._fromJson(Map<String, dynamic> json) : super._fromJson(json) {
     id = json['id'];
     number = json['number'];
     name = json['name'];
+    isSystemIsolate = json['isSystemIsolate'];
   }
 
   @override
@@ -4792,6 +4841,7 @@ class IsolateRef extends Response {
       'id': id,
       'number': number,
       'name': name,
+      'isSystemIsolate': isSystemIsolate,
     });
     return json;
   }
@@ -4800,8 +4850,9 @@ class IsolateRef extends Response {
 
   operator ==(other) => other is IsolateRef && id == other.id;
 
-  String toString() =>
-      '[IsolateRef type: ${type}, id: ${id}, number: ${number}, name: ${name}]';
+  String toString() => '[IsolateRef ' //
+      'type: ${type}, id: ${id}, number: ${number}, name: ${name}, ' //
+      'isSystemIsolate: ${isSystemIsolate}]';
 }
 
 /// An `Isolate` object provides information about one isolate in the VM.
@@ -4817,6 +4868,10 @@ class Isolate extends Response implements IsolateRef {
 
   /// A name identifying this isolate. Not guaranteed to be unique.
   String name;
+
+  /// Specifies whether the isolate was spawned by the VM or embedder for
+  /// internal use. If `false`, this isolate is likely running user code.
+  bool isSystemIsolate;
 
   /// The time that the VM started in milliseconds since the epoch.
   ///
@@ -4866,6 +4921,7 @@ class Isolate extends Response implements IsolateRef {
     @required this.id,
     @required this.number,
     @required this.name,
+    @required this.isSystemIsolate,
     @required this.startTime,
     @required this.runnable,
     @required this.livePorts,
@@ -4883,6 +4939,7 @@ class Isolate extends Response implements IsolateRef {
     id = json['id'];
     number = json['number'];
     name = json['name'];
+    isSystemIsolate = json['isSystemIsolate'];
     startTime = json['startTime'];
     runnable = json['runnable'];
     livePorts = json['livePorts'];
@@ -4908,6 +4965,7 @@ class Isolate extends Response implements IsolateRef {
       'id': id,
       'number': number,
       'name': name,
+      'isSystemIsolate': isSystemIsolate,
       'startTime': startTime,
       'runnable': runnable,
       'livePorts': livePorts,
@@ -4946,16 +5004,22 @@ class IsolateGroupRef extends Response {
   /// A name identifying this isolate group. Not guaranteed to be unique.
   String name;
 
+  /// Specifies whether the isolate group was spawned by the VM or embedder for
+  /// internal use. If `false`, this isolate group is likely running user code.
+  bool isSystemIsolateGroup;
+
   IsolateGroupRef({
     @required this.id,
     @required this.number,
     @required this.name,
+    @required this.isSystemIsolateGroup,
   });
 
   IsolateGroupRef._fromJson(Map<String, dynamic> json) : super._fromJson(json) {
     id = json['id'];
     number = json['number'];
     name = json['name'];
+    isSystemIsolateGroup = json['isSystemIsolateGroup'];
   }
 
   @override
@@ -4966,6 +5030,7 @@ class IsolateGroupRef extends Response {
       'id': id,
       'number': number,
       'name': name,
+      'isSystemIsolateGroup': isSystemIsolateGroup,
     });
     return json;
   }
@@ -4974,8 +5039,9 @@ class IsolateGroupRef extends Response {
 
   operator ==(other) => other is IsolateGroupRef && id == other.id;
 
-  String toString() =>
-      '[IsolateGroupRef type: ${type}, id: ${id}, number: ${number}, name: ${name}]';
+  String toString() => '[IsolateGroupRef ' //
+      'type: ${type}, id: ${id}, number: ${number}, name: ${name}, ' //
+      'isSystemIsolateGroup: ${isSystemIsolateGroup}]';
 }
 
 /// An `Isolate` object provides information about one isolate in the VM.
@@ -4992,6 +5058,10 @@ class IsolateGroup extends Response implements IsolateGroupRef {
   /// A name identifying this isolate. Not guaranteed to be unique.
   String name;
 
+  /// Specifies whether the isolate group was spawned by the VM or embedder for
+  /// internal use. If `false`, this isolate group is likely running user code.
+  bool isSystemIsolateGroup;
+
   /// A list of all isolates in this isolate group.
   List<IsolateRef> isolates;
 
@@ -4999,6 +5069,7 @@ class IsolateGroup extends Response implements IsolateGroupRef {
     @required this.id,
     @required this.number,
     @required this.name,
+    @required this.isSystemIsolateGroup,
     @required this.isolates,
   });
 
@@ -5006,6 +5077,7 @@ class IsolateGroup extends Response implements IsolateGroupRef {
     id = json['id'];
     number = json['number'];
     name = json['name'];
+    isSystemIsolateGroup = json['isSystemIsolateGroup'];
     isolates = List<IsolateRef>.from(
         createServiceObject(json['isolates'], const ['IsolateRef']) ?? []);
   }
@@ -5018,6 +5090,7 @@ class IsolateGroup extends Response implements IsolateGroupRef {
       'id': id,
       'number': number,
       'name': name,
+      'isSystemIsolateGroup': isSystemIsolateGroup,
       'isolates': isolates.map((f) => f.toJson()).toList(),
     });
     return json;
@@ -5029,7 +5102,7 @@ class IsolateGroup extends Response implements IsolateGroupRef {
 
   String toString() => '[IsolateGroup ' //
       'type: ${type}, id: ${id}, number: ${number}, name: ${name}, ' //
-      'isolates: ${isolates}]';
+      'isSystemIsolateGroup: ${isSystemIsolateGroup}, isolates: ${isolates}]';
 }
 
 /// See [getInboundReferences].
@@ -5430,10 +5503,11 @@ class MemoryUsage extends Response {
 
   /// The amount of non-Dart memory that is retained by Dart objects. For
   /// example, memory associated with Dart objects through APIs such as
-  /// Dart_NewWeakPersistentHandle and Dart_NewExternalTypedData.  This usage is
-  /// only as accurate as the values supplied to these APIs from the VM embedder
-  /// or native extensions. This external memory applies GC pressure, but is
-  /// separate from heapUsage and heapCapacity.
+  /// Dart_NewFinalizableHandle, Dart_NewWeakPersistentHandle and
+  /// Dart_NewExternalTypedData.  This usage is only as accurate as the values
+  /// supplied to these APIs from the VM embedder or native extensions. This
+  /// external memory applies GC pressure, but is separate from heapUsage and
+  /// heapCapacity.
   int externalUsage;
 
   /// The total capacity of the heap in bytes. This is the amount of memory used
@@ -5882,6 +5956,84 @@ class Protocol {
 
   String toString() => '[Protocol ' //
       'protocolName: ${protocolName}, major: ${major}, minor: ${minor}]';
+}
+
+/// Set [getProcessMemoryUsage].
+class ProcessMemoryUsage extends Response {
+  static ProcessMemoryUsage parse(Map<String, dynamic> json) =>
+      json == null ? null : ProcessMemoryUsage._fromJson(json);
+
+  ProcessMemoryItem root;
+
+  ProcessMemoryUsage({
+    @required this.root,
+  });
+
+  ProcessMemoryUsage._fromJson(Map<String, dynamic> json)
+      : super._fromJson(json) {
+    root = createServiceObject(json['root'], const ['ProcessMemoryItem']);
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    var json = <String, dynamic>{};
+    json['type'] = 'ProcessMemoryUsage';
+    json.addAll({
+      'root': root.toJson(),
+    });
+    return json;
+  }
+
+  String toString() => '[ProcessMemoryUsage type: ${type}, root: ${root}]';
+}
+
+class ProcessMemoryItem {
+  static ProcessMemoryItem parse(Map<String, dynamic> json) =>
+      json == null ? null : ProcessMemoryItem._fromJson(json);
+
+  /// A short name for this bucket of memory.
+  String name;
+
+  /// A longer description for this item.
+  String description;
+
+  /// The amount of memory in bytes. This is a retained size, not a shallow
+  /// size. That is, it includes the size of children.
+  int size;
+
+  /// Subdivisons of this bucket of memory.
+  List<ProcessMemoryItem> children;
+
+  ProcessMemoryItem({
+    @required this.name,
+    @required this.description,
+    @required this.size,
+    @required this.children,
+  });
+
+  ProcessMemoryItem._fromJson(Map<String, dynamic> json) {
+    name = json['name'];
+    description = json['description'];
+    size = json['size'];
+    children = List<ProcessMemoryItem>.from(
+        createServiceObject(json['children'], const ['ProcessMemoryItem']) ??
+            []);
+  }
+
+  Map<String, dynamic> toJson() {
+    var json = <String, dynamic>{};
+    json.addAll({
+      'name': name,
+      'description': description,
+      'size': size,
+      'children': children.map((f) => f.toJson()).toList(),
+    });
+    return json;
+  }
+
+  String toString() => '[ProcessMemoryItem ' //
+      'name: ${name}, description: ${description}, size: ${size}, ' //
+      'children: ${children}]';
 }
 
 class ReloadReport extends Response {
@@ -6952,6 +7104,12 @@ class VM extends Response implements VMRef {
   /// A list of isolate groups running in the VM.
   List<IsolateGroupRef> isolateGroups;
 
+  /// A list of system isolates running in the VM.
+  List<IsolateRef> systemIsolates;
+
+  /// A list of isolate groups which contain system isolates running in the VM.
+  List<IsolateGroupRef> systemIsolateGroups;
+
   VM({
     @required this.name,
     @required this.architectureBits,
@@ -6963,6 +7121,8 @@ class VM extends Response implements VMRef {
     @required this.startTime,
     @required this.isolates,
     @required this.isolateGroups,
+    @required this.systemIsolates,
+    @required this.systemIsolateGroups,
   });
 
   VM._fromJson(Map<String, dynamic> json) : super._fromJson(json) {
@@ -6979,6 +7139,12 @@ class VM extends Response implements VMRef {
     isolateGroups = List<IsolateGroupRef>.from(
         createServiceObject(json['isolateGroups'], const ['IsolateGroupRef']) ??
             []);
+    systemIsolates = List<IsolateRef>.from(
+        createServiceObject(json['systemIsolates'], const ['IsolateRef']) ??
+            []);
+    systemIsolateGroups = List<IsolateGroupRef>.from(createServiceObject(
+            json['systemIsolateGroups'], const ['IsolateGroupRef']) ??
+        []);
   }
 
   @override
@@ -6996,9 +7162,41 @@ class VM extends Response implements VMRef {
       'startTime': startTime,
       'isolates': isolates.map((f) => f.toJson()).toList(),
       'isolateGroups': isolateGroups.map((f) => f.toJson()).toList(),
+      'systemIsolates': systemIsolates.map((f) => f.toJson()).toList(),
+      'systemIsolateGroups':
+          systemIsolateGroups.map((f) => f.toJson()).toList(),
     });
     return json;
   }
 
   String toString() => '[VM]';
+}
+
+/// See [getWebSocketTarget]
+class WebSocketTarget extends Response {
+  static WebSocketTarget parse(Map<String, dynamic> json) =>
+      json == null ? null : WebSocketTarget._fromJson(json);
+
+  /// The web socket URI that should be used to connect to the service.
+  String uri;
+
+  WebSocketTarget({
+    @required this.uri,
+  });
+
+  WebSocketTarget._fromJson(Map<String, dynamic> json) : super._fromJson(json) {
+    uri = json['uri'];
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    var json = <String, dynamic>{};
+    json['type'] = 'WebSocketTarget';
+    json.addAll({
+      'uri': uri,
+    });
+    return json;
+  }
+
+  String toString() => '[WebSocketTarget type: ${type}, uri: ${uri}]';
 }

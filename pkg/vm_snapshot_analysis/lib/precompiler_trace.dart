@@ -5,17 +5,14 @@
 /// Helpers for working with the output of `--trace-precompiler-to` VM flag.
 library vm_snapshot_analysis.precompiler_trace;
 
-import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:vm_snapshot_analysis/name.dart';
 import 'package:vm_snapshot_analysis/program_info.dart';
-import 'package:vm_snapshot_analysis/utils.dart';
 
 /// Build [CallGraph] based on the trace written by `--trace-precompiler-to`
 /// flag.
-Future<CallGraph> loadTrace(File input) async =>
-    _TraceReader(await loadJson(input)).readTrace();
+CallGraph loadTrace(Object inputJson) => _TraceReader(inputJson).readTrace();
 
 /// [CallGraphNode] represents a node of the call-graph. It can either be:
 ///
@@ -125,8 +122,17 @@ class CallGraph {
     final nodeByEntityId = <CallGraphNode>[];
 
     ProgramInfoNode collapsed(ProgramInfoNode nn) {
+      // Root always collapses onto itself.
+      if (nn == program.root) {
+        return nn;
+      }
+
+      // Even though all code is grouped into libraries, not all libraries
+      // are grouped into packages (e.g. dart:* libraries). Meaning
+      // that if we are collapsing by package we need to stop right before
+      // hitting the root node.
       var n = nn;
-      while (n.parent != null && n.type != type) {
+      while (n.parent != program.root && n.type != type) {
         n = n.parent;
       }
       return n;
@@ -439,10 +445,11 @@ class _TraceReader {
             callNodesBySelector[targetName]?.connectTo(funNode);
             callNodesBySelector['$dynPrefix$targetName']?.connectTo(funNode);
           } else if (name.startsWith(extractorPrefix)) {
-            // Handle method tear-off: [tear-off-extractor] get:foo is hit
-            // by get:foo.
-            callNodesBySelector[name.substring(extractorPrefix.length)]
-                ?.connectTo(funNode);
+            // Handle method tear-off: [tear-off-extractor] get:foo can be hit
+            // by dyn:get:foo and get:foo.
+            final targetName = name.substring(extractorPrefix.length);
+            callNodesBySelector[targetName]?.connectTo(funNode);
+            callNodesBySelector['$dynPrefix$targetName']?.connectTo(funNode);
           }
         }
       }

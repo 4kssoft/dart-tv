@@ -21,6 +21,15 @@ class DecoratedTypeOperations
       this._typeSystem, this._variableRepository, this._graph);
 
   @override
+  TypeClassification classifyType(DecoratedType type) {
+    if (type.type.isDartCoreNull) {
+      return TypeClassification.nullOrEquivalent;
+    } else {
+      return TypeClassification.potentiallyNullable;
+    }
+  }
+
+  @override
   DecoratedType factor(DecoratedType from, DecoratedType what) {
     // TODO(scheglov): https://github.com/dart-lang/sdk/issues/41672
     return from;
@@ -54,6 +63,11 @@ class DecoratedTypeOperations
     return variable is LocalVariableElement &&
         variable.hasImplicitType &&
         variable.initializer == null;
+  }
+
+  @override
+  bool isNever(DecoratedType type) {
+    return false;
   }
 
   @override

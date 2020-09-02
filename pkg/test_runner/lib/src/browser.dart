@@ -54,7 +54,7 @@ String pathToJSIdentifier(String path) {
 
 /// Escape [name] to make it into a valid identifier.
 String _toJSIdentifier(String name) {
-  if (name.length == 0) return r'$';
+  if (name.isEmpty) return r'$';
 
   // Escape any invalid characters
   StringBuffer buffer;
@@ -152,11 +152,10 @@ String dartdevcHtml(String testName, String testNameAlias, String testJSDir,
     Compiler compiler, NnbdMode mode, bool nonNullAsserts) {
   var testId = pathToJSIdentifier(testName);
   var testIdAlias = pathToJSIdentifier(testNameAlias);
-  var isKernel = compiler == Compiler.dartdevk;
   var isNnbd = mode != NnbdMode.legacy;
   var isNnbdStrong = mode == NnbdMode.strong;
-  var sdkPath = isKernel ? 'kernel/amd/dart_sdk' : 'js/amd/dart_sdk';
-  var pkgDir = isKernel ? 'pkg_kernel' : 'pkg';
+  var sdkPath = isNnbdStrong ? 'sound/amd/dart_sdk' : 'kernel/amd/dart_sdk';
+  var pkgDir = isNnbdStrong ? 'pkg_sound' : 'pkg_kernel';
   var packagePaths = testPackages
       .map((p) => '    "$p": "/root_build/gen/utils/dartdevc/$pkgDir/$p",')
       .join("\n");
@@ -234,7 +233,6 @@ requirejs(["$testName", "dart_sdk", "async_helper"],
   };
 
   if ($isNnbd) {
-    sdk.dart.nullSafety($isNnbdStrong);
     sdk.dart.weakNullSafetyWarnings(!$isNnbdStrong);
     sdk.dart.nonNullAsserts($nonNullAsserts);
   }

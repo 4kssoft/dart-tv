@@ -71,7 +71,7 @@ REUSABLE_HANDLE_LIST(REUSABLE_FORWARD_DECLARATION)
 #undef REUSABLE_FORWARD_DECLARATION
 
 class Symbols;
-class ZoneTextBuffer;
+class BaseTextBuffer;
 
 #if defined(DEBUG)
 #define CHECK_HANDLE() CheckHandle();
@@ -449,6 +449,7 @@ class Object {
   V(LanguageError, branch_offset_error)                                        \
   V(LanguageError, speculative_inlining_error)                                 \
   V(LanguageError, background_compilation_error)                               \
+  V(LanguageError, out_of_memory_error)                                        \
   V(Array, vm_isolate_snapshot_object_table)                                   \
   V(Type, dynamic_type)                                                        \
   V(Type, void_type)                                                           \
@@ -899,6 +900,7 @@ enum class Nullability : int8_t {
   kNullable = 0,
   kNonNullable = 1,
   kLegacy = 2,
+  // Adjust kNullabilityBitSize in clustered_snapshot.cc if adding new values.
 };
 
 // Equality kind between types.
@@ -1371,9 +1373,17 @@ class Class : public Object {
 
   bool is_finalized() const {
     return ClassFinalizedBits::decode(raw_ptr()->state_bits_) ==
-           ClassLayout::kFinalized;
+               ClassLayout::kFinalized ||
+           ClassFinalizedBits::decode(raw_ptr()->state_bits_) ==
+               ClassLayout::kAllocateFinalized;
   }
   void set_is_finalized() const;
+
+  bool is_allocate_finalized() const {
+    return ClassFinalizedBits::decode(raw_ptr()->state_bits_) ==
+           ClassLayout::kAllocateFinalized;
+  }
+  void set_is_allocate_finalized() const;
 
   bool is_prefinalized() const {
     return ClassFinalizedBits::decode(raw_ptr()->state_bits_) ==
@@ -1528,6 +1538,7 @@ class Class : public Object {
   void EnsureDeclarationLoaded() const;
 
   ErrorPtr EnsureIsFinalized(Thread* thread) const;
+  ErrorPtr EnsureIsAllocateFinalized(Thread* thread) const;
 
   // Allocate a class used for VM internal objects.
   template <class FakeObject, class TargetFakeObject>
@@ -1764,6 +1775,7 @@ class Class : public Object {
   friend class InterpreterHelpers;
   friend class Intrinsifier;
   friend class ProgramWalker;
+  friend class Precompiler;
 };
 
 // Classification of type genericity according to type parameter owners.
@@ -2391,10 +2403,10 @@ class ICData : public CallSiteData {
   friend class CallSiteResetter;
   friend class CallTargets;
   friend class Class;
-  friend class Deserializer;
+  friend class VMDeserializationRoots;
   friend class ICDataTestTask;
   friend class Interpreter;
-  friend class Serializer;
+  friend class VMSerializationRoots;
   friend class SnapshotWriter;
 };
 
@@ -2467,7 +2479,7 @@ class Function : public Object {
   const char* NameCString(NameVisibility name_visibility) const;
 
   void PrintName(const NameFormattingParams& params,
-                 ZoneTextBuffer* printer) const;
+                 BaseTextBuffer* printer) const;
   StringPtr QualifiedScrubbedName() const;
   StringPtr QualifiedUserVisibleName() const;
 
@@ -2541,7 +2553,7 @@ class Function : public Object {
   StringPtr UserVisibleSignature() const;
 
   void PrintSignature(NameVisibility name_visibility,
-                      ZoneTextBuffer* printer) const;
+                      BaseTextBuffer* printer) const;
 
   // Returns true if the signature of this function is instantiated, i.e. if it
   // does not involve generic parameter types or generic result type.
@@ -2583,6 +2595,9 @@ class Function : public Object {
   void SetParameterTypeAt(intptr_t index, const AbstractType& value) const;
   ArrayPtr parameter_types() const { return raw_ptr()->parameter_types_; }
   void set_parameter_types(const Array& value) const;
+  static intptr_t parameter_types_offset() {
+    return OFFSET_OF(FunctionLayout, parameter_types_);
+  }
 
   // Parameter names are valid for all valid parameter indices, and are not
   // limited to named optional parameters. If there are parameter flags (eg
@@ -2593,6 +2608,9 @@ class Function : public Object {
   void SetParameterNameAt(intptr_t index, const String& value) const;
   ArrayPtr parameter_names() const { return raw_ptr()->parameter_names_; }
   void set_parameter_names(const Array& value) const;
+  static intptr_t parameter_names_offset() {
+    return OFFSET_OF(FunctionLayout, parameter_names_);
+  }
 
   // The required flags are stored at the end of the parameter_names. The flags
   // are packed into SMIs, but omitted if they're 0.
@@ -2614,6 +2632,9 @@ class Function : public Object {
     return raw_ptr()->type_parameters_;
   }
   void set_type_parameters(const TypeArguments& value) const;
+  static intptr_t type_parameters_offset() {
+    return OFFSET_OF(FunctionLayout, type_parameters_);
+  }
   intptr_t NumTypeParameters(Thread* thread) const;
   intptr_t NumTypeParameters() const {
     return NumTypeParameters(Thread::Current());
@@ -2734,6 +2755,11 @@ class Function : public Object {
   // Enclosing function of this local function.
   FunctionPtr parent_function() const;
 
+  // Enclosed generated closure function of this local function.
+  // This will only work after the closure function has been allocated in the
+  // isolate's object_store.
+  FunctionPtr GetGeneratedClosure() const;
+
   // Enclosing outermost function of this local function.
   FunctionPtr GetOutermostFunction() const;
 
@@ -2746,6 +2772,10 @@ class Function : public Object {
   void set_accessor_field(const Field& value) const;
   FieldPtr accessor_field() const;
 
+  bool IsRegularFunction() const {
+    return kind() == FunctionLayout::kRegularFunction;
+  }
+
   bool IsMethodExtractor() const {
     return kind() == FunctionLayout::kMethodExtractor;
   }
@@ -2757,6 +2787,20 @@ class Function : public Object {
   bool IsInvokeFieldDispatcher() const {
     return kind() == FunctionLayout::kInvokeFieldDispatcher;
   }
+
+  bool IsDynamicInvokeFieldDispatcher() const {
+    return IsInvokeFieldDispatcher() &&
+           IsDynamicInvocationForwarderName(name());
+  }
+
+  // Performs all the checks that don't require the current thread first, to
+  // avoid retrieving it unless they all pass. If you have a handle on the
+  // current thread, call the version that takes one instead.
+  bool IsDynamicClosureCallDispatcher() const {
+    if (!IsDynamicInvokeFieldDispatcher()) return false;
+    return IsDynamicClosureCallDispatcher(Thread::Current());
+  }
+  bool IsDynamicClosureCallDispatcher(Thread* thread) const;
 
   bool IsDynamicInvocationForwarder() const {
     return kind() == FunctionLayout::kDynamicInvocationForwarder;
@@ -2785,6 +2829,10 @@ class Function : public Object {
   InstancePtr ImplicitStaticClosure() const;
 
   InstancePtr ImplicitInstanceClosure(const Instance& receiver) const;
+
+  // Returns the target of the implicit closure or null if the target is now
+  // invalid (e.g., mismatched argument shapes after a reload).
+  FunctionPtr ImplicitClosureTarget(Zone* zone) const;
 
   intptr_t ComputeClosureHash() const;
 
@@ -2821,10 +2869,14 @@ class Function : public Object {
     return (kind() == FunctionLayout::kConstructor) && is_static();
   }
 
+  static bool ClosureBodiesContainNonCovariantChecks() {
+    return FLAG_precompiled_mode || FLAG_lazy_dispatchers;
+  }
+
   // Whether this function can receive an invocation where the number and names
   // of arguments have not been checked.
   bool CanReceiveDynamicInvocation() const {
-    return IsClosureFunction() || IsFfiTrampoline();
+    return IsFfiTrampoline() || IsDynamicClosureCallDispatcher();
   }
 
   bool HasThisParameter() const {
@@ -2891,11 +2943,12 @@ class Function : public Object {
   bool IsInFactoryScope() const;
 
   bool NeedsArgumentTypeChecks() const {
-    return IsClosureFunction() ||
+    return (IsClosureFunction() && ClosureBodiesContainNonCovariantChecks()) ||
            !(is_static() || (kind() == FunctionLayout::kConstructor));
   }
 
   bool NeedsMonomorphicCheckedEntry(Zone* zone) const;
+  bool HasDynamicCallers(Zone* zone) const;
   bool PrologueNeedsArgumentsDescriptor() const;
 
   bool MayHaveUncheckedEntryPoint() const;
@@ -2932,22 +2985,28 @@ class Function : public Object {
 
   uint32_t packed_fields() const { return raw_ptr()->packed_fields_; }
   void set_packed_fields(uint32_t packed_fields) const;
+  static intptr_t packed_fields_offset() {
+    return OFFSET_OF(FunctionLayout, packed_fields_);
+  }
+  // Reexported so they can be used by the flow graph builders.
+  using PackedHasNamedOptionalParameters =
+      FunctionLayout::PackedHasNamedOptionalParameters;
+  using PackedNumFixedParameters = FunctionLayout::PackedNumFixedParameters;
+  using PackedNumOptionalParameters =
+      FunctionLayout::PackedNumOptionalParameters;
 
   bool HasOptionalParameters() const {
-    return FunctionLayout::PackedNumOptionalParameters::decode(
-               raw_ptr()->packed_fields_) > 0;
+    return PackedNumOptionalParameters::decode(raw_ptr()->packed_fields_) > 0;
   }
   bool HasOptionalNamedParameters() const {
     return HasOptionalParameters() &&
-           FunctionLayout::PackedHasNamedOptionalParameters::decode(
-               raw_ptr()->packed_fields_);
+           PackedHasNamedOptionalParameters::decode(raw_ptr()->packed_fields_);
   }
   bool HasOptionalPositionalParameters() const {
     return HasOptionalParameters() && !HasOptionalNamedParameters();
   }
   intptr_t NumOptionalParameters() const {
-    return FunctionLayout::PackedNumOptionalParameters::decode(
-        raw_ptr()->packed_fields_);
+    return PackedNumOptionalParameters::decode(raw_ptr()->packed_fields_);
   }
   void SetNumOptionalParameters(intptr_t num_optional_parameters,
                                 bool are_optional_positional) const;
@@ -3116,11 +3175,51 @@ class Function : public Object {
                               String* error_message) const;
 
   // Returns a TypeError if the provided arguments don't match the function
-  // parameter types, NULL otherwise. Assumes AreValidArguments is called first.
+  // parameter types, null otherwise. Assumes AreValidArguments is called first.
+  //
+  // If the function has a non-null receiver in the arguments, the instantiator
+  // type arguments are retrieved from the receiver, otherwise the null type
+  // arguments vector is used.
+  //
+  // If the function is generic, the appropriate function type arguments are
+  // retrieved either from the arguments array or the receiver (if a closure).
+  // If no function type arguments are available in either location, the bounds
+  // of the function type parameters are instantiated and used as the function
+  // type arguments.
+  //
+  // The local function type arguments (_not_ parent function type arguments)
+  // are also checked against the bounds of the corresponding parameters to
+  // ensure they are appropriate subtypes if the function is generic.
+  ObjectPtr DoArgumentTypesMatch(const Array& args,
+                                 const ArgumentsDescriptor& arg_names) const;
+
+  // Returns a TypeError if the provided arguments don't match the function
+  // parameter types, null otherwise. Assumes AreValidArguments is called first.
+  //
+  // If the function is generic, the appropriate function type arguments are
+  // retrieved either from the arguments array or the receiver (if a closure).
+  // If no function type arguments are available in either location, the bounds
+  // of the function type parameters are instantiated and used as the function
+  // type arguments.
+  //
+  // The local function type arguments (_not_ parent function type arguments)
+  // are also checked against the bounds of the corresponding parameters to
+  // ensure they are appropriate subtypes if the function is generic.
   ObjectPtr DoArgumentTypesMatch(
       const Array& args,
       const ArgumentsDescriptor& arg_names,
       const TypeArguments& instantiator_type_args) const;
+
+  // Returns a TypeError if the provided arguments don't match the function
+  // parameter types, null otherwise. Assumes AreValidArguments is called first.
+  //
+  // The local function type arguments (_not_ parent function type arguments)
+  // are also checked against the bounds of the corresponding parameters to
+  // ensure they are appropriate subtypes if the function is generic.
+  ObjectPtr DoArgumentTypesMatch(const Array& args,
+                                 const ArgumentsDescriptor& arg_names,
+                                 const TypeArguments& instantiator_type_args,
+                                 const TypeArguments& function_type_args) const;
 
   // Returns true if the type argument count, total argument count and the names
   // of optional arguments are valid for calling this function.
@@ -3252,6 +3351,15 @@ class Function : public Object {
 #endif  //  !defined(DART_PRECOMPILED_RUNTIME)
   }
 
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  bool HasUnboxedParameters() const {
+    return raw_ptr()->unboxed_parameters_info_.HasUnboxedParameters();
+  }
+  bool HasUnboxedReturnValue() const {
+    return raw_ptr()->unboxed_parameters_info_.HasUnboxedReturnValue();
+  }
+#endif  //  !defined(DART_PRECOMPILED_RUNTIME)
+
   // Returns true if the type of this function is a subtype of the type of
   // the other function.
   bool IsSubtypeOf(const Function& other, Heap::Space space) const;
@@ -3278,6 +3386,12 @@ class Function : public Object {
   // Returns true if this function represents an implicit getter function.
   bool IsImplicitGetterFunction() const {
     return kind() == FunctionLayout::kImplicitGetter;
+  }
+
+  // Returns true if this function represents an implicit static getter
+  // function.
+  bool IsImplicitStaticGetterFunction() const {
+    return kind() == FunctionLayout::kImplicitStaticGetter;
   }
 
   // Returns true if this function represents an explicit setter function.
@@ -3503,9 +3617,9 @@ class Function : public Object {
 
   static StringPtr DemangleDynamicInvocationForwarderName(const String& name);
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
   static StringPtr CreateDynamicInvocationForwarderName(const String& name);
 
+#if !defined(DART_PRECOMPILED_RUNTIME)
   FunctionPtr CreateDynamicInvocationForwarder(
       const String& mangled_name) const;
 
@@ -3716,7 +3830,7 @@ class Function : public Object {
   void PrintSignatureParameters(Thread* thread,
                                 Zone* zone,
                                 NameVisibility name_visibility,
-                                ZoneTextBuffer* printer) const;
+                                BaseTextBuffer* printer) const;
 
   // Returns true if the type of the formal parameter at the given position in
   // this function is contravariant with the type of the other formal parameter
@@ -3880,6 +3994,10 @@ class Field : public Object {
     NoSafepointScope no_safepoint;
     return !raw_ptr()->owner_->IsField();
   }
+
+  // Returns whether fields must be cloned via [CloneFromOriginal] for the
+  // current compilation thread.
+  static bool ShouldCloneFields();
 
   // Returns a field cloned from 'this'. 'this' is set as the
   // original field of result.
@@ -5212,14 +5330,17 @@ class ObjectPool : public Object {
   };
 
   EntryType TypeAt(intptr_t index) const {
+    ASSERT((index >= 0) && (index <= Length()));
     return TypeBits::decode(raw_ptr()->entry_bits()[index]);
   }
 
   Patchability PatchableAt(intptr_t index) const {
+    ASSERT((index >= 0) && (index <= Length()));
     return PatchableBit::decode(raw_ptr()->entry_bits()[index]);
   }
 
   void SetTypeAt(intptr_t index, EntryType type, Patchability patchable) const {
+    ASSERT(index >= 0 && index <= Length());
     const uint8_t bits =
         PatchableBit::encode(patchable) | TypeBits::encode(type);
     StoreNonPointer(&raw_ptr()->entry_bits()[index], bits);
@@ -5279,8 +5400,13 @@ class ObjectPool : public Object {
   static intptr_t IndexFromOffset(intptr_t offset) {
     ASSERT(
         Utils::IsAligned(offset + kHeapObjectTag, compiler::target::kWordSize));
-    return (offset + kHeapObjectTag - data_offset()) /
-           sizeof(ObjectPoolLayout::Entry);
+#if defined(DART_PRECOMPILER)
+    return (offset + kHeapObjectTag -
+            compiler::target::ObjectPool::element_offset(0)) /
+           compiler::target::kWordSize;
+#else
+    return (offset + kHeapObjectTag - element_offset(0)) / kWordSize;
+#endif
   }
 
   static intptr_t OffsetFromIndex(intptr_t index) {
@@ -5408,6 +5534,10 @@ class Instructions : public Object {
     if (Size(a) != Size(b)) return false;
     NoSafepointScope no_safepoint;
     return memcmp(a->ptr(), b->ptr(), InstanceSize(Size(a))) == 0;
+  }
+
+  uint32_t Hash() const {
+    return HashBytes(reinterpret_cast<const uint8_t*>(PayloadStart()), Size());
   }
 
   CodeStatistics* stats() const;
@@ -6717,7 +6847,10 @@ class Context : public Object {
   static const intptr_t kAwaitJumpVarIndex = 0;
   static const intptr_t kAsyncCompleterIndex = 1;
   static const intptr_t kControllerIndex = 1;
-  static const intptr_t kChainedFutureIndex = 2;
+  // Expected context index of chained futures in recognized async functions.
+  // These are used to unwind async stacks.
+  static const intptr_t kFutureTimeoutFutureIndex = 2;
+  static const intptr_t kFutureWaitFutureIndex = 2;
 
   static intptr_t variable_offset(intptr_t context_index) {
     return OFFSET_OF_RETURNED_VALUE(ContextLayout, data) +
@@ -6971,14 +7104,15 @@ class SubtypeTestCache : public Object {
 
   FINAL_HEAP_OBJECT_IMPLEMENTATION(SubtypeTestCache, Object);
   friend class Class;
-  friend class Serializer;
-  friend class Deserializer;
+  friend class VMSerializationRoots;
+  friend class VMDeserializationRoots;
 };
 
 class LoadingUnit : public Object {
  public:
-  static const intptr_t kIllegalId = 0;
-  static const intptr_t kRootId = 1;
+  static constexpr intptr_t kIllegalId = 0;
+  COMPILE_ASSERT(kIllegalId == WeakTable::kNoValue);
+  static constexpr intptr_t kRootId = 1;
 
   static LoadingUnitPtr New();
 
@@ -6993,17 +7127,23 @@ class LoadingUnit : public Object {
   void set_base_objects(const Array& value) const;
 
   intptr_t id() const { return raw_ptr()->id_; }
-  void set_id(intptr_t id) { StoreNonPointer(&raw_ptr()->id_, id); }
+  void set_id(intptr_t id) const { StoreNonPointer(&raw_ptr()->id_, id); }
 
   // True once the VM deserializes this unit's snapshot.
   bool loaded() const { return raw_ptr()->loaded_; }
-  void set_loaded(bool value) { StoreNonPointer(&raw_ptr()->loaded_, value); }
-
-  // True once the VM invokes the embedder's deferred load callback.
-  bool load_issued() const { return raw_ptr()->load_issued_; }
-  void set_load_issued(bool value) {
-    StoreNonPointer(&raw_ptr()->load_issued_, value);
+  void set_loaded(bool value) const {
+    StoreNonPointer(&raw_ptr()->loaded_, value);
   }
+
+  // True once the VM invokes the embedder's deferred load callback until the
+  // embedder calls Dart_DeferredLoadComplete[Error].
+  bool load_outstanding() const { return raw_ptr()->load_outstanding_; }
+  void set_load_outstanding(bool value) const {
+    StoreNonPointer(&raw_ptr()->load_outstanding_, value);
+  }
+
+  ObjectPtr IssueLoad() const;
+  void CompleteLoad(const String& error_message, bool transient_error) const;
 
  private:
   FINAL_HEAP_OBJECT_IMPLEMENTATION(LoadingUnit, Object);
@@ -7426,6 +7566,9 @@ class TypeArguments : public Instance {
   // architecture.
   static const intptr_t kHashBits = 30;
 
+  // Hash value for a type argument vector consisting solely of dynamic types.
+  static const intptr_t kAllDynamicHash = 1;
+
   intptr_t Length() const;
   AbstractTypePtr TypeAt(intptr_t index) const;
   AbstractTypePtr TypeAtNullSafe(intptr_t index) const;
@@ -7481,7 +7624,7 @@ class TypeArguments : public Instance {
       intptr_t from_index,
       intptr_t len,
       NameVisibility name_visibility,
-      ZoneTextBuffer* printer,
+      BaseTextBuffer* printer,
       NameDisambiguation name_disambiguation = NameDisambiguation::kNo) const;
 
   // Check if the subvector of length 'len' starting at 'from_index' of this
@@ -7640,6 +7783,7 @@ class TypeArguments : public Instance {
     return 0;
   }
   intptr_t Hash() const;
+  intptr_t HashForRange(intptr_t from_index, intptr_t len) const;
 
   static TypeArgumentsPtr New(intptr_t len, Heap::Space space = Heap::kOld);
 
@@ -7808,7 +7952,7 @@ class AbstractType : public Instance {
   // type arguments, if any.
   void PrintName(
       NameVisibility visibility,
-      ZoneTextBuffer* printer,
+      BaseTextBuffer* printer,
       NameDisambiguation name_disambiguation = NameDisambiguation::kNo) const;
 
   // Add the class name and URI of each occuring type to the uris
@@ -7894,6 +8038,11 @@ class AbstractType : public Instance {
   // Returns the type argument of this (possibly nested) 'FutureOr' type.
   // Returns unmodified type if this type is not a 'FutureOr' type.
   AbstractTypePtr UnwrapFutureOr() const;
+
+  // Returns true if catching this type will catch all exceptions.
+  // Exception objects are guaranteed to be non-nullable, so
+  // non-nullable Object is also a catch-all type.
+  bool IsCatchAllType() const { return IsDynamicType() || IsObjectType(); }
 
   // Check the subtype relationship.
   bool IsSubtypeOf(const AbstractType& other,
@@ -9004,11 +9153,6 @@ class OneByteString : public AllStatic {
                                              intptr_t length,
                                              Heap::Space space);
 
-  static void SetPeer(const String& str,
-                      void* peer,
-                      intptr_t external_allocation_size,
-                      Dart_WeakPersistentHandleFinalizer callback);
-
   static const ClassId kClassId = kOneByteStringCid;
 
   static OneByteStringPtr null() {
@@ -9132,11 +9276,6 @@ class TwoByteString : public AllStatic {
   static TwoByteStringPtr Transform(int32_t (*mapping)(int32_t ch),
                                     const String& str,
                                     Heap::Space space);
-
-  static void SetPeer(const String& str,
-                      void* peer,
-                      intptr_t external_allocation_size,
-                      Dart_WeakPersistentHandleFinalizer callback);
 
   static TwoByteStringPtr null() {
     return static_cast<TwoByteStringPtr>(Object::null());
@@ -9464,6 +9603,9 @@ class Array : public Instance {
   }
 
   bool IsImmutable() const { return raw()->GetClassId() == kImmutableArrayCid; }
+
+  // Position of element type in type arguments.
+  static const intptr_t kElementTypeTypeArgPos = 0;
 
   virtual TypeArgumentsPtr GetTypeArguments() const {
     return raw_ptr()->type_arguments_;
@@ -10475,6 +10617,11 @@ class Closure : public Instance {
     return OFFSET_OF(ClosureLayout, context_);
   }
 
+  bool IsGeneric(Thread* thread) const { return NumTypeParameters(thread) > 0; }
+  intptr_t NumTypeParameters(Thread* thread) const;
+  // No need for NumParentTypeParameters, as a closure is always closed over
+  // its parents type parameters (i.e., function_type_parameters() above).
+
   SmiPtr hash() const { return raw_ptr()->hash_; }
   static intptr_t hash_offset() { return OFFSET_OF(ClosureLayout, hash_); }
 
@@ -11224,7 +11371,7 @@ inline void TypeParameter::SetHash(intptr_t value) const {
 }
 
 inline intptr_t TypeArguments::Hash() const {
-  if (IsNull()) return 0;
+  if (IsNull()) return kAllDynamicHash;
   intptr_t result = Smi::Value(raw_ptr()->hash_);
   if (result != 0) {
     return result;

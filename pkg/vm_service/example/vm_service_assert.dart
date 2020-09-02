@@ -656,6 +656,7 @@ vms.IsolateRef assertIsolateRef(vms.IsolateRef obj) {
   assertString(obj.id);
   assertString(obj.number);
   assertString(obj.name);
+  assertBool(obj.isSystemIsolate);
   return obj;
 }
 
@@ -672,6 +673,7 @@ vms.Isolate assertIsolate(vms.Isolate obj) {
   assertString(obj.id);
   assertString(obj.number);
   assertString(obj.name);
+  assertBool(obj.isSystemIsolate);
   assertInt(obj.startTime);
   assertBool(obj.runnable);
   assertInt(obj.livePorts);
@@ -689,6 +691,7 @@ vms.IsolateGroupRef assertIsolateGroupRef(vms.IsolateGroupRef obj) {
   assertString(obj.id);
   assertString(obj.number);
   assertString(obj.name);
+  assertBool(obj.isSystemIsolateGroup);
   return obj;
 }
 
@@ -706,6 +709,7 @@ vms.IsolateGroup assertIsolateGroup(vms.IsolateGroup obj) {
   assertString(obj.id);
   assertString(obj.number);
   assertString(obj.name);
+  assertBool(obj.isSystemIsolateGroup);
   assertListOfIsolateRef(obj.isolates);
   return obj;
 }
@@ -940,6 +944,30 @@ List<vms.Protocol> assertListOfProtocol(List<vms.Protocol> list) {
   return list;
 }
 
+vms.ProcessMemoryUsage assertProcessMemoryUsage(vms.ProcessMemoryUsage obj) {
+  assertNotNull(obj);
+  assertString(obj.type);
+  assertProcessMemoryItem(obj.root);
+  return obj;
+}
+
+vms.ProcessMemoryItem assertProcessMemoryItem(vms.ProcessMemoryItem obj) {
+  assertNotNull(obj);
+  assertString(obj.name);
+  assertString(obj.description);
+  assertInt(obj.size);
+  assertListOfProcessMemoryItem(obj.children);
+  return obj;
+}
+
+List<vms.ProcessMemoryItem> assertListOfProcessMemoryItem(
+    List<vms.ProcessMemoryItem> list) {
+  for (vms.ProcessMemoryItem elem in list) {
+    assertProcessMemoryItem(elem);
+  }
+  return list;
+}
+
 vms.ReloadReport assertReloadReport(vms.ReloadReport obj) {
   assertNotNull(obj);
   assertString(obj.type);
@@ -1169,5 +1197,14 @@ vms.VM assertVM(vms.VM obj) {
   assertInt(obj.startTime);
   assertListOfIsolateRef(obj.isolates);
   assertListOfIsolateGroupRef(obj.isolateGroups);
+  assertListOfIsolateRef(obj.systemIsolates);
+  assertListOfIsolateGroupRef(obj.systemIsolateGroups);
+  return obj;
+}
+
+vms.WebSocketTarget assertWebSocketTarget(vms.WebSocketTarget obj) {
+  assertNotNull(obj);
+  assertString(obj.type);
+  assertString(obj.uri);
   return obj;
 }

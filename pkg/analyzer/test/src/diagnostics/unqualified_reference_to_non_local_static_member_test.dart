@@ -5,7 +5,7 @@
 import 'package:analyzer/src/error/codes.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
-import '../dart/resolution/driver_resolution.dart';
+import '../dart/resolution/context_collection_resolution.dart';
 
 main() {
   defineReflectiveSuite(() {
@@ -15,7 +15,7 @@ main() {
 
 @reflectiveTest
 class UnqualifiedReferenceToNonLocalStaticMemberTest
-    extends DriverResolutionTest {
+    extends PubPackageResolutionTest {
   test_getter() async {
     await assertErrorsInCode(r'''
 class A {
@@ -28,8 +28,7 @@ class B extends A {
 }
 ''', [
       error(
-          StaticTypeWarningCode
-              .UNQUALIFIED_REFERENCE_TO_NON_LOCAL_STATIC_MEMBER,
+          CompileTimeErrorCode.UNQUALIFIED_REFERENCE_TO_NON_LOCAL_STATIC_MEMBER,
           80,
           1),
     ]);
@@ -48,8 +47,7 @@ class B extends A {
 }
 ''', [
       error(
-          StaticTypeWarningCode
-              .UNQUALIFIED_REFERENCE_TO_NON_LOCAL_STATIC_MEMBER,
+          CompileTimeErrorCode.UNQUALIFIED_REFERENCE_TO_NON_LOCAL_STATIC_MEMBER,
           72,
           3),
     ]);
@@ -67,8 +65,7 @@ class B extends A {
 }
 ''', [
       error(
-          StaticTypeWarningCode
-              .UNQUALIFIED_REFERENCE_TO_NON_LOCAL_STATIC_MEMBER,
+          CompileTimeErrorCode.UNQUALIFIED_REFERENCE_TO_NON_LOCAL_STATIC_MEMBER,
           66,
           1),
     ]);

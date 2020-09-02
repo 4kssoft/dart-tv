@@ -1,8 +1,8 @@
-# Dart VM Service Protocol 3.36
+# Dart VM Service Protocol 3.38
 
 > Please post feedback to the [observatory-discuss group][discuss-list]
 
-This document describes of _version 3.36_ of the Dart VM Service Protocol. This
+This document describes of _version 3.38_ of the Dart VM Service Protocol. This
 protocol is used to communicate with a running Dart Virtual Machine.
 
 To use the Service Protocol, start the VM with the *--observe* flag.
@@ -59,6 +59,7 @@ The Service Protocol uses [JSON-RPC 2.0][].
   - [getVMTimeline](#getvmtimeline)
   - [getVMTimelineFlags](#getvmtimelineflags)
   - [getVMTimelineMicros](#getvmtimelinemicros)
+  - [getWebSocketTarget](#getwebsockettarget)
   - [invoke](#invoke)
   - [pause](#pause)
   - [kill](#kill)
@@ -139,6 +140,7 @@ The Service Protocol uses [JSON-RPC 2.0][].
   - [UresolvedSourceLocation](#unresolvedsourcelocation)
   - [Version](#version)
   - [VM](#vm)
+  - [WebSocketTarget](#websockettarget)
 - [Revision History](#revision-history)
 
 ## RPCs, Requests, and Responses
@@ -422,6 +424,8 @@ When DDS connects to the VM service, the VM service enters single client
 mode and will no longer accept incoming web socket connections, instead forwarding
 the web socket connection request to DDS. If DDS disconnects from the VM service,
 the VM service will once again start accepting incoming web socket connections.
+
+The VM service forwards the web socket connection by issuing a redirect 
 
 ### Protocol Extensions
 
@@ -1139,6 +1143,17 @@ The _getVMTimelineMicros_ RPC returns the current time stamp from the clock used
 similar to `Timeline.now` in `dart:developer` and `Dart_TimelineGetMicros` in the VM embedding API.
 
 See [Timestamp](#timestamp) and [getVMTimeline](#getvmtimeline).
+
+### getWebSocketTarget
+
+```
+WebSocketTarget getWebSocketTarget()
+```
+
+The _getWebSocketTarget_ RPC returns the web socket URI that should be used by VM service clients
+with WebSocket implementations that do not follow redirects (e.g., `dart:html`'s [WebSocket](https://api.dart.dev/dart-html/WebSocket-class.html)).
+
+See [WebSocketTarget](#websockettarget).
 
 ### pause
 
@@ -2843,6 +2858,10 @@ class @Isolate extends Response {
 
   // A name identifying this isolate. Not guaranteed to be unique.
   string name;
+
+  // Specifies whether the isolate was spawned by the VM or embedder for
+  // internal use. If `false`, this isolate is likely running user code.
+  bool isSystemIsolate;
 }
 ```
 
@@ -2859,6 +2878,10 @@ class Isolate extends Response {
 
   // A name identifying this isolate. Not guaranteed to be unique.
   string name;
+
+  // Specifies whether the isolate was spawned by the VM or embedder for
+  // internal use. If `false`, this isolate is likely running user code.
+  bool isSystemIsolate;
 
   // The time that the VM started in milliseconds since the epoch.
   //
@@ -2917,6 +2940,10 @@ class @IsolateGroup extends Response {
 
   // A name identifying this isolate group. Not guaranteed to be unique.
   string name;
+
+  // Specifies whether the isolate group was spawned by the VM or embedder for
+  // internal use. If `false`, this isolate group is likely running user code.
+  bool isSystemIsolateGroup;  
 }
 ```
 
@@ -2933,6 +2960,10 @@ class IsolateGroup extends Response {
 
   // A name identifying this isolate. Not guaranteed to be unique.
   string name;
+
+  // Specifies whether the isolate group was spawned by the VM or embedder for
+  // internal use. If `false`, this isolate group is likely running user code.
+  bool isSystemIsolateGroup;  
 
   // A list of all isolates in this isolate group.
   @Isolate[] isolates;
@@ -3098,10 +3129,11 @@ class MapAssociation {
 class MemoryUsage extends Response {
   // The amount of non-Dart memory that is retained by Dart objects. For
   // example, memory associated with Dart objects through APIs such as
-  // Dart_NewWeakPersistentHandle and Dart_NewExternalTypedData.  This usage is
-  // only as accurate as the values supplied to these APIs from the VM embedder or
-  // native extensions. This external memory applies GC pressure, but is separate
-  // from heapUsage and heapCapacity.
+  // Dart_NewFinalizableHandle, Dart_NewWeakPersistentHandle and
+  // Dart_NewExternalTypedData.  This usage is only as accurate as the values
+  // supplied to these APIs from the VM embedder or native extensions. This
+  // external memory applies GC pressure, but is separate from heapUsage and
+  // heapCapacity.
   int externalUsage;
 
   // The total capacity of the heap in bytes. This is the amount of memory used
@@ -3846,8 +3878,25 @@ class VM extends Response {
 
   // A list of isolate groups running in the VM.
   @IsolateGroup[] isolateGroups;
+
+  // A list of system isolates running in the VM.
+  @Isolate[] systemIsolates;
+
+  // A list of isolate groups which contain system isolates running in the VM.
+  @IsolateGroup[] systemIsolateGroups;
 }
 ```
+
+### WebSocketTarget
+
+```
+class WebSocketTarget extends Response {
+  // The web socket URI that should be used to connect to the service.
+  string uri;
+}
+```
+
+See [getWebSocketTarget](#getwebsockettarget)
 
 ## Revision History
 
@@ -3893,5 +3942,8 @@ the VM service.
 3.34 | Added `TimelineStreamSubscriptionsUpdate` event which is sent when `setVMTimelineFlags` is invoked.
 3.35 | Added `getSupportedProtocols` RPC and `ProtocolList`, `Protocol` objects.
 3.36 | Added `getProcessMemoryUsage` RPC and `ProcessMemoryUsage` and `ProcessMemoryItem` objects.
+3.37 | Added `getWebSocketTarget` RPC and `WebSocketTarget` object.
+3.38 | Added `isSystemIsolate` property to `@Isolate` and `Isolate`, `isSystemIsolateGroup` property to `@IsolateGroup` and `IsolateGroup`,
+and properties `systemIsolates` and `systemIsolateGroups` to `VM`.
 
 [discuss-list]: https://groups.google.com/a/dartlang.org/forum/#!forum/observatory-discuss

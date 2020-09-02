@@ -450,7 +450,7 @@ class OutlineBuilder extends StackListenerImpl {
 
   @override
   void beginClassOrNamedMixinApplicationPrelude(Token token) {
-    debugEvent("beginClassOrNamedMixinApplication");
+    debugEvent("beginClassOrNamedMixinApplicationPrelude");
     libraryBuilder.beginNestedDeclaration(
         TypeParameterScopeKind.classOrNamedMixinApplication,
         "class or mixin application");
@@ -522,6 +522,11 @@ class OutlineBuilder extends StackListenerImpl {
   @override
   void handleRecoverClassHeader() {
     debugEvent("handleRecoverClassHeader");
+    // TODO(jensj): Possibly use these instead... E.g. "class A extend B {}"
+    // will get here (because it's 'extends' with an 's') and discard the B...
+    // Also Analyzer actually merges the information meaning that the two could
+    // give different errors (if, say, one later assigns
+    // A to a variable of type B).
     pop(NullValue.TypeBuilderList); // Interfaces.
     pop(); // Supertype offset.
     pop(); // Supertype.
@@ -530,13 +535,19 @@ class OutlineBuilder extends StackListenerImpl {
   @override
   void handleRecoverMixinHeader() {
     debugEvent("handleRecoverMixinHeader");
+    // TODO(jensj): Possibly use these instead...
+    // See also handleRecoverClassHeader
     pop(NullValue.TypeBuilderList); // Interfaces.
     pop(NullValue.TypeBuilderList); // Supertype constraints.
   }
 
   @override
-  void handleClassExtends(Token extendsKeyword) {
+  void handleClassExtends(Token extendsKeyword, int typeCount) {
     debugEvent("handleClassExtends");
+    while (typeCount > 1) {
+      pop();
+      typeCount--;
+    }
     push(extendsKeyword?.charOffset ?? -1);
   }
 
@@ -813,9 +824,7 @@ class OutlineBuilder extends StackListenerImpl {
       }
     }
     int modifiers = pop();
-    if (isAbstract) {
-      modifiers |= abstractMask;
-    }
+    modifiers = Modifier.addAbstractMask(modifiers, isAbstract: isAbstract);
     if (nativeMethodName != null) {
       modifiers |= externalMask;
     }
@@ -1059,12 +1068,10 @@ class OutlineBuilder extends StackListenerImpl {
         isAbstract = false;
       }
     }
-    int modifiers = Modifier.validate(pop(), isAbstract: isAbstract);
+    int modifiers = Modifier.toMask(pop());
+    modifiers = Modifier.addAbstractMask(modifiers, isAbstract: isAbstract);
     if (nativeMethodName != null) {
       modifiers |= externalMask;
-    }
-    if ((modifiers & externalMask) != 0) {
-      modifiers &= ~abstractMask;
     }
     bool isConst = (modifiers & constMask) != 0;
     int varFinalOrConstOffset = pop();
@@ -1644,7 +1651,7 @@ class OutlineBuilder extends StackListenerImpl {
           !libraryBuilder.enableNonfunctionTypeAliasesInLibrary) {
         if (type.nullabilityBuilder.build(libraryBuilder) ==
                 Nullability.nullable &&
-            libraryBuilder.enableNonNullableInLibrary) {
+            libraryBuilder.isNonNullableByDefault) {
           // The error is reported when the non-nullable experiment is enabled.
           // Otherwise, the attempt to use a nullable type will be reported
           // elsewhere.
@@ -1686,12 +1693,18 @@ class OutlineBuilder extends StackListenerImpl {
       Token beginToken,
       Token endToken) {
     debugEvent("endTopLevelFields");
-    if (lateToken != null && !libraryBuilder.isNonNullableByDefault) {
+    if (!libraryBuilder.isNonNullableByDefault) {
       reportNonNullableModifierError(lateToken);
       if (externalToken != null) {
-        externalToken = null;
         handleRecoverableError(
             messageExternalField, externalToken, externalToken);
+        externalToken = null;
+      }
+    } else {
+      if (externalToken != null && lateToken != null) {
+        handleRecoverableError(
+            messageExternalLateField, externalToken, externalToken);
+        externalToken = null;
       }
     }
     List<FieldInfo> fieldInfos = popFieldInfos(count);
@@ -1711,6 +1724,7 @@ class OutlineBuilder extends StackListenerImpl {
 
   @override
   void endClassFields(
+      Token abstractToken,
       Token externalToken,
       Token staticToken,
       Token covariantToken,
@@ -1720,17 +1734,38 @@ class OutlineBuilder extends StackListenerImpl {
       Token beginToken,
       Token endToken) {
     debugEvent("Fields");
-    if (lateToken != null && !libraryBuilder.isNonNullableByDefault) {
+    if (!libraryBuilder.isNonNullableByDefault) {
       reportNonNullableModifierError(lateToken);
+      if (abstractToken != null) {
+        handleRecoverableError(
+            messageAbstractClassMember, abstractToken, abstractToken);
+        abstractToken = null;
+      }
       if (externalToken != null) {
-        externalToken = null;
         handleRecoverableError(
             messageExternalField, externalToken, externalToken);
+        externalToken = null;
+      }
+    } else {
+      if (staticToken != null && abstractToken != null) {
+        handleRecoverableError(
+            messageAbstractStaticField, abstractToken, abstractToken);
+        abstractToken = null;
+      }
+      if (abstractToken != null && lateToken != null) {
+        handleRecoverableError(
+            messageAbstractLateField, abstractToken, abstractToken);
+        abstractToken = null;
+      } else if (externalToken != null && lateToken != null) {
+        handleRecoverableError(
+            messageExternalLateField, externalToken, externalToken);
+        externalToken = null;
       }
     }
     List<FieldInfo> fieldInfos = popFieldInfos(count);
     TypeBuilder type = pop();
-    int modifiers = (externalToken != null ? externalMask : 0) |
+    int modifiers = (abstractToken != null ? abstractMask : 0) |
+        (externalToken != null ? externalMask : 0) |
         (staticToken != null ? staticMask : 0) |
         (covariantToken != null ? covariantMask : 0) |
         (lateToken != null ? lateMask : 0) |

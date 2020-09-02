@@ -1,0 +1,10 @@
+const String valueClass = "valueClass";
+
+class Animal {
+  int numberOfLegs;
+}
+
+@valueClass
+class Cat extends Animal {}
+
+main() {}

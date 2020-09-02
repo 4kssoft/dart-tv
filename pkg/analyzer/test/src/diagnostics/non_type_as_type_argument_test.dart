@@ -5,7 +5,7 @@
 import 'package:analyzer/src/error/codes.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
-import '../dart/resolution/driver_resolution.dart';
+import '../dart/resolution/context_collection_resolution.dart';
 
 main() {
   defineReflectiveSuite(() {
@@ -14,14 +14,14 @@ main() {
 }
 
 @reflectiveTest
-class NonTypeAsTypeArgumentTest extends DriverResolutionTest {
+class NonTypeAsTypeArgumentTest extends PubPackageResolutionTest {
   test_notAType() async {
     await assertErrorsInCode(r'''
 int A;
 class B<E> {}
 f(B<A> b) {}
 ''', [
-      error(StaticTypeWarningCode.NON_TYPE_AS_TYPE_ARGUMENT, 25, 1),
+      error(CompileTimeErrorCode.NON_TYPE_AS_TYPE_ARGUMENT, 25, 1),
     ]);
   }
 
@@ -30,7 +30,7 @@ f(B<A> b) {}
 class B<E> {}
 f(B<A> b) {}
 ''', [
-      error(StaticTypeWarningCode.NON_TYPE_AS_TYPE_ARGUMENT, 18, 1),
+      error(CompileTimeErrorCode.NON_TYPE_AS_TYPE_ARGUMENT, 18, 1),
     ]);
   }
 }

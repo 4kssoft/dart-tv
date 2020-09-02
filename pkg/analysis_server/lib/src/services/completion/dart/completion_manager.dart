@@ -37,6 +37,7 @@ import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/analysis/session.dart';
 import 'package:analyzer/dart/ast/ast.dart';
+import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer/exception/exception.dart';
@@ -51,7 +52,6 @@ import 'package:analyzer_plugin/protocol/protocol_common.dart';
 import 'package:analyzer_plugin/protocol/protocol_common.dart' as protocol;
 import 'package:analyzer_plugin/src/utilities/completion/completion_target.dart';
 import 'package:analyzer_plugin/src/utilities/completion/optype.dart';
-import 'package:meta/meta.dart';
 
 /// [DartCompletionManager] determines if a completion request is Dart specific
 /// and forwards those requests to all [DartCompletionContributor]s.
@@ -103,7 +103,8 @@ class DartCompletionManager {
   Future<List<CompletionSuggestion>> computeSuggestions(
     OperationPerformanceImpl performance,
     CompletionRequest request, {
-    @required bool enableUriContributor,
+    bool enableOverrideContributor = true,
+    bool enableUriContributor = true,
   }) async {
     request.checkAborted();
     if (!AnalysisEngine.isDartFileName(request.result.path)) {
@@ -146,7 +147,7 @@ class DartCompletionManager {
       LocalLibraryContributor(),
       LocalReferenceContributor(),
       NamedConstructorContributor(),
-      OverrideContributor(),
+      if (enableOverrideContributor) OverrideContributor(),
       StaticMemberContributor(),
       TypeMemberContributor(),
       if (enableUriContributor) UriContributor(),
@@ -405,14 +406,22 @@ class DartCompletionRequestImpl implements DartCompletionRequest {
   @override
   String get targetPrefix {
     var entity = target.entity;
+
+    if (entity is Token) {
+      var prev = entity.previous;
+      if (prev?.end == offset && prev.isKeywordOrIdentifier) {
+        return prev.lexeme;
+      }
+    }
+
     while (entity is AstNode) {
       if (entity is SimpleIdentifier) {
         var identifier = entity.name;
-        if (offset >= entity.offset &&
-            offset - entity.offset < identifier.length) {
+        if (offset >= entity.offset && offset < entity.end) {
           return identifier.substring(0, offset - entity.offset);
+        } else if (offset == entity.end) {
+          return identifier;
         }
-        return identifier;
       }
       var children = (entity as AstNode).childEntities;
       entity = children.isEmpty ? null : children.first;

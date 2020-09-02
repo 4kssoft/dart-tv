@@ -180,6 +180,7 @@ const Map<String, ValueSpecification> optionSpecification =
   Flags.fatal: const StringListValue(),
   Flags.fatalSkip: const StringValue(),
   Flags.forceLateLowering: const BoolValue(false),
+  Flags.forceStaticFieldLowering: const BoolValue(false),
   Flags.forceNoExplicitGetterCalls: const BoolValue(false),
   Flags.help: const BoolValue(false),
   Flags.librariesJson: const UriValue(),
@@ -242,6 +243,8 @@ ProcessedOptions analyzeCommandLine(String programName,
 
   final TargetFlags flags = new TargetFlags(
       forceLateLoweringForTesting: options[Flags.forceLateLowering],
+      forceStaticFieldLoweringForTesting:
+          options[Flags.forceStaticFieldLowering],
       forceNoExplicitGetterCallsForTesting:
           options[Flags.forceNoExplicitGetterCalls],
       enableNullSafety:
@@ -502,7 +505,6 @@ Future<T> runProtectedFromAbort<T>(Future<T> Function() action,
     // treat this as a crash which is signalled by exiting with 255.
     exit(255);
   }
-  return failingValue;
 }
 
 abstract class ValueSpecification {

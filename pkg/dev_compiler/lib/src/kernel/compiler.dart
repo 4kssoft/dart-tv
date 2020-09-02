@@ -3239,7 +3239,8 @@ class ProgramCompiler extends ComputeOnceConstantVisitor<js_ast.Expression>
 
       if (_annotatedNullCheck(p.annotations)) {
         body.add(_nullParameterCheck(jsParam));
-      } else if (_mustBeNonNullable(p.type) &&
+      } else if (!_options.soundNullSafety &&
+          _mustBeNonNullable(p.type) &&
           !_annotatedNotNull(p.annotations)) {
         // TODO(vsm): Remove if / when CFE does this:
         // https://github.com/dart-lang/sdk/issues/40597
@@ -4849,6 +4850,14 @@ class ProgramCompiler extends ComputeOnceConstantVisitor<js_ast.Expression>
         if (name == 'extensionSymbol' && firstArg is StringLiteral) {
           return getExtensionSymbolInternal(firstArg.value);
         }
+
+        if (name == 'compileTimeFlag' && firstArg is StringLiteral) {
+          var flagName = firstArg.value;
+          if (flagName == 'soundNullSafety') {
+            return js.boolean(_options.soundNullSafety);
+          }
+          throw UnsupportedError('Invalid flag in call to $name: $flagName');
+        }
       } else if (node.arguments.positional.length == 2) {
         var firstArg = node.arguments.positional[0];
         var secondArg = node.arguments.positional[1];
@@ -5291,11 +5300,11 @@ class ProgramCompiler extends ComputeOnceConstantVisitor<js_ast.Expression>
     // Generate `is` as `dart.is` or `typeof` depending on the RHS type.
     var lhs = _visitExpression(operand);
     var typeofName = _typeRep.typeFor(type).primitiveTypeOf;
-    // Inline primitives other than int (which requires a Math.floor check).
+    // Inline non-nullable primitive types other than int (which requires a
+    // Math.floor check).
     if (typeofName != null &&
-        type != _types.coreTypes.intLegacyRawType &&
-        type != _types.coreTypes.intNonNullableRawType &&
-        type != _types.coreTypes.intNullableRawType) {
+        type.nullability == Nullability.nonNullable &&
+        type != _types.coreTypes.intNonNullableRawType) {
       return js.call('typeof # == #', [lhs, js.string(typeofName, "'")]);
     } else {
       return js.call('#.is(#)', [_emitType(type), lhs]);
