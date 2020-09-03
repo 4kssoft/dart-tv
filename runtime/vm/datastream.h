@@ -254,9 +254,10 @@ class ReadStream : public ValueObject {
 };
 
 // Stream for writing various types into a buffer.
-class WriteStream : public ValueObject {
+template <typename B>
+class WriteStreamBase : public B {
  public:
-  WriteStream(uint8_t** buffer, ReAlloc alloc, intptr_t initial_size)
+  WriteStreamBase(uint8_t** buffer, ReAlloc alloc, intptr_t initial_size)
       : buffer_(buffer),
         end_(NULL),
         current_(NULL),
@@ -294,7 +295,7 @@ class WriteStream : public ValueObject {
   template <typename T>
   class Raw<1, T> {
    public:
-    static void Write(WriteStream* st, T value) {
+    static void Write(WriteStreamBase<B>* st, T value) {
       st->WriteByte(bit_cast<uint8_t>(value));
     }
   };
@@ -302,7 +303,7 @@ class WriteStream : public ValueObject {
   template <typename T>
   class Raw<2, T> {
    public:
-    static void Write(WriteStream* st, T value) {
+    static void Write(WriteStreamBase<B>* st, T value) {
       st->Write<int16_t>(bit_cast<int16_t>(value));
     }
   };
@@ -310,7 +311,7 @@ class WriteStream : public ValueObject {
   template <typename T>
   class Raw<4, T> {
    public:
-    static void Write(WriteStream* st, T value) {
+    static void Write(WriteStreamBase<B>* st, T value) {
       st->Write<int32_t>(bit_cast<int32_t>(value));
     }
   };
@@ -318,7 +319,7 @@ class WriteStream : public ValueObject {
   template <typename T>
   class Raw<8, T> {
    public:
-    static void Write(WriteStream* st, T value) {
+    static void Write(WriteStreamBase<B>* st, T value) {
       st->Write<int64_t>(bit_cast<int64_t>(value));
     }
   };
@@ -498,7 +499,25 @@ class WriteStream : public ValueObject {
   ReAlloc alloc_;
   intptr_t initial_size_;
 
+  DISALLOW_COPY_AND_ASSIGN(WriteStreamBase);
+};
+
+class WriteStream : public WriteStreamBase<ValueObject> {
+ public:
+  WriteStream(uint8_t** buffer, ReAlloc alloc, intptr_t initial_size)
+      : WriteStreamBase<ValueObject>(buffer, alloc, initial_size) {}
+
+ private:
   DISALLOW_COPY_AND_ASSIGN(WriteStream);
+};
+
+class ZoneWriteStream : public WriteStreamBase<ZoneAllocated> {
+ public:
+  ZoneWriteStream(uint8_t** buffer, ReAlloc alloc, intptr_t initial_size)
+      : WriteStreamBase<ZoneAllocated>(buffer, alloc, initial_size) {}
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(ZoneWriteStream);
 };
 
 class StreamingWriteStream : public ValueObject {
