@@ -598,13 +598,36 @@ COMPILER_PASS(OutputWasm, {
     wasm::WasmModuleBuilder* const module_builder =
         state->precompiler->wasm_module_builder();
 
-    // Register new function which returns an i32.
-    wasm::Function* const fct =
-        module_builder->AddFunction("fct", module_builder->i32());
+    // Make a Wasm struct type {i32, mut i64}.
+    wasm::StructType* const str_type = module_builder->MakeStructType();
+    str_type->AddField(module_builder->i32(), /*mut =*/false);
+    str_type->AddField(module_builder->i64(), /*mut =*/true);
 
-    // Register two new locals of this function.
-    fct->AddLocal(wasm::Local::LocalKind::kParam, module_builder->i32(), "x");
-    fct->AddLocal(wasm::Local::LocalKind::kLocal, module_builder->f64(), "y");
+    // Make a Wasm function type [i64 f32 f64] -> [i32].
+    wasm::FuncType* const fct_type =
+        module_builder->MakeFuncType(module_builder->i32());
+    fct_type->AddParam(module_builder->i64());
+    fct_type->AddParam(module_builder->f32());
+    fct_type->AddParam(module_builder->f64());
+
+    // Make a Wasm function $fct, of type [i64 f32 f64] -> [i32].
+    wasm::Function* const fct = module_builder->AddFunction("fct", fct_type);
+
+    // Register four locals to this function.
+    // Note: Parameters are *not* checked against func_type.
+    // So, this function is not well-formed, but it doesn't matter
+    // for testing purposes.
+    fct->AddLocal(wasm::Local::Kind::kParam, module_builder->i32(),
+                  "x");  // (param $x i32)
+    fct->AddLocal(
+        wasm::Local::Kind::kLocal,
+        module_builder->MakeRefType(/*nullable =*/true,
+                                    module_builder->MakeHeapType(str_type)),
+        "y");  // (local $y (ref str_type)).
+    fct->AddLocal(wasm::Local::Kind::kLocal, module_builder->anyref(),
+                  "z");  // (local $z anyref).
+    fct->AddLocal(wasm::Local::Kind::kLocal, module_builder->i31ref(),
+                  "t");  // (local $t i31ref).
 
     // Add instructions to this function: compute 45 + 49.
     wasm::BasicBlock* const block = fct->AddBlock(23);
@@ -616,7 +639,7 @@ COMPILER_PASS(OutputWasm, {
     auto sexp = state->precompiler->wasm_module_builder()->Serialize();
     sexp->SerializeTo(stack_zone.GetZone(), &buffer, "");
     // Output to file specified by the --output_wasm_to flag.
-    file_write(buffer.buf(), buffer.length(), stream);
+    file_write(buffer.buffer(), buffer.length(), stream);
   }
 })
 #endif
