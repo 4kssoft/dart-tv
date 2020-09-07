@@ -6,6 +6,7 @@
 #define RUNTIME_VM_COMPILER_ASSEMBLER_ASSEMBLER_WASM_H_
 
 #include "vm/compiler/backend/sexpression.h"
+#include "vm/datastream.h"
 #include "vm/thread.h"
 
 namespace wasm {
@@ -48,6 +49,7 @@ FOR_ALL_WASM_CONSTRUCTS(FORWARD_DECLARATION)
 class Type : public dart::ZoneAllocated {
  public:
   virtual dart::SExpression* Serialize() = 0;
+  virtual void OutputBinary() = 0;
   virtual ~Type() = default;
   WasmModuleBuilder* module_builder() { return module_builder_; }
 
@@ -67,6 +69,7 @@ class Type : public dart::ZoneAllocated {
 class ValueType : public Type {
  public:
   virtual dart::SExpression* Serialize() = 0;
+  virtual void OutputBinary() = 0;
   virtual ~ValueType() = default;
 
  protected:
@@ -84,6 +87,7 @@ class ValueType : public Type {
 class NumType : public ValueType {
  public:
   dart::SExpression* Serialize() override;
+  void OutputBinary() override;
 
  private:
   enum class Kind { kI32, kI64, kF32, kF64 };
@@ -106,6 +110,7 @@ class NumType : public ValueType {
 class RefType : public ValueType {
  public:
   dart::SExpression* Serialize() override;
+  void OutputBinary() override;
 
  private:
   RefType(WasmModuleBuilder* module_builder, bool nullable, HeapType* heap_type)
@@ -133,6 +138,7 @@ class RefType : public ValueType {
 class HeapType : public Type {
  public:
   dart::SExpression* Serialize() override;
+  void OutputBinary() override;
 
  private:
   enum class Kind { kFunc, kExtern, kTypeidx, kAny, kEq, kI31 };
@@ -161,6 +167,7 @@ class HeapType : public Type {
 class Rtt : public ValueType {
  public:
   dart::SExpression* Serialize() override;
+  void OutputBinary() override;
 
  private:
   Rtt(WasmModuleBuilder* module_builder, intptr_t depth, HeapType* heap_type)
@@ -177,6 +184,7 @@ class Rtt : public ValueType {
 class Field : dart::ZoneAllocated {
  public:
   dart::SExpression* Serialize();
+  void OutputBinary();
 
   StructType* struct_type() const { return struct_type_; }
   WasmModuleBuilder* module_builder() const;
@@ -209,6 +217,7 @@ class Field : dart::ZoneAllocated {
 class FieldType : public Type {
  public:
   dart::SExpression* Serialize() override;
+  void OutputBinary() override;
 
  private:
   enum class PackedType { kNoType, kI8, kI16 };
@@ -246,6 +255,7 @@ class FieldType : public Type {
 class DefType : public Type {
  public:
   virtual dart::SExpression* Serialize() = 0;
+  virtual void OutputBinary() = 0;
   virtual ~DefType() = default;
 
   uint32_t index() const { return index_; }
@@ -266,6 +276,7 @@ class DefType : public Type {
 class FuncType : public DefType {
  public:
   dart::SExpression* Serialize() override;
+  void OutputBinary() override;
 
   void AddParam(ValueType* param_type);
 
@@ -285,6 +296,7 @@ class FuncType : public DefType {
 class StructType : public DefType {
  public:
   dart::SExpression* Serialize() override;
+  void OutputBinary() override;
 
   Field* AddField(FieldType* field_type);
   Field* AddField(ValueType* value_type, bool mut);
@@ -303,6 +315,7 @@ class StructType : public DefType {
 class ArrayType : public DefType {
  public:
   dart::SExpression* Serialize() override;
+  void OutputBinary() override;
 
  private:
   ArrayType(WasmModuleBuilder* module_builder, int index, FieldType* field_type)
@@ -318,6 +331,7 @@ class ArrayType : public DefType {
 class Instruction : public dart::ZoneAllocated {
  public:
   virtual dart::SExpression* Serialize() = 0;
+  virtual void OutputBinary() = 0;
   virtual ~Instruction() = default;
 
   WasmModuleBuilder* module_builder() const;
@@ -336,6 +350,7 @@ class Instruction : public dart::ZoneAllocated {
 class LocalGet : public Instruction {
  public:
   dart::SExpression* Serialize() override;
+  void OutputBinary() override;
 
  private:
   LocalGet(BasicBlock* block, Local* local)
@@ -351,6 +366,7 @@ class LocalGet : public Instruction {
 class LocalSet : public Instruction {
  public:
   dart::SExpression* Serialize() override;
+  void OutputBinary() override;
 
  private:
   LocalSet(BasicBlock* block, Local* local)
@@ -367,6 +383,7 @@ class LocalSet : public Instruction {
 class Int32Add : public Instruction {
  public:
   dart::SExpression* Serialize() override;
+  void OutputBinary() override;
 
  private:
   explicit Int32Add(BasicBlock* block) : Instruction(block) {}
@@ -380,6 +397,7 @@ class Int32Add : public Instruction {
 class Constant : public Instruction {
  public:
   dart::SExpression* Serialize() override;
+  void OutputBinary() override;
 
  private:
   Constant(BasicBlock* block, uint32_t value)
@@ -398,6 +416,7 @@ class Constant : public Instruction {
 class Goto : public Instruction {
  public:
   dart::SExpression* Serialize() override;
+  void OutputBinary() override;
 
  private:
   Goto(BasicBlock* block, BasicBlock* target_block)
@@ -418,6 +437,7 @@ class Goto : public Instruction {
 class If : public Instruction {
  public:
   dart::SExpression* Serialize() override;
+  void OutputBinary() override;
 
   InstructionList* test() { return test_; }
   InstructionList* then() { return test_; }
@@ -443,6 +463,7 @@ class Local : public dart::ZoneAllocated {
   enum class Kind { kLocal, kParam };
 
   dart::SExpression* Serialize();
+  void OutputBinary();
 
   const char* name() const { return name_; }
   int index() const { return index_; }
@@ -475,6 +496,7 @@ class Local : public dart::ZoneAllocated {
 class InstructionList : public dart::ZoneAllocated {
  public:
   dart::SExpression* Serialize();
+  void OutputBinary();
 
   BasicBlock* block() const { return block_; }
   WasmModuleBuilder* module_builder() const;
@@ -510,6 +532,8 @@ class InstructionList : public dart::ZoneAllocated {
 class BasicBlock : public dart::ZoneAllocated {
  public:
   dart::SExpression* Serialize();
+  void OutputBinary();
+
   intptr_t block_id() const { return block_id_; }
 
   Function* function() const { return function_; }
@@ -534,6 +558,7 @@ class BasicBlock : public dart::ZoneAllocated {
 class Function : public dart::ZoneAllocated {
  public:
   dart::SExpression* Serialize();
+  void OutputBinary();
 
   Local* AddLocal(Local::Kind kind, ValueType* type, const char* name);
   BasicBlock* AddBlock(intptr_t block_id);
@@ -567,15 +592,16 @@ class Function : public dart::ZoneAllocated {
 
 // Provides higher level methods for building a Wasm module and
 // serializing it. Instantiated as a field of the Precompiler.
-class WasmModuleBuilder : public dart::ValueObject {
+class WasmModuleBuilder : public dart::ZoneAllocated {
  public:
-  explicit WasmModuleBuilder(dart::Thread* thread);
+  WasmModuleBuilder(dart::Zone* zone, uint8_t** buffer, dart::ReAlloc realloc);
 
   // After we add conversion straight to binary format, this will no longer
   // serve as the main way of outputting Wasm. Instead, it will be used as a
   // means of debugging. Consequently, it's not entirely compliant with actual
   // text format. Applies to all other Serialize() methods.
   dart::SExpression* Serialize();
+  void OutputBinary();
 
   // Used to specify a field type, for use in array/struct field construction.
   FieldType* MakeFieldType(ValueType* value_type, bool mut);
@@ -611,8 +637,10 @@ class WasmModuleBuilder : public dart::ValueObject {
   HeapType* eq() { return &eq_; }
   HeapType* i31() { return &i31_; }
 
-  dart::Thread* thread() const { return thread_; }
   dart::Zone* zone() const { return zone_; }
+  intptr_t bytes_written() const {
+    return binary_output_stream_.bytes_written();
+  }
 
  private:
   NumType i32_;
@@ -630,8 +658,9 @@ class WasmModuleBuilder : public dart::ValueObject {
   RefType eqref_;      // Type alias: eqref = (ref null eq).
   RefType i31ref_;     // Type alias: i31ref = (ref i31).
 
-  dart::Thread* const thread_;
   dart::Zone* const zone_;
+  dart::WriteStream binary_output_stream_;
+
   dart::GrowableArray<DefType*> types_;
   dart::GrowableArray<Function*> functions_;
 

@@ -12,12 +12,13 @@
 namespace wasm {
 namespace {
 using ::dart::OS;
+using ::dart::ReAlloc;
 using ::dart::SExpInteger;  // Uses int64_t internally, so it should fit most
                             // serialized Wasm integers.
 using ::dart::SExpList;
 using ::dart::SExpression;
 using ::dart::SExpSymbol;
-using ::dart::Thread;
+using ::dart::Zone;
 }  // namespace
 
 SExpression* NumType::Serialize() {
@@ -33,6 +34,11 @@ SExpression* NumType::Serialize() {
     default:
       UNREACHABLE();
   }
+}
+
+void NumType::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
 }
 
 SExpression* RefType::Serialize() {
@@ -62,7 +68,12 @@ SExpression* RefType::Serialize() {
   }
 }
 
-dart::SExpression* HeapType::Serialize() {
+void RefType::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
+}
+
+SExpression* HeapType::Serialize() {
   switch (kind_) {
     case Kind::kFunc:
       return new (Z) SExpSymbol("func");
@@ -81,7 +92,12 @@ dart::SExpression* HeapType::Serialize() {
   }
 }
 
-dart::SExpression* Rtt::Serialize() {
+void HeapType::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
+}
+
+SExpression* Rtt::Serialize() {
   const auto sexp = new (Z) SExpList(Z);
   sexp->Add(new SExpSymbol("rtt"));
   sexp->Add(new SExpInteger(depth_));
@@ -89,15 +105,25 @@ dart::SExpression* Rtt::Serialize() {
   return sexp;
 }
 
-dart::SExpression* Field::Serialize() {
+void Rtt::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
+}
+
+SExpression* Field::Serialize() {
   return field_type_->Serialize();
+}
+
+void Field::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
 }
 
 WasmModuleBuilder* Field::module_builder() const {
   return struct_type_->module_builder();
 }
 
-dart::SExpression* FieldType::Serialize() {
+SExpression* FieldType::Serialize() {
   SExpression* sexp = nullptr;
   switch (packed_type_) {
     case PackedType::kNoType:
@@ -121,6 +147,11 @@ dart::SExpression* FieldType::Serialize() {
   } else {
     return sexp;
   }
+}
+
+void FieldType::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
 }
 
 FuncType::FuncType(WasmModuleBuilder* module_builder,
@@ -148,6 +179,11 @@ SExpression* FuncType::Serialize() {
   return sexp;
 }
 
+void FuncType::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
+}
+
 void FuncType::AddParam(ValueType* param_type) {
   param_types_.Add(param_type);
 }
@@ -164,6 +200,11 @@ SExpression* StructType::Serialize() {
   return sexp;
 }
 
+void StructType::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
+}
+
 SExpression* ArrayType::Serialize() {
   const auto sexp = new (Z) SExpList(Z);
   sexp->Add(new (Z) SExpSymbol("array"));
@@ -171,11 +212,15 @@ SExpression* ArrayType::Serialize() {
   return sexp;
 }
 
+void ArrayType::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
+}
+
 Field* StructType::AddField(FieldType* field_type) {
   fields_.Add(new (Z) Field(this, field_type, fields_.length()));
   return fields_.Last();
 }
-
 Field* StructType::AddField(ValueType* value_type, bool mut) {
   return AddField(module_builder()->MakeFieldType(value_type, mut));
 }
@@ -191,16 +236,36 @@ SExpression* LocalGet::Serialize() {
   return new (Z) SExpSymbol(OS::SCreate(Z, "local.get $%s", local_->name()));
 }
 
+void LocalGet::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
+}
+
 SExpression* LocalSet::Serialize() {
   return new (Z) SExpSymbol(OS::SCreate(Z, "local.set $%s", local_->name()));
+}
+
+void LocalSet::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
 }
 
 SExpression* Int32Add::Serialize() {
   return new (Z) SExpSymbol("i32.add");
 }
 
+void Int32Add::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
+}
+
 SExpression* Constant::Serialize() {
   return new (Z) SExpSymbol(OS::SCreate(Z, "i32.const %" Pu32, value_));
+}
+
+void Constant::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
 }
 
 // Serializing a Goto doesn't produce Wasm-compliant code, but should be
@@ -208,6 +273,11 @@ SExpression* Constant::Serialize() {
 SExpression* Goto::Serialize() {
   return new (Z)
       SExpSymbol(OS::SCreate(Z, "goto B%" Pd, target_block_->block_id()));
+}
+
+void Goto::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
 }
 
 If::If(BasicBlock* basic_block)
@@ -241,6 +311,11 @@ SExpression* If::Serialize() {
   return sexp;
 }
 
+void If::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
+}
+
 WasmModuleBuilder* Local::module_builder() const {
   return function_->module_builder();
 }
@@ -264,6 +339,11 @@ SExpression* Local::Serialize() {
   return sexp;
 }
 
+void Local::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
+}
+
 InstructionList::InstructionList(BasicBlock* block)
     : block_(block), instructions_(Z, 16) {}
 
@@ -277,6 +357,11 @@ SExpression* InstructionList::Serialize() {
     sexp->Add(instr->Serialize());
   }
   return sexp;
+}
+
+void InstructionList::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
 }
 
 Instruction* InstructionList::AddLocalGet(Local* local) {
@@ -325,6 +410,11 @@ SExpression* BasicBlock::Serialize() {
   return sexp;
 }
 
+void BasicBlock::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
+}
+
 Function::Function(WasmModuleBuilder* module_builder,
                    const char* name,
                    uint32_t index,
@@ -367,6 +457,11 @@ SExpression* Function::Serialize() {
   return sexp;
 }
 
+void Function::OutputBinary() {
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
+}
+
 Local* Function::AddLocal(Local::Kind kind, ValueType* type, const char* name) {
   // No further params can be declared after the first
   // local in a Wasm function header.
@@ -404,7 +499,9 @@ BasicBlock* Function::GetBlockById(intptr_t block_id) {
   FATAL("Basic block lookup by id returned no matching result.");
 }
 
-WasmModuleBuilder::WasmModuleBuilder(Thread* thread)
+WasmModuleBuilder::WasmModuleBuilder(Zone* zone,
+                                     uint8_t** binary_output_buffer,
+                                     ReAlloc realloc)
     : i32_(this, NumType::Kind::kI32),
       i64_(this, NumType::Kind::kI64),
       f32_(this, NumType::Kind::kF32),
@@ -419,10 +516,10 @@ WasmModuleBuilder::WasmModuleBuilder(Thread* thread)
       anyref_(this, /*nullable =*/true, &any_),
       eqref_(this, /*nullable =*/true, &eq_),
       i31ref_(this, /*nullable =*/false, &i31_),
-      thread_(thread),
-      zone_(thread->zone()),
-      types_(thread->zone(), 16),
-      functions_(thread->zone(), 16) {}
+      zone_(zone),
+      binary_output_stream_(binary_output_buffer, realloc, 16),
+      types_(zone, 16),
+      functions_(zone, 16) {}
 
 SExpression* WasmModuleBuilder::Serialize() {
   const auto sexp = new (zone()) SExpList(zone());
@@ -441,6 +538,21 @@ SExpression* WasmModuleBuilder::Serialize() {
     sexp->Add(fct->Serialize());
   }
   return sexp;
+}
+
+void WasmModuleBuilder::OutputBinary() {
+  // Magic.
+  binary_output_stream_.WriteFixed(static_cast<uint8_t>('\0'));
+  binary_output_stream_.WriteFixed(static_cast<uint8_t>('a'));
+  binary_output_stream_.WriteFixed(static_cast<uint8_t>('s'));
+  binary_output_stream_.WriteFixed(static_cast<uint8_t>('m'));
+  // Version.
+  binary_output_stream_.WriteFixed(static_cast<uint8_t>(0x01));
+  binary_output_stream_.WriteFixed(static_cast<uint8_t>(0x00));
+  binary_output_stream_.WriteFixed(static_cast<uint8_t>(0x00));
+  binary_output_stream_.WriteFixed(static_cast<uint8_t>(0x00));
+  // TODO(andreicostin): Write the logic.
+  UNIMPLEMENTED();
 }
 
 FieldType* WasmModuleBuilder::MakeFieldType(ValueType* value_type, bool mut) {

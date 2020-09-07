@@ -232,7 +232,13 @@ class Precompiler : public ValueObject {
   }
 
   void* il_serialization_stream() const { return il_serialization_stream_; }
-  void* output_wasm_stream() const { return output_wasm_stream_; }
+  void* output_serialized_wasm_stream() const {
+    return output_serialized_wasm_stream_;
+  }
+  void* output_binary_wasm_stream() const { return output_binary_wasm_stream_; }
+  uint8_t* wasm_binary_output_buffer() const {
+    return wasm_binary_output_buffer_;
+  }
 
   static Precompiler* Instance() { return singleton_; }
 
@@ -250,12 +256,18 @@ class Precompiler : public ValueObject {
 
   bool is_tracing() const { return is_tracing_; }
 
-  wasm::WasmModuleBuilder* wasm_module_builder() {
-    return &wasm_module_builder_;
+  wasm::WasmModuleBuilder* wasm_module_builder() const {
+    return wasm_module_builder_;
   }
 
  private:
   static Precompiler* singleton_;
+
+  // Reallocator for wasm_binary_output_buffer_.
+  // Reallocates on the precompiler zone.
+  static uint8_t* PrecompilerZoneReAlloc(uint8_t* ptr,
+                                         intptr_t old_size,
+                                         intptr_t new_size);
 
   // Scope which activates machine readable precompiler tracing if tracer
   // is available.
@@ -334,7 +346,12 @@ class Precompiler : public ValueObject {
     il_serialization_stream_ = file;
   }
 
-  void set_output_wasm_stream(void* file) { output_wasm_stream_ = file; }
+  void set_output_serialized_wasm_stream(void* file) {
+    output_serialized_wasm_stream_ = file;
+  }
+  void set_output_binary_wasm_stream(void* file) {
+    output_binary_wasm_stream_ = file;
+  }
 
   Thread* thread() const { return thread_; }
   Zone* zone() const { return zone_; }
@@ -377,13 +394,15 @@ class Precompiler : public ValueObject {
 
   bool get_runtime_type_is_unique_;
   void* il_serialization_stream_;
-  void* output_wasm_stream_;
+  void* output_serialized_wasm_stream_;
+  void* output_binary_wasm_stream_;
+  uint8_t* wasm_binary_output_buffer_;
 
   Phase phase_ = Phase::kPreparation;
   PrecompilerTracer* tracer_ = nullptr;
   bool is_tracing_ = false;
 
-  wasm::WasmModuleBuilder wasm_module_builder_;
+  wasm::WasmModuleBuilder* wasm_module_builder_;
 };
 
 class FunctionsTraits {

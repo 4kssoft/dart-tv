@@ -92,9 +92,18 @@ DEFINE_FLAG(charp,
             "Serialize flow graphs to the given file");
 
 DEFINE_FLAG(charp,
-            output_wasm_to,
+            output_serialized_wasm_to,
             nullptr,
-            "Output generated Wasm module to the given file");
+            "Output serialized Wasm module to the given file.\n"
+            "Note that, even though the output is expected to look very"
+            "similar to Wasm text format, this output target is only"
+            "intended for debugging purposes, and there will be differences"
+            "from text format-compliant Wasm code.");
+
+DEFINE_FLAG(charp,
+            output_binary_wasm_to,
+            nullptr,
+            "Output binary Wasm module to the given file");
 
 DEFINE_FLAG(bool,
             populate_llvm_constant_pool,
@@ -152,6 +161,15 @@ ErrorPtr Precompiler::CompileAll() {
   }
 }
 
+uint8_t* Precompiler::PrecompilerZoneReAlloc(uint8_t* ptr,
+                                             intptr_t old_size,
+                                             intptr_t new_size) {
+  ASSERT(Precompiler::Instance() != nullptr);
+  ASSERT(Precompiler::Instance()->zone() != nullptr);
+  return Precompiler::Instance()->zone()->Realloc<uint8_t>(ptr, old_size,
+                                                           new_size);
+}
+
 Precompiler::Precompiler(Thread* thread)
     : thread_(thread),
       zone_(NULL),
@@ -186,8 +204,10 @@ Precompiler::Precompiler(Thread* thread)
       error_(Error::Handle()),
       get_runtime_type_is_unique_(false),
       il_serialization_stream_(nullptr),
-      output_wasm_stream_(nullptr),
-      wasm_module_builder_(thread) {
+      output_serialized_wasm_stream_(nullptr),
+      output_binary_wasm_stream_(nullptr),
+      wasm_binary_output_buffer_(nullptr),
+      wasm_module_builder_(nullptr) {
   ASSERT(Precompiler::singleton_ == NULL);
   Precompiler::singleton_ = this;
 }
@@ -277,14 +297,27 @@ void Precompiler::DoCompileAll() {
         }
       }
 
-      if (FLAG_output_wasm_to != nullptr &&
+      if (FLAG_output_serialized_wasm_to != nullptr &&
           Dart::file_write_callback() != nullptr) {
         if (auto file_open = Dart::file_open_callback()) {
-          auto file = file_open(FLAG_output_wasm_to, /*write=*/true);
-          set_output_wasm_stream(file);
+          auto file = file_open(FLAG_output_serialized_wasm_to, /*write=*/true);
+          set_output_serialized_wasm_stream(file);
+        }
+      }
+      if (FLAG_output_binary_wasm_to != nullptr &&
+          Dart::file_write_callback() != nullptr) {
+        if (auto file_open = Dart::file_open_callback()) {
+          auto file = file_open(FLAG_output_binary_wasm_to, /*write=*/true);
+          set_output_binary_wasm_stream(file);
         }
       }
 
+      if (FLAG_output_serialized_wasm_to != nullptr ||
+          FLAG_output_binary_wasm_to != nullptr) {
+        wasm_module_builder_ = new (zone_)
+            wasm::WasmModuleBuilder(zone_, &wasm_binary_output_buffer_,
+                                    Precompiler::PrecompilerZoneReAlloc);
+      }
       tracer_ = PrecompilerTracer::StartTracingIfRequested(this);
 
       // All stubs have already been generated, all of them share the same pool.
@@ -399,12 +432,23 @@ void Precompiler::DoCompileAll() {
         }
       }
 
-      if (FLAG_output_wasm_to != nullptr &&
+      if (FLAG_output_serialized_wasm_to != nullptr &&
           Dart::file_write_callback() != nullptr) {
         if (auto file_close = Dart::file_close_callback()) {
-          file_close(output_wasm_stream());
+          file_close(output_serialized_wasm_stream());
         }
-        set_output_wasm_stream(nullptr);
+        set_output_serialized_wasm_stream(nullptr);
+      }
+      if (FLAG_output_binary_wasm_to != nullptr &&
+          Dart::file_write_callback() != nullptr) {
+        if (auto file_close = Dart::file_close_callback()) {
+          file_close(output_binary_wasm_stream());
+        }
+        set_output_binary_wasm_stream(nullptr);
+      }
+
+      if (wasm_module_builder_ != nullptr) {
+        wasm_module_builder_ = nullptr;
       }
 
       if (tracer_ != nullptr) {

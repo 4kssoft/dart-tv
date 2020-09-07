@@ -580,66 +580,93 @@ COMPILER_PASS(RoundTripSerialization, {
 #if defined(DART_PRECOMPILER)
 COMPILER_PASS(OutputWasm, {
   if (state->precompiler == nullptr) return state;
-  if (auto stream = state->precompiler->output_wasm_stream()) {
-    // Hack to only run for the first discovered flowgraph (one way to
-    // run only once).
-    static bool run_once = true;
-    if (!run_once) return state;
-    run_once = false;
 
-    auto file_write = Dart::file_write_callback();
-    ASSERT(file_write != nullptr);
+  // Only run this pass iff either of the precompiler flags
+  // --output_serialized_wasm_to or --output_binary_wasm_to has been set.
+  if (state->precompiler->wasm_module_builder() == nullptr) return state;
 
-    const intptr_t kInitialBufferSize = 1 * MB;
-    TextBuffer buffer(kInitialBufferSize);
-    StackZone stack_zone(Thread::Current());
+  // Hack to only run for the first discovered flowgraph (one way to
+  // run only once).
+  static bool run_once = true;
+  if (!run_once) return state;
+  run_once = false;
 
-    // Get Wasm module from the precompiler state.
-    wasm::WasmModuleBuilder* const module_builder =
-        state->precompiler->wasm_module_builder();
+  if (FLAG_trace_wasm_compilation) {
+    THR_Print("Outputting Wasm\n");
+  }
 
-    // Make a Wasm struct type {i32, mut i64}.
-    wasm::StructType* const str_type = module_builder->MakeStructType();
-    str_type->AddField(module_builder->i32(), /*mut =*/false);
-    str_type->AddField(module_builder->i64(), /*mut =*/true);
+  // Output filenames.
+  auto stream_serialized = state->precompiler->output_serialized_wasm_stream();
+  auto stream_binary = state->precompiler->output_binary_wasm_stream();
+  ASSERT(stream_serialized != nullptr || stream_binary != nullptr);
 
-    // Make a Wasm function type [i64 f32 f64] -> [i32].
-    wasm::FuncType* const fct_type =
-        module_builder->MakeFuncType(module_builder->i32());
-    fct_type->AddParam(module_builder->i64());
-    fct_type->AddParam(module_builder->f32());
-    fct_type->AddParam(module_builder->f64());
+  auto file_write = Dart::file_write_callback();
+  ASSERT(file_write != nullptr);
 
-    // Make a Wasm function $fct, of type [i64 f32 f64] -> [i32].
-    wasm::Function* const fct = module_builder->AddFunction("fct", fct_type);
+  const intptr_t kInitialBufferSize = 1 * MB;
+  TextBuffer buffer(kInitialBufferSize);
+  StackZone stack_zone(Thread::Current());
 
-    // Register four locals to this function.
-    // Note: Parameters are *not* checked against func_type.
-    // So, this function is not well-formed, but it doesn't matter
-    // for testing purposes.
-    fct->AddLocal(wasm::Local::Kind::kParam, module_builder->i32(),
-                  "x");  // (param $x i32)
-    fct->AddLocal(
-        wasm::Local::Kind::kLocal,
-        module_builder->MakeRefType(/*nullable =*/true,
-                                    module_builder->MakeHeapType(str_type)),
-        "y");  // (local $y (ref str_type)).
-    fct->AddLocal(wasm::Local::Kind::kLocal, module_builder->anyref(),
-                  "z");  // (local $z anyref).
-    fct->AddLocal(wasm::Local::Kind::kLocal, module_builder->i31ref(),
-                  "t");  // (local $t i31ref).
+  // Get Wasm module from the precompiler state.
+  wasm::WasmModuleBuilder* const module_builder =
+      state->precompiler->wasm_module_builder();
 
-    // Add instructions to this function: compute 45 + 49.
-    wasm::BasicBlock* const block = fct->AddBlock(23);
-    block->instructions()->AddConstant(45);
-    block->instructions()->AddConstant(49);
-    block->instructions()->AddInt32Add();
+  // Make a Wasm struct type {i32, mut i64}.
+  wasm::StructType* const str_type = module_builder->MakeStructType();
+  str_type->AddField(module_builder->i32(), /*mut =*/false);
+  str_type->AddField(module_builder->i64(), /*mut =*/true);
 
-    // Serialize Wasm module.
-    auto sexp = state->precompiler->wasm_module_builder()->Serialize();
+  // Make a Wasm function type [i64 f32 f64] -> [i32].
+  wasm::FuncType* const fct_type =
+      module_builder->MakeFuncType(module_builder->i32());
+  fct_type->AddParam(module_builder->i64());
+  fct_type->AddParam(module_builder->f32());
+  fct_type->AddParam(module_builder->f64());
+
+  // Make a Wasm function $fct, of type [i64 f32 f64] -> [i32].
+  wasm::Function* const fct = module_builder->AddFunction("fct", fct_type);
+
+  // Register four locals to this function.
+  // Note: Parameters are *not* checked against func_type.
+  // So, this function is not well-formed, but it doesn't matter
+  // for testing purposes.
+  fct->AddLocal(wasm::Local::Kind::kParam, module_builder->i32(),
+                "x");  // (param $x i32)
+  fct->AddLocal(wasm::Local::Kind::kLocal,
+                module_builder->MakeRefType(
+                    /*nullable =*/true, module_builder->MakeHeapType(str_type)),
+                "y");  // (local $y (ref str_type)).
+  fct->AddLocal(wasm::Local::Kind::kLocal, module_builder->anyref(),
+                "z");  // (local $z anyref).
+  fct->AddLocal(wasm::Local::Kind::kLocal, module_builder->i31ref(),
+                "t");  // (local $t i31ref).
+
+  // Add instructions to this function: compute 45 + 49.
+  wasm::BasicBlock* const block = fct->AddBlock(23);
+  block->instructions()->AddConstant(45);
+  block->instructions()->AddConstant(49);
+  block->instructions()->AddInt32Add();
+
+  // Serialize Wasm module.
+  if (stream_serialized != nullptr) {
+    const auto sexp = state->precompiler->wasm_module_builder()->Serialize();
     sexp->SerializeTo(stack_zone.GetZone(), &buffer, "");
-    // Output to file specified by the --output_wasm_to flag.
-    file_write(buffer.buffer(), buffer.length(), stream);
+    file_write(buffer.buffer(), buffer.length(), stream_serialized);
+  }
+
+  // Output Wasm module to binary.
+  if (stream_binary != nullptr) {
+    state->precompiler->wasm_module_builder()->OutputBinary();
+
+    uint8_t* const wasm_binary_output_buffer =
+        state->precompiler->wasm_binary_output_buffer();
+    const intptr_t bytes_written =
+        state->precompiler->wasm_module_builder()->bytes_written();
+
+    if (FLAG_trace_wasm_compilation) {
+      THR_Print("Printing binary Wasm bytes: %" Pd "\n", bytes_written);
+    }
+    file_write(wasm_binary_output_buffer, bytes_written, stream_binary);
   }
 })
 #endif
