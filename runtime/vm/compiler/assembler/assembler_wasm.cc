@@ -4,13 +4,42 @@
 
 #include "vm/compiler/assembler/assembler_wasm.h"
 
-// In a few cases module_builder() will not be available, or will not be safe
-// to call just yet (i.e. in a constructor initializer list), so care has to
-// be taken when using this macro.
+#include "vm/log.h"
+
+// In a few cases module_builder() will not be safe to call just yet
+// (i.e. in a constructor initializer list), so care has to be taken
+// when using this macro.
 #define Z (module_builder()->zone())
+
+#if defined(_MSC_VER)
+#define WASM_TRACE(format, ...)                                                \
+  if (FLAG_trace_wasm_compilation) {                                           \
+    THR_Print(format, __VA_ARGS__);                                            \
+  }
+#else
+#define WASM_TRACE(format, ...)                                                \
+  if (FLAG_trace_wasm_compilation) {                                           \
+    THR_Print(format, ##__VA_ARGS__);                                          \
+  }
+#endif
+
+#define WRITE_BYTE(m)                                                          \
+  module_builder()->binary_output_stream()->WriteFixed(static_cast<uint8_t>(m))
+#define WRITE_UNSIGNED(m)                                                      \
+  module_builder()->binary_output_stream()->WriteUnsigned(m)
+
+// It is not permitted to have two occurences of this macro in the same
+// enclosing scope. This is enforced by a variable name clash if this is
+// not respected. This requires users to explicitly open a new scope whenever
+// they need multiply-nested PushBytecountFrontScopes, consistent with the
+// example uses below.
+#define WRITE_BYTECOUNT()                                                      \
+  PushBytecountFrontScope push_bytecount_front_scope(module_builder())
 
 namespace wasm {
 namespace {
+using ::dart::FLAG_trace_wasm_compilation;  // For use in the WASM_TRACE macro.
+using ::dart::Log;                          // For use in the WASM_TRACE macro.
 using ::dart::OS;
 using ::dart::ReAlloc;
 using ::dart::SExpInteger;  // Uses int64_t internally, so it should fit most
@@ -19,7 +48,62 @@ using ::dart::SExpList;
 using ::dart::SExpression;
 using ::dart::SExpSymbol;
 using ::dart::Zone;
+using ::dart::ZoneWriteStream;
 }  // namespace
+
+// PushBytecountFrontScope is an instance of the RAII programming pattern.
+// It is used in the WRITE_BYTECOUNT() macro, which is to only be used
+// inside the OutputWasm() methods of the Wasm classes.
+// Example usage and semantics:
+//
+//  The following *scoped* code inside an OutputWasm() method:
+//  {
+//    WRITE_BYTECOUNT();
+//    WRITE_UNSIGNED(23);
+//    WRITE_UNSIGNED(98);
+//  }
+//
+//  Has the same effect as the following:
+//  {
+//     WRITE_UNSIGNED(2);  // Since 2 bytes follow in the enclosing scope.
+//     WRITE_UNSIGNED(23);
+//     WRITE_UNSIGNED(98);
+//  }
+//
+//  Both code fragments write the list [2, 23, 98].
+class PushBytecountFrontScope : public dart::ValueObject {
+ public:
+  explicit PushBytecountFrontScope(WasmModuleBuilder* module_builder);
+  ~PushBytecountFrontScope();
+
+ private:
+  WasmModuleBuilder* const module_builder_;
+  uint8_t* replacement_buffer_;
+  dart::ZoneWriteStream* const old_binary_output_stream;
+
+  DISALLOW_COPY_AND_ASSIGN(PushBytecountFrontScope);
+};
+
+PushBytecountFrontScope::PushBytecountFrontScope(
+    WasmModuleBuilder* module_builder)
+    : module_builder_(ASSERT_NOTNULL(module_builder)),
+      replacement_buffer_(nullptr),
+      old_binary_output_stream(module_builder_->binary_output_stream_) {
+  module_builder_->binary_output_stream_ = new (module_builder_->zone())
+      ZoneWriteStream(&replacement_buffer_, module_builder_->realloc_, 16);
+}
+
+PushBytecountFrontScope::~PushBytecountFrontScope() {
+  const intptr_t bytes_written =
+      module_builder_->binary_output_stream_->bytes_written();
+  WASM_TRACE("Copying %" Pd " bytes to parent WriteStream.\n", bytes_written);
+  // The Wasm specification treats bytes_written as an unsigned 32 bit integer.
+  // While an overflow is technically possible, code of this size is unlikely
+  // to occur in practice.
+  old_binary_output_stream->WriteUnsigned(bytes_written);
+  old_binary_output_stream->WriteBytes(replacement_buffer_, bytes_written);
+  module_builder_->binary_output_stream_ = old_binary_output_stream;
+}
 
 SExpression* NumType::Serialize() {
   switch (kind_) {
@@ -517,17 +601,21 @@ WasmModuleBuilder::WasmModuleBuilder(Zone* zone,
       eqref_(this, /*nullable =*/true, &eq_),
       i31ref_(this, /*nullable =*/false, &i31_),
       zone_(zone),
-      binary_output_stream_(binary_output_buffer, realloc, 16),
+      binary_output_stream_(
+          binary_output_buffer == nullptr
+              ? nullptr
+              : new (Z) ZoneWriteStream(binary_output_buffer, realloc, 16)),
+      realloc_(realloc),
       types_(zone, 16),
       functions_(zone, 16) {}
 
 SExpression* WasmModuleBuilder::Serialize() {
-  const auto sexp = new (zone()) SExpList(zone());
-  sexp->Add(new (zone()) SExpSymbol("module"));
+  const auto sexp = new (Z) SExpList(Z);
+  sexp->Add(new (Z) SExpSymbol("module"));
   // Types section.
   for (DefType* def_type : types_) {
-    const auto sexp_type = new (zone()) SExpList(zone());
-    sexp_type->Add(new (zone()) SExpSymbol("type"));
+    const auto sexp_type = new (Z) SExpList(Z);
+    sexp_type->Add(new (Z) SExpSymbol("type"));
     sexp_type->Add(def_type->Serialize());
     sexp->Add(sexp_type);
   }
@@ -541,32 +629,34 @@ SExpression* WasmModuleBuilder::Serialize() {
 }
 
 void WasmModuleBuilder::OutputBinary() {
+  ASSERT(binary_output_stream_ != nullptr);
+  // Testing code for the new RAII class - correctly pushes 8 front.
+  WRITE_BYTECOUNT();
   // Magic.
-  binary_output_stream_.WriteFixed(static_cast<uint8_t>('\0'));
-  binary_output_stream_.WriteFixed(static_cast<uint8_t>('a'));
-  binary_output_stream_.WriteFixed(static_cast<uint8_t>('s'));
-  binary_output_stream_.WriteFixed(static_cast<uint8_t>('m'));
+  WRITE_BYTE('\0');
+  WRITE_BYTE('a');
+  WRITE_BYTE('s');
+  WRITE_BYTE('m');
   // Version.
-  binary_output_stream_.WriteFixed(static_cast<uint8_t>(0x01));
-  binary_output_stream_.WriteFixed(static_cast<uint8_t>(0x00));
-  binary_output_stream_.WriteFixed(static_cast<uint8_t>(0x00));
-  binary_output_stream_.WriteFixed(static_cast<uint8_t>(0x00));
+  WRITE_BYTE(0x01);
+  WRITE_BYTE(0x00);
+  WRITE_BYTE(0x00);
+  WRITE_BYTE(0x00);
   // TODO(andreicostin): Write the logic.
   UNIMPLEMENTED();
 }
 
 FieldType* WasmModuleBuilder::MakeFieldType(ValueType* value_type, bool mut) {
-  return new (zone()) FieldType(this, value_type, mut);
+  return new (Z) FieldType(this, value_type, mut);
 }
 
 FieldType* WasmModuleBuilder::MakeFieldType(FieldType::PackedType packed_type,
                                             bool mut) {
-  return new (zone()) FieldType(this, packed_type, mut);
+  return new (Z) FieldType(this, packed_type, mut);
 }
 
 ArrayType* WasmModuleBuilder::MakeArrayType(FieldType* field_type) {
-  const auto array_type =
-      new (zone()) ArrayType(this, types_.length(), field_type);
+  const auto array_type = new (Z) ArrayType(this, types_.length(), field_type);
   types_.Add(array_type);
   return array_type;
 }
@@ -580,28 +670,27 @@ ArrayType* WasmModuleBuilder::MakeArrayType(FieldType::PackedType packed_type,
 }
 
 HeapType* WasmModuleBuilder::MakeHeapType(DefType* def_type) {
-  return new (zone()) HeapType(this, def_type);
+  return new (Z) HeapType(this, def_type);
 }
 
 RefType* WasmModuleBuilder::MakeRefType(bool nullable, HeapType* heap_type) {
-  return new (zone()) RefType(this, nullable, heap_type);
+  return new (Z) RefType(this, nullable, heap_type);
 }
 
 FuncType* WasmModuleBuilder::MakeFuncType(ValueType* result_type) {
-  const auto fct_type =
-      new (zone()) FuncType(this, types_.length(), result_type);
+  const auto fct_type = new (Z) FuncType(this, types_.length(), result_type);
   types_.Add(fct_type);
   return fct_type;
 }
 
 StructType* WasmModuleBuilder::MakeStructType() {
-  const auto str_type = new (zone()) StructType(this, types_.length());
+  const auto str_type = new (Z) StructType(this, types_.length());
   types_.Add(str_type);
   return str_type;
 }
 
 Function* WasmModuleBuilder::AddFunction(const char* name, FuncType* type) {
-  functions_.Add(new (zone()) Function(this, name, functions_.length(), type));
+  functions_.Add(new (Z) Function(this, name, functions_.length(), type));
   return functions_.Last();
 }
 

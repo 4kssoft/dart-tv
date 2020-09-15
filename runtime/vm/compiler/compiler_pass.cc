@@ -24,6 +24,18 @@
 #endif
 #include "vm/timeline.h"
 
+#if defined(_MSC_VER)
+#define WASM_TRACE(format, ...)                                                \
+  if (FLAG_trace_wasm_compilation) {                                           \
+    THR_Print(format, __VA_ARGS__);                                            \
+  }
+#else
+#define WASM_TRACE(format, ...)                                                \
+  if (FLAG_trace_wasm_compilation) {                                           \
+    THR_Print(format, ##__VA_ARGS__);                                          \
+  }
+#endif
+
 #define COMPILER_PASS_REPEAT(Name, Body)                                       \
   class CompilerPass_##Name : public CompilerPass {                            \
    public:                                                                     \
@@ -591,9 +603,7 @@ COMPILER_PASS(OutputWasm, {
   if (!run_once) return state;
   run_once = false;
 
-  if (FLAG_trace_wasm_compilation) {
-    THR_Print("Outputting Wasm\n");
-  }
+  WASM_TRACE("Outputting Wasm\n");
 
   // Output filenames.
   auto stream_serialized = state->precompiler->output_serialized_wasm_stream();
@@ -663,9 +673,7 @@ COMPILER_PASS(OutputWasm, {
     const intptr_t bytes_written =
         state->precompiler->wasm_module_builder()->bytes_written();
 
-    if (FLAG_trace_wasm_compilation) {
-      THR_Print("Printing binary Wasm bytes: %" Pd "\n", bytes_written);
-    }
+    WASM_TRACE("Printing binary Wasm bytes: %" Pd "\n", bytes_written);
     file_write(wasm_binary_output_buffer, bytes_written, stream_binary);
   }
 })

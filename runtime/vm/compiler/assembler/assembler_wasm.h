@@ -7,7 +7,6 @@
 
 #include "vm/compiler/backend/sexpression.h"
 #include "vm/datastream.h"
-#include "vm/thread.h"
 
 namespace wasm {
 
@@ -637,9 +636,13 @@ class WasmModuleBuilder : public dart::ZoneAllocated {
   HeapType* eq() { return &eq_; }
   HeapType* i31() { return &i31_; }
 
+  WasmModuleBuilder* module_builder() { return this; }
   dart::Zone* zone() const { return zone_; }
+  dart::ZoneWriteStream* binary_output_stream() const {
+    return binary_output_stream_;
+  }
   intptr_t bytes_written() const {
-    return binary_output_stream_.bytes_written();
+    return binary_output_stream_->bytes_written();
   }
 
  private:
@@ -659,11 +662,19 @@ class WasmModuleBuilder : public dart::ZoneAllocated {
   RefType i31ref_;     // Type alias: i31ref = (ref i31).
 
   dart::Zone* const zone_;
-  dart::WriteStream binary_output_stream_;
+  // The binary_output_stream_ field is replaced by a new buffer (and stream)
+  // each time the WRITE_BYTECOUNT() macro occurs in a scope. Then,
+  // upon leaving the scope, the initial buffer (and stream) is restored,
+  // with the new contents and their byte count appended (the latter coming
+  // first).
+  dart::ZoneWriteStream* binary_output_stream_;
+  const dart::ReAlloc realloc_;
 
   dart::GrowableArray<DefType*> types_;
   dart::GrowableArray<Function*> functions_;
 
+  friend class PushBytecountFrontScope;  // For access to replacing the
+                                         // current binary_output_stream_.
   DISALLOW_COPY_AND_ASSIGN(WasmModuleBuilder);
 };
 
