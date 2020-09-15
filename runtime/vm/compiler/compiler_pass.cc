@@ -21,6 +21,7 @@
 #if defined(DART_PRECOMPILER)
 #include "vm/compiler/aot/aot_call_specializer.h"
 #include "vm/compiler/aot/precompiler.h"
+#include "vm/compiler/aot/wasm_translator.h"
 #endif
 #include "vm/timeline.h"
 
@@ -620,6 +621,10 @@ COMPILER_PASS(OutputWasm, {
   // Get Wasm module from the precompiler state.
   wasm::WasmModuleBuilder* const module_builder =
       state->precompiler->wasm_module_builder();
+
+  // TODO(andreicostin): Move this to be called from the Wasm code generator.
+  WasmTranslator translator(flow_graph);
+  translator.Translate();
 
   // Make a Wasm struct type {i32, mut i64}.
   wasm::StructType* const str_type = module_builder->MakeStructType();

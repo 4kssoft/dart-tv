@@ -13,6 +13,8 @@ compiler_sources = [
   "aot/precompiler.h",
   "aot/precompiler_tracer.cc",
   "aot/precompiler_tracer.h",
+  "aot/wasm_translator.cc",
+  "aot/wasm_translator.h",
   "asm_intrinsifier.cc",
   "asm_intrinsifier.h",
   "asm_intrinsifier_arm.cc",
