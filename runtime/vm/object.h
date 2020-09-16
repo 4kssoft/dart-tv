@@ -5154,6 +5154,7 @@ class Library : public Object {
   friend class Namespace;
   friend class Object;
   friend class Precompiler;
+  friend class WasmCodegen;  // For access to the library dictionary.
 };
 
 // A Namespace contains the names in a library dictionary, filtered by

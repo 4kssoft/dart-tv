@@ -11,8 +11,8 @@
 
 #include "vm/allocation.h"
 #include "vm/compiler/aot/dispatch_table_generator.h"
+#include "vm/compiler/aot/wasm_codegen.h"
 #include "vm/compiler/assembler/assembler.h"
-#include "vm/compiler/assembler/assembler_wasm.h"
 #include "vm/hash_map.h"
 #include "vm/hash_table.h"
 #include "vm/object.h"
@@ -30,6 +30,8 @@ class String;
 class Precompiler;
 class FlowGraph;
 class PrecompilerTracer;
+class WasmCodegen;
+class PrecompileParsedFunctionHelper;
 
 class TableSelectorKeyValueTrait {
  public:
@@ -232,10 +234,6 @@ class Precompiler : public ValueObject {
   }
 
   void* il_serialization_stream() const { return il_serialization_stream_; }
-  void* output_serialized_wasm_stream() const {
-    return output_serialized_wasm_stream_;
-  }
-  void* output_binary_wasm_stream() const { return output_binary_wasm_stream_; }
   uint8_t* wasm_binary_output_buffer() const {
     return wasm_binary_output_buffer_;
   }
@@ -256,14 +254,12 @@ class Precompiler : public ValueObject {
 
   bool is_tracing() const { return is_tracing_; }
 
-  wasm::WasmModuleBuilder* wasm_module_builder() const {
-    return wasm_module_builder_;
-  }
+  WasmCodegen* wasm_codegen() const { return wasm_codegen_; }
 
  private:
   static Precompiler* singleton_;
 
-  // Reallocator for wasm_binary_output_buffer_.
+  // Reallocator for the Wasm binary output buffer.
   // Reallocates on the precompiler zone.
   static uint8_t* PrecompilerZoneReAlloc(uint8_t* ptr,
                                          intptr_t old_size,
@@ -333,6 +329,10 @@ class Precompiler : public ValueObject {
 
   DEBUG_ONLY(FunctionPtr FindUnvisitedRetainedFunction());
 
+  void InitWasmCodegen();
+  void WasmHoistRootLibrary();
+  void OutputWasm();
+
   void Obfuscate();
 
   void CollectDynamicFunctionNames();
@@ -344,13 +344,6 @@ class Precompiler : public ValueObject {
 
   void set_il_serialization_stream(void* file) {
     il_serialization_stream_ = file;
-  }
-
-  void set_output_serialized_wasm_stream(void* file) {
-    output_serialized_wasm_stream_ = file;
-  }
-  void set_output_binary_wasm_stream(void* file) {
-    output_binary_wasm_stream_ = file;
   }
 
   Thread* thread() const { return thread_; }
@@ -394,15 +387,13 @@ class Precompiler : public ValueObject {
 
   bool get_runtime_type_is_unique_;
   void* il_serialization_stream_;
-  void* output_serialized_wasm_stream_;
-  void* output_binary_wasm_stream_;
   uint8_t* wasm_binary_output_buffer_;
 
   Phase phase_ = Phase::kPreparation;
   PrecompilerTracer* tracer_ = nullptr;
   bool is_tracing_ = false;
 
-  wasm::WasmModuleBuilder* wasm_module_builder_;
+  WasmCodegen* wasm_codegen_;
 };
 
 class FunctionsTraits {

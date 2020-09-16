@@ -59,6 +59,18 @@ namespace dart {
 #define I (isolate())
 #define Z (zone())
 
+#if defined(_MSC_VER)
+#define WASM_TRACE(format, ...)                                                \
+  if (FLAG_trace_wasm_compilation) {                                           \
+    THR_Print(format, __VA_ARGS__);                                            \
+  }
+#else
+#define WASM_TRACE(format, ...)                                                \
+  if (FLAG_trace_wasm_compilation) {                                           \
+    THR_Print(format, ##__VA_ARGS__);                                          \
+  }
+#endif
+
 DEFINE_FLAG(bool, print_unique_targets, false, "Print unique dynamic targets");
 DEFINE_FLAG(bool, print_gop, false, "Print global object pool");
 DEFINE_FLAG(bool, trace_precompiler, false, "Trace precompiler.");
@@ -204,10 +216,8 @@ Precompiler::Precompiler(Thread* thread)
       error_(Error::Handle()),
       get_runtime_type_is_unique_(false),
       il_serialization_stream_(nullptr),
-      output_serialized_wasm_stream_(nullptr),
-      output_binary_wasm_stream_(nullptr),
       wasm_binary_output_buffer_(nullptr),
-      wasm_module_builder_(nullptr) {
+      wasm_codegen_(nullptr) {
   ASSERT(Precompiler::singleton_ == NULL);
   Precompiler::singleton_ = this;
 }
@@ -220,6 +230,28 @@ Precompiler::~Precompiler() {
 
   ASSERT(Precompiler::singleton_ == this);
   Precompiler::singleton_ = NULL;
+}
+
+void Precompiler::InitWasmCodegen() {
+  if (FLAG_output_serialized_wasm_to != nullptr ||
+      FLAG_output_binary_wasm_to != nullptr) {
+    WASM_TRACE("Generating Wasm\n");
+    // Note: wasm_codegen_ will live until the precompiler zone is deallocated.
+    wasm_codegen_ = new (zone_) WasmCodegen(
+        this, zone_,
+        FLAG_output_binary_wasm_to != nullptr ? &wasm_binary_output_buffer_
+                                              : nullptr,
+        Precompiler::PrecompilerZoneReAlloc);
+  }
+}
+
+void Precompiler::WasmHoistRootLibrary() {
+  if (wasm_codegen_ != nullptr) {
+    const Library& root_lib =
+        Library::Handle(Z, I->object_store()->root_library());
+    wasm_codegen_->HoistClassesFromLibrary(root_lib);
+    wasm_codegen_->HoistFunctionsFromLibrary(root_lib);
+  }
 }
 
 void Precompiler::DoCompileAll() {
@@ -244,6 +276,9 @@ void Precompiler::DoCompileAll() {
       ASSERT(Error::Handle(Z, T->sticky_error()).IsNull());
 
       ClassFinalizer::SortClasses();
+
+      InitWasmCodegen();
+      WasmHoistRootLibrary();
 
       // Collects type usage information which allows us to decide when/how to
       // optimize runtime type tests.
@@ -297,27 +332,6 @@ void Precompiler::DoCompileAll() {
         }
       }
 
-      if (FLAG_output_serialized_wasm_to != nullptr &&
-          Dart::file_write_callback() != nullptr) {
-        if (auto file_open = Dart::file_open_callback()) {
-          auto file = file_open(FLAG_output_serialized_wasm_to, /*write=*/true);
-          set_output_serialized_wasm_stream(file);
-        }
-      }
-      if (FLAG_output_binary_wasm_to != nullptr &&
-          Dart::file_write_callback() != nullptr) {
-        if (auto file_open = Dart::file_open_callback()) {
-          auto file = file_open(FLAG_output_binary_wasm_to, /*write=*/true);
-          set_output_binary_wasm_stream(file);
-        }
-      }
-
-      if (FLAG_output_serialized_wasm_to != nullptr ||
-          FLAG_output_binary_wasm_to != nullptr) {
-        wasm_module_builder_ = new (zone_)
-            wasm::WasmModuleBuilder(zone_, &wasm_binary_output_buffer_,
-                                    Precompiler::PrecompilerZoneReAlloc);
-      }
       tracer_ = PrecompilerTracer::StartTracingIfRequested(this);
 
       // All stubs have already been generated, all of them share the same pool.
@@ -432,29 +446,12 @@ void Precompiler::DoCompileAll() {
         }
       }
 
-      if (FLAG_output_serialized_wasm_to != nullptr &&
-          Dart::file_write_callback() != nullptr) {
-        if (auto file_close = Dart::file_close_callback()) {
-          file_close(output_serialized_wasm_stream());
-        }
-        set_output_serialized_wasm_stream(nullptr);
-      }
-      if (FLAG_output_binary_wasm_to != nullptr &&
-          Dart::file_write_callback() != nullptr) {
-        if (auto file_close = Dart::file_close_callback()) {
-          file_close(output_binary_wasm_stream());
-        }
-        set_output_binary_wasm_stream(nullptr);
-      }
-
-      if (wasm_module_builder_ != nullptr) {
-        wasm_module_builder_ = nullptr;
-      }
-
       if (tracer_ != nullptr) {
         tracer_->Finalize();
         tracer_ = nullptr;
       }
+
+      OutputWasm();
 
       TraceForRetainedFunctions();
       FinalizeDispatchTable();
@@ -507,6 +504,10 @@ void Precompiler::DoCompileAll() {
     ProgramVisitor::Dedup(T);
 
     zone_ = NULL;
+
+    if (wasm_codegen_ != nullptr) {
+      wasm_codegen_ = nullptr;
+    }
   }
 
   intptr_t symbols_before = -1;
@@ -2453,6 +2454,51 @@ FunctionPtr Precompiler::FindUnvisitedRetainedFunction() {
   return Function::null();
 }
 #endif
+
+void Precompiler::OutputWasm() {
+  if (FLAG_output_serialized_wasm_to == nullptr &&
+      FLAG_output_binary_wasm_to == nullptr) {
+    return;
+  }
+  ASSERT(wasm_codegen_ != nullptr);
+  auto file_open = Dart::file_open_callback();
+  auto file_write = Dart::file_write_callback();
+  auto file_close = Dart::file_close_callback();
+  if (file_open == nullptr || file_write == nullptr || file_close == nullptr) {
+    WASM_TRACE("File IO for Wasm output failed\n");
+    return;
+  }
+  WASM_TRACE("Outputting Wasm\n");
+
+  // Output serialized Wasm module.
+  if (FLAG_output_serialized_wasm_to != nullptr) {
+    auto file = file_open(FLAG_output_serialized_wasm_to, /*write=*/true);
+    const intptr_t kInitialBufferSize = 1 * MB;
+    TextBuffer buffer(kInitialBufferSize);
+    StackZone stack_zone(Thread::Current());
+
+    const auto sexp = wasm_codegen_->module_builder()->Serialize();
+    sexp->SerializeTo(stack_zone.GetZone(), &buffer, "");
+    WASM_TRACE("Outputting serialized Wasm\n");
+    file_write(buffer.buffer(), buffer.length(), file);
+    file_close(file);
+  }
+
+  // Output Wasm module to binary.
+  if (FLAG_output_binary_wasm_to != nullptr) {
+    auto file = file_open(FLAG_output_binary_wasm_to, /*write=*/true);
+    wasm_codegen_->module_builder()->OutputBinary();
+
+    const intptr_t bytes_written =
+        wasm_codegen_->module_builder()->bytes_written();
+
+    WASM_TRACE("Outputting binary Wasm bytes: %" Pd "\n", bytes_written);
+
+    ASSERT(wasm_binary_output_buffer_ != nullptr);
+    file_write(wasm_binary_output_buffer_, bytes_written, file);
+    file_close(file);
+  }
+}
 
 void Precompiler::Obfuscate() {
   if (!I->obfuscate()) {

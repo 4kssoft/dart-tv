@@ -591,7 +591,7 @@ class Function : public dart::ZoneAllocated {
 
 // Provides higher level methods for building a Wasm module and
 // serializing it. Instantiated as a field of the Precompiler.
-class WasmModuleBuilder : public dart::ZoneAllocated {
+class WasmModuleBuilder : public dart::ValueObject {
  public:
   WasmModuleBuilder(dart::Zone* zone, uint8_t** buffer, dart::ReAlloc realloc);
 

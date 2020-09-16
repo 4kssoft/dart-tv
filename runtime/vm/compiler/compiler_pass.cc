@@ -296,7 +296,7 @@ FlowGraph* CompilerPass::RunForceOptimizedPipeline(
   INVOKE_PASS(EliminateWriteBarriers);
   INVOKE_PASS(FinalizeGraph);
   INVOKE_PASS_AOT(SerializeGraph);
-  INVOKE_PASS_AOT(OutputWasm);
+  INVOKE_PASS_AOT(CompileToWasm);
   if (FLAG_late_round_trip_serialization) {
     INVOKE_PASS(RoundTripSerialization);
   }
@@ -369,10 +369,10 @@ FlowGraph* CompilerPass::RunPipeline(PipelineMode mode,
   INVOKE_PASS(AllocationSinking_DetachMaterializations);
   INVOKE_PASS(EliminateWriteBarriers);
   INVOKE_PASS(FinalizeGraph);
+  INVOKE_PASS_AOT(CompileToWasm);
   // If we are serializing the flow graph, do it now before we start
   // doing register allocation.
   INVOKE_PASS_AOT(SerializeGraph);
-  INVOKE_PASS_AOT(OutputWasm);
   if (FLAG_late_round_trip_serialization) {
     INVOKE_PASS(RoundTripSerialization);
   }
@@ -566,7 +566,7 @@ COMPILER_PASS(FinalizeGraph, {
 
 #if defined(DART_PRECOMPILER)
 COMPILER_PASS(SerializeGraph, {
-  if (state->precompiler == nullptr) return state;
+  if (state->precompiler == nullptr) return false;
   if (auto stream = state->precompiler->il_serialization_stream()) {
     auto file_write = Dart::file_write_callback();
     ASSERT(file_write != nullptr);
@@ -587,100 +587,27 @@ COMPILER_PASS(RoundTripSerialization, {
   ASSERT(state->flow_graph() != nullptr);
 })
 
-// Hack: Compiler pass with no effect on the FlowGraph.
-// As a side effect, it acts as a driver program for testing
-// the WasmModuleBuilder.
 #if defined(DART_PRECOMPILER)
-COMPILER_PASS(OutputWasm, {
-  if (state->precompiler == nullptr) return state;
+COMPILER_PASS(CompileToWasm, {
+  Precompiler* const precompiler = state->precompiler;
+  if (precompiler == nullptr) return false;
 
   // Only run this pass iff either of the precompiler flags
-  // --output_serialized_wasm_to or --output_binary_wasm_to has been set.
-  if (state->precompiler->wasm_module_builder() == nullptr) return state;
+  // --output_serialized_wasm_to and --output_binary_wasm_to have been set.
+  WasmCodegen* const codegen = precompiler->wasm_codegen();
+  if (codegen == nullptr) return false;
 
-  // Hack to only run for the first discovered flowgraph (one way to
-  // run only once).
-  static bool run_once = true;
-  if (!run_once) return state;
-  run_once = false;
+  FlowGraph* const flow_graph = state->flow_graph();
+  const Function& function = flow_graph->function();
 
-  WASM_TRACE("Outputting Wasm\n");
-
-  // Output filenames.
-  auto stream_serialized = state->precompiler->output_serialized_wasm_stream();
-  auto stream_binary = state->precompiler->output_binary_wasm_stream();
-  ASSERT(stream_serialized != nullptr || stream_binary != nullptr);
-
-  auto file_write = Dart::file_write_callback();
-  ASSERT(file_write != nullptr);
-
-  const intptr_t kInitialBufferSize = 1 * MB;
-  TextBuffer buffer(kInitialBufferSize);
-  StackZone stack_zone(Thread::Current());
-
-  // Get Wasm module from the precompiler state.
-  wasm::WasmModuleBuilder* const module_builder =
-      state->precompiler->wasm_module_builder();
-
-  // TODO(andreicostin): Move this to be called from the Wasm code generator.
-  WasmTranslator translator(flow_graph);
-  translator.Translate();
-
-  // Make a Wasm struct type {i32, mut i64}.
-  wasm::StructType* const str_type = module_builder->MakeStructType();
-  str_type->AddField(module_builder->i32(), /*mut =*/false);
-  str_type->AddField(module_builder->i64(), /*mut =*/true);
-
-  // Make a Wasm function type [i64 f32 f64] -> [i32].
-  wasm::FuncType* const fct_type =
-      module_builder->MakeFuncType(module_builder->i32());
-  fct_type->AddParam(module_builder->i64());
-  fct_type->AddParam(module_builder->f32());
-  fct_type->AddParam(module_builder->f64());
-
-  // Make a Wasm function $fct, of type [i64 f32 f64] -> [i32].
-  wasm::Function* const fct = module_builder->AddFunction("fct", fct_type);
-
-  // Register four locals to this function.
-  // Note: Parameters are *not* checked against func_type.
-  // So, this function is not well-formed, but it doesn't matter
-  // for testing purposes.
-  fct->AddLocal(wasm::Local::Kind::kParam, module_builder->i32(),
-                "x");  // (param $x i32)
-  fct->AddLocal(wasm::Local::Kind::kLocal,
-                module_builder->MakeRefType(
-                    /*nullable =*/true, module_builder->MakeHeapType(str_type)),
-                "y");  // (local $y (ref str_type)).
-  fct->AddLocal(wasm::Local::Kind::kLocal, module_builder->anyref(),
-                "z");  // (local $z anyref).
-  fct->AddLocal(wasm::Local::Kind::kLocal, module_builder->i31ref(),
-                "t");  // (local $t i31ref).
-
-  // Add instructions to this function: compute 45 + 49.
-  wasm::BasicBlock* const block = fct->AddBlock(23);
-  block->instructions()->AddConstant(45);
-  block->instructions()->AddConstant(49);
-  block->instructions()->AddInt32Add();
-
-  // Serialize Wasm module.
-  if (stream_serialized != nullptr) {
-    const auto sexp = state->precompiler->wasm_module_builder()->Serialize();
-    sexp->SerializeTo(stack_zone.GetZone(), &buffer, "");
-    file_write(buffer.buffer(), buffer.length(), stream_serialized);
+  if (!codegen->IsFunctionHoisted(function)) {
+    return false;
   }
 
-  // Output Wasm module to binary.
-  if (stream_binary != nullptr) {
-    state->precompiler->wasm_module_builder()->OutputBinary();
+  WASM_TRACE("Compiling function %s to Wasm\n",
+             String::Handle(function.name()).ToCString());
 
-    uint8_t* const wasm_binary_output_buffer =
-        state->precompiler->wasm_binary_output_buffer();
-    const intptr_t bytes_written =
-        state->precompiler->wasm_module_builder()->bytes_written();
-
-    WASM_TRACE("Printing binary Wasm bytes: %" Pd "\n", bytes_written);
-    file_write(wasm_binary_output_buffer, bytes_written, stream_binary);
-  }
+  // TODO(andreicostin): Implement the flowgraph translation logic.
 })
 #endif
 
