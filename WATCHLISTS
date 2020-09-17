@@ -7,63 +7,6 @@
 
 {
   'WATCHLIST_DEFINITIONS': {
-    'build': {
-      'filepath': (
-        '.*gyp$|'
-        '.*gypi$|'
-        '.*gn$|'
-        '.*gni$|'
-        '^tools/.*py$|'
-        '^build/|'
-        '^tools/buildtools/'
-      )
-    },
-    'front_end': {
-      'filepath': '^pkg/front_end',
-    },
-    'kernel': {
-      'filepath': '^pkg/kernel',
-    },
-    'dart2js': {
-      'filepath': (
-        '^pkg/compiler|'
-        '^sdk/lib/_internal/js_runtime|'
-        '^tests/dart2js'
-      )
-    },
-    'dartdevc': {
-      'filepath': (
-        '^pkg/dev_compiler|'
-        '^sdk/lib/_internal/js_dev_runtime|'
-        '^tests/dartdevc'
-      )
-    },
-    'package_vm': {
-      'filepath': '^pkg/vm/',
-    },
-    'messages_review': {
-      'filepath': (
-        '^('
-        'pkg/front_end/messages\\.yaml|'
-        'pkg/compiler/lib/src/diagnostics/messages\\.dart|'
-        'pkg/analyzer/lib/src/analysis_options/error/option_codes\\.dart|'
-        'pkg/analyzer/lib/src/dart/error/hint_codes\\.dart|'
-        'pkg/analyzer/lib/src/dart/error/lint_codes\\.dart|'
-        'pkg/analyzer/lib/src/dart/error/todo_codes\\.dart|'
-        'pkg/analyzer/lib/src/html/error/html_codes\\.dart|'
-        'pkg/dart_messages/lib/shared_messages\\.dart'
-        ')$'
-      )
-    },
-    'observatory': {
-      'filepath': (
-        '^runtime/bin/vmservice/|'
-        '^runtime/bin/vmservice*|'
-        '^runtime/observatory/|'
-        '^runtime/vm/service/|'
-        '^runtime/vm/service*'
-      )
-    },
     'runtime': {
       'filepath': '^runtime/',
     },
@@ -73,14 +16,6 @@
   },
 
   'WATCHLISTS': {
-    'build': [ 'keertip@google.com' ],
-    'dart2js': [ 'dart2js-team+reviews@google.com' ],
-    'dartdevc': [ 'dart-dc-team+reviews@google.com' ],
-    'front_end': [ 'dart-fe-team+reviews@google.com' ],
-    'kernel': [ 'jensj@google.com', 'alexmarkov@google.com' ],
-    'messages_review': [ 'dart-uxr+reviews@google.com' ],
-    'observatory': [ 'bkonyi@google.com' ],
-    'package_vm': [ 'alexmarkov@google.com' ],
     'runtime': [ 'vm-dev@dartlang.org' ],
     'vm_compiler': [ 'dart-vm-compiler-team+reviews@google.com' ],
   },
