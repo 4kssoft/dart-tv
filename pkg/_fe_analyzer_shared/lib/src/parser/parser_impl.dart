@@ -4,6 +4,8 @@
 
 library _fe_analyzer_shared.parser.parser;
 
+import 'package:_fe_analyzer_shared/src/parser/type_info_impl.dart';
+
 import '../messages/codes.dart' as codes;
 
 import '../scanner/scanner.dart' show ErrorToken, Token;
@@ -1130,8 +1132,59 @@ class Parser {
       }
       if (optional('=', next)) {
         equals = next;
-        token = computeType(equals, /* required = */ true)
-            .ensureTypeOrVoid(equals, this);
+        TypeInfo type = computeType(equals, /* required = */ true);
+        if (!type.isFunctionType) {
+          // Recovery: In certain cases insert missing 'Function' and missing
+          // parens.
+          Token skippedType = type.skipType(equals);
+          if (optional('(', skippedType.next) &&
+              skippedType.next.endGroup != null &&
+              optional(';', skippedType.next.endGroup.next)) {
+            // Turn "<return type>? '(' <whatever> ')';"
+            // into "<return type>? Function '(' <whatever> ')';".
+            // Assume the type is meant as the return type.
+            Token functionToken =
+                rewriter.insertSyntheticKeyword(skippedType, Keyword.FUNCTION);
+            reportRecoverableError(functionToken,
+                codes.templateExpectedButGot.withArguments('Function'));
+            type = computeType(equals, /* required = */ true);
+          } else if (type is NoType &&
+              optional('<', skippedType.next) &&
+              skippedType.next.endGroup != null) {
+            // Recover these two:
+            // "<whatever>;" => "Function<whatever>();"
+            // "<whatever>(<whatever>);" => "Function<whatever>(<whatever>);"
+            Token endGroup = skippedType.next.endGroup;
+            bool recover = false;
+            if (optional(';', endGroup.next)) {
+              // Missing parenthesis. Insert them.
+              // Turn "<whatever>;" in to "<whatever>();"
+              // Insert missing 'Function' below.
+              reportRecoverableError(endGroup,
+                  missingParameterMessage(MemberKind.FunctionTypeAlias));
+              rewriter.insertParens(endGroup, /*includeIdentifier =*/ false);
+              recover = true;
+            } else if (optional('(', endGroup.next) &&
+                endGroup.next.endGroup != null &&
+                optional(';', endGroup.next.endGroup.next)) {
+              // "<whatever>(<whatever>);". Insert missing 'Function' below.
+              recover = true;
+            }
+
+            if (recover) {
+              // Assume the '<' indicates type arguments to the function.
+              // Insert 'Function' before them.
+              Token functionToken =
+                  rewriter.insertSyntheticKeyword(equals, Keyword.FUNCTION);
+              reportRecoverableError(functionToken,
+                  codes.templateExpectedButGot.withArguments('Function'));
+              type = computeType(equals, /* required = */ true);
+            }
+          } else {
+            // E.g. "typedef j = foo;" -- don't attempt any recovery.
+          }
+        }
+        token = type.ensureTypeOrVoid(equals, this);
       } else {
         // A rewrite caused the = to disappear
         token = parseFormalParametersRequiredOpt(
@@ -4562,13 +4615,22 @@ class Parser {
       token = typeArg.parseArguments(bangToken, this);
       assert(optional('(', token.next));
     }
+
+    return _parsePrecedenceExpressionLoop(
+        precedence, allowCascades, typeArg, token);
+  }
+
+  Token _parsePrecedenceExpressionLoop(int precedence, bool allowCascades,
+      TypeParamOrArgInfo typeArg, Token token) {
     Token next = token.next;
     TokenType type = next.type;
     int tokenLevel = _computePrecedence(next);
+    bool enteredLoop = false;
     for (int level = tokenLevel; level >= precedence; --level) {
       int lastBinaryExpressionLevel = -1;
       Token lastCascade;
       while (identical(tokenLevel, level)) {
+        enteredLoop = true;
         Token operator = next;
         if (identical(tokenLevel, CASCADE_PRECEDENCE)) {
           if (!allowCascades) {
@@ -4672,9 +4734,102 @@ class Parser {
         type = next.type;
         tokenLevel = _computePrecedence(next);
       }
+      if (_recoverAtPrecedenceLevel && !_currentlyRecovering) {
+        // Attempt recovery
+        if (_attemptPrecedenceLevelRecovery(
+            token, precedence, level, allowCascades, typeArg)) {
+          // Recovered - try again at same level with the replacement token.
+          level++;
+          next = token.next;
+          type = next.type;
+          tokenLevel = _computePrecedence(next);
+        }
+      }
+    }
+
+    if (!enteredLoop && _recoverAtPrecedenceLevel && !_currentlyRecovering) {
+      // Attempt recovery
+      if (_attemptPrecedenceLevelRecovery(
+          token, precedence, /*currentLevel = */ -1, allowCascades, typeArg)) {
+        return _parsePrecedenceExpressionLoop(
+            precedence, allowCascades, typeArg, token);
+      }
     }
     return token;
   }
+
+  /// Attempt a recovery where [token.next] is replaced.
+  bool _attemptPrecedenceLevelRecovery(Token token, int precedence,
+      int currentLevel, bool allowCascades, TypeParamOrArgInfo typeArg) {
+    // Attempt recovery.
+    assert(_token_recovery_replacements.containsKey(token.next.lexeme));
+    TokenType replacement = _token_recovery_replacements[token.next.lexeme];
+    if (currentLevel >= 0) {
+      // Check that the new precedence and currentLevel would have accepted this
+      // replacement here.
+      int newLevel = replacement.precedence;
+      // The loop it would normally have gone through is something like
+      // for (; ; --level) {
+      //   while (identical(tokenLevel, level)) {
+      //   }
+      // }
+      // So if the new tokens level <= the "old" (current) level, [level] (in
+      // the above code snippet) would get down to it and accept it.
+      // But if the new tokens level > the "old" (current) level, normally we
+      // would never get to it - so we shouldn't here either. As the loop starts
+      // by taking the first tokens tokenLevel as level, recursing below won't
+      // weed that out so we need to do it here.
+      if (newLevel > currentLevel) return false;
+    }
+
+    _currentlyRecovering = true;
+    _recoverAtPrecedenceLevel = false;
+    Listener originalListener = listener;
+    TokenStreamRewriter originalRewriter = cachedRewriter;
+    NullListener nullListener = listener = new NullListener();
+    UndoableTokenStreamRewriter undoableTokenStreamRewriter =
+        new UndoableTokenStreamRewriter();
+    cachedRewriter = undoableTokenStreamRewriter;
+    rewriter.replaceNextTokenWithSyntheticToken(token, replacement);
+    bool acceptRecovery = false;
+    Token afterExpression = _parsePrecedenceExpressionLoop(
+        precedence, allowCascades, typeArg, token);
+
+    if (!nullListener.hasErrors &&
+        isOneOfOrEof(afterExpression.next, const [';', ',', ')', '{', '}'])) {
+      // Seems good!
+      acceptRecovery = true;
+    }
+
+    // Undo all changes and reset.
+    _currentlyRecovering = false;
+    undoableTokenStreamRewriter.undo();
+    listener = originalListener;
+    cachedRewriter = originalRewriter;
+
+    if (acceptRecovery) {
+      // Report and redo recovery.
+      reportRecoverableError(
+          token.next,
+          codes.templateBinaryOperatorWrittenOut
+              .withArguments(token.next.lexeme, replacement.lexeme));
+      rewriter.replaceNextTokenWithSyntheticToken(token, replacement);
+      return true;
+    }
+    return false;
+  }
+
+  bool _recoverAtPrecedenceLevel = false;
+  bool _currentlyRecovering = false;
+  static const Map<String, TokenType> _token_recovery_replacements = const {
+    // E.g. in Kotlin these are written out, see.
+    // https://kotlinlang.org/api/latest/jvm/stdlib/kotlin/-int/.
+    "xor": TokenType.CARET,
+    "and": TokenType.AMPERSAND,
+    "or": TokenType.BAR,
+    "shl": TokenType.LT_LT,
+    "shr": TokenType.GT_GT,
+  };
 
   int _computePrecedence(Token token) {
     TokenType type = token.type;
@@ -4698,7 +4853,15 @@ class Parser {
       if (!isConditional) {
         return SELECTOR_PRECEDENCE;
       }
+    } else if (identical(type, TokenType.IDENTIFIER)) {
+      // An identifier at this point is not right. So some recovery is going to
+      // happen soon. The question is, if we can do a better recovery here.
+      if (!_currentlyRecovering &&
+          _token_recovery_replacements.containsKey(token.lexeme)) {
+        _recoverAtPrecedenceLevel = true;
+      }
     }
+
     return type.precedence;
   }
 
@@ -6195,7 +6358,7 @@ class Parser {
       token =
           parseVariablesDeclarationRest(token, /* endWithSemicolon = */ false);
       listener.handleForInitializerLocalVariableDeclaration(
-          token, optional('in', token.next));
+          token, optional('in', token.next) || optional(':', token.next));
     } else if (optional(';', token.next)) {
       listener.handleForInitializerEmptyStatement(token.next);
     } else {
@@ -6316,6 +6479,8 @@ class Parser {
     assert(optional('in', inKeyword) || optional(':', inKeyword));
 
     if (!identifier.isIdentifier) {
+      // TODO(jensj): This should probably (sometimes) be
+      // templateExpectedIdentifierButGotKeyword instead.
       reportRecoverableErrorWithToken(
           identifier, codes.templateExpectedIdentifier);
     } else if (identifier != token) {

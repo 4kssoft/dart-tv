@@ -129,6 +129,8 @@ coo
 corners
 costly
 cov
+coverage
+coverages
 cp
 csi
 ctrl
@@ -151,6 +153,7 @@ debugger
 decrease
 decrements
 dectcem
+deduplication
 defaulting
 defintions
 deleting
@@ -163,6 +166,7 @@ detector
 deviation
 dfast
 di
+diagnosticable
 dictionaries
 dictionary
 differences
@@ -184,6 +188,7 @@ divergent
 doctype
 doesnt
 dog
+donly
 doo
 downstream
 draw
@@ -216,6 +221,7 @@ exe
 execute
 exercised
 exercises
+existence
 exitcode
 exiting
 expanded
@@ -279,6 +285,7 @@ hest
 heuristics
 hi
 hints
+hits
 home
 hoo
 hosted
@@ -335,6 +342,7 @@ issue41499b
 it'll
 italic
 iter
+jlcontreras
 joo
 jumped
 kernels
@@ -399,6 +407,7 @@ minutes
 mismatched
 misnamed
 miss
+misses
 misspelled
 mistake
 mistakes
@@ -421,6 +430,7 @@ numerator
 observable
 oh
 okay
+onull
 ooo
 operate
 ops
@@ -496,6 +506,7 @@ repro
 response
 result1
 result2
+resuming
 retaining
 retainingpath
 retains
@@ -526,6 +537,7 @@ signalled
 sigwinch
 slight
 smoke
+snull
 somehow
 spans
 spawn

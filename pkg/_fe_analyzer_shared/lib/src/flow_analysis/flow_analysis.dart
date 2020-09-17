@@ -362,7 +362,16 @@ abstract class FlowAnalysis<Node, Statement extends Node, Expression, Variable,
   void doStatement_end(Expression condition);
 
   /// Call this method just after visiting a binary `==` or `!=` expression.
-  void equalityOp_end(Expression wholeExpression, Expression rightOperand,
+  ///
+  /// Return value indicates whether flow analysis believes that a successful
+  /// equality check is reachable.  If `false` is returned, the client should
+  /// ensure that the `==` test behaves like `x == y && throw ...`.
+  ///
+  /// Note that if `notEqual` is `true`, then the return value describes the
+  /// behavior of the underlying `==` test.  So if `notEqual` is `true` and
+  /// `false` is returned, the client should ensure that the `!=` test behaves
+  /// like `!(x == y && throw ...)`.
+  bool equalityOp_end(Expression wholeExpression, Expression rightOperand,
       Type rightOperandType,
       {bool notEqual = false});
 
@@ -475,7 +484,13 @@ abstract class FlowAnalysis<Node, Statement extends Node, Expression, Variable,
 
   /// Call this method after visiting the LHS of an if-null expression ("??")
   /// or if-null assignment ("??=").
-  void ifNullExpression_rightBegin(Expression leftHandSide);
+  ///
+  /// Return value indicates whether flow analysis believes that the right hand
+  /// side is reachable.  If `false` is returned, the client should ensure that
+  /// `x ?? y` behaves like `x ?? throw ...` (or, correspondingly, that
+  /// `x ??= y` behaves like `x ??= throw ...`).
+  bool ifNullExpression_rightBegin(
+      Expression leftHandSide, Type leftHandSideType);
 
   /// Call this method after visiting the "then" part of an if statement, and
   /// before visiting the "else" part.
@@ -511,7 +526,16 @@ abstract class FlowAnalysis<Node, Statement extends Node, Expression, Variable,
   /// be the expression to which the "is" check was applied.  [isNot] should be
   /// a boolean indicating whether this is an "is" or an "is!" expression.
   /// [type] should be the type being checked.
-  void isExpression_end(
+  ///
+  /// Return value indicates whether flow analysis believes that a failure of
+  /// the `is` test is reachable.  If `false` is returned, the client should
+  /// ensure that the `is` test behaves like `x is T || throw ...`.
+  ///
+  /// Note that if `isNot` is `true`, then the return value describes the
+  /// behavior of the underlying `if` test.  So if `isNot` is `true` and `false`
+  /// is returned, the client should ensure that the `is!` test behaves like
+  /// `!(x is T || throw ...)`.
+  bool isExpression_end(
       Expression isExpression, Expression subExpression, bool isNot, Type type);
 
   /// Return whether the [variable] is definitely unassigned in the current
@@ -558,12 +582,22 @@ abstract class FlowAnalysis<Node, Statement extends Node, Expression, Variable,
   /// [target] should be the expression just before the null-aware operator, or
   /// `null` if the null-aware access starts a cascade section.
   ///
+  /// [targetType] should be the type of the expression just before the
+  /// null-aware operator, and should be non-null even if the null-aware access
+  /// starts a cascade section.
+  ///
   /// Note that [nullAwareAccess_end] should be called after the conclusion
   /// of any null-shorting that is caused by the `?.`.  So, for example, if the
   /// code being analyzed is `x?.y?.z(x)`, [nullAwareAccess_rightBegin] should
   /// be called once upon reaching each `?.`, but [nullAwareAccess_end] should
   /// not be called until after processing the method call to `z(x)`.
-  void nullAwareAccess_rightBegin(Expression target);
+  ///
+  /// Return value indicates whether flow analysis believes that a null target
+  /// is reachable.  If `false` is returned, the client should ensure that
+  /// `x?.y` behaves like `x!.y`.  (Note that this is necessary even if `y`
+  /// exists on `Object`--see
+  /// https://github.com/dart-lang/language/issues/1143#issuecomment-682096575.)
+  bool nullAwareAccess_rightBegin(Expression target, Type targetType);
 
   /// Call this method when encountering an expression that is a `null` literal.
   void nullLiteral(Expression expression);
@@ -811,15 +845,17 @@ class FlowAnalysisDebug<Node, Statement extends Node, Expression, Variable,
   }
 
   @override
-  void equalityOp_end(Expression wholeExpression, Expression rightOperand,
+  bool equalityOp_end(Expression wholeExpression, Expression rightOperand,
       Type rightOperandType,
       {bool notEqual = false}) {
-    _wrap(
+    return _wrap(
         'equalityOp_end($wholeExpression, $rightOperand, $rightOperandType, '
         'notEqual: $notEqual)',
         () => _wrapped.equalityOp_end(
             wholeExpression, rightOperand, rightOperandType,
-            notEqual: notEqual));
+            notEqual: notEqual),
+        isQuery: true,
+        isPure: false);
   }
 
   @override
@@ -902,9 +938,14 @@ class FlowAnalysisDebug<Node, Statement extends Node, Expression, Variable,
   }
 
   @override
-  void ifNullExpression_rightBegin(Expression leftHandSide) {
-    return _wrap('ifNullExpression_rightBegin($leftHandSide)',
-        () => _wrapped.ifNullExpression_rightBegin(leftHandSide));
+  bool ifNullExpression_rightBegin(
+      Expression leftHandSide, Type leftHandSideType) {
+    return _wrap(
+        'ifNullExpression_rightBegin($leftHandSide, $leftHandSideType)',
+        () => _wrapped.ifNullExpression_rightBegin(
+            leftHandSide, leftHandSideType),
+        isQuery: true,
+        isPure: false);
   }
 
   @override
@@ -931,12 +972,14 @@ class FlowAnalysisDebug<Node, Statement extends Node, Expression, Variable,
   }
 
   @override
-  void isExpression_end(Expression isExpression, Expression subExpression,
+  bool isExpression_end(Expression isExpression, Expression subExpression,
       bool isNot, Type type) {
-    _wrap(
+    return _wrap(
         'isExpression_end($isExpression, $subExpression, $isNot, $type)',
-        () => _wrapped.isExpression_end(
-            isExpression, subExpression, isNot, type));
+        () =>
+            _wrapped.isExpression_end(isExpression, subExpression, isNot, type),
+        isQuery: true,
+        isPure: false);
   }
 
   @override
@@ -991,9 +1034,10 @@ class FlowAnalysisDebug<Node, Statement extends Node, Expression, Variable,
   }
 
   @override
-  void nullAwareAccess_rightBegin(Expression target) {
-    _wrap('nullAwareAccess_rightBegin($target)',
-        () => _wrapped.nullAwareAccess_rightBegin(target));
+  bool nullAwareAccess_rightBegin(Expression target, Type targetType) {
+    return _wrap('nullAwareAccess_rightBegin($target, $targetType)',
+        () => _wrapped.nullAwareAccess_rightBegin(target, targetType),
+        isQuery: true, isPure: false);
   }
 
   @override
@@ -1174,12 +1218,13 @@ class FlowModel<Variable, Type> {
   /// are assumed to be unpromoted and already assigned, so joining another
   /// state with this one will have no effect on it.
   FlowModel(bool reachable)
-      : this._(
+      : this.withInfo(
           reachable,
           const {},
         );
 
-  FlowModel._(this.reachable, this.variableInfo)
+  @visibleForTesting
+  FlowModel.withInfo(this.reachable, this.variableInfo)
       : _freshVariableInfo = new VariableModel.fresh() {
     assert(() {
       for (VariableModel<Variable, Type> value in variableInfo.values) {
@@ -1241,7 +1286,7 @@ class FlowModel<Variable, Type> {
 
     FlowModel<Variable, Type> result = newVariableInfo == null
         ? this
-        : new FlowModel<Variable, Type>._(reachable, newVariableInfo);
+        : new FlowModel<Variable, Type>.withInfo(reachable, newVariableInfo);
 
     return result;
   }
@@ -1263,6 +1308,41 @@ class FlowModel<Variable, Type> {
   /// Gets the info for the given [variable], creating it if it doesn't exist.
   VariableModel<Variable, Type> infoFor(Variable variable) =>
       variableInfo[variable] ?? _freshVariableInfo;
+
+  /// Builds a [FlowModel] based on `this`, but extending the `tested` set to
+  /// include types from [other].  This is used at the bottom of certain kinds
+  /// of loops, to ensure that types tested within the body of the loop are
+  /// consistently treated as "of interest" in code that follows the loop,
+  /// regardless of the type of loop.
+  @visibleForTesting
+  FlowModel<Variable, Type> inheritTested(
+      TypeOperations<Variable, Type> typeOperations,
+      FlowModel<Variable, Type> other) {
+    Map<Variable, VariableModel<Variable, Type>> newVariableInfo =
+        <Variable, VariableModel<Variable, Type>>{};
+    Map<Variable, VariableModel<Variable, Type>> otherVariableInfo =
+        other.variableInfo;
+    bool changed = false;
+    for (MapEntry<Variable, VariableModel<Variable, Type>> entry
+        in variableInfo.entries) {
+      Variable variable = entry.key;
+      VariableModel<Variable, Type> variableModel = entry.value;
+      VariableModel<Variable, Type> otherVariableModel =
+          otherVariableInfo[variable];
+      VariableModel<Variable, Type> newVariableModel =
+          otherVariableModel == null
+              ? variableModel
+              : VariableModel.inheritTested(
+                  typeOperations, variableModel, otherVariableModel.tested);
+      newVariableInfo[variable] = newVariableModel;
+      if (!identical(newVariableModel, variableModel)) changed = true;
+    }
+    if (changed) {
+      return new FlowModel<Variable, Type>.withInfo(reachable, newVariableInfo);
+    } else {
+      return this;
+    }
+  }
 
   /// Updates the state to indicate that variables that are not definitely
   /// unassigned in the [other], are also not definitely unassigned in the
@@ -1291,7 +1371,7 @@ class FlowModel<Variable, Type> {
 
     if (newVariableInfo == null) return this;
 
-    return new FlowModel<Variable, Type>._(reachable, newVariableInfo);
+    return new FlowModel<Variable, Type>.withInfo(reachable, newVariableInfo);
   }
 
   /// Updates the state to reflect a control path that is known to have
@@ -1365,7 +1445,7 @@ class FlowModel<Variable, Type> {
   FlowModel<Variable, Type> setReachable(bool reachable) {
     if (this.reachable == reachable) return this;
 
-    return new FlowModel<Variable, Type>._(reachable, variableInfo);
+    return new FlowModel<Variable, Type>.withInfo(reachable, variableInfo);
   }
 
   @override
@@ -1542,7 +1622,7 @@ class FlowModel<Variable, Type> {
     Map<Variable, VariableModel<Variable, Type>> newVariableInfo =
         new Map<Variable, VariableModel<Variable, Type>>.from(variableInfo);
     newVariableInfo[variable] = model;
-    return new FlowModel<Variable, Type>._(reachable, newVariableInfo);
+    return new FlowModel<Variable, Type>.withInfo(reachable, newVariableInfo);
   }
 
   /// Forms a new state to reflect a control flow path that might have come from
@@ -1631,7 +1711,8 @@ class FlowModel<Variable, Type> {
       return second;
     }
 
-    return new FlowModel<Variable, Type>._(newReachable, newVariableInfo);
+    return new FlowModel<Variable, Type>.withInfo(
+        newReachable, newVariableInfo);
   }
 
   /// Determines whether the given "variableInfo" maps are equivalent.
@@ -2095,6 +2176,22 @@ class VariableModel<Variable, Type> {
     return promotedTypes;
   }
 
+  /// Builds a [VariableModel] based on [model], but extending the [tested] set
+  /// to include types from [tested].  This is used at the bottom of certain
+  /// kinds of loops, to ensure that types tested within the body of the loop
+  /// are consistently treated as "of interest" in code that follows the loop,
+  /// regardless of the type of loop.
+  @visibleForTesting
+  static VariableModel<Variable, Type> inheritTested<Variable, Type>(
+      TypeOperations<Variable, Type> typeOperations,
+      VariableModel<Variable, Type> model,
+      List<Type> tested) {
+    List<Type> newTested = joinTested(tested, model.tested, typeOperations);
+    if (identical(newTested, model.tested)) return model;
+    return new VariableModel<Variable, Type>(model.promotedTypes, newTested,
+        model.assigned, model.unassigned, model.writeCaptured);
+  }
+
   /// Joins two variable models.  See [FlowModel.join] for details.
   static VariableModel<Variable, Type> join<Variable, Type>(
       TypeOperations<Variable, Type> typeOperations,
@@ -2456,7 +2553,7 @@ class _FlowAnalysisImpl<Node, Statement extends Node, Expression, Variable,
   }
 
   @override
-  void equalityOp_end(Expression wholeExpression, Expression rightOperand,
+  bool equalityOp_end(Expression wholeExpression, Expression rightOperand,
       Type rightOperandType,
       {bool notEqual = false}) {
     _EqualityOpContext<Variable, Type> context =
@@ -2471,14 +2568,16 @@ class _FlowAnalysisImpl<Node, Statement extends Node, Expression, Variable,
         typeOperations.classifyType(rightOperandType);
     if (leftOperandTypeClassification == TypeClassification.nullOrEquivalent &&
         rightOperandTypeClassification == TypeClassification.nullOrEquivalent) {
-      return booleanLiteral(wholeExpression, !notEqual);
+      booleanLiteral(wholeExpression, !notEqual);
+      return true;
     } else if ((leftOperandTypeClassification ==
                 TypeClassification.nullOrEquivalent &&
             rightOperandTypeClassification == TypeClassification.nonNullable) ||
         (rightOperandTypeClassification ==
                 TypeClassification.nullOrEquivalent &&
             leftOperandTypeClassification == TypeClassification.nonNullable)) {
-      return booleanLiteral(wholeExpression, notEqual);
+      booleanLiteral(wholeExpression, notEqual);
+      return false;
     } else if (lhsInfo is _NullInfo<Variable, Type> &&
         rhsInfo is _VariableReadInfo<Variable, Type>) {
       assert(
@@ -2490,10 +2589,11 @@ class _FlowAnalysisImpl<Node, Statement extends Node, Expression, Variable,
       equalityInfo =
           _current.tryMarkNonNullable(typeOperations, lhsInfo._variable);
     } else {
-      return;
+      return true;
     }
     _storeExpressionInfo(wholeExpression,
         notEqual ? equalityInfo : ExpressionInfo.invert(equalityInfo));
+    return equalityInfo.ifFalse.reachable;
   }
 
   @override
@@ -2536,7 +2636,8 @@ class _FlowAnalysisImpl<Node, Statement extends Node, Expression, Variable,
     FlowModel<Variable, Type> breakState = context._breakModel;
     FlowModel<Variable, Type> falseCondition = context._conditionInfo.ifFalse;
 
-    _current = _join(falseCondition, breakState);
+    _current = _join(falseCondition, breakState)
+        .inheritTested(typeOperations, _current);
   }
 
   @override
@@ -2550,10 +2651,10 @@ class _FlowAnalysisImpl<Node, Statement extends Node, Expression, Variable,
   void forEach_bodyBegin(Node node, Variable loopVariable, Type writtenType) {
     AssignedVariablesNodeInfo<Variable> info =
         _assignedVariables._getInfoForNode(node);
+    _current = _current.conservativeJoin(info._written, info._captured);
     _SimpleStatementContext<Variable, Type> context =
         new _SimpleStatementContext<Variable, Type>(_current);
     _stack.add(context);
-    _current = _current.conservativeJoin(info._written, info._captured);
     if (loopVariable != null) {
       _current = _current.write(loopVariable, writtenType, typeOperations);
     }
@@ -2619,7 +2720,8 @@ class _FlowAnalysisImpl<Node, Statement extends Node, Expression, Variable,
   }
 
   @override
-  void ifNullExpression_rightBegin(Expression leftHandSide) {
+  bool ifNullExpression_rightBegin(
+      Expression leftHandSide, Type leftHandSideType) {
     ExpressionInfo<Variable, Type> lhsInfo = _getExpressionInfo(leftHandSide);
     FlowModel<Variable, Type> promoted;
     if (lhsInfo is _VariableReadInfo<Variable, Type>) {
@@ -2630,7 +2732,12 @@ class _FlowAnalysisImpl<Node, Statement extends Node, Expression, Variable,
     } else {
       promoted = _current;
     }
+    if (typeOperations.classifyType(leftHandSideType) ==
+        TypeClassification.nonNullable) {
+      _current = _current.setReachable(false);
+    }
     _stack.add(new _SimpleContext<Variable, Type>(promoted));
+    return _current.reachable;
   }
 
   @override
@@ -2670,7 +2777,7 @@ class _FlowAnalysisImpl<Node, Statement extends Node, Expression, Variable,
   }
 
   @override
-  void isExpression_end(Expression isExpression, Expression subExpression,
+  bool isExpression_end(Expression isExpression, Expression subExpression,
       bool isNot, Type type) {
     ExpressionInfo<Variable, Type> subExpressionInfo =
         _getExpressionInfo(subExpression);
@@ -2678,12 +2785,13 @@ class _FlowAnalysisImpl<Node, Statement extends Node, Expression, Variable,
     if (subExpressionInfo is _VariableReadInfo<Variable, Type>) {
       variable = subExpressionInfo._variable;
     } else {
-      return;
+      return true;
     }
     ExpressionInfo<Variable, Type> expressionInfo =
         _current.tryPromoteForTypeCheck(typeOperations, variable, type);
     _storeExpressionInfo(isExpression,
         isNot ? ExpressionInfo.invert(expressionInfo) : expressionInfo);
+    return expressionInfo.ifFalse.reachable;
   }
 
   @override
@@ -2760,8 +2868,16 @@ class _FlowAnalysisImpl<Node, Statement extends Node, Expression, Variable,
   }
 
   @override
-  void nullAwareAccess_rightBegin(Expression target) {
-    _stack.add(new _SimpleContext<Variable, Type>(_current));
+  bool nullAwareAccess_rightBegin(Expression target, Type targetType) {
+    assert(targetType != null);
+    bool shortingIsReachable = true;
+    FlowModel<Variable, Type> shortingModel = _current;
+    if (typeOperations.classifyType(targetType) ==
+        TypeClassification.nonNullable) {
+      shortingModel = shortingModel.setReachable(false);
+      shortingIsReachable = false;
+    }
+    _stack.add(new _SimpleContext<Variable, Type>(shortingModel));
     if (target != null) {
       ExpressionInfo<Variable, Type> targetInfo = _getExpressionInfo(target);
       if (targetInfo is _VariableReadInfo<Variable, Type>) {
@@ -2770,6 +2886,7 @@ class _FlowAnalysisImpl<Node, Statement extends Node, Expression, Variable,
             .ifTrue;
       }
     }
+    return shortingIsReachable;
   }
 
   @override
@@ -2933,7 +3050,8 @@ class _FlowAnalysisImpl<Node, Statement extends Node, Expression, Variable,
   void whileStatement_end() {
     _WhileContext<Variable, Type> context =
         _stack.removeLast() as _WhileContext<Variable, Type>;
-    _current = _join(context._conditionInfo.ifFalse, context._breakModel);
+    _current = _join(context._conditionInfo.ifFalse, context._breakModel)
+        .inheritTested(typeOperations, _current);
   }
 
   @override

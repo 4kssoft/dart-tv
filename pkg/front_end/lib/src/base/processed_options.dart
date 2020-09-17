@@ -13,7 +13,12 @@ import 'package:_fe_analyzer_shared/src/messages/severity.dart' show Severity;
 import 'package:kernel/binary/ast_from_binary.dart' show BinaryBuilder;
 
 import 'package:kernel/kernel.dart'
-    show CanonicalName, Component, Location, Version;
+    show
+        CanonicalName,
+        Component,
+        Location,
+        NonNullableByDefaultCompiledMode,
+        Version;
 
 import 'package:kernel/target/targets.dart'
     show NoneTarget, Target, TargetFlags;
@@ -351,14 +356,22 @@ class ProcessedOptions {
         allowedExperimentalFlags: _raw.allowedExperimentalFlagsForTesting);
   }
 
-  Version getExperimentEnabledVersionInLibrary(
-      flags.ExperimentalFlag flag, Uri importUri) {
-    return flags.getExperimentEnabledVersionInLibrary(flag, importUri,
-        allowedExperimentalFlags: _raw.allowedExperimentalFlagsForTesting,
-        experimentEnabledVersionForTesting:
-            _raw.experimentEnabledVersionForTesting,
+  Version getExperimentEnabledVersion(flags.ExperimentalFlag flag) {
+    return flags.getExperimentEnabledVersion(flag,
         experimentReleasedVersionForTesting:
             _raw.experimentReleasedVersionForTesting);
+  }
+
+  Component _validateNullSafetyMode(Component component) {
+    if (nnbdMode == NnbdMode.Strong &&
+        !(component.mode == NonNullableByDefaultCompiledMode.Strong ||
+            component.mode == NonNullableByDefaultCompiledMode.Agnostic)) {
+      throw new FormatException(
+          'Provided .dill file for the following libraries does not '
+          'support sound null safety:\n'
+          '${component.libraries.join('\n')}');
+    }
+    return component;
   }
 
   /// Get an outline component that summarizes the SDK, if any.
@@ -369,6 +382,7 @@ class ProcessedOptions {
       List<int> bytes = await loadSdkSummaryBytes();
       if (bytes != null && bytes.isNotEmpty) {
         _sdkSummaryComponent = loadComponent(bytes, nameRoot);
+        _validateNullSafetyMode(_sdkSummaryComponent);
       }
     }
     return _sdkSummaryComponent;
@@ -378,6 +392,7 @@ class ProcessedOptions {
     if (_sdkSummaryComponent != null) {
       throw new StateError("sdkSummary already loaded.");
     }
+    _validateNullSafetyMode(platform);
     _sdkSummaryComponent = platform;
   }
 
@@ -393,7 +408,8 @@ class ProcessedOptions {
           uris.map((uri) => _readAsBytes(fileSystem.entityForUri(uri))));
       _additionalDillComponents = allBytes
           .where((bytes) => bytes != null)
-          .map((bytes) => loadComponent(bytes, nameRoot))
+          .map((bytes) =>
+              _validateNullSafetyMode(loadComponent(bytes, nameRoot)))
           .toList();
     }
     return _additionalDillComponents;
@@ -403,6 +419,7 @@ class ProcessedOptions {
     if (_additionalDillComponents != null) {
       throw new StateError("inputAdditionalDillsComponents already loaded.");
     }
+    components.forEach(_validateNullSafetyMode);
     _additionalDillComponents = components;
   }
 
@@ -418,7 +435,7 @@ class ProcessedOptions {
             disableLazyReading: false,
             alwaysCreateNewNamedNodes: alwaysCreateNewNamedNodes)
         .readComponent(component);
-    return component;
+    return _validateNullSafetyMode(component);
   }
 
   /// Get the [UriTranslator] which resolves "package:" and "dart:" URIs.

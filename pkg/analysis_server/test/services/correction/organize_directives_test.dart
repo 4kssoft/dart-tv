@@ -2,8 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async';
-
 import 'package:analysis_server/src/services/correction/organize_imports.dart';
 import 'package:analyzer/error/error.dart';
 import 'package:analyzer_plugin/protocol/protocol_common.dart'
@@ -85,14 +83,14 @@ import 'dart:async';
 import 'dart:async';
 
 main() {
-  Future f;
+  Completer f;
 }''');
     // validate change
     _assertOrganize(r'''
 import 'dart:async';
 
 main() {
-  Future f;
+  Completer f;
 }''', removeUnused: true);
   }
 
@@ -166,7 +164,7 @@ import 'dart:math';
 class A {}
 
 main() {
-  Future f;
+  Completer f;
 }''');
     // validate change
     _assertOrganize(r'''
@@ -175,7 +173,7 @@ import 'dart:async';
 class A {}
 
 main() {
-  Future f;
+  Completer f;
 }''', removeUnused: true);
   }
 
@@ -257,6 +255,162 @@ export 'bbb/bbb.dart';
 part 'aaa/aaa.dart';
 part 'bbb/bbb.dart';
 
+main() {
+}
+''');
+  }
+
+  Future<void> test_sort_commentsAnnotations_library() async {
+    await _computeUnitAndErrors(r'''
+// Library docs 1
+// Library docs 2
+library foo;
+
+// Import c comment
+@annotation
+import 'c.dart'; // Trailing comment C
+// Import b comment
+@annotation
+import 'b.dart'; // Trailing comment B
+// Import a comment
+@annotation
+import 'a.dart'; // Trailing comment A
+
+/** doc */
+main() {
+}
+''');
+    // validate change
+    _assertOrganize(r'''
+// Library docs 1
+// Library docs 2
+library foo;
+
+// Import a comment
+@annotation
+import 'a.dart'; // Trailing comment A
+// Import b comment
+@annotation
+import 'b.dart'; // Trailing comment B
+// Import c comment
+@annotation
+import 'c.dart'; // Trailing comment C
+
+/** doc */
+main() {
+}
+''');
+  }
+
+  Future<void> test_sort_commentsAnnotations_noLibrary() async {
+    await _computeUnitAndErrors(r'''
+// Library docs 1
+// Library docs 2
+@annotation
+import 'c.dart'; // Trailing comment C
+// Import b comment
+@annotation
+import 'b.dart'; // Trailing comment B
+// Import a comment
+@annotation
+import 'a.dart'; // Trailing comment A
+
+/** doc */
+main() {
+}
+''');
+    // validate change
+    _assertOrganize(r'''
+// Library docs 1
+// Library docs 2
+// Import a comment
+@annotation
+import 'a.dart'; // Trailing comment A
+// Import b comment
+@annotation
+import 'b.dart'; // Trailing comment B
+@annotation
+import 'c.dart'; // Trailing comment C
+
+/** doc */
+main() {
+}
+''');
+  }
+
+  Future<void> test_sort_documentationAnnotations_library() async {
+    await _computeUnitAndErrors(r'''
+/// Library docs 1
+/// Library docs 2
+library foo;
+
+/// Import c docs
+@annotation
+import 'c.dart'; // Trailing comment C
+/// Import b docs
+@annotation
+import 'b.dart'; // Trailing comment B
+/// Import a docs
+@annotation
+import 'a.dart'; // Trailing comment A
+
+/** doc */
+main() {
+}
+''');
+    // validate change
+    _assertOrganize(r'''
+/// Library docs 1
+/// Library docs 2
+library foo;
+
+/// Import a docs
+@annotation
+import 'a.dart'; // Trailing comment A
+/// Import b docs
+@annotation
+import 'b.dart'; // Trailing comment B
+/// Import c docs
+@annotation
+import 'c.dart'; // Trailing comment C
+
+/** doc */
+main() {
+}
+''');
+  }
+
+  Future<void> test_sort_documentationAnnotations_noLibrary() async {
+    await _computeUnitAndErrors(r'''
+/// Library docs 1
+/// Library docs 2
+@annotation
+import 'c.dart'; // Trailing comment C
+/// Import b docs
+@annotation
+import 'b.dart'; // Trailing comment B
+/// Import a docs
+@annotation
+import 'a.dart'; // Trailing comment A
+
+/** doc */
+main() {
+}
+''');
+    // validate change
+    _assertOrganize(r'''
+/// Library docs 1
+/// Library docs 2
+/// Import a docs
+@annotation
+import 'a.dart'; // Trailing comment A
+/// Import b docs
+@annotation
+import 'b.dart'; // Trailing comment B
+@annotation
+import 'c.dart'; // Trailing comment C
+
+/** doc */
 main() {
 }
 ''');
@@ -358,6 +512,32 @@ import 'package:product.ui.api/entity2.dart';
 import 'package:product.ui.api.aaa/manager2.dart';
 import 'package:product.ui.api.bbb/manager1.dart';
 import 'package:product2.client/entity.dart';
+''');
+  }
+
+  Future<void> test_sort_imports_splits_comments() async {
+    // Here, the comments "b" and "ccc1" will be part of the same list
+    // of comments so need to be split.
+    await _computeUnitAndErrors(r'''
+// copyright
+import 'b.dart'; // b
+// ccc1
+// ccc2
+import 'c.dart'; // c
+// aaa1
+// aaa2
+import 'a.dart'; // a
+''');
+
+    _assertOrganize(r'''
+// copyright
+// aaa1
+// aaa2
+import 'a.dart'; // a
+import 'b.dart'; // b
+// ccc1
+// ccc2
+import 'c.dart'; // c
 ''');
   }
 

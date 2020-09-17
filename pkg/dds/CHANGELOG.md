@@ -1,5 +1,16 @@
-# 1.3.2-dev
+# 1.3.4
 
+- Fixed issue where `isolateId`s were expected to take the form `isolates/123`
+  although this is not required by the VM service specification.
+
+# 1.3.3
+
+- Fixed issue where `DartDevelopmentService.sseUri` did not return a URI with a
+  `sse` scheme.
+
+# 1.3.2
+
+- Add IPv6 hosting support.
 - Fix handling of requests that are outstanding when a client channel is closed.
 
 # 1.3.1

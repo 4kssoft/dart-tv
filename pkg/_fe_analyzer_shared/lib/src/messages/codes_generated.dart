@@ -295,6 +295,36 @@ const MessageCode messageAwaitNotAsync = const MessageCode("AwaitNotAsync",
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const Template<
     Message Function(
+        String string,
+        String
+            string2)> templateBinaryOperatorWrittenOut = const Template<
+        Message Function(String string, String string2)>(
+    messageTemplate:
+        r"""Binary operator '#string' is written as '#string2' instead of the written out word.""",
+    tipTemplate: r"""Try replacing '#string' with '#string2'.""",
+    withArguments: _withArgumentsBinaryOperatorWrittenOut);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Message Function(String string, String string2)>
+    codeBinaryOperatorWrittenOut =
+    const Code<Message Function(String string, String string2)>(
+        "BinaryOperatorWrittenOut", templateBinaryOperatorWrittenOut,
+        index: 112);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+Message _withArgumentsBinaryOperatorWrittenOut(String string, String string2) {
+  if (string.isEmpty) throw 'No string provided';
+  if (string2.isEmpty) throw 'No string provided';
+  return new Message(codeBinaryOperatorWrittenOut,
+      message:
+          """Binary operator '${string}' is written as '${string2}' instead of the written out word.""",
+      tip: """Try replacing '${string}' with '${string2}'.""",
+      arguments: {'string': string, 'string2': string2});
+}
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Template<
+    Message Function(
         String name,
         String
             name2)> templateBoundIssueViaCycleNonSimplicity = const Template<
@@ -1513,6 +1543,33 @@ const MessageCode messageConstructorCyclic = const MessageCode(
     message: r"""Redirecting constructors can't be cyclic.""",
     tip:
         r"""Try to have all constructors eventually redirect to a non-redirecting constructor.""");
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Template<Message Function(String name)>
+    templateConstructorInitializeSameInstanceVariableSeveralTimes =
+    const Template<Message Function(String name)>(
+        messageTemplate:
+            r"""'#name' was already initialized by this constructor.""",
+        withArguments:
+            _withArgumentsConstructorInitializeSameInstanceVariableSeveralTimes);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Message Function(String name)>
+    codeConstructorInitializeSameInstanceVariableSeveralTimes =
+    const Code<Message Function(String name)>(
+        "ConstructorInitializeSameInstanceVariableSeveralTimes",
+        templateConstructorInitializeSameInstanceVariableSeveralTimes,
+        analyzerCodes: <String>["FIELD_INITIALIZED_BY_MULTIPLE_INITIALIZERS"]);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+Message _withArgumentsConstructorInitializeSameInstanceVariableSeveralTimes(
+    String name) {
+  if (name.isEmpty) throw 'No name provided';
+  name = demangleMixinApplicationName(name);
+  return new Message(codeConstructorInitializeSameInstanceVariableSeveralTimes,
+      message: """'${name}' was already initialized by this constructor.""",
+      arguments: {'name': name});
+}
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const Template<Message Function(String name)> templateConstructorNotFound =
@@ -2780,6 +2837,7 @@ const MessageCode messageExpectedHexDigit = const MessageCode(
 const Template<Message Function(Token token)> templateExpectedIdentifier =
     const Template<Message Function(Token token)>(
         messageTemplate: r"""Expected an identifier, but got '#lexeme'.""",
+        tipTemplate: r"""Try inserting an identifier before '#lexeme'.""",
         withArguments: _withArgumentsExpectedIdentifier);
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
@@ -2793,6 +2851,36 @@ Message _withArgumentsExpectedIdentifier(Token token) {
   String lexeme = token.lexeme;
   return new Message(codeExpectedIdentifier,
       message: """Expected an identifier, but got '${lexeme}'.""",
+      tip: """Try inserting an identifier before '${lexeme}'.""",
+      arguments: {'token': token});
+}
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Template<
+    Message Function(
+        Token
+            token)> templateExpectedIdentifierButGotKeyword = const Template<
+        Message Function(
+            Token token)>(
+    messageTemplate:
+        r"""'#lexeme' can't be used as an identifier because it's a keyword.""",
+    tipTemplate:
+        r"""Try renaming this to be an identifier that isn't a keyword.""",
+    withArguments: _withArgumentsExpectedIdentifierButGotKeyword);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Message Function(Token token)> codeExpectedIdentifierButGotKeyword =
+    const Code<Message Function(Token token)>("ExpectedIdentifierButGotKeyword",
+        templateExpectedIdentifierButGotKeyword,
+        index: 113);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+Message _withArgumentsExpectedIdentifierButGotKeyword(Token token) {
+  String lexeme = token.lexeme;
+  return new Message(codeExpectedIdentifierButGotKeyword,
+      message:
+          """'${lexeme}' can't be used as an identifier because it's a keyword.""",
+      tip: """Try renaming this to be an identifier that isn't a keyword.""",
       arguments: {'token': token});
 }
 
@@ -3728,6 +3816,60 @@ Message _withArgumentsFfiStructGeneric(String name) {
 }
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Template<
+    Message Function(
+        String
+            name)> templateFieldAlreadyInitializedAtDeclaration = const Template<
+        Message Function(String name)>(
+    messageTemplate:
+        r"""'#name' is a final instance variable that was initialized at the declaration.""",
+    withArguments: _withArgumentsFieldAlreadyInitializedAtDeclaration);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Message Function(String name)>
+    codeFieldAlreadyInitializedAtDeclaration =
+    const Code<Message Function(String name)>(
+        "FieldAlreadyInitializedAtDeclaration",
+        templateFieldAlreadyInitializedAtDeclaration,
+        analyzerCodes: <String>[
+      "FIELD_INITIALIZED_IN_INITIALIZER_AND_DECLARATION"
+    ]);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+Message _withArgumentsFieldAlreadyInitializedAtDeclaration(String name) {
+  if (name.isEmpty) throw 'No name provided';
+  name = demangleMixinApplicationName(name);
+  return new Message(codeFieldAlreadyInitializedAtDeclaration,
+      message:
+          """'${name}' is a final instance variable that was initialized at the declaration.""",
+      arguments: {'name': name});
+}
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Template<Message Function(String name)>
+    templateFieldAlreadyInitializedAtDeclarationCause =
+    const Template<Message Function(String name)>(
+        messageTemplate: r"""'#name' was initialized here.""",
+        withArguments: _withArgumentsFieldAlreadyInitializedAtDeclarationCause);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Message Function(String name)>
+    codeFieldAlreadyInitializedAtDeclarationCause =
+    const Code<Message Function(String name)>(
+        "FieldAlreadyInitializedAtDeclarationCause",
+        templateFieldAlreadyInitializedAtDeclarationCause,
+        severity: Severity.context);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+Message _withArgumentsFieldAlreadyInitializedAtDeclarationCause(String name) {
+  if (name.isEmpty) throw 'No name provided';
+  name = demangleMixinApplicationName(name);
+  return new Message(codeFieldAlreadyInitializedAtDeclarationCause,
+      message: """'${name}' was initialized here.""",
+      arguments: {'name': name});
+}
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const Code<Null> codeFieldInitializedOutsideDeclaringClass =
     messageFieldInitializedOutsideDeclaringClass;
 
@@ -3867,58 +4009,6 @@ Message _withArgumentsFinalFieldWithoutInitializer(String name) {
   return new Message(codeFinalFieldWithoutInitializer,
       message: """The final variable '${name}' must be initialized.""",
       tip: """Try adding an initializer ('= expression') to the declaration.""",
-      arguments: {'name': name});
-}
-
-// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
-const Template<Message Function(String name)>
-    templateFinalInstanceVariableAlreadyInitialized =
-    const Template<Message Function(String name)>(
-        messageTemplate:
-            r"""'#name' is a final instance variable that has already been initialized.""",
-        withArguments: _withArgumentsFinalInstanceVariableAlreadyInitialized);
-
-// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
-const Code<Message Function(String name)>
-    codeFinalInstanceVariableAlreadyInitialized =
-    const Code<Message Function(String name)>(
-        "FinalInstanceVariableAlreadyInitialized",
-        templateFinalInstanceVariableAlreadyInitialized,
-        analyzerCodes: <String>["FINAL_INITIALIZED_MULTIPLE_TIMES"]);
-
-// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
-Message _withArgumentsFinalInstanceVariableAlreadyInitialized(String name) {
-  if (name.isEmpty) throw 'No name provided';
-  name = demangleMixinApplicationName(name);
-  return new Message(codeFinalInstanceVariableAlreadyInitialized,
-      message:
-          """'${name}' is a final instance variable that has already been initialized.""",
-      arguments: {'name': name});
-}
-
-// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
-const Template<Message Function(String name)>
-    templateFinalInstanceVariableAlreadyInitializedCause =
-    const Template<Message Function(String name)>(
-        messageTemplate: r"""'#name' was initialized here.""",
-        withArguments:
-            _withArgumentsFinalInstanceVariableAlreadyInitializedCause);
-
-// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
-const Code<Message Function(String name)>
-    codeFinalInstanceVariableAlreadyInitializedCause =
-    const Code<Message Function(String name)>(
-        "FinalInstanceVariableAlreadyInitializedCause",
-        templateFinalInstanceVariableAlreadyInitializedCause,
-        severity: Severity.context);
-
-// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
-Message _withArgumentsFinalInstanceVariableAlreadyInitializedCause(
-    String name) {
-  if (name.isEmpty) throw 'No name provided';
-  name = demangleMixinApplicationName(name);
-  return new Message(codeFinalInstanceVariableAlreadyInitializedCause,
-      message: """'${name}' was initialized here.""",
       arguments: {'name': name});
 }
 
@@ -6128,14 +6218,14 @@ Message _withArgumentsModifierOutOfOrder(String string, String string2) {
 }
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
-const Code<Null> codeMoreThanOneSuperOrThisInitializer =
-    messageMoreThanOneSuperOrThisInitializer;
+const Code<Null> codeMoreThanOneSuperInitializer =
+    messageMoreThanOneSuperInitializer;
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
-const MessageCode messageMoreThanOneSuperOrThisInitializer = const MessageCode(
-    "MoreThanOneSuperOrThisInitializer",
-    analyzerCodes: <String>["SUPER_IN_REDIRECTING_CONSTRUCTOR"],
-    message: r"""Can't have more than one 'super' or 'this' initializer.""");
+const MessageCode messageMoreThanOneSuperInitializer = const MessageCode(
+    "MoreThanOneSuperInitializer",
+    analyzerCodes: <String>["MULTIPLE_SUPER_INITIALIZERS"],
+    message: r"""Can't have more than one 'super' initializer.""");
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const Code<Null> codeMultipleExtends = messageMultipleExtends;
@@ -6608,6 +6698,27 @@ Message _withArgumentsNonSimpleBoundViaVariable(String name) {
 }
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Null> codeNonVoidReturnOperator = messageNonVoidReturnOperator;
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const MessageCode messageNonVoidReturnOperator = const MessageCode(
+    "NonVoidReturnOperator",
+    analyzerCodes: <String>["NON_VOID_RETURN_FOR_OPERATOR"],
+    message: r"""The return type of the operator []= must be 'void'.""",
+    tip: r"""Try changing the return type to 'void'.""");
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Null> codeNonVoidReturnSetter = messageNonVoidReturnSetter;
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const MessageCode messageNonVoidReturnSetter = const MessageCode(
+    "NonVoidReturnSetter",
+    analyzerCodes: <String>["NON_VOID_RETURN_FOR_SETTER"],
+    message: r"""The return type of the setter must be 'void' or absent.""",
+    tip:
+        r"""Try removing the return type, or define a method rather than a setter.""");
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const Code<Null> codeNotAConstantExpression = messageNotAConstantExpression;
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
@@ -6779,6 +6890,15 @@ Message _withArgumentsNullableMixinError(String name) {
       message: """Can't mix '${name}' in because it's marked with '?'.""",
       arguments: {'name': name});
 }
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Null> codeNullableSpreadError = messageNullableSpreadError;
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const MessageCode messageNullableSpreadError = const MessageCode(
+    "NullableSpreadError",
+    message:
+        r"""An expression whose value can be 'null' must be null-checked before it can be dereferenced.""");
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const Template<Message Function(String name)> templateNullableSuperclassError =
@@ -7585,6 +7705,17 @@ const MessageCode messagePrivateNamedParameter = const MessageCode(
     message: r"""An optional named parameter can't start with '_'.""");
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Null> codeRedirectingConstructorWithAnotherInitializer =
+    messageRedirectingConstructorWithAnotherInitializer;
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const MessageCode messageRedirectingConstructorWithAnotherInitializer =
+    const MessageCode("RedirectingConstructorWithAnotherInitializer",
+        analyzerCodes: <String>["FIELD_INITIALIZER_REDIRECTING_CONSTRUCTOR"],
+        message:
+            r"""A redirecting constructor can't have other initializers.""");
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const Code<Null> codeRedirectingConstructorWithBody =
     messageRedirectingConstructorWithBody;
 
@@ -7595,6 +7726,29 @@ const MessageCode messageRedirectingConstructorWithBody = const MessageCode(
     message: r"""Redirecting constructors can't have a body.""",
     tip:
         r"""Try removing the body, or not making this a redirecting constructor.""");
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Null> codeRedirectingConstructorWithMultipleRedirectInitializers =
+    messageRedirectingConstructorWithMultipleRedirectInitializers;
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const MessageCode
+    messageRedirectingConstructorWithMultipleRedirectInitializers =
+    const MessageCode("RedirectingConstructorWithMultipleRedirectInitializers",
+        analyzerCodes: <String>["MULTIPLE_REDIRECTING_CONSTRUCTOR_INVOCATIONS"],
+        message:
+            r"""A redirecting constructor can't have more than one redirection.""");
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Null> codeRedirectingConstructorWithSuperInitializer =
+    messageRedirectingConstructorWithSuperInitializer;
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const MessageCode messageRedirectingConstructorWithSuperInitializer =
+    const MessageCode("RedirectingConstructorWithSuperInitializer",
+        analyzerCodes: <String>["SUPER_IN_REDIRECTING_CONSTRUCTOR"],
+        message:
+            r"""A redirecting constructor can't have a 'super' initializer.""");
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const Code<Null> codeRedirectionInNonFactory = messageRedirectionInNonFactory;
@@ -8390,15 +8544,6 @@ const MessageCode messageThisAsIdentifier = const MessageCode(
     "ThisAsIdentifier",
     analyzerCodes: <String>["INVALID_REFERENCE_TO_THIS"],
     message: r"""Expected identifier, but got 'this'.""");
-
-// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
-const Code<Null> codeThisInitializerNotAlone = messageThisInitializerNotAlone;
-
-// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
-const MessageCode messageThisInitializerNotAlone = const MessageCode(
-    "ThisInitializerNotAlone",
-    analyzerCodes: <String>["FIELD_INITIALIZER_REDIRECTING_CONSTRUCTOR"],
-    message: r"""Can't have other initializers together with 'this'.""");
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const Template<Message Function(String string)>

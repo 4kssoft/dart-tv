@@ -794,6 +794,12 @@ class BytecodeGenerator extends RecursiveVisitor<Null> {
     for (var param in function.namedParameters) {
       parameters.add(getParameterDeclaration(param));
     }
+    // We only need the required flags when loading the function declaration.
+    final parameterFlags =
+        getParameterFlags(function, mask: ParameterDeclaration.isRequiredFlag);
+    if (parameterFlags != null) {
+      flags |= FunctionDeclaration.hasParameterFlagsFlag;
+    }
 
     return new FunctionDeclaration(
         flags,
@@ -804,6 +810,7 @@ class BytecodeGenerator extends RecursiveVisitor<Null> {
         typeParameters,
         function.requiredParameterCount,
         parameters,
+        parameterFlags,
         objectTable.getHandle(function.returnType),
         nativeName,
         code,
@@ -857,8 +864,11 @@ class BytecodeGenerator extends RecursiveVisitor<Null> {
     return new ParameterDeclaration(nameHandle, typeHandle);
   }
 
-  List<int> getParameterFlags(FunctionNode function) {
-    int getFlags(VariableDeclaration variable) {
+  // Most uses of parameter flags in the VM only nee a subset of the flags,
+  // so the optional [mask] argument allows the caller to specify the subset
+  // that should be retained.
+  List<int> getParameterFlags(FunctionNode function, {int mask = -1}) {
+    int getFlags(VariableDeclaration variable, int mask) {
       int flags = 0;
       if (variable.isCovariant) {
         flags |= ParameterDeclaration.isCovariantFlag;
@@ -872,15 +882,15 @@ class BytecodeGenerator extends RecursiveVisitor<Null> {
       if (variable.isRequired) {
         flags |= ParameterDeclaration.isRequiredFlag;
       }
-      return flags;
+      return flags & mask;
     }
 
     final List<int> paramFlags = <int>[];
     for (var param in function.positionalParameters) {
-      paramFlags.add(getFlags(param));
+      paramFlags.add(getFlags(param, mask));
     }
     for (var param in function.namedParameters) {
-      paramFlags.add(getFlags(param));
+      paramFlags.add(getFlags(param, mask));
     }
 
     for (int flags in paramFlags) {
@@ -1600,7 +1610,7 @@ class BytecodeGenerator extends RecursiveVisitor<Null> {
       return;
     }
     if (condition is MethodInvocation &&
-        condition.name.name == '==' &&
+        condition.name.text == '==' &&
         (condition.receiver is NullLiteral ||
             condition.arguments.positional.single is NullLiteral)) {
       if (condition.receiver is NullLiteral) {
@@ -1845,7 +1855,7 @@ class BytecodeGenerator extends RecursiveVisitor<Null> {
 
   // Generate additional code for 'operator ==' to handle nulls.
   void _genEqualsOperatorNullHandling(Member member) {
-    if (member.name.name != '==' ||
+    if (member.name.text != '==' ||
         locals.numParameters != 2 ||
         member.enclosingClass == coreTypes.objectClass) {
       return;
@@ -1880,10 +1890,16 @@ class BytecodeGenerator extends RecursiveVisitor<Null> {
         int forwardingStubTargetCpIndex = null;
         int defaultFunctionTypeArgsCpIndex = null;
 
+        // We don't need the required flag when loading the code, but do need
+        // all other parameter flags.
+        final parameterFlagMask = ~ParameterDeclaration.isRequiredFlag;
+
         if (node is Constructor) {
-          parameterFlags = getParameterFlags(node.function);
+          parameterFlags =
+              getParameterFlags(node.function, mask: parameterFlagMask);
         } else if (node is Procedure) {
-          parameterFlags = getParameterFlags(node.function);
+          parameterFlags =
+              getParameterFlags(node.function, mask: parameterFlagMask);
 
           if (node.isForwardingStub) {
             forwardingStubTargetCpIndex =
@@ -2657,7 +2673,9 @@ class BytecodeGenerator extends RecursiveVisitor<Null> {
       flags |= ClosureDeclaration.hasTypeParamsFlag;
     }
 
-    final List<int> parameterFlags = getParameterFlags(function);
+    // We only need the required flags when loading the closure declaration.
+    final parameterFlags =
+        getParameterFlags(function, mask: ParameterDeclaration.isRequiredFlag);
     if (parameterFlags != null) {
       flags |= ClosureDeclaration.hasParameterFlagsFlag;
     }
@@ -3507,7 +3525,7 @@ class BytecodeGenerator extends RecursiveVisitor<Null> {
     if (target == null) {
       final int temp = locals.tempIndexInFrame(node);
       _genNoSuchMethodForSuperCall(
-          node.name.name,
+          node.name.text,
           temp,
           cp.addArgDescByArguments(args, hasReceiver: true),
           args.types,
@@ -3531,7 +3549,7 @@ class BytecodeGenerator extends RecursiveVisitor<Null> {
         hierarchy.getDispatchTarget(enclosingClass.superclass, node.name);
     if (target == null) {
       final int temp = locals.tempIndexInFrame(node);
-      _genNoSuchMethodForSuperCall(node.name.name, temp, cp.addArgDesc(1), [],
+      _genNoSuchMethodForSuperCall(node.name.text, temp, cp.addArgDesc(1), [],
           <Expression>[new ThisExpression()]);
       return;
     }
@@ -3548,7 +3566,7 @@ class BytecodeGenerator extends RecursiveVisitor<Null> {
     final Member target = hierarchy
         .getDispatchTarget(enclosingClass.superclass, node.name, setter: true);
     if (target == null) {
-      _genNoSuchMethodForSuperCall(node.name.name, temp, cp.addArgDesc(2), [],
+      _genNoSuchMethodForSuperCall(node.name.text, temp, cp.addArgDesc(2), [],
           <Expression>[new ThisExpression(), node.value],
           storeLastArgumentToTemp: hasResult);
     } else {
@@ -3820,7 +3838,7 @@ class BytecodeGenerator extends RecursiveVisitor<Null> {
         // closure call needs one temporary, so withTemp lets us use this
         // VariableGet's temporary when visiting the initializer.
         assert(init is MethodInvocation &&
-            init.name.name == "call" &&
+            init.name.text == "call" &&
             init.arguments.positional.length == 0);
         locals.withTemp(
             init, locals.tempIndexInFrame(node), () => _generateNode(init));

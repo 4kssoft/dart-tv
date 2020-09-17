@@ -2,7 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:io';
 
@@ -498,16 +497,6 @@ class ContextsPage extends DiagnosticPageWithNav {
     buf.writeln(writeOption(
         'Has pubspec.yaml file', folder.getChild('pubspec.yaml').exists));
     buf.writeln('</p>');
-
-    buf.writeln('</div>');
-
-    buf.writeln('<div class="column one-half">');
-    var sdk = driver?.sourceFactory?.dartSdk;
-    AnalysisOptionsImpl sdkOptions = sdk?.context?.analysisOptions;
-    if (sdkOptions != null) {
-      h3('SDK analysis options');
-      p(describe(sdkOptions), raw: true);
-    }
 
     buf.writeln('</div>');
 

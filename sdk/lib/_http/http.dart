@@ -23,7 +23,6 @@ import 'dart:io';
 import 'dart:typed_data';
 
 part 'crypto.dart';
-part 'embedder_config.dart';
 part 'http_date.dart';
 part 'http_headers.dart';
 part 'http_impl.dart';
@@ -869,7 +868,8 @@ abstract class HttpSession implements Map {
 }
 
 /**
- * A MIME/IANA media type used as the value of the [contentTypeHeader] header.
+ * A MIME/IANA media type used as the value of the
+ * [HttpHeaders.contentTypeHeader] header.
  *
  * A [ContentType] is immutable.
  */

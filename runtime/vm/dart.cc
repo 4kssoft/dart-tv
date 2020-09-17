@@ -69,6 +69,7 @@ Dart_FileReadCallback Dart::file_read_callback_ = NULL;
 Dart_FileWriteCallback Dart::file_write_callback_ = NULL;
 Dart_FileCloseCallback Dart::file_close_callback_ = NULL;
 Dart_EntropySource Dart::entropy_source_callback_ = NULL;
+Dart_GCEventCallback Dart::gc_event_callback_ = nullptr;
 
 // Structure for managing read-only global handles allocation used for
 // creating global read-only handles that are pre created and initialized
@@ -186,11 +187,6 @@ char* Dart::Init(const uint8_t* vm_isolate_snapshot,
     return Utils::StrDup("VM already initialized or flags not initialized.");
   }
 
-  if (FLAG_causal_async_stacks && FLAG_lazy_async_stacks) {
-    return Utils::StrDup(
-        "To use --lazy-async-stacks, please disable --causal-async-stacks!");
-  }
-
   const Snapshot* snapshot = nullptr;
   if (vm_isolate_snapshot != nullptr) {
     snapshot = Snapshot::SetupFromBuffer(vm_isolate_snapshot);
@@ -209,6 +205,10 @@ char* Dart::Init(const uint8_t* vm_isolate_snapshot,
     if (error != nullptr) {
       return error;
     }
+  }
+  if (FLAG_causal_async_stacks && FLAG_lazy_async_stacks) {
+    return Utils::StrDup(
+        "To use --lazy-async-stacks, please disable --causal-async-stacks!");
   }
 
   FrameLayout::Init();

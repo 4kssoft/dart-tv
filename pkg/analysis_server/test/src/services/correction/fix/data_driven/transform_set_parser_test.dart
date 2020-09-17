@@ -2,8 +2,12 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'package:analysis_server/src/services/correction/fix/data_driven/add_type_parameter.dart';
+import 'package:analysis_server/src/services/correction/fix/data_driven/modify_parameters.dart';
+import 'package:analysis_server/src/services/correction/fix/data_driven/parameter_reference.dart';
 import 'package:analysis_server/src/services/correction/fix/data_driven/rename.dart';
 import 'package:analysis_server/src/services/correction/fix/data_driven/transform_set_error_code.dart';
+import 'package:analysis_server/src/services/correction/fix/data_driven/value_extractor.dart';
 import 'package:matcher/matcher.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
@@ -18,14 +22,289 @@ void main() {
 
 @reflectiveTest
 class TransformSetParserTest extends AbstractTransformSetParserTest {
+  void test_addParameter_optionalNamed() {
+    parse('''
+version: 1
+transforms:
+- title: 'Add'
+  date: 2020-09-09
+  element:
+    uris: ['test.dart']
+    function: 'f'
+  changes:
+    - kind: 'addParameter'
+      index: 0
+      name: 'p'
+      style: optional_named
+      argumentValue:
+        kind: 'argument'
+        index: 1
+''');
+    var transforms = result.transformsFor('f', ['test.dart']);
+    expect(transforms, hasLength(1));
+    var transform = transforms[0];
+    expect(transform.title, 'Add');
+    expect(transform.changes, hasLength(1));
+    var change = transform.changes[0] as ModifyParameters;
+    var modifications = change.modifications;
+    expect(modifications, hasLength(1));
+    var modification = modifications[0] as AddParameter;
+    expect(modification.index, 0);
+    expect(modification.name, 'p');
+    expect(modification.isRequired, false);
+    expect(modification.isPositional, false);
+    var value = modification.argumentValue as ArgumentExtractor;
+    var parameter = value.parameter as PositionalParameterReference;
+    expect(parameter.index, 1);
+  }
+
+  void test_addParameter_optionalPositional() {
+    parse('''
+version: 1
+transforms:
+- title: 'Add'
+  date: 2020-09-09
+  element:
+    uris: ['test.dart']
+    function: 'f'
+  changes:
+    - kind: 'addParameter'
+      index: 0
+      name: 'p'
+      style: optional_positional
+''');
+    var transforms = result.transformsFor('f', ['test.dart']);
+    expect(transforms, hasLength(1));
+    var transform = transforms[0];
+    expect(transform.title, 'Add');
+    expect(transform.changes, hasLength(1));
+    var change = transform.changes[0] as ModifyParameters;
+    var modifications = change.modifications;
+    expect(modifications, hasLength(1));
+    var modification = modifications[0] as AddParameter;
+    expect(modification.index, 0);
+    expect(modification.name, 'p');
+    expect(modification.isRequired, false);
+    expect(modification.isPositional, true);
+  }
+
+  void test_addParameter_requiredNamed() {
+    parse('''
+version: 1
+transforms:
+- title: 'Add'
+  date: 2020-09-09
+  element:
+    uris: ['test.dart']
+    function: 'f'
+  changes:
+    - kind: 'addParameter'
+      index: 0
+      name: 'p'
+      style: required_named
+      argumentValue:
+        kind: 'argument'
+        index: 1
+''');
+    var transforms = result.transformsFor('f', ['test.dart']);
+    expect(transforms, hasLength(1));
+    var transform = transforms[0];
+    expect(transform.title, 'Add');
+    expect(transform.changes, hasLength(1));
+    var change = transform.changes[0] as ModifyParameters;
+    var modifications = change.modifications;
+    expect(modifications, hasLength(1));
+    var modification = modifications[0] as AddParameter;
+    expect(modification.index, 0);
+    expect(modification.name, 'p');
+    expect(modification.isRequired, true);
+    expect(modification.isPositional, false);
+    var value = modification.argumentValue as ArgumentExtractor;
+    var parameter = value.parameter as PositionalParameterReference;
+    expect(parameter.index, 1);
+  }
+
+  void test_addParameter_requiredPositional() {
+    parse('''
+version: 1
+transforms:
+- title: 'Add'
+  date: 2020-09-09
+  element:
+    uris: ['test.dart']
+    function: 'f'
+  changes:
+    - kind: 'addParameter'
+      index: 0
+      name: 'p'
+      style: required_positional
+      argumentValue:
+        kind: 'argument'
+        index: 1
+''');
+    var transforms = result.transformsFor('f', ['test.dart']);
+    expect(transforms, hasLength(1));
+    var transform = transforms[0];
+    expect(transform.title, 'Add');
+    expect(transform.changes, hasLength(1));
+    var change = transform.changes[0] as ModifyParameters;
+    var modifications = change.modifications;
+    expect(modifications, hasLength(1));
+    var modification = modifications[0] as AddParameter;
+    expect(modification.index, 0);
+    expect(modification.name, 'p');
+    expect(modification.isRequired, true);
+    expect(modification.isPositional, true);
+    var value = modification.argumentValue as ArgumentExtractor;
+    var parameter = value.parameter as PositionalParameterReference;
+    expect(parameter.index, 1);
+  }
+
+  void test_addTypeParameter_fromNamedArgument() {
+    parse('''
+version: 1
+transforms:
+- title: 'Add'
+  date: 2020-09-03
+  element:
+    uris:
+      - 'test.dart'
+    class: 'A'
+  changes:
+    - kind: 'addTypeParameter'
+      index: 0
+      name: 'T'
+      argumentValue:
+        kind: 'argument'
+        name: 'p'
+''');
+    var transforms = result.transformsFor('A', ['test.dart']);
+    expect(transforms, hasLength(1));
+    var transform = transforms[0];
+    expect(transform.title, 'Add');
+    expect(transform.changes, hasLength(1));
+    var change = transform.changes[0] as AddTypeParameter;
+    expect(change.index, 0);
+    expect(change.name, 'T');
+    var value = change.argumentValue as ArgumentExtractor;
+    var parameter = value.parameter as NamedParameterReference;
+    expect(parameter.name, 'p');
+  }
+
+  void test_addTypeParameter_fromPositionalArgument() {
+    parse('''
+version: 1
+transforms:
+- title: 'Add'
+  date: 2020-09-03
+  element:
+    uris:
+      - 'test.dart'
+    class: 'A'
+  changes:
+    - kind: 'addTypeParameter'
+      index: 0
+      name: 'T'
+      argumentValue:
+        kind: 'argument'
+        index: 2
+''');
+    var transforms = result.transformsFor('A', ['test.dart']);
+    expect(transforms, hasLength(1));
+    var transform = transforms[0];
+    expect(transform.title, 'Add');
+    expect(transform.changes, hasLength(1));
+    var change = transform.changes[0] as AddTypeParameter;
+    expect(change.index, 0);
+    expect(change.name, 'T');
+    var value = change.argumentValue as ArgumentExtractor;
+    var parameter = value.parameter as PositionalParameterReference;
+    expect(parameter.index, 2);
+  }
+
+  void test_date() {
+    parse('''
+version: 1
+transforms:
+- title: 'Rename g'
+  date: 2020-09-10
+  element:
+    uris: ['test.dart']
+    getter: 'g'
+  changes: []
+''');
+    var transforms = result.transformsFor('g', ['test.dart']);
+    expect(transforms, hasLength(1));
+    var transform = transforms[0];
+    expect(transform.title, 'Rename g');
+    expect(transform.changes, isEmpty);
+  }
+
+  void test_element_getter_inMixin() {
+    parse('''
+version: 1
+transforms:
+- title: 'Rename g'
+  date: 2020-09-02
+  element:
+    uris: ['test.dart']
+    getter: 'g'
+    inMixin: 'A'
+  changes: []
+''');
+    var transforms = result.transformsFor('g', ['test.dart']);
+    expect(transforms, hasLength(1));
+    var transform = transforms[0];
+    expect(transform.title, 'Rename g');
+    expect(transform.changes, isEmpty);
+  }
+
+  void test_element_getter_topLevel() {
+    parse('''
+version: 1
+transforms:
+- title: 'Rename g'
+  date: 2020-09-02
+  element:
+    uris: ['test.dart']
+    getter: 'g'
+  changes: []
+''');
+    var transforms = result.transformsFor('g', ['test.dart']);
+    expect(transforms, hasLength(1));
+    var transform = transforms[0];
+    expect(transform.title, 'Rename g');
+    expect(transform.changes, isEmpty);
+  }
+
+  void test_element_method_inClass() {
+    parse('''
+version: 1
+transforms:
+- title: 'Rename m'
+  date: 2020-09-02
+  element:
+    uris: ['test.dart']
+    method: 'm'
+    inClass: 'A'
+  changes: []
+''');
+    var transforms = result.transformsFor('m', ['test.dart']);
+    expect(transforms, hasLength(1));
+    var transform = transforms[0];
+    expect(transform.title, 'Rename m');
+    expect(transform.changes, isEmpty);
+  }
+
   void test_incomplete() {
     parse('''
 version: 1
 transforms:
 ''');
     expect(result, null);
-    // TODO(brianwilkerson) Report a diagnostic.
-    errorListener.assertErrors([]);
+    errorListener.assertErrors([
+      error(TransformSetErrorCode.invalidValue, 21, 0),
+    ]);
   }
 
   void test_invalidYaml() {
@@ -38,16 +317,68 @@ transforms:
     ]);
   }
 
+  void test_removeParameter_named() {
+    parse('''
+version: 1
+transforms:
+- title: 'Remove'
+  date: 2020-09-09
+  element:
+    uris: ['test.dart']
+    function: 'f'
+  changes:
+    - kind: 'removeParameter'
+      name: 'p'
+''');
+    var transforms = result.transformsFor('f', ['test.dart']);
+    expect(transforms, hasLength(1));
+    var transform = transforms[0];
+    expect(transform.title, 'Remove');
+    expect(transform.changes, hasLength(1));
+    var change = transform.changes[0] as ModifyParameters;
+    var modifications = change.modifications;
+    expect(modifications, hasLength(1));
+    var modification = modifications[0] as RemoveParameter;
+    var parameter = modification.parameter as NamedParameterReference;
+    expect(parameter.name, 'p');
+  }
+
+  void test_removeParameter_positional() {
+    parse('''
+version: 1
+transforms:
+- title: 'Remove'
+  date: 2020-09-09
+  element:
+    uris: ['test.dart']
+    function: 'f'
+  changes:
+    - kind: 'removeParameter'
+      index: 0
+''');
+    var transforms = result.transformsFor('f', ['test.dart']);
+    expect(transforms, hasLength(1));
+    var transform = transforms[0];
+    expect(transform.title, 'Remove');
+    expect(transform.changes, hasLength(1));
+    var change = transform.changes[0] as ModifyParameters;
+    var modifications = change.modifications;
+    expect(modifications, hasLength(1));
+    var modification = modifications[0] as RemoveParameter;
+    var parameter = modification.parameter as PositionalParameterReference;
+    expect(parameter.index, 0);
+  }
+
   void test_rename() {
     parse('''
 version: 1
 transforms:
 - title: 'Rename A'
+  date: 2020-08-21
   element:
     uris:
       - 'test.dart'
-    components:
-      - 'A'
+    class: 'A'
   changes:
     - kind: 'rename'
       newName: 'B'

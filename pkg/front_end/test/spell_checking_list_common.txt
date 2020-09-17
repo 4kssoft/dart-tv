@@ -276,6 +276,7 @@ behavior
 behaviors
 behind
 being
+believes
 belong
 belongs
 below
@@ -792,6 +793,7 @@ deprecate
 deprecated
 depromotes
 depth
+dereferenced
 derivation
 derive
 derived
@@ -1014,6 +1016,7 @@ equate
 equivalence
 equivalent
 equivalents
+erasure
 erroneous
 error
 errors
@@ -1807,6 +1810,7 @@ means
 meant
 measurably
 measure
+measurements
 mechanism
 medium
 meet
@@ -2786,6 +2790,7 @@ starts
 startup
 state
 stateful
+stateless
 statement
 statement's
 statements

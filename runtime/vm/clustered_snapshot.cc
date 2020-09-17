@@ -1517,7 +1517,7 @@ class KernelProgramInfoDeserializationCluster : public DeserializationCluster {
 class CodeSerializationCluster : public SerializationCluster {
  public:
   explicit CodeSerializationCluster(Heap* heap)
-      : SerializationCluster("Code") {}
+      : SerializationCluster("Code"), array_(Array::Handle()) {}
   ~CodeSerializationCluster() {}
 
   void Trace(Serializer* s, ObjectPtr object) {
@@ -1552,11 +1552,23 @@ class CodeSerializationCluster : public SerializationCluster {
       if (calls_array != Array::null()) {
         // Some Code entries in the static calls target table may only be
         // accessible via here, so push the Code objects.
-        auto const length = Smi::Value(calls_array->ptr()->length_);
-        for (intptr_t i = 0; i < length; i++) {
-          auto const object = calls_array->ptr()->data()[i];
-          if (object->IsHeapObject() && object->IsCode()) {
-            s->Push(object);
+        array_ = calls_array;
+        for (auto entry : StaticCallsTable(array_)) {
+          auto kind = Code::KindField::decode(
+              Smi::Value(entry.Get<Code::kSCallTableKindAndOffset>()));
+          switch (kind) {
+            case Code::kCallViaCode:
+              // Code object in the pool.
+              continue;
+            case Code::kPcRelativeTTSCall:
+              // TTS will be reachable through type object which itself is
+              // in the pool.
+              continue;
+            case Code::kPcRelativeCall:
+            case Code::kPcRelativeTailCall:
+              auto destination = entry.Get<Code::kSCallTableCodeOrTypeTarget>();
+              ASSERT(destination->IsHeapObject() && destination->IsCode());
+              s->Push(destination);
           }
         }
       }
@@ -1744,6 +1756,37 @@ class CodeSerializationCluster : public SerializationCluster {
       WriteField(code, deopt_info_array_);
       WriteField(code, static_calls_target_table_);
     }
+
+#if defined(DART_PRECOMPILER)
+    if (FLAG_write_v8_snapshot_profile_to != nullptr &&
+        code->ptr()->static_calls_target_table_ != Array::null()) {
+      // If we are writing V8 snapshot profile then attribute references
+      // going through static calls.
+      array_ = code->ptr()->static_calls_target_table_;
+      intptr_t index = code->ptr()->object_pool_ != ObjectPool::null()
+                           ? code->ptr()->object_pool_->ptr()->length_
+                           : 0;
+      for (auto entry : StaticCallsTable(array_)) {
+        auto kind = Code::KindField::decode(
+            Smi::Value(entry.Get<Code::kSCallTableKindAndOffset>()));
+        switch (kind) {
+          case Code::kCallViaCode:
+            // Code object in the pool.
+            continue;
+          case Code::kPcRelativeTTSCall:
+            // TTS will be reachable through type object which itself is
+            // in the pool.
+            continue;
+          case Code::kPcRelativeCall:
+          case Code::kPcRelativeTailCall:
+            auto destination = entry.Get<Code::kSCallTableCodeOrTypeTarget>();
+            ASSERT(destination->IsHeapObject() && destination->IsCode());
+            s->AttributeElementRef(destination, index++);
+        }
+      }
+    }
+#endif  // defined(DART_PRECOMPILER)
+
 #if !defined(PRODUCT)
     WriteField(code, return_address_metadata_);
     if (FLAG_code_comments) {
@@ -1789,6 +1832,7 @@ class CodeSerializationCluster : public SerializationCluster {
 
   GrowableArray<CodePtr> objects_;
   GrowableArray<CodePtr> deferred_objects_;
+  Array& array_;
 };
 #endif  // !DART_PRECOMPILED_RUNTIME
 
@@ -4803,10 +4847,8 @@ class OneByteStringSerializationCluster : public SerializationCluster {
       OneByteStringPtr str = objects_[i];
       AutoTraceObject(str);
       const intptr_t length = Smi::Value(str->ptr()->length_);
-      s->WriteUnsigned(length);
-      s->Write<bool>(str->ptr()->IsCanonical());
-      intptr_t hash = String::GetCachedHash(str);
-      s->Write<int32_t>(hash);
+      ASSERT(length <= compiler::target::kSmiMax);
+      s->WriteUnsigned((length << 1) | (str->ptr()->IsCanonical() ? 1 : 0));
       s->WriteBytes(str->ptr()->data(), length);
     }
   }
@@ -4836,16 +4878,20 @@ class OneByteStringDeserializationCluster : public DeserializationCluster {
   void ReadFill(Deserializer* d) {
     for (intptr_t id = start_index_; id < stop_index_; id++) {
       OneByteStringPtr str = static_cast<OneByteStringPtr>(d->Ref(id));
-      const intptr_t length = d->ReadUnsigned();
-      bool is_canonical = d->Read<bool>();
+      const intptr_t combined = d->ReadUnsigned();
+      const intptr_t length = combined >> 1;
+      const bool is_canonical = (combined & 1) != 0;
       Deserializer::InitializeHeader(str, kOneByteStringCid,
                                      OneByteString::InstanceSize(length),
                                      is_canonical);
       str->ptr()->length_ = Smi::New(length);
-      String::SetCachedHash(str, d->Read<int32_t>());
+      uint32_t hash = 0;
       for (intptr_t j = 0; j < length; j++) {
-        str->ptr()->data()[j] = d->Read<uint8_t>();
+        uint8_t code_point = d->Read<uint8_t>();
+        str->ptr()->data()[j] = code_point;
+        hash = CombineHashes(hash, code_point);
       }
+      String::SetCachedHash(str, FinalizeHash(hash, String::kHashBits));
     }
   }
 };
@@ -4880,10 +4926,8 @@ class TwoByteStringSerializationCluster : public SerializationCluster {
       TwoByteStringPtr str = objects_[i];
       AutoTraceObject(str);
       const intptr_t length = Smi::Value(str->ptr()->length_);
-      s->WriteUnsigned(length);
-      s->Write<bool>(str->ptr()->IsCanonical());
-      intptr_t hash = String::GetCachedHash(str);
-      s->Write<int32_t>(hash);
+      ASSERT(length <= (compiler::target::kSmiMax / 2));
+      s->WriteUnsigned((length << 1) | (str->ptr()->IsCanonical() ? 1 : 0));
       s->WriteBytes(reinterpret_cast<uint8_t*>(str->ptr()->data()), length * 2);
     }
   }
@@ -4913,15 +4957,16 @@ class TwoByteStringDeserializationCluster : public DeserializationCluster {
   void ReadFill(Deserializer* d) {
     for (intptr_t id = start_index_; id < stop_index_; id++) {
       TwoByteStringPtr str = static_cast<TwoByteStringPtr>(d->Ref(id));
-      const intptr_t length = d->ReadUnsigned();
-      bool is_canonical = d->Read<bool>();
+      const intptr_t combined = d->ReadUnsigned();
+      const intptr_t length = combined >> 1;
+      const bool is_canonical = (combined & 1) != 0;
       Deserializer::InitializeHeader(str, kTwoByteStringCid,
                                      TwoByteString::InstanceSize(length),
                                      is_canonical);
       str->ptr()->length_ = Smi::New(length);
-      String::SetCachedHash(str, d->Read<int32_t>());
       uint8_t* cdata = reinterpret_cast<uint8_t*>(str->ptr()->data());
       d->ReadBytes(cdata, length * 2);
+      String::SetCachedHash(str, String::Hash(str));
     }
   }
 };
@@ -5553,9 +5598,15 @@ bool Serializer::CreateArtificalNodeIfNeeded(ObjectPtr obj) {
     name = str.ToCString();
   }
 
-  TraceStartWritingObject(type, obj, name);
+  // CreateArtificalNodeIfNeeded might call TraceStartWritingObject
+  // and these calls don't nest, so we need to call this outside
+  // of the tracing scope created below.
   if (owner != nullptr) {
     CreateArtificalNodeIfNeeded(owner);
+  }
+
+  TraceStartWritingObject(type, obj, name);
+  if (owner != nullptr) {
     AttributePropertyRef(owner, owner_ref_name,
                          /*permit_artificial_ref=*/true);
   }
@@ -5572,10 +5623,6 @@ const char* Serializer::ReadOnlyObjectType(intptr_t cid) {
       return "CodeSourceMap";
     case kCompressedStackMapsCid:
       return "CompressedStackMaps";
-    case kOneByteStringCid:
-      return "OneByteString";
-    case kTwoByteStringCid:
-      return "TwoByteString";
     default:
       return nullptr;
   }
@@ -6302,8 +6349,6 @@ DeserializationCluster* Deserializer::ReadCluster() {
       case kPcDescriptorsCid:
       case kCodeSourceMapCid:
       case kCompressedStackMapsCid:
-      case kOneByteStringCid:
-      case kTwoByteStringCid:
         return new (Z) RODataDeserializationCluster();
     }
   }

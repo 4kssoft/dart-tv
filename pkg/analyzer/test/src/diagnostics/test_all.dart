@@ -37,6 +37,7 @@ import 'async_keyword_used_as_identifier_test.dart'
 import 'await_in_late_local_variable_initializer_test.dart'
     as await_in_late_local_variable_initializer;
 import 'await_in_wrong_context_test.dart' as await_in_wrong_context;
+import 'binary_operator_written_out_test.dart' as binary_operator_written_out;
 import 'body_might_complete_normally_test.dart' as body_might_complete_normally;
 import 'built_in_identifier_as_extension_name_test.dart'
     as built_in_as_extension_name;
@@ -518,6 +519,7 @@ import 'rethrow_outside_catch_test.dart' as rethrow_outside_catch;
 import 'return_in_generative_constructor_test.dart'
     as return_in_generative_constructor;
 import 'return_in_generator_test.dart' as return_in_generator;
+import 'return_of_do_not_store_test.dart' as return_of_do_not_store;
 import 'return_of_invalid_type_test.dart' as return_of_invalid_type;
 import 'return_without_value_test.dart' as return_without_value;
 import 'sdk_version_as_expression_in_const_context_test.dart'
@@ -668,6 +670,7 @@ main() {
     async_keyword_used_as_identifier.main();
     await_in_late_local_variable_initializer.main();
     await_in_wrong_context.main();
+    binary_operator_written_out.main();
     body_might_complete_normally.main();
     built_in_as_extension_name.main();
     built_in_as_prefix_name.main();
@@ -982,6 +985,7 @@ main() {
     rethrow_outside_catch.main();
     return_in_generative_constructor.main();
     return_in_generator.main();
+    return_of_do_not_store.main();
     return_of_invalid_type.main();
     return_without_value.main();
     set_element_from_deferred_library.main();

@@ -4,7 +4,10 @@ import "dart:core" as core;
 import "dart:_internal" as _in;
 
 class Class extends core::Object {
+  static const field core::int staticConstField = #C1;
   static field core::int? staticFieldWithoutInitializer = null;
+  field core::int nonNullableInstanceFieldWithInitializer = self::init<core::int>(55);
+  field core::int? nullableInstanceFieldWithInitializer = self::init<core::int?>(17);
   static field core::int? _#nonNullableStaticFieldWithInitializer1 = null;
   static field core::int? _#nullableStaticFieldWithInitializer1 = null;
   static field core::bool _#nullableStaticFieldWithInitializer1#isSet = false;
@@ -86,6 +89,7 @@ class Class extends core::Object {
   }
 }
 static field dynamic lastInit;
+static const field core::int constTopLevelField = #C2;
 static field core::int? topLevelFieldWithoutInitializer;
 static field core::int? _#nonNullableTopLevelFieldWithInitializer1 = null;
 static field core::int? _#nullableTopLevelFieldWithInitializer = null;
@@ -170,7 +174,9 @@ static get nullableFinalTopLevelFieldWithInitializer2() → core::int? {
 static method main() → dynamic {
   self::expect(null, self::lastInit);
   self::expect(null, self::topLevelFieldWithoutInitializer);
+  self::expect(324, #C2);
   self::expect(null, self::Class::staticFieldWithoutInitializer);
+  self::expect(123, #C1);
   self::expect(42, self::nonNullableTopLevelFieldWithInitializer1);
   self::expect(42, self::lastInit);
   self::expect(123, self::nullableTopLevelFieldWithInitializer);
@@ -207,6 +213,10 @@ static method main() → dynamic {
   self::expect(19, self::lastInit);
   self::throws(() → core::int => self::Class::nonNullableStaticFinalFieldWithInitializer2, "Read nonNullableStaticFinalFieldWithInitializer2");
   self::throws(() → core::int? => self::Class::nullableStaticFinalFieldWithInitializer2, "Read nullableStaticFinalFieldWithInitializer2");
+  self::Class c = new self::Class::•();
+  self::expect(17, self::lastInit);
+  self::expect(55, c.{self::Class::nonNullableInstanceFieldWithInitializer});
+  self::expect(17, c.{self::Class::nullableInstanceFieldWithInitializer});
 }
 static method expect(dynamic expected, dynamic actual) → dynamic {
   if(!expected.{core::Object::==}(actual))
@@ -222,4 +232,9 @@ static method throws(() → dynamic f, core::String message) → dynamic {
     return;
   }
   throw "${message}: ${value}";
+}
+
+constants  {
+  #C1 = 123
+  #C2 = 324
 }

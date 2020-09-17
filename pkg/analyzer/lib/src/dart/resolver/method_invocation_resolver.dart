@@ -414,16 +414,6 @@ class MethodInvocationResolver {
 
   void _resolveReceiverInterfaceType(MethodInvocation node, Expression receiver,
       InterfaceType receiverType, SimpleIdentifier nameNode, String name) {
-    if (_isCoreFunction(receiverType) &&
-        name == FunctionElement.CALL_METHOD_NAME) {
-      _resolver.nullableDereferenceVerifier.expression(
-        receiver,
-        type: receiverType,
-      );
-      _setDynamicResolution(node);
-      return;
-    }
-
     _resolveReceiverType(
       node: node,
       receiver: receiver,
@@ -638,13 +628,8 @@ class MethodInvocationResolver {
       receiverType: receiverType,
       name: name,
       receiverErrorNode: receiverErrorNode,
-      nameErrorNode: nameNode,
+      nameErrorEntity: nameNode,
     );
-
-    if (result.isAmbiguous) {
-      _setDynamicResolution(node);
-      return;
-    }
 
     var target = result.getter;
     if (target != null) {
@@ -665,6 +650,10 @@ class MethodInvocationResolver {
     }
 
     _setDynamicResolution(node);
+
+    if (!result.needsGetterError) {
+      return;
+    }
 
     String receiverClassName = '<unknown>';
     if (receiverType is InterfaceType) {

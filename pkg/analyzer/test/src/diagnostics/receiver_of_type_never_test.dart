@@ -190,7 +190,6 @@ void main(Never? x) {
 }
 ''', [
       error(CompileTimeErrorCode.UNCHECKED_USE_OF_NULLABLE_VALUE, 24, 1),
-      error(CompileTimeErrorCode.UNDEFINED_OPERATOR, 25, 3),
     ]);
 
     assertIndexExpression(
@@ -208,8 +207,6 @@ void main(Never? x) {
 }
 ''', [
       error(CompileTimeErrorCode.UNCHECKED_USE_OF_NULLABLE_VALUE, 24, 1),
-      error(CompileTimeErrorCode.UNDEFINED_OPERATOR, 25, 3),
-      error(CompileTimeErrorCode.UNDEFINED_OPERATOR, 25, 3),
     ]);
 
     assertIndexExpression(
@@ -229,7 +226,6 @@ void main(Never? x) {
 }
 ''', [
       error(CompileTimeErrorCode.UNCHECKED_USE_OF_NULLABLE_VALUE, 24, 1),
-      error(CompileTimeErrorCode.UNDEFINED_OPERATOR, 25, 3),
     ]);
 
     assertIndexExpression(
@@ -436,7 +432,7 @@ void main(Never x) {
       findNode.simple('foo'),
       readElement: null,
       writeElement: null,
-      type: 'Never',
+      type: 'dynamic',
     );
 
     assertAssignment(
@@ -446,7 +442,7 @@ void main(Never x) {
       writeElement: null,
       writeType: 'dynamic',
       operatorElement: null,
-      type: 'int',
+      type: 'dynamic',
     );
   }
 
@@ -562,13 +558,11 @@ void main() {
   }
 
   test_binaryExpression_plus() async {
-    await assertErrorsInCode(r'''
+    await assertNoErrorsInCode(r'''
 void main() {
   (throw '') + (1 + 2);
 }
-''', [
-      error(CompileTimeErrorCode.UNDEFINED_OPERATOR, 27, 1),
-    ]);
+''');
 
     assertBinaryExpression(
       findNode.binary('+ ('),

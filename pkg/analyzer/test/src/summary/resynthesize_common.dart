@@ -2,8 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async';
-
 import 'package:analyzer/dart/analysis/declared_variables.dart';
 import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/ast/ast.dart';
@@ -10334,6 +10332,20 @@ Map<dynamic, dynamic> m;
     var library = await checkLibrary('dynamic d;');
     checkElementText(library, r'''
 dynamic d;
+''');
+  }
+
+  test_type_inference_assignmentExpression_references_onTopLevelVariable() async {
+    var library = await checkLibrary('''
+var a = () {
+  b += 0;
+  return 0;
+};
+var b = 0;
+''');
+    checkElementText(library, '''
+int Function() a;
+int b;
 ''');
   }
 

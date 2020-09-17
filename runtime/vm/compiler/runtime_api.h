@@ -233,6 +233,8 @@ class RuntimeEntry : public ValueObject {
 
   word OffsetFromThread() const;
 
+  bool is_leaf() const;
+
  protected:
   RuntimeEntry(const dart::RuntimeEntry* runtime_entry,
                RuntimeEntryCallInternal call)
@@ -299,17 +301,22 @@ extern const word kOldPageSizeInWords;
 extern const word kOldPageMask;
 
 static constexpr intptr_t kObjectAlignment = ObjectAlignment::kObjectAlignment;
-// Parameter flags are stored in Smis. In particular, there is one flag (the
-// required flag), but we want ensure that the number of bits stored per Smi is
-// a power of two so we can simply uses shift to convert the parameter index to
-// calculate both the parameter flag index in the parameter names array to get
-// the packed flags and which bit in the packed flags to check.
+
+// Note: if other flags are added, then change the check for required parameters
+// when no named arguments are provided in
+// FlowGraphBuilder::BuildClosureCallHasRequiredNamedArgumentsCheck, since it
+// assumes there are no flag slots when no named parameters are required.
+enum ParameterFlags {
+  kRequiredNamedParameterFlag,
+  kNumParameterFlags,
+};
+// Parameter flags are stored in Smis. To ensure shifts and masks can be used to
+// calculate both the parameter flag index in the parameter names array and
+// which bit to check, kNumParameterFlagsPerElement should be a power of two.
 static constexpr intptr_t kNumParameterFlagsPerElementLog2 =
-    kBitsPerWordLog2 - 1;
+    kBitsPerWordLog2 - kNumParameterFlags;
 static constexpr intptr_t kNumParameterFlagsPerElement =
     1 << kNumParameterFlagsPerElementLog2;
-// Thus, in the untagged Smi value, only the lowest kNumParameterFlagsPerElement
-// bits are used for flags, with the other bits currently unused.
 static_assert(kNumParameterFlagsPerElement <= kSmiBits,
               "kNumParameterFlagsPerElement should fit in a Smi");
 
@@ -878,6 +885,8 @@ class TypeParameter : public AllStatic {
  public:
   static word InstanceSize();
   static word NextFieldOffset();
+  static word parameterized_class_id_offset();
+  static word index_offset();
 };
 
 class LibraryPrefix : public AllStatic {
@@ -1294,6 +1303,7 @@ class Field : public AllStatic {
 class TypeArguments : public AllStatic {
  public:
   static word instantiations_offset();
+  static word length_offset();
   static word nullability_offset();
   static word type_at_offset(intptr_t i);
   static word InstanceSize();

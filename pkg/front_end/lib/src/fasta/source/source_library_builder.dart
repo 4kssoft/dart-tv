@@ -76,11 +76,11 @@ import '../../api_prototype/experimental_flags.dart';
 import '../../base/nnbd_mode.dart';
 
 import '../builder/builder.dart';
-import '../builder/builtin_type_builder.dart';
+import '../builder/builtin_type_declaration_builder.dart';
 import '../builder/class_builder.dart';
 import '../builder/constructor_builder.dart';
 import '../builder/constructor_reference_builder.dart';
-import '../builder/dynamic_type_builder.dart';
+import '../builder/dynamic_type_declaration_builder.dart';
 import '../builder/enum_builder.dart';
 import '../builder/extension_builder.dart';
 import '../builder/field_builder.dart';
@@ -94,7 +94,7 @@ import '../builder/metadata_builder.dart';
 import '../builder/mixin_application_builder.dart';
 import '../builder/name_iterator.dart';
 import '../builder/named_type_builder.dart';
-import '../builder/never_type_builder.dart';
+import '../builder/never_type_declaration_builder.dart';
 import '../builder/nullability_builder.dart';
 import '../builder/prefix_builder.dart';
 import '../builder/procedure_builder.dart';
@@ -103,7 +103,7 @@ import '../builder/type_builder.dart';
 import '../builder/type_declaration_builder.dart';
 import '../builder/type_variable_builder.dart';
 import '../builder/unresolved_type.dart';
-import '../builder/void_type_builder.dart';
+import '../builder/void_type_declaration_builder.dart';
 
 import '../combinator.dart' show Combinator;
 
@@ -338,7 +338,7 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
   bool _enableVarianceInLibrary;
   bool _enableNonfunctionTypeAliasesInLibrary;
   bool _enableNonNullableInLibrary;
-  Version _enableNonNullableVersionInLibrary;
+  Version _enableNonNullableVersionCache;
   bool _enableTripleShiftInLibrary;
   bool _enableExtensionMethodsInLibrary;
 
@@ -360,10 +360,8 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
       loader.target.isExperimentEnabledInLibrary(
           ExperimentalFlag.nonNullable, _packageUri ?? importUri);
 
-  Version get enableNonNullableVersionInLibrary =>
-      _enableNonNullableVersionInLibrary ??= loader.target
-          .getExperimentEnabledVersionInLibrary(
-              ExperimentalFlag.nonNullable, _packageUri ?? importUri);
+  Version get _enableNonNullableVersion => _enableNonNullableVersionCache ??=
+      loader.target.getExperimentEnabledVersion(ExperimentalFlag.nonNullable);
 
   bool get enableTripleShiftInLibrary => _enableTripleShiftInLibrary ??=
       loader.target.isExperimentEnabledInLibrary(
@@ -439,7 +437,7 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
   @override
   bool get isNonNullableByDefault =>
       enableNonNullableInLibrary &&
-      languageVersion.version >= enableNonNullableVersionInLibrary &&
+      languageVersion.version >= _enableNonNullableVersion &&
       !isOptOutTest(library.importUri);
 
   static bool isOptOutTest(Uri uri) {
@@ -749,8 +747,13 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
     }
   }
 
-  void addFields(String documentationComment, List<MetadataBuilder> metadata,
-      int modifiers, TypeBuilder type, List<FieldInfo> fieldInfos) {
+  void addFields(
+      String documentationComment,
+      List<MetadataBuilder> metadata,
+      int modifiers,
+      bool isTopLevel,
+      TypeBuilder type,
+      List<FieldInfo> fieldInfos) {
     for (FieldInfo info in fieldInfos) {
       bool isConst = modifiers & constMask != 0;
       bool isFinal = modifiers & finalMask != 0;
@@ -767,8 +770,17 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
         new Token.eof(startToken.previous.offset).setNext(startToken);
       }
       bool hasInitializer = info.initializerToken != null;
-      addField(documentationComment, metadata, modifiers, type, info.name,
-          info.charOffset, info.charEndOffset, startToken, hasInitializer,
+      addField(
+          documentationComment,
+          metadata,
+          modifiers,
+          isTopLevel,
+          type,
+          info.name,
+          info.charOffset,
+          info.charEndOffset,
+          startToken,
+          hasInitializer,
           constInitializerToken:
               potentiallyNeedInitializerInOutline ? startToken : null);
     }
@@ -1324,14 +1336,14 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
   Uri get importUri => library.importUri;
 
   void addSyntheticDeclarationOfDynamic() {
-    addBuilder(
-        "dynamic", new DynamicTypeBuilder(const DynamicType(), this, -1), -1);
+    addBuilder("dynamic",
+        new DynamicTypeDeclarationBuilder(const DynamicType(), this, -1), -1);
   }
 
   void addSyntheticDeclarationOfNever() {
     addBuilder(
         "Never",
-        new NeverTypeBuilder(
+        new NeverTypeDeclarationBuilder(
             const NeverType(Nullability.nonNullable), this, -1),
         -1);
   }
@@ -1346,14 +1358,17 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
 
   TypeBuilder addMixinApplication(
       TypeBuilder supertype, List<TypeBuilder> mixins, int charOffset) {
-    return addType(new MixinApplicationBuilder(supertype, mixins), charOffset);
+    return addType(
+        new MixinApplicationBuilder(supertype, mixins, fileUri, charOffset),
+        charOffset);
   }
 
   TypeBuilder addVoidType(int charOffset) {
     // 'void' is always nullable.
     return addNamedType(
         "void", const NullabilityBuilder.nullable(), null, charOffset)
-      ..bind(new VoidTypeBuilder(const VoidType(), this, charOffset));
+      ..bind(
+          new VoidTypeDeclarationBuilder(const VoidType(), this, charOffset));
   }
 
   /// Add a problem that might not be reported immediately.
@@ -1888,7 +1903,9 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
           isMixinDeclaration ? null : supertype,
           isNamedMixinApplication
               ? interfaces
-              : isMixinDeclaration ? [supertype, mixin] : null,
+              : isMixinDeclaration
+                  ? [supertype, mixin]
+                  : null,
           null, // No `on` clause types.
           new Scope(
               local: <String, MemberBuilder>{},
@@ -1954,6 +1971,7 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
       String documentationComment,
       List<MetadataBuilder> metadata,
       int modifiers,
+      bool isTopLevel,
       TypeBuilder type,
       String name,
       int charOffset,
@@ -2053,6 +2071,7 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
         type,
         name,
         modifiers,
+        isTopLevel,
         this,
         charOffset,
         charEndOffset,
@@ -2155,7 +2174,7 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
     MetadataCollector metadataCollector = loader.target.metadataCollector;
     if (returnType == null) {
       if (kind == ProcedureKind.Operator &&
-          identical(name, indexSetName.name)) {
+          identical(name, indexSetName.text)) {
         returnType = addVoidType(charOffset);
       } else if (kind == ProcedureKind.Setter) {
         returnType = addVoidType(charOffset);
@@ -2404,8 +2423,8 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
       List<FormalParameterBuilder> formals,
       NullabilityBuilder nullabilityBuilder,
       int charOffset) {
-    FunctionTypeBuilder builder = new FunctionTypeBuilder(
-        returnType, typeVariables, formals, nullabilityBuilder);
+    FunctionTypeBuilder builder = new FunctionTypeBuilder(returnType,
+        typeVariables, formals, nullabilityBuilder, fileUri, charOffset);
     checkTypeVariables(typeVariables, null);
     // Nested declaration began in `OutlineBuilder.beginFunctionType` or
     // `OutlineBuilder.beginFunctionTypedFormalParameter`.
@@ -2497,7 +2516,7 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
     } else if (declaration is PrefixBuilder) {
       // Ignored. Kernel doesn't represent prefixes.
       return;
-    } else if (declaration is BuiltinTypeBuilder) {
+    } else if (declaration is BuiltinTypeDeclarationBuilder) {
       // Nothing needed.
       return;
     } else {
@@ -2719,7 +2738,7 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
         VariableDeclaration originNamed = originNamedMap[forwarderNamed.name];
         if (originNamed == null) {
           return unhandled(
-              "null", forwarder.name.name, origin.fileOffset, origin.fileUri);
+              "null", forwarder.name.text, origin.fileOffset, origin.fileUri);
         }
         if (originNamed.initializer == null) continue;
         forwarderNamed.initializer = cloner.clone(originNamed.initializer);
@@ -2929,8 +2948,8 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
         assert(
             declaration is FieldBuilder ||
                 declaration is PrefixBuilder ||
-                declaration is DynamicTypeBuilder ||
-                declaration is NeverTypeBuilder,
+                declaration is DynamicTypeDeclarationBuilder ||
+                declaration is NeverTypeDeclarationBuilder,
             "Unexpected top level member $declaration "
             "(${declaration.runtimeType}).");
       }
@@ -3386,7 +3405,7 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
         targetReceiver =
             new InterfaceType(klass, klass.enclosingLibrary.nonNullable);
       }
-      String targetName = node.target.name.name;
+      String targetName = node.target.name.text;
       reportTypeArgumentIssues(issues, fileUri, node.fileOffset,
           typeArgumentsInfo: typeArgumentsInfo,
           targetReceiver: targetReceiver,
@@ -3470,7 +3489,7 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
     reportTypeArgumentIssues(issues, fileUri, offset,
         typeArgumentsInfo: getTypeArgumentsInfo(arguments),
         targetReceiver: receiverType,
-        targetName: name.name);
+        targetName: name.text);
   }
 
   void checkTypesInOutline(TypeEnvironment typeEnvironment) {

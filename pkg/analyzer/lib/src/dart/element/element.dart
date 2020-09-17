@@ -1919,6 +1919,7 @@ class ConstLocalVariableElementImpl extends LocalVariableElementImpl
 
 /// A concrete implementation of a [ConstructorElement].
 class ConstructorElementImpl extends ExecutableElementImpl
+    with ConstructorElementMixin
     implements ConstructorElement {
   /// The constructor to which this constructor is redirecting.
   ConstructorElement _redirectedConstructor;
@@ -2005,23 +2006,6 @@ class ConstructorElementImpl extends ExecutableElementImpl
     // This property is updated in ConstantEvaluationEngine even for
     // resynthesized constructors, so we don't have the usual assert here.
     _isCycleFree = isCycleFree;
-  }
-
-  @override
-  bool get isDefaultConstructor {
-    // unnamed
-    String name = this.name;
-    if (name != null && name.isNotEmpty) {
-      return false;
-    }
-    // no required parameters
-    for (ParameterElement parameter in parameters) {
-      if (parameter.isNotOptional) {
-        return false;
-      }
-    }
-    // OK, can be used as default constructor
-    return true;
   }
 
   @override
@@ -2161,6 +2145,26 @@ class ConstructorElementImpl extends ExecutableElementImpl
       computeConstants(library.typeProvider, library.typeSystem,
           context.declaredVariables, [this], analysisOptions.experimentStatus);
     }
+  }
+}
+
+/// Common implementation for methods defined in [ConstructorElement].
+mixin ConstructorElementMixin implements ConstructorElement {
+  @override
+  bool get isDefaultConstructor {
+    // unnamed
+    var name = this.name;
+    if (name != null && name.isNotEmpty) {
+      return false;
+    }
+    // no required parameters
+    for (ParameterElement parameter in parameters) {
+      if (parameter.isNotOptional) {
+        return false;
+      }
+    }
+    // OK, can be used as default constructor
+    return true;
   }
 }
 
@@ -6967,21 +6971,7 @@ class PropertyAccessorElementImpl_ImplicitGetter
   }
 
   @override
-  DartType get returnTypeInternal {
-    var returnType = variable.type;
-
-    // While performing inference during linking, the first step is to collect
-    // dependencies. During this step we resolve the expression, but we might
-    // reference elements that don't have their types inferred yet. So, here
-    // we give some type. A better solution would be to infer recursively, but
-    // we are not doing this yet.
-    if (returnType == null) {
-      assert(linkedContext.isLinking);
-      return DynamicTypeImpl.instance;
-    }
-
-    return returnType;
-  }
+  DartType get returnTypeInternal => variable.type;
 
   @override
   FunctionType get type => ElementTypeProvider.current.getExecutableType(this);
@@ -7138,7 +7128,19 @@ abstract class PropertyInducingElementImpl
   DartType get typeInternal {
     if (linkedNode != null) {
       if (_type != null) return _type;
-      return _type = linkedContext.getType(linkedNode);
+      _type = linkedContext.getType(linkedNode);
+
+      // While performing inference during linking, the first step is to collect
+      // dependencies. During this step we resolve the expression, but we might
+      // reference elements that don't have their types inferred yet. So, here
+      // we give some type. A better solution would be to infer recursively, but
+      // we are not doing this yet.
+      if (_type == null) {
+        assert(linkedContext.isLinking);
+        return DynamicTypeImpl.instance;
+      }
+
+      return _type;
     }
     if (isSynthetic && _type == null) {
       if (getter != null) {

@@ -10,6 +10,23 @@ import 'package:analyzer/error/error.dart';
 class TransformSetErrorCode extends ErrorCode {
   /**
    * Parameters:
+   * 0: the key with which the value is associated
+   * 1: the expected type of the value
+   * 0: the actual type of the value
+   */
+  static const TransformSetErrorCode invalidValue = TransformSetErrorCode(
+      'invalidValue',
+      "The value of '{0}' should be of type '{1}' but is of type '{2}'.");
+
+  /**
+   * Parameters:
+   * 0: the missing key
+   */
+  static const TransformSetErrorCode missingKey =
+      TransformSetErrorCode('missingKey', "Missing the required key '{0}'.");
+
+  /**
+   * Parameters:
    * 0: the unsupported key
    */
   static const TransformSetErrorCode unsupportedKey =
@@ -20,7 +37,7 @@ class TransformSetErrorCode extends ErrorCode {
    * 0: the message produced by the YAML parser
    */
   static const TransformSetErrorCode yamlSyntaxError =
-      TransformSetErrorCode('yamlSyntaxError', "{0}");
+      TransformSetErrorCode('yamlSyntaxError', "Parse error: {0}");
 
   /// Initialize a newly created error code.
   const TransformSetErrorCode(String name, String message,

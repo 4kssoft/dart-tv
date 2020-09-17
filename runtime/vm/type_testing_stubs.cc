@@ -91,10 +91,11 @@ const char* TypeTestingStubNamer::AssemblerSafeName(char* cname) {
 CodePtr TypeTestingStubGenerator::DefaultCodeForType(
     const AbstractType& type,
     bool lazy_specialize /* = true */) {
+  auto isolate = Isolate::Current();
+
   if (type.IsTypeRef()) {
-    return Isolate::Current()->null_safety()
-               ? StubCode::DefaultTypeTest().raw()
-               : StubCode::DefaultNullableTypeTest().raw();
+    return isolate->null_safety() ? StubCode::DefaultTypeTest().raw()
+                                  : StubCode::DefaultNullableTypeTest().raw();
   }
 
   // During bootstrapping we have no access to stubs yet, so we'll just return
@@ -109,8 +110,16 @@ CodePtr TypeTestingStubGenerator::DefaultCodeForType(
   if (type.IsTopTypeForSubtyping()) {
     return StubCode::TopTypeTypeTest().raw();
   }
+  if (type.IsTypeParameter()) {
+    const bool nullable = Instance::NullIsAssignableTo(type);
+    if (nullable) {
+      return StubCode::NullableTypeParameterTypeTest().raw();
+    } else {
+      return StubCode::TypeParameterTypeTest().raw();
+    }
+  }
 
-  if (type.IsType() || type.IsTypeParameter()) {
+  if (type.IsType()) {
     const bool should_specialize = !FLAG_precompiled_mode && lazy_specialize;
     const bool nullable = Instance::NullIsAssignableTo(type);
     if (should_specialize) {
@@ -144,7 +153,7 @@ CodePtr TypeTestingStubGenerator::OptimizedCodeForType(
 #if !defined(TARGET_ARCH_IA32)
   ASSERT(StubCode::HasBeenInitialized());
 
-  if (type.IsTypeRef()) {
+  if (type.IsTypeRef() || type.IsTypeParameter()) {
     return TypeTestingStubGenerator::DefaultCodeForType(
         type, /*lazy_specialize=*/false);
   }
@@ -514,8 +523,8 @@ void RegisterTypeArgumentsUse(const Function& function,
   //      type_arguments <- Constant(#TypeArguments: [ ... ])
   //
   //   Case b)
-  //      type_arguments <- InstantiateTypeArguments(
-  //          <type-expr-with-parameters>, ita, fta)
+  //      type_arguments <- InstantiateTypeArguments(ita, fta, uta)
+  //      (where uta may or may not be a constant TypeArguments object)
   //
   //   Case c)
   //      type_arguments <- LoadField(vx)
@@ -534,8 +543,10 @@ void RegisterTypeArgumentsUse(const Function& function,
     type_usage_info->UseTypeArgumentsInInstanceCreation(klass, type_arguments);
   } else if (InstantiateTypeArgumentsInstr* instantiate =
                  type_arguments->AsInstantiateTypeArguments()) {
-    const TypeArguments& ta = instantiate->type_arguments();
-    ASSERT(!ta.IsNull());
+    ASSERT(instantiate->type_arguments()->BindsToConstant());
+    ASSERT(!instantiate->type_arguments()->BoundConstant().IsNull());
+    const auto& ta =
+        TypeArguments::Cast(instantiate->type_arguments()->BoundConstant());
     type_usage_info->UseTypeArgumentsInInstanceCreation(klass, ta);
   } else if (LoadFieldInstr* load_field = type_arguments->AsLoadField()) {
     Definition* instance = load_field->instance()->definition();

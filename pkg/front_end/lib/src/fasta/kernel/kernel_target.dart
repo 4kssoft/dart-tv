@@ -65,19 +65,19 @@ import '../../base/nnbd_mode.dart';
 import '../builder/builder.dart';
 import '../builder/class_builder.dart';
 import '../builder/constructor_builder.dart';
-import '../builder/dynamic_type_builder.dart';
+import '../builder/dynamic_type_declaration_builder.dart';
 import '../builder/field_builder.dart';
 import '../builder/invalid_type_declaration_builder.dart';
 import '../builder/library_builder.dart';
 import '../builder/named_type_builder.dart';
-import '../builder/never_type_builder.dart';
+import '../builder/never_type_declaration_builder.dart';
 import '../builder/nullability_builder.dart';
 import '../builder/procedure_builder.dart';
 import '../builder/type_alias_builder.dart';
 import '../builder/type_builder.dart';
 import '../builder/type_declaration_builder.dart';
 import '../builder/type_variable_builder.dart';
-import '../builder/void_type_builder.dart';
+import '../builder/void_type_declaration_builder.dart';
 
 import '../compiler_context.dart' show CompilerContext;
 
@@ -148,18 +148,38 @@ class KernelTarget extends TargetImplementation {
   Component component;
 
   // 'dynamic' is always nullable.
+  // TODO(johnniwinther): Why isn't this using a FixedTypeBuilder?
   final TypeBuilder dynamicType = new NamedTypeBuilder(
-      "dynamic", const NullabilityBuilder.nullable(), null);
+      "dynamic",
+      const NullabilityBuilder.nullable(),
+      /* arguments = */ null,
+      /* fileUri = */ null,
+      /* charOffset = */ null);
 
-  final NamedTypeBuilder objectType =
-      new NamedTypeBuilder("Object", const NullabilityBuilder.omitted(), null);
+  final NamedTypeBuilder objectType = new NamedTypeBuilder(
+      "Object",
+      const NullabilityBuilder.omitted(),
+      /* arguments = */ null,
+      /* fileUri = */ null,
+      /* charOffset = */ null);
 
   // Null is always nullable.
-  final TypeBuilder nullType =
-      new NamedTypeBuilder("Null", const NullabilityBuilder.nullable(), null);
+  // TODO(johnniwinther): This could (maybe) use a FixedTypeBuilder when we
+  //  have NullType?
+  final TypeBuilder nullType = new NamedTypeBuilder(
+      "Null",
+      const NullabilityBuilder.nullable(),
+      /* arguments = */ null,
+      /* fileUri = */ null,
+      /* charOffset = */ null);
 
-  final TypeBuilder bottomType =
-      new NamedTypeBuilder("Never", const NullabilityBuilder.omitted(), null);
+  // TODO(johnniwinther): Why isn't this using a FixedTypeBuilder?
+  final TypeBuilder bottomType = new NamedTypeBuilder(
+      "Never",
+      const NullabilityBuilder.omitted(),
+      /* arguments = */ null,
+      /* fileUri = */ null,
+      /* charOffset = */ null);
 
   final bool excludeSource = !CompilerContext.current.options.embedSourceText;
 
@@ -289,9 +309,13 @@ class KernelTarget extends TargetImplementation {
     cls.implementedTypes.clear();
     cls.supertype = null;
     cls.mixedInType = null;
-    builder.supertypeBuilder =
-        new NamedTypeBuilder("Object", const NullabilityBuilder.omitted(), null)
-          ..bind(objectClassBuilder);
+    builder.supertypeBuilder = new NamedTypeBuilder(
+        "Object",
+        const NullabilityBuilder.omitted(),
+        /* arguments = */ null,
+        /* fileUri = */ null,
+        /* charOffset = */ null)
+      ..bind(objectClassBuilder);
     builder.interfaceBuilders = null;
     builder.mixedInTypeBuilder = null;
   }
@@ -456,7 +480,11 @@ class KernelTarget extends TargetImplementation {
             if (cls != objectClass) {
               cls.supertype ??= objectClass.asRawSupertype;
               declaration.supertypeBuilder ??= new NamedTypeBuilder(
-                  "Object", const NullabilityBuilder.omitted(), null)
+                  "Object",
+                  const NullabilityBuilder.omitted(),
+                  /* arguments = */ null,
+                  /* fileUri = */ null,
+                  /* charOffset = */ null)
                 ..bind(objectClassBuilder);
             }
             if (declaration.isMixinApplication) {
@@ -581,7 +609,7 @@ class KernelTarget extends TargetImplementation {
             builder.getSubstitutionMap(supertype.cls);
         for (Constructor constructor in supertype.cls.constructors) {
           Constructor referenceFrom =
-              indexedClass?.lookupConstructor(constructor.name.name);
+              indexedClass?.lookupConstructor(constructor.name.text);
 
           builder.addSyntheticConstructor(makeMixinApplicationConstructor(
               builder.cls,
@@ -593,9 +621,9 @@ class KernelTarget extends TargetImplementation {
       }
     } else if (supertype is InvalidTypeDeclarationBuilder ||
         supertype is TypeVariableBuilder ||
-        supertype is DynamicTypeBuilder ||
-        supertype is VoidTypeBuilder ||
-        supertype is NeverTypeBuilder) {
+        supertype is DynamicTypeDeclarationBuilder ||
+        supertype is VoidTypeDeclarationBuilder ||
+        supertype is NeverTypeDeclarationBuilder) {
       builder.addSyntheticConstructor(
           makeDefaultConstructor(builder.cls, referenceFrom));
     } else {
@@ -821,7 +849,7 @@ class KernelTarget extends TargetImplementation {
         }
       });
       Set<String> kernelConstructorNames =
-          cls.constructors.map((c) => c.name.name).toSet().difference({""});
+          cls.constructors.map((c) => c.name.text).toSet().difference({""});
       return kernelConstructorNames.containsAll(patchConstructorNames);
     }(),
         "Constructors of class '${builder.fullNameForErrors}' "
@@ -832,7 +860,7 @@ class KernelTarget extends TargetImplementation {
         if (initializer is RedirectingInitializer) {
           if (constructor.isConst && !initializer.target.isConst) {
             builder.addProblem(messageConstConstructorRedirectionToNonConst,
-                initializer.fileOffset, initializer.target.name.name.length);
+                initializer.fileOffset, initializer.target.name.text.length);
           }
           isRedirecting = true;
           break;
@@ -1044,7 +1072,7 @@ class KernelTarget extends TargetImplementation {
           patchFieldNames.remove(name);
         }
       });
-      Set<String> kernelFieldNames = cls.fields.map((f) => f.name.name).toSet();
+      Set<String> kernelFieldNames = cls.fields.map((f) => f.name.text).toSet();
       return kernelFieldNames.containsAll(patchFieldNames);
     }(),
         "Fields of class '${builder.fullNameForErrors}' "
@@ -1090,7 +1118,8 @@ class KernelTarget extends TargetImplementation {
 
     if (loader.target.context.options
         .isExperimentEnabledGlobally(ExperimentalFlag.valueClass)) {
-      valueClass.transformComponent(component, loader.coreTypes);
+      valueClass.transformComponent(
+          component, loader.coreTypes, loader.hierarchy);
       ticker.logMs("Lowered value classes");
     }
 
@@ -1210,7 +1239,7 @@ Constructor defaultSuperConstructor(Class cls) {
   Class superclass = cls.superclass;
   if (superclass != null) {
     for (Constructor constructor in superclass.constructors) {
-      if (constructor.name.name.isEmpty) {
+      if (constructor.name.text.isEmpty) {
         return constructor.function.requiredParameterCount == 0
             ? constructor
             : null;

@@ -2,8 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:async';
-
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/nullability_suffix.dart';
@@ -89,7 +87,6 @@ class StrongModeLocalInferenceTest extends PubPackageResolutionTest {
 
   test_async_method_propagation() async {
     String code = r'''
-      import "dart:async";
       class A {
         Future f0() => new Future.value(3);
         Future f1() async => new Future.value(3);
@@ -146,8 +143,6 @@ class StrongModeLocalInferenceTest extends PubPackageResolutionTest {
 
   test_async_propagation() async {
     String code = r'''
-      import "dart:async";
-
       Future f0() => new Future.value(3);
       Future f1() async => new Future.value(3);
       Future f2() async => await new Future.value(3);
@@ -3380,14 +3375,13 @@ void test<S>(T pf<T>(T e)) {
 
   test_genericMethod_then() async {
     await assertErrorsInCode(r'''
-import 'dart:async';
 String toString(int x) => x.toString();
 main() {
   Future<int> bar = null;
   var foo = bar.then(toString);
 }
 ''', [
-      error(HintCode.UNUSED_LOCAL_VARIABLE, 102, 3),
+      error(HintCode.UNUSED_LOCAL_VARIABLE, 81, 3),
     ]);
 
     expectInitializerType('foo', 'Future<String>');
@@ -3410,14 +3404,13 @@ main() {
   test_genericMethod_then_propagatedType() async {
     // Regression test for https://github.com/dart-lang/sdk/issues/25482.
     await assertErrorsInCode(r'''
-import 'dart:async';
 void main() {
   Future<String> p;
   var foo = p.then((r) => new Future<String>.value(3));
 }
 ''', [
-      error(HintCode.UNUSED_LOCAL_VARIABLE, 61, 3),
-      error(CompileTimeErrorCode.ARGUMENT_TYPE_NOT_ASSIGNABLE, 106, 1),
+      error(HintCode.UNUSED_LOCAL_VARIABLE, 40, 3),
+      error(CompileTimeErrorCode.ARGUMENT_TYPE_NOT_ASSIGNABLE, 85, 1),
     ]);
     // Note: this correctly reports the error
     // CompileTimeErrorCode.ARGUMENT_TYPE_NOT_ASSIGNABLE when run with the driver;
@@ -3502,36 +3495,36 @@ void test() {
   }
 
   test_instantiateToBounds_class_error_recursion() async {
-    await assertErrorsInCode(r'''
+    await assertNoErrorsInCode(r'''
 class C<T0 extends List<T1>, T1 extends List<T0>> {}
 C c;
-''', []);
+''');
     _assertTopVarType('c', 'C<List<dynamic>, List<dynamic>>');
   }
 
   test_instantiateToBounds_class_error_recursion_self() async {
-    await assertErrorsInCode(r'''
+    await assertNoErrorsInCode(r'''
 class C<T extends C<T>> {}
 C c;
-''', []);
+''');
     _assertTopVarType('c', 'C<C<dynamic>>');
   }
 
   test_instantiateToBounds_class_error_recursion_self2() async {
-    await assertErrorsInCode(r'''
+    await assertNoErrorsInCode(r'''
 class A<E> {}
 class C<T extends A<T>> {}
 C c;
-''', []);
+''');
     _assertTopVarType('c', 'C<A<dynamic>>');
   }
 
   test_instantiateToBounds_class_error_typedef() async {
-    await assertErrorsInCode(r'''
+    await assertNoErrorsInCode(r'''
 typedef T F<T>(T x);
 class C<T extends F<T>> {}
 C c;
-''', []);
+''');
     _assertTopVarType('c', 'C<dynamic Function(dynamic)>');
   }
 
@@ -3980,7 +3973,6 @@ main() {
 
   test_foreachInference_var_stream() async {
     await resolveTestCode(r'''
-import 'dart:async';
 main() async {
   Stream<int> stream = null;
   await for (var v in stream) {

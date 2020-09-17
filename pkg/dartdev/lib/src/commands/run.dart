@@ -8,16 +8,22 @@ import 'dart:developer';
 import 'dart:io';
 
 import 'package:args/args.dart';
+import 'package:meta/meta.dart';
 import 'package:path/path.dart';
 
 import '../core.dart';
+import '../events.dart';
 import '../experiments.dart';
 import '../sdk.dart';
 import '../utils.dart';
 import '../vm_interop_handler.dart';
 
 class RunCommand extends DartdevCommand<int> {
+  static const String cmdName = 'run';
+
   static bool launchDds = false;
+  static String ddsHost;
+  static String ddsPort;
 
   // kErrorExitCode, as defined in runtime/bin/error_exit.h
   static const errorExitCode = 255;
@@ -39,7 +45,7 @@ class RunCommand extends DartdevCommand<int> {
 
   RunCommand({this.verbose = false})
       : super(
-          'run',
+          cmdName,
           'Run a Dart program.',
         ) {
     // NOTE: When updating this list of flags, be sure to add any VM flags to
@@ -151,7 +157,7 @@ class RunCommand extends DartdevCommand<int> {
   String get invocation => '${super.invocation} <dart file | package target>';
 
   @override
-  FutureOr<int> run() async {
+  FutureOr<int> runImpl() async {
     // The command line arguments after 'run'
     var args = argResults.arguments.toList();
 
@@ -209,9 +215,6 @@ class RunCommand extends DartdevCommand<int> {
     // service intermediary which implements the VM service protocol and
     // provides non-VM specific extensions (e.g., log caching, client
     // synchronization).
-    // TODO(bkonyi): Remove once DevTools supports DDS.
-    // See https://github.com/flutter/flutter/issues/62507
-    launchDds = false;
     _DebuggingSession debugSession;
     if (launchDds) {
       debugSession = _DebuggingSession();
@@ -237,6 +240,14 @@ class RunCommand extends DartdevCommand<int> {
     VmInteropHandler.run(path, runArgs);
     return 0;
   }
+
+  @override
+  UsageEvent createUsageEvent(int exitCode) => RunUsageEvent(
+        usagePath,
+        exitCode: exitCode,
+        specifiedExperiments: specifiedExperiments,
+        args: argResults.arguments,
+      );
 }
 
 class _DebuggingSession {
@@ -255,7 +266,9 @@ class _DebuggingSession {
             sdk.ddsSnapshot
           else
             absolute(dirname(sdk.dart), 'gen', 'dds.dart.snapshot'),
-          serviceInfo.serverUri.toString()
+          serviceInfo.serverUri.toString(),
+          RunCommand.ddsHost,
+          RunCommand.ddsPort,
         ],
         mode: ProcessStartMode.detachedWithStdio);
     final completer = Completer<void>();
@@ -264,10 +277,34 @@ class _DebuggingSession {
       if (event == 'DDS started') {
         sub.cancel();
         completer.complete();
+      } else if (event.contains('Failed to start DDS')) {
+        sub.cancel();
+        completer.completeError(event.replaceAll(
+          'Failed to start DDS',
+          'Could not start Observatory HTTP server',
+        ));
       }
     });
-
-    await completer.future;
-    return true;
+    try {
+      await completer.future;
+      return true;
+    } catch (e) {
+      stderr.write(e);
+      return false;
+    }
   }
+}
+
+/// The [UsageEvent] for the run command.
+class RunUsageEvent extends UsageEvent {
+  RunUsageEvent(String usagePath,
+      {String label,
+      @required int exitCode,
+      @required List<String> specifiedExperiments,
+      @required List<String> args})
+      : super(RunCommand.cmdName, usagePath,
+            label: label,
+            exitCode: exitCode,
+            specifiedExperiments: specifiedExperiments,
+            args: args);
 }

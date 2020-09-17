@@ -273,11 +273,11 @@ class VerifyingVisitor extends RecursiveVisitor<void> {
     var oldParent = enterParent(node);
     bool isTopLevel = node.parent == currentLibrary;
     if (isTopLevel && !node.isStatic) {
-      problem(node, "The top-level field '${node.name.name}' should be static",
+      problem(node, "The top-level field '${node.name.text}' should be static",
           context: node);
     }
     if (node.isConst && !node.isStatic) {
-      problem(node, "The const field '${node.name.name}' should be static",
+      problem(node, "The const field '${node.name.text}' should be static",
           context: node);
     }
     classTypeParametersAreInScope = !node.isStatic;
@@ -795,6 +795,21 @@ class VerifyingVisitor extends RecursiveVisitor<void> {
           "Type $node provides ${node.typeArguments.length}"
           " type arguments, but the class declares"
           " ${node.classNode.typeParameters.length} parameters.");
+    }
+    if (node.classNode.isAnonymousMixin) {
+      if (currentParent is FunctionNode) {
+        TreeNode functionNodeParent = currentParent.parent;
+        if (functionNodeParent is Constructor ||
+            functionNodeParent is Procedure &&
+                functionNodeParent.kind == ProcedureKind.Factory) {
+          if (functionNodeParent.parent == node.classNode) {
+            // We only allow references to anonymous mixins in types as the
+            // return type of its own constructor.
+            return;
+          }
+        }
+      }
+      problem(currentParent, "Type $node references an anonymous mixin class.");
     }
   }
 

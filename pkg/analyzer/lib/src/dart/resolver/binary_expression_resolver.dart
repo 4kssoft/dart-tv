@@ -178,7 +178,7 @@ class BinaryExpressionResolver {
     }
     InferenceContext.setType(right, rightContextType);
 
-    flow?.ifNullExpression_rightBegin(left);
+    flow?.ifNullExpression_rightBegin(left, leftType);
     right.accept(_resolver);
     right = node.rightOperand;
     flow?.ifNullExpression_end();
@@ -339,12 +339,12 @@ class BinaryExpressionResolver {
       receiverType: leftType,
       name: methodName,
       receiverErrorNode: leftOperand,
-      nameErrorNode: node,
+      nameErrorEntity: node,
     );
 
     node.staticElement = result.getter;
     node.staticInvokeType = result.getter?.type;
-    if (_shouldReportInvalidMember(leftType, result)) {
+    if (result.needsGetterError) {
       if (leftOperand is SuperExpression) {
         _errorReporter.reportErrorForToken(
           CompileTimeErrorCode.UNDEFINED_SUPER_OPERATOR,
@@ -379,19 +379,5 @@ class BinaryExpressionResolver {
       );
     }
     _inferenceHelper.recordStaticType(node, staticType);
-  }
-
-  /// Return `true` if we should report an error for the lookup [result] on
-  /// the [type].
-  ///
-  /// TODO(scheglov) this is duplicate
-  bool _shouldReportInvalidMember(DartType type, ResolutionResult result) {
-    if (result.isNone && type != null && !type.isDynamic) {
-      if (_isNonNullableByDefault && _typeSystem.isPotentiallyNullable(type)) {
-        return false;
-      }
-      return true;
-    }
-    return false;
   }
 }

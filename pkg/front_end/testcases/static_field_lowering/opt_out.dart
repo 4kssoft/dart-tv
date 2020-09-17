@@ -11,6 +11,8 @@ T init<T>(T value) {
   return value;
 }
 
+const int constTopLevelField = 324;
+
 int topLevelFieldWithoutInitializer;
 
 int topLevelFieldWithInitializer1 = init(42);
@@ -26,6 +28,10 @@ final int finalTopLevelFieldWithInitializer2 =
         : 87;
 
 class Class {
+  static const int staticConstField = 123;
+
+  int instanceFieldWithInitializer = init(55);
+
   static int staticFieldWithoutInitializer;
 
   static int staticFieldWithInitializer1 = init(55);
@@ -44,7 +50,9 @@ class Class {
 main() {
   expect(null, lastInit);
   expect(null, topLevelFieldWithoutInitializer);
+  expect(324, constTopLevelField);
   expect(null, Class.staticFieldWithoutInitializer);
+  expect(123, Class.staticConstField);
 
   expect(42, topLevelFieldWithInitializer1);
   expect(42, lastInit);
@@ -73,6 +81,10 @@ main() {
 
   throws(() => Class.staticFinalFieldWithInitializer2,
       'Read staticFinalFieldWithInitializer2');
+
+  var c = new Class();
+  expect(55, lastInit);
+  expect(55, c.instanceFieldWithInitializer);
 }
 
 expect(expected, actual) {

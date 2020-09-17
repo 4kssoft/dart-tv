@@ -997,6 +997,26 @@ AllocateUninitializedContextInstr::AllocateUninitializedContextInstr(
   ASSERT(!CompilerState::Current().is_aot());
 }
 
+LocationSummary* AllocateTypedDataInstr::MakeLocationSummary(Zone* zone,
+                                                             bool opt) const {
+  const intptr_t kNumInputs = 1;
+  const intptr_t kNumTemps = 0;
+  LocationSummary* locs = new (zone)
+      LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kCall);
+  locs->set_in(kLengthPos, Location::RegisterLocation(
+                               AllocateTypedDataArrayABI::kLengthReg));
+  locs->set_out(
+      0, Location::RegisterLocation(AllocateTypedDataArrayABI::kResultReg));
+  return locs;
+}
+
+void AllocateTypedDataInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+  const Code& stub = Code::ZoneHandle(
+      compiler->zone(), StubCode::GetAllocationStubForTypedData(class_id()));
+  compiler->GenerateStubCall(token_pos(), stub, PcDescriptorsLayout::kOther,
+                             locs());
+}
+
 bool StoreInstanceFieldInstr::IsUnboxedStore() const {
   return slot().IsDartField() &&
          FlowGraphCompiler::IsUnboxedField(slot().field());
@@ -2687,6 +2707,7 @@ bool LoadFieldInstr::IsImmutableLengthLoad() const {
     case Slot::Kind::kArray_length:
     case Slot::Kind::kTypedDataBase_length:
     case Slot::Kind::kString_length:
+    case Slot::Kind::kTypeArguments_length:
       return true;
     case Slot::Kind::kGrowableObjectArray_length:
       return false;
@@ -2793,6 +2814,42 @@ bool LoadFieldInstr::TryEvaluateLoad(const Object& instance,
       }
       return false;
 
+    case Slot::Kind::kArgumentsDescriptor_count:
+      if (instance.IsArray() && Array::Cast(instance).IsImmutable()) {
+        ArgumentsDescriptor desc(Array::Cast(instance));
+        *result = Smi::New(desc.Count());
+        return true;
+      }
+      return false;
+
+    case Slot::Kind::kArgumentsDescriptor_positional_count:
+      if (instance.IsArray() && Array::Cast(instance).IsImmutable()) {
+        ArgumentsDescriptor desc(Array::Cast(instance));
+        *result = Smi::New(desc.PositionalCount());
+        return true;
+      }
+      return false;
+
+    case Slot::Kind::kArgumentsDescriptor_size:
+      // If a constant arguments descriptor appears, then either it is from
+      // a invocation dispatcher (which always has tagged arguments and so
+      // [host]Size() ==  [target]Size() == Count()) or the constant should
+      // have the correct Size() in terms of the target architecture if any
+      // spill slots are involved.
+      if (instance.IsArray() && Array::Cast(instance).IsImmutable()) {
+        ArgumentsDescriptor desc(Array::Cast(instance));
+        *result = Smi::New(desc.Size());
+        return true;
+      }
+      return false;
+
+    case Slot::Kind::kTypeArguments_length:
+      if (instance.IsTypeArguments()) {
+        *result = Smi::New(TypeArguments::Cast(instance).Length());
+        return true;
+      }
+      return false;
+
     default:
       break;
   }
@@ -2859,6 +2916,10 @@ Definition* LoadFieldInstr::Canonicalize(FlowGraph* flow_graph) {
       if (slot().kind() == Slot::Kind::kArray_length) {
         return create_array->num_elements()->definition();
       }
+    } else if (AllocateTypedDataInstr* alloc_typed_data =
+                   array->AsAllocateTypedData()) {
+      ASSERT(slot().kind() == Slot::Kind::kTypedDataBase_length);
+      return alloc_typed_data->num_elements()->definition();
     } else if (LoadFieldInstr* load_array = array->AsLoadField()) {
       // For arrays with guarded lengths, replace the length load
       // with a constant.

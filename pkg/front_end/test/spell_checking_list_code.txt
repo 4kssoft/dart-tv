@@ -564,12 +564,15 @@ json
 jumps
 juxtaposition
 juxtapositions
+jvm
 k
 kallentu
 kernel's
 kernel2kernel
 klass
 kmillikin
+kotlin
+kotlinlang
 kustermann
 kv
 k’s
@@ -663,6 +666,7 @@ mi
 migration
 mime
 min
+misuse
 mixers
 mk
 mm
@@ -883,6 +887,7 @@ redeclared
 redefine
 redirectee
 redirector
+redo
 reexports
 ref
 reflect
@@ -970,7 +975,9 @@ shallow
 shas
 shelf
 shifts
+shl
 showing
+shr
 shrinking
 shru
 si
@@ -1025,6 +1032,7 @@ statics
 stderr
 stdin
 stdio
+stdlib
 stdout
 stmt
 str
@@ -1195,6 +1203,7 @@ unshadowed
 unsortable
 unwrapper
 unwraps
+unwritten
 unzip
 upcast
 update2018
@@ -1214,6 +1223,7 @@ variable's
 variances
 variant
 variants
+variation
 vary
 vb
 vector
@@ -1237,6 +1247,7 @@ wb
 wc
 weakened
 weakener
+weed
 weird
 weren't
 werror
@@ -1250,6 +1261,7 @@ wind
 with1
 wn
 worthwhile
+worthy
 writeln
 wrt
 wtf

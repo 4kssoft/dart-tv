@@ -352,7 +352,6 @@ void f(int a, int b, double c) {
 ''', [
       error(ParserErrorCode.ILLEGAL_ASSIGNMENT_TO_NON_ASSIGNABLE, 35, 5),
       error(ParserErrorCode.MISSING_ASSIGNABLE_SELECTOR, 35, 5),
-      error(CompileTimeErrorCode.INVALID_ASSIGNMENT, 44, 1),
     ]);
 
     var assignment = findNode.assignment('= c');
@@ -362,11 +361,8 @@ void f(int a, int b, double c) {
       readType: 'dynamic',
       writeElement: null,
       writeType: 'dynamic',
-      operatorElement: elementMatcher(
-        numElement.getMethod('+'),
-        isLegacy: isNullSafetySdkAndLegacyLibrary,
-      ),
-      type: 'double',
+      operatorElement: null,
+      type: 'dynamic',
     );
 
     assertElement(findNode.simple('a +'), findElement.parameter('a'));
@@ -382,7 +378,6 @@ void f(int a, int b, double c) {
 ''', [
       error(ParserErrorCode.ILLEGAL_ASSIGNMENT_TO_NON_ASSIGNABLE, 35, 7),
       error(ParserErrorCode.MISSING_ASSIGNABLE_SELECTOR, 35, 7),
-      error(CompileTimeErrorCode.INVALID_ASSIGNMENT, 46, 1),
     ]);
 
     var assignment = findNode.assignment('= c');
@@ -392,11 +387,8 @@ void f(int a, int b, double c) {
       readType: 'dynamic',
       writeElement: null,
       writeType: 'dynamic',
-      operatorElement: elementMatcher(
-        numElement.getMethod('+'),
-        isLegacy: isNullSafetySdkAndLegacyLibrary,
-      ),
-      type: 'double',
+      operatorElement: null,
+      type: 'dynamic',
     );
   }
 
@@ -461,11 +453,8 @@ void f(num x, int y) {
       readType: 'dynamic',
       writeElement: null,
       writeType: 'dynamic',
-      operatorElement: elementMatcher(
-        numElement.getMethod('+'),
-        isLegacy: isNullSafetySdkAndLegacyLibrary,
-      ),
-      type: 'num',
+      operatorElement: null,
+      type: 'dynamic',
     );
 
     assertSimpleIdentifier(
@@ -555,11 +544,8 @@ void f(num x, int y) {
       readType: 'dynamic',
       writeElement: null,
       writeType: 'dynamic',
-      operatorElement: elementMatcher(
-        numElement.getMethod('+'),
-        isLegacy: isNullSafetySdkAndLegacyLibrary,
-      ),
-      type: 'num',
+      operatorElement: null,
+      type: 'dynamic',
     );
 
     assertSimpleIdentifier(
@@ -1459,7 +1445,7 @@ void f() {
   x = 2;
 }
 ''', [
-      error(CompileTimeErrorCode.ASSIGNMENT_TO_FINAL_LOCAL, 30, 1),
+      error(CompileTimeErrorCode.ASSIGNMENT_TO_FINAL, 30, 1),
     ]);
 
     var assignment = findNode.assignment('x = 2');
@@ -1941,6 +1927,80 @@ void f(final int x) {
     assertType(assignment.rightHandSide, 'int');
   }
 
+  test_simpleIdentifier_staticGetter_superSetter_simple() async {
+    await assertErrorsInCode('''
+class A {
+  set x(num _) {}
+}
+
+class B extends A {
+  static int get x => 1;
+
+  void f() {
+    x = 2;
+  }
+}
+''', [
+      error(CompileTimeErrorCode.CONFLICTING_STATIC_AND_INSTANCE, 68, 1),
+      error(CompileTimeErrorCode.ASSIGNMENT_TO_FINAL_NO_SETTER, 94, 1),
+    ]);
+
+    var assignment = findNode.assignment('x = 2');
+    assertAssignment(
+      assignment,
+      readElement: null,
+      readType: null,
+      writeElement: findElement.getter('x', of: 'B'),
+      writeType: 'dynamic',
+      operatorElement: null,
+      type: 'int',
+    );
+
+    assertSimpleIdentifier(
+      assignment.leftHandSide,
+      readElement: null,
+      writeElement: findElement.getter('x', of: 'B'),
+      type: null,
+    );
+  }
+
+  test_simpleIdentifier_staticMethod_superSetter_simple() async {
+    await assertErrorsInCode('''
+class A {
+  set x(num _) {}
+}
+
+class B extends A {
+  static void x() {}
+
+  void f() {
+    x = 2;
+  }
+}
+''', [
+      error(CompileTimeErrorCode.CONFLICTING_STATIC_AND_INSTANCE, 65, 1),
+      error(CompileTimeErrorCode.ASSIGNMENT_TO_METHOD, 90, 1),
+    ]);
+
+    var assignment = findNode.assignment('x = 2');
+    assertAssignment(
+      assignment,
+      readElement: null,
+      readType: null,
+      writeElement: findElement.method('x', of: 'B'),
+      writeType: 'dynamic',
+      operatorElement: null,
+      type: 'int',
+    );
+
+    assertSimpleIdentifier(
+      assignment.leftHandSide,
+      readElement: null,
+      writeElement: findElement.method('x', of: 'B'),
+      type: null,
+    );
+  }
+
   test_simpleIdentifier_superSetter_simple() async {
     await assertNoErrorsInCode(r'''
 class A {
@@ -2125,6 +2185,45 @@ class C with M1, M2 {
     assertType(assignment.rightHandSide, 'int');
   }
 
+  test_simpleIdentifier_topGetter_superSetter_simple() async {
+    await assertErrorsInCode('''
+class A {
+  set x(num _) {}
+}
+
+int get x => 1;
+
+class B extends A {
+
+  void f() {
+    x = 2;
+  }
+}
+''', [
+      error(CompileTimeErrorCode.ASSIGNMENT_TO_FINAL, 86, 1),
+    ]);
+
+    var assignment = findNode.assignment('x = 2');
+    assertAssignment(
+      assignment,
+      readElement: null,
+      readType: null,
+      writeElement: findElement.topGet('x'),
+      writeType: 'dynamic',
+      operatorElement: null,
+      type: 'int',
+    );
+
+    assertSimpleIdentifier(
+      assignment.leftHandSide,
+      readElement: null,
+      writeElement: findElement.topGet('x'),
+      type: null,
+    );
+
+    assertType(assignment.rightHandSide, 'int');
+  }
+
   test_simpleIdentifier_topGetter_topSetter_compound() async {
     await assertNoErrorsInCode('''
 int get x => 0;
@@ -2303,7 +2402,7 @@ void f() {
   x = 2;
 }
 ''', [
-      error(CompileTimeErrorCode.ASSIGNMENT_TO_FINAL_LOCAL, 31, 1),
+      error(CompileTimeErrorCode.ASSIGNMENT_TO_FINAL, 31, 1),
     ]);
 
     var assignment = findNode.assignment('x = 2');

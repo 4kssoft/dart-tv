@@ -281,8 +281,8 @@ abstract class ClassHierarchy implements ClassHierarchyBase {
     int firstHash = firstName.hashCode;
     int secondHash = secondName.hashCode;
     if (firstHash != secondHash) return firstHash - secondHash;
-    String firstString = firstName.name;
-    String secondString = secondName.name;
+    String firstString = firstName.text;
+    String secondString = secondName.text;
     int firstLength = firstString.length;
     int secondLength = secondString.length;
     if (firstLength != secondLength) {
@@ -635,8 +635,14 @@ class ClosedWorldClassHierarchy implements ClassHierarchy {
       }
       ++i2;
       ++i1;
+      if (next.classNode.isAnonymousMixin) {
+        // Never find unnamed mixin application in least upper bound.
+        continue;
+      }
       if (next.depth != currentDepth) {
-        if (numCandidatesAtThisDepth == 1) return candidate;
+        if (numCandidatesAtThisDepth == 1) {
+          return candidate;
+        }
         currentDepth = next.depth;
         numCandidatesAtThisDepth = 0;
         candidate = null;

@@ -72,6 +72,9 @@ class ParserErrorCode extends ErrorCode {
           "The keywords 'await' and 'yield' can't be used as "
               "identifiers in an asynchronous or generator function.");
 
+  static const ParserErrorCode BINARY_OPERATOR_WRITTEN_OUT =
+      _BINARY_OPERATOR_WRITTEN_OUT;
+
   static const ParserErrorCode BREAK_OUTSIDE_OF_LOOP = _BREAK_OUTSIDE_OF_LOOP;
 
   static const ParserErrorCode CATCH_SYNTAX = _CATCH_SYNTAX;
@@ -181,6 +184,9 @@ class ParserErrorCode extends ErrorCode {
       "Expected a method, getter, setter or operator declaration.",
       correction:
           "This appears to be incomplete code. Try removing it or completing it.");
+
+  static const ParserErrorCode EXPECTED_IDENTIFIER_BUT_GOT_KEYWORD =
+      _EXPECTED_IDENTIFIER_BUT_GOT_KEYWORD;
 
   static const ParserErrorCode EXPECTED_INSTEAD = _EXPECTED_INSTEAD;
 

@@ -1628,6 +1628,9 @@ class ErrorVerifier extends RecursiveAstVisitor<void> {
   /// [StaticWarningCode.ASSIGNMENT_TO_FINAL], and
   /// [StaticWarningCode.ASSIGNMENT_TO_METHOD].
   void _checkForAssignmentToFinal(Expression expression) {
+    // TODO(scheglov) Check SimpleIdentifier(s) as all other nodes.
+    if (expression is! SimpleIdentifier) return;
+
     // Already handled in the assignment resolver.
     if (expression is SimpleIdentifier &&
         expression.parent is AssignmentExpression) {
@@ -1647,38 +1650,42 @@ class ErrorVerifier extends RecursiveAstVisitor<void> {
       highlightedNode = expression.propertyName;
     }
     // check if element is assignable
-    Element toVariable(Element element) {
-      return element is PropertyAccessorElement ? element.variable : element;
-    }
-
-    element = toVariable(element);
     if (element is VariableElement) {
       if (element.isConst) {
         _errorReporter.reportErrorForNode(
-            CompileTimeErrorCode.ASSIGNMENT_TO_CONST, expression);
-      } else if (element.isFinal && !element.isLate) {
-        if (element is FieldElementImpl) {
-          if (element.setter == null && element.isSynthetic) {
-            _errorReporter.reportErrorForNode(
-                CompileTimeErrorCode.ASSIGNMENT_TO_FINAL_NO_SETTER,
-                highlightedNode,
-                [element.name, element.enclosingElement.displayName]);
-          } else {
-            _errorReporter.reportErrorForNode(
-                CompileTimeErrorCode.ASSIGNMENT_TO_FINAL,
-                highlightedNode,
-                [element.name]);
-          }
-          return;
-        }
-        if (_isNonNullableByDefault && element is PromotableElement) {
+          CompileTimeErrorCode.ASSIGNMENT_TO_CONST,
+          expression,
+        );
+      } else if (element.isFinal) {
+        if (_isNonNullableByDefault) {
           // Handled during resolution, with flow analysis.
         } else {
           _errorReporter.reportErrorForNode(
-              CompileTimeErrorCode.ASSIGNMENT_TO_FINAL_LOCAL,
-              highlightedNode,
-              [element.name]);
+            CompileTimeErrorCode.ASSIGNMENT_TO_FINAL_LOCAL,
+            expression,
+            [element.name],
+          );
         }
+      }
+    } else if (element is PropertyAccessorElement && element.isGetter) {
+      var variable = element.variable;
+      if (variable.isConst) {
+        _errorReporter.reportErrorForNode(
+          CompileTimeErrorCode.ASSIGNMENT_TO_CONST,
+          expression,
+        );
+      } else if (variable is FieldElement && variable.isSynthetic) {
+        _errorReporter.reportErrorForNode(
+          CompileTimeErrorCode.ASSIGNMENT_TO_FINAL_NO_SETTER,
+          highlightedNode,
+          [variable.name, variable.enclosingElement.displayName],
+        );
+      } else {
+        _errorReporter.reportErrorForNode(
+          CompileTimeErrorCode.ASSIGNMENT_TO_FINAL,
+          highlightedNode,
+          [variable.name],
+        );
       }
     } else if (element is FunctionElement) {
       _errorReporter.reportErrorForNode(
@@ -3496,6 +3503,8 @@ class ErrorVerifier extends RecursiveAstVisitor<void> {
     // try to find default generative super constructor
     ConstructorElement superUnnamedConstructor =
         superElement.unnamedConstructor;
+    superUnnamedConstructor =
+        _currentLibrary.toLegacyElementIfOptOut(superUnnamedConstructor);
     if (superUnnamedConstructor != null) {
       if (superUnnamedConstructor.isFactory) {
         _errorReporter.reportErrorForNode(
@@ -4302,6 +4311,8 @@ class ErrorVerifier extends RecursiveAstVisitor<void> {
     }
     ConstructorElement superUnnamedConstructor =
         superElement.unnamedConstructor;
+    superUnnamedConstructor =
+        _currentLibrary.toLegacyElementIfOptOut(superUnnamedConstructor);
     if (superUnnamedConstructor != null) {
       if (superUnnamedConstructor.isFactory) {
         _errorReporter.reportErrorForNode(

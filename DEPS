@@ -39,12 +39,12 @@ vars = {
 
   # Checked-in SDK version. The checked-in SDK is a Dart SDK distribution in a
   # cipd package used to run Dart scripts in the build and test infrastructure.
-  "sdk_tag": "version:2.10.0-3.0.dev",
+  "sdk_tag": "version:2.10.0-79.0.dev",
 
   # co19 is a cipd package. Use update.sh in tests/co19[_2] to update these
   # hashes. It requires access to the dart-build-access group, which EngProd
   # has.
-  "co19_rev": "12855e59cd7e031d076cc8cece9f5ee08e77ca8c",
+  "co19_rev": "e8c8b7edab7df1a73c0215da7d458acd0f6c1ef3",
   "co19_2_rev": "e48b3090826cf40b8037648f19d211e8eab1b4b6",
 
   # The internal benchmarks to use. See go/dart-benchmarks-internal
@@ -97,9 +97,9 @@ vars = {
   "dart_style_tag": "1.3.7",  # Please see the note above before updating.
 
   "chromedriver_tag": "83.0.4103.39",
-  "dartdoc_rev" : "291ebc50072746bc59ccab59115a298915218428",
+  "dartdoc_rev" : "2bef0f260594b822f55c8c8f777d9c4c1ea8f76c",
   "ffi_rev": "454ab0f9ea6bd06942a983238d8a6818b1357edb",
-  "fixnum_rev": "300c3f025e94a72b7b6770e15f76a4de15f77668",
+  "fixnum_rev": "16d3890c6dc82ca629659da1934e412292508bba",
   "glob_rev": "e9f4e6b7ae8abe5071461cf8f47191bb19cf7ef6",
   "html_rev": "083a36cd801a4b787ba156b7c6e4c8b2e2daed4a",
   "http_io_rev": "2fa188caf7937e313026557713f7feffedd4978b",
@@ -112,7 +112,7 @@ vars = {
   "idl_parser_rev": "5fb1ebf49d235b5a70c9f49047e83b0654031eb7",
   "intl_tag": "0.16.1",
   "jinja2_rev": "2222b31554f03e62600cd7e383376a7c187967a1",
-  "json_rpc_2_rev": "995611cf006c927d51cc53cb28f1aa4356d5414f",
+  "json_rpc_2_rev": "8f189db8f0c299187a0e8fa959dba7e9b0254be5",
   "linter_tag": "0.1.118",
   "logging_rev": "9561ba016ae607747ae69b846c0e10958ca58ed4",
   "markupsafe_rev": "8f45f5cfa0009d2a70589bcda0349b8cb2b72783",
@@ -142,7 +142,7 @@ vars = {
   "source_map_stack_trace_rev": "1c3026f69d9771acf2f8c176a1ab750463309cce",
   "source_maps-0.9.4_rev": "38524",
   "source_maps_rev": "53eb92ccfe6e64924054f83038a534b959b12b3e",
-  "source_span_rev": "94833d6cbf4552ebe5d2aa6714acecd93834e53a",
+  "source_span_rev": "cc7c4288a83f71ecef3414199947b52a8c112c65",
   "sse_tag": "e5cf68975e8e87171a3dc297577aa073454a91dc",
   "stack_trace_tag": "d3813ca0a77348e0faf0d6af0cc17913e36afa39",
   "stagehand_tag": "v3.3.9",

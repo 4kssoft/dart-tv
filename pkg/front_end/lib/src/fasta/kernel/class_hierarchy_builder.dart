@@ -64,6 +64,7 @@ import '../problems.dart' show unhandled;
 
 import '../scope.dart' show Scope;
 
+import '../source/source_class_builder.dart';
 import '../source/source_library_builder.dart' show SourceLibraryBuilder;
 
 import '../source/source_loader.dart' show SourceLoader;
@@ -354,7 +355,7 @@ class ClassHierarchyBuilder implements ClassHierarchyBase {
   }
 
   void registerOverrideCheck(
-      ClassBuilder classBuilder, ClassMember a, ClassMember b) {
+      SourceClassBuilder classBuilder, ClassMember a, ClassMember b) {
     _overrideChecks.add(new DelayedOverrideCheck(classBuilder, a, b));
   }
 
@@ -523,6 +524,10 @@ class ClassHierarchyBuilder implements ClassHierarchyBase {
     for (int i = 0; i < nodes2.length; i++) {
       ClassHierarchyNode node = nodes2[i];
       if (node == null) continue;
+      if (node.classBuilder.cls.isAnonymousMixin) {
+        // Never find unnamed mixin application in least upper bound.
+        continue;
+      }
       if (nodes1.contains(node)) {
         DartType candidate1 = getTypeAsInstanceOf(
             type1, node.classBuilder.cls, clientLibrary, coreTypes);
@@ -576,9 +581,9 @@ class ClassHierarchyBuilder implements ClassHierarchyBase {
     if (declaration?.isStatic ?? true) return null;
     if (declaration.isDuplicate) {
       library?.addProblem(
-          templateDuplicatedDeclarationUse.withArguments(name.name),
+          templateDuplicatedDeclarationUse.withArguments(name.text),
           charOffset,
-          name.name.length,
+          name.text.length,
           library.fileUri);
       return null;
     }
@@ -1715,14 +1720,17 @@ class ClassHierarchyNodeBuilder {
 
     void registerOverrideCheck(
         ClassMember member, ClassMember overriddenMember) {
-      if (overriddenMember.hasDeclarations &&
-          classBuilder == overriddenMember.classBuilder) {
-        for (int i = 0; i < overriddenMember.declarations.length; i++) {
+      if (classBuilder is SourceClassBuilder) {
+        if (overriddenMember.hasDeclarations &&
+            classBuilder == overriddenMember.classBuilder) {
+          for (int i = 0; i < overriddenMember.declarations.length; i++) {
+            hierarchy.registerOverrideCheck(
+                classBuilder, member, overriddenMember.declarations[i]);
+          }
+        } else {
           hierarchy.registerOverrideCheck(
-              classBuilder, member, overriddenMember.declarations[i]);
+              classBuilder, member, overriddenMember);
         }
-      } else {
-        hierarchy.registerOverrideCheck(classBuilder, member, overriddenMember);
       }
     }
 
@@ -1956,6 +1964,7 @@ class ClassHierarchyNodeBuilder {
 
       void checkMemberVsSetter(
           ClassMember member, ClassMember overriddenMember) {
+        if (classBuilder is! SourceClassBuilder) return;
         if (overriddenMember.isStatic) return;
         if (member == overriddenMember) return;
         if (member.isDuplicate || overriddenMember.isDuplicate) {
@@ -2568,7 +2577,7 @@ class TypeBuilderConstraintGatherer extends TypeConstraintGatherer
 }
 
 class DelayedOverrideCheck {
-  final ClassBuilder classBuilder;
+  final SourceClassBuilder classBuilder;
   final ClassMember declaredMember;
   final ClassMember overriddenMember;
 
@@ -2798,11 +2807,13 @@ class InheritedImplementationInterfaceConflict extends DelayedMember {
       return combinedMemberSignatureResult;
     }
     if (!classBuilder.isAbstract) {
-      for (int i = 0; i < declarations.length; i++) {
-        if (concreteMember != declarations[i]) {
-          new DelayedOverrideCheck(
-                  classBuilder, concreteMember, declarations[i])
-              .check(hierarchy);
+      if (classBuilder is SourceClassBuilder) {
+        for (int i = 0; i < declarations.length; i++) {
+          if (concreteMember != declarations[i]) {
+            new DelayedOverrideCheck(
+                    classBuilder, concreteMember, declarations[i])
+                .check(hierarchy);
+          }
         }
       }
     }
@@ -2954,76 +2965,84 @@ class InterfaceConflict extends DelayedMember {
       return combinedMemberSignatureResult =
           declarations.first.getMember(hierarchy);
     }
-    bool isNonNullableByDefault = classBuilder.library.isNonNullableByDefault;
-    DartType thisType = hierarchy.coreTypes
-        .thisInterfaceType(classBuilder.cls, classBuilder.library.nonNullable);
-    List<DartType> candidateTypes = new List<DartType>(declarations.length);
     ClassMember bestSoFar;
     int bestSoFarIndex;
-    DartType bestTypeSoFar;
     Map<DartType, int> mutualSubtypes;
-    for (int candidateIndex = declarations.length - 1;
-        candidateIndex >= 0;
-        candidateIndex--) {
-      ClassMember candidate = declarations[candidateIndex];
-      Member target = candidate.getMember(hierarchy);
-      assert(target != null,
-          "No member computed for ${candidate} (${candidate.runtimeType})");
-      DartType candidateType = computeMemberType(hierarchy, thisType, target);
-      if (!isNonNullableByDefault) {
-        candidateType = legacyErasure(hierarchy.coreTypes, candidateType);
-      }
-      candidateTypes[candidateIndex] = candidateType;
-      if (bestSoFar == null) {
-        bestSoFar = candidate;
-        bestTypeSoFar = candidateType;
-        bestSoFarIndex = candidateIndex;
-      } else {
-        if (isMoreSpecific(hierarchy, candidateType, bestTypeSoFar)) {
-          debug?.log("Combined Member Signature: ${candidate.fullName} "
-              "${candidateType} <: ${bestSoFar.fullName} ${bestTypeSoFar}");
-          if (isNonNullableByDefault &&
-              isMoreSpecific(hierarchy, bestTypeSoFar, candidateType)) {
-            if (mutualSubtypes == null) {
-              mutualSubtypes = {
-                bestTypeSoFar: bestSoFarIndex,
-                candidateType: candidateIndex
-              };
-            } else {
-              mutualSubtypes[candidateType] = candidateIndex;
-            }
-          } else {
-            mutualSubtypes = null;
-          }
-          bestSoFarIndex = candidateIndex;
+    if (declarations.length == 1) {
+      bestSoFar = declarations[0];
+      bestSoFarIndex = 0;
+    } else {
+      DartType thisType = hierarchy.coreTypes.thisInterfaceType(
+          classBuilder.cls, classBuilder.library.nonNullable);
+      bool isNonNullableByDefault = classBuilder.library.isNonNullableByDefault;
+
+      DartType bestTypeSoFar;
+      List<DartType> candidateTypes = new List<DartType>(declarations.length);
+      for (int candidateIndex = declarations.length - 1;
+          candidateIndex >= 0;
+          candidateIndex--) {
+        ClassMember candidate = declarations[candidateIndex];
+        Member target = candidate.getMember(hierarchy);
+        assert(target != null,
+            "No member computed for ${candidate} (${candidate.runtimeType})");
+        DartType candidateType = computeMemberType(hierarchy, thisType, target);
+        if (!isNonNullableByDefault) {
+          candidateType = legacyErasure(hierarchy.coreTypes, candidateType);
+        }
+        candidateTypes[candidateIndex] = candidateType;
+        if (bestSoFar == null) {
           bestSoFar = candidate;
           bestTypeSoFar = candidateType;
+          bestSoFarIndex = candidateIndex;
         } else {
-          debug?.log("Combined Member Signature: "
-              "${candidate.fullName} !<: ${bestSoFar.fullName}");
-        }
-      }
-    }
-    if (bestSoFar != null) {
-      debug?.log("Combined Member Signature bestSoFar: ${bestSoFar.fullName}");
-      for (int candidateIndex = 0;
-          candidateIndex < declarations.length;
-          candidateIndex++) {
-        ClassMember candidate = declarations[candidateIndex];
-        DartType candidateType = candidateTypes[candidateIndex];
-        if (!isMoreSpecific(hierarchy, bestTypeSoFar, candidateType)) {
-          debug?.log("Combined Member Signature: "
-              "${bestSoFar.fullName} !<: ${candidate.fullName}");
-
-          if (!shouldOverrideProblemBeOverlooked(classBuilder)) {
-            bestSoFar = null;
-            bestTypeSoFar = null;
-            mutualSubtypes = null;
+          if (isMoreSpecific(hierarchy, candidateType, bestTypeSoFar)) {
+            debug?.log("Combined Member Signature: ${candidate.fullName} "
+                "${candidateType} <: ${bestSoFar.fullName} ${bestTypeSoFar}");
+            if (isNonNullableByDefault &&
+                isMoreSpecific(hierarchy, bestTypeSoFar, candidateType)) {
+              if (mutualSubtypes == null) {
+                mutualSubtypes = {
+                  bestTypeSoFar: bestSoFarIndex,
+                  candidateType: candidateIndex
+                };
+              } else {
+                mutualSubtypes[candidateType] = candidateIndex;
+              }
+            } else {
+              mutualSubtypes = null;
+            }
+            bestSoFarIndex = candidateIndex;
+            bestSoFar = candidate;
+            bestTypeSoFar = candidateType;
+          } else {
+            debug?.log("Combined Member Signature: "
+                "${candidate.fullName} !<: ${bestSoFar.fullName}");
           }
-          break;
+        }
+      }
+      if (bestSoFar != null) {
+        debug?.log("Combined Member Signature bestSoFar: "
+            "${bestSoFar.fullName}");
+        for (int candidateIndex = 0;
+            candidateIndex < declarations.length;
+            candidateIndex++) {
+          ClassMember candidate = declarations[candidateIndex];
+          DartType candidateType = candidateTypes[candidateIndex];
+          if (!isMoreSpecific(hierarchy, bestTypeSoFar, candidateType)) {
+            debug?.log("Combined Member Signature: "
+                "${bestSoFar.fullName} !<: ${candidate.fullName}");
+
+            if (!shouldOverrideProblemBeOverlooked(classBuilder)) {
+              bestSoFar = null;
+              bestTypeSoFar = null;
+              mutualSubtypes = null;
+            }
+            break;
+          }
         }
       }
     }
+
     if (bestSoFar == null) {
       String name = classBuilder.fullNameForErrors;
       int length = classBuilder.isAnonymousMixinApplication ? 1 : name.length;
@@ -3047,16 +3066,16 @@ class InterfaceConflict extends DelayedMember {
     debug?.log("Combined Member Signature of ${fullNameForErrors}: "
         "${bestSoFar.fullName}");
 
-    ProcedureKind kind = ProcedureKind.Method;
-    Member bestMemberSoFar = bestSoFar.getMember(hierarchy);
-    if (bestSoFar.isProperty) {
-      kind = isSetter ? ProcedureKind.Setter : ProcedureKind.Getter;
-    } else if (bestMemberSoFar is Procedure &&
-        bestMemberSoFar.kind == ProcedureKind.Operator) {
-      kind = ProcedureKind.Operator;
-    }
-
     if (modifyKernel) {
+      ProcedureKind kind = ProcedureKind.Method;
+      Member bestMemberSoFar = bestSoFar.getMember(hierarchy);
+      if (bestSoFar.isProperty) {
+        kind = isSetter ? ProcedureKind.Setter : ProcedureKind.Getter;
+      } else if (bestMemberSoFar is Procedure &&
+          bestMemberSoFar.kind == ProcedureKind.Operator) {
+        kind = ProcedureKind.Operator;
+      }
+
       debug?.log("Combined Member Signature of ${fullNameForErrors}: new "
           "ForwardingNode($classBuilder, $bestSoFar, $declarations, $kind)");
       Member stub = new ForwardingNode(
@@ -3162,9 +3181,11 @@ class AbstractMemberOverridingImplementation extends DelayedMember {
       _isChecked = true;
       if (!classBuilder.isAbstract &&
           !hierarchy.nodes[classBuilder.cls].hasNoSuchMethod) {
-        new DelayedOverrideCheck(
-                classBuilder, concreteImplementation, abstractMember)
-            .check(hierarchy);
+        if (classBuilder is SourceClassBuilder) {
+          new DelayedOverrideCheck(
+                  classBuilder, concreteImplementation, abstractMember)
+              .check(hierarchy);
+        }
       }
 
       ProcedureKind kind = ProcedureKind.Method;

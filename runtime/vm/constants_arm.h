@@ -326,11 +326,12 @@ struct TypeTestABI {
   static const Register kInstantiatorTypeArgumentsReg = R2;
   static const Register kFunctionTypeArgumentsReg = R1;
   static const Register kSubtypeTestCacheReg = R3;
+  static const Register kScratchReg = R4;
 
   static const intptr_t kAbiRegisters =
       (1 << kInstanceReg) | (1 << kDstTypeReg) |
       (1 << kInstantiatorTypeArgumentsReg) | (1 << kFunctionTypeArgumentsReg) |
-      (1 << kSubtypeTestCacheReg);
+      (1 << kSubtypeTestCacheReg) | (1 << kScratchReg);
 
   // For call to InstanceOfStub.
   static const Register kResultReg = R0;
@@ -391,6 +392,12 @@ struct RangeErrorABI {
 struct AllocateMintABI {
   static const Register kResultReg = R0;
   static const Register kTempReg = R1;
+};
+
+// ABI for Allocate<TypedData>ArrayStub.
+struct AllocateTypedDataArrayABI {
+  static const Register kLengthReg = R4;
+  static const Register kResultReg = R0;
 };
 
 // TODO(regis): Add ABIs for type testing stubs and is-type test stubs instead

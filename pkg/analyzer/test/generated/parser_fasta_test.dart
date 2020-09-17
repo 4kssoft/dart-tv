@@ -1114,6 +1114,17 @@ class CollectionLiteralParserTest extends FastaParserTestCase {
 @reflectiveTest
 class ComplexParserTest_Fasta extends FastaParserTestCase
     with ComplexParserTestMixin {
+  void test_binary_operator_written_out_expression() {
+    BinaryExpression expression = parseExpression('x xor y', errors: [
+      expectedError(ParserErrorCode.BINARY_OPERATOR_WRITTEN_OUT, 2, 3),
+    ]);
+    SimpleIdentifier lhs = expression.leftOperand;
+    expect(lhs.name, 'x');
+    expect(expression.operator.lexeme, '^');
+    SimpleIdentifier rhs = expression.rightOperand;
+    expect(rhs.name, 'y');
+  }
+
   void test_conditionalExpression_precedence_nullableType_as2() {
     ExpressionStatement statement = parseStatement('x as bool? ? (x + y) : z;');
     ConditionalExpression expression = statement.expression;
@@ -1420,7 +1431,7 @@ class ExpressionParserTest_Fasta extends FastaParserTestCase
     parseExpression('n=<.["\$assert', errors: [
       expectedError(ParserErrorCode.EXPECTED_TYPE_NAME, 3, 1),
       expectedError(ParserErrorCode.EXPECTED_TYPE_NAME, 4, 1),
-      expectedError(ParserErrorCode.MISSING_IDENTIFIER, 7, 6),
+      expectedError(ParserErrorCode.EXPECTED_IDENTIFIER_BUT_GOT_KEYWORD, 7, 6),
       expectedError(ScannerErrorCode.UNTERMINATED_STRING_LITERAL, 12, 1),
       expectedError(ScannerErrorCode.EXPECTED_TOKEN, 13, 1),
     ]);
@@ -1617,8 +1628,9 @@ class ExpressionParserTest_Fasta extends FastaParserTestCase
   void test_parseStringLiteral_interpolated_void() {
     Expression expression = parseStringLiteral(r"'<html>$void</html>'");
     expect(expression, isNotNull);
-    assertErrors(
-        errors: [expectedError(ParserErrorCode.MISSING_IDENTIFIER, 8, 4)]);
+    assertErrors(errors: [
+      expectedError(ParserErrorCode.EXPECTED_IDENTIFIER_BUT_GOT_KEYWORD, 8, 4)
+    ]);
     expect(expression, isStringInterpolation);
     StringInterpolation literal = expression;
     NodeList<InterpolationElement> elements = literal.elements;
@@ -4887,7 +4899,8 @@ class VarianceParserTest_Fasta extends FastaParserTestCase {
   void test_function_disabled() {
     parseCompilationUnit('void A(in int value) {}',
         errors: [
-          expectedError(ParserErrorCode.MISSING_IDENTIFIER, 7, 2),
+          expectedError(
+              ParserErrorCode.EXPECTED_IDENTIFIER_BUT_GOT_KEYWORD, 7, 2),
           expectedError(ParserErrorCode.EXPECTED_TOKEN, 10, 3),
         ],
         featureSet: FeatureSet.forTesting(sdkVersion: '2.5.0'));
@@ -4895,7 +4908,7 @@ class VarianceParserTest_Fasta extends FastaParserTestCase {
 
   void test_function_enabled() {
     parseCompilationUnit('void A(in int value) {}', errors: [
-      expectedError(ParserErrorCode.MISSING_IDENTIFIER, 7, 2),
+      expectedError(ParserErrorCode.EXPECTED_IDENTIFIER_BUT_GOT_KEYWORD, 7, 2),
       expectedError(ParserErrorCode.EXPECTED_TOKEN, 10, 3),
     ]);
   }

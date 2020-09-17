@@ -185,11 +185,72 @@ main() {
         var nullExpr = _Expression();
         flow.nullLiteral(nullExpr);
         var expr = _Expression();
-        flow.equalityOp_end(expr, nullExpr, _Type('Null'), notEqual: true);
+        var successIsReachable =
+            flow.equalityOp_end(expr, nullExpr, _Type('Null'), notEqual: true);
+        expect(successIsReachable, true);
         flow.ifStatement_thenBegin(expr);
+        expect(flow.isReachable, true);
         expect(flow.promotedType(x).type, 'int');
         flow.ifStatement_elseBegin();
+        expect(flow.isReachable, true);
         expect(flow.promotedType(x), isNull);
+        flow.ifStatement_end(true);
+      });
+    });
+
+    test('equalityOp(x != null) when x is non-nullable', () {
+      var h = _Harness();
+      var x = h.addVar('x', 'int');
+      h.run((flow) {
+        h.declare(x, initialized: true);
+        var varExpr = _Expression();
+        flow.variableRead(varExpr, x);
+        flow.equalityOp_rightBegin(varExpr, _Type('int'));
+        var nullExpr = _Expression();
+        flow.nullLiteral(nullExpr);
+        var expr = _Expression();
+        var successIsReachable =
+            flow.equalityOp_end(expr, nullExpr, _Type('Null'), notEqual: true);
+        expect(successIsReachable, false);
+        flow.ifStatement_thenBegin(expr);
+        expect(flow.isReachable, true);
+        expect(flow.promotedType(x), isNull);
+        flow.ifStatement_elseBegin();
+        expect(flow.isReachable, false);
+        expect(flow.promotedType(x), isNull);
+        flow.ifStatement_end(true);
+      });
+    });
+
+    test('equalityOp(<expr> == <expr>) has no special effect', () {
+      var h = _Harness();
+      h.run((flow) {
+        flow.equalityOp_rightBegin(_Expression(), _Type('int?'));
+        var expr = _Expression();
+        var successIsReachable = flow.equalityOp_end(
+            expr, _Expression(), _Type('int?'),
+            notEqual: false);
+        expect(successIsReachable, true);
+        flow.ifStatement_thenBegin(expr);
+        expect(flow.isReachable, true);
+        flow.ifStatement_elseBegin();
+        expect(flow.isReachable, true);
+        flow.ifStatement_end(true);
+      });
+    });
+
+    test('equalityOp(<expr> != <expr>) has no special effect', () {
+      var h = _Harness();
+      h.run((flow) {
+        flow.equalityOp_rightBegin(_Expression(), _Type('int?'));
+        var expr = _Expression();
+        var successIsReachable = flow
+            .equalityOp_end(expr, _Expression(), _Type('int?'), notEqual: true);
+        expect(successIsReachable, true);
+        flow.ifStatement_thenBegin(expr);
+        expect(flow.isReachable, true);
+        flow.ifStatement_elseBegin();
+        expect(flow.isReachable, true);
         flow.ifStatement_end(true);
       });
     });
@@ -224,11 +285,39 @@ main() {
         var nullExpr = _Expression();
         flow.nullLiteral(nullExpr);
         var expr = _Expression();
-        flow.equalityOp_end(expr, nullExpr, _Type('Null'), notEqual: false);
+        var successIsReachable =
+            flow.equalityOp_end(expr, nullExpr, _Type('Null'), notEqual: false);
+        expect(successIsReachable, true);
         flow.ifStatement_thenBegin(expr);
+        expect(flow.isReachable, true);
         expect(flow.promotedType(x), isNull);
         flow.ifStatement_elseBegin();
+        expect(flow.isReachable, true);
         expect(flow.promotedType(x).type, 'int');
+        flow.ifStatement_end(true);
+      });
+    });
+
+    test('equalityOp(x == null) when x is non-nullable', () {
+      var h = _Harness();
+      var x = h.addVar('x', 'int');
+      h.run((flow) {
+        h.declare(x, initialized: true);
+        var varExpr = _Expression();
+        flow.variableRead(varExpr, x);
+        flow.equalityOp_rightBegin(varExpr, _Type('int'));
+        var nullExpr = _Expression();
+        flow.nullLiteral(nullExpr);
+        var expr = _Expression();
+        var successIsReachable =
+            flow.equalityOp_end(expr, nullExpr, _Type('Null'), notEqual: false);
+        expect(successIsReachable, false);
+        flow.ifStatement_thenBegin(expr);
+        expect(flow.isReachable, false);
+        expect(flow.promotedType(x), isNull);
+        flow.ifStatement_elseBegin();
+        expect(flow.isReachable, true);
+        expect(flow.promotedType(x), isNull);
         flow.ifStatement_end(true);
       });
     });
@@ -299,7 +388,9 @@ main() {
         flow.equalityOp_rightBegin(null1, _Type('Null'));
         var null2 = _Expression();
         var expr = _Expression();
-        flow.equalityOp_end(expr, null2, _Type('Null'));
+        var successIsReachable =
+            flow.equalityOp_end(expr, null2, _Type('Null'));
+        expect(successIsReachable, true);
         flow.ifStatement_thenBegin(expr);
         expect(flow.isReachable, true);
         flow.ifStatement_elseBegin();
@@ -315,7 +406,9 @@ main() {
         flow.equalityOp_rightBegin(null1, _Type('Null'));
         var null2 = _Expression();
         var expr = _Expression();
-        flow.equalityOp_end(expr, null2, _Type('Null'), notEqual: true);
+        var successIsReachable =
+            flow.equalityOp_end(expr, null2, _Type('Null'), notEqual: true);
+        expect(successIsReachable, true);
         flow.ifStatement_thenBegin(expr);
         expect(flow.isReachable, false);
         flow.ifStatement_elseBegin();
@@ -331,7 +424,8 @@ main() {
         flow.equalityOp_rightBegin(null1, _Type('Null'));
         var null2 = _Expression();
         var expr = _Expression();
-        flow.equalityOp_end(expr, null2, _Type('int'));
+        var successIsReachable = flow.equalityOp_end(expr, null2, _Type('int'));
+        expect(successIsReachable, false);
         flow.ifStatement_thenBegin(expr);
         expect(flow.isReachable, false);
         flow.ifStatement_elseBegin();
@@ -347,7 +441,9 @@ main() {
         flow.equalityOp_rightBegin(null1, _Type('Null'));
         var null2 = _Expression();
         var expr = _Expression();
-        flow.equalityOp_end(expr, null2, _Type('int'), notEqual: true);
+        var successIsReachable =
+            flow.equalityOp_end(expr, null2, _Type('int'), notEqual: true);
+        expect(successIsReachable, false);
         flow.ifStatement_thenBegin(expr);
         expect(flow.isReachable, true);
         flow.ifStatement_elseBegin();
@@ -363,7 +459,9 @@ main() {
         flow.equalityOp_rightBegin(null1, _Type('int'));
         var null2 = _Expression();
         var expr = _Expression();
-        flow.equalityOp_end(expr, null2, _Type('Null'));
+        var successIsReachable =
+            flow.equalityOp_end(expr, null2, _Type('Null'));
+        expect(successIsReachable, false);
         flow.ifStatement_thenBegin(expr);
         expect(flow.isReachable, false);
         flow.ifStatement_elseBegin();
@@ -379,7 +477,9 @@ main() {
         flow.equalityOp_rightBegin(null1, _Type('int'));
         var null2 = _Expression();
         var expr = _Expression();
-        flow.equalityOp_end(expr, null2, _Type('Null'), notEqual: true);
+        var successIsReachable =
+            flow.equalityOp_end(expr, null2, _Type('Null'), notEqual: true);
+        expect(successIsReachable, false);
         flow.ifStatement_thenBegin(expr);
         expect(flow.isReachable, true);
         flow.ifStatement_elseBegin();
@@ -710,6 +810,29 @@ main() {
       });
     });
 
+    test('forEach_bodyBegin() pushes conservative join state', () {
+      var h = _Harness();
+      var x = h.addVar('x', 'int');
+      var forStatement = _Statement();
+      h.assignedVariables(
+          (vars) => vars.nest(forStatement, () => vars.write(x)));
+      h.run((flow) {
+        h.declare(x, initialized: false);
+        expect(flow.isUnassigned(x), true);
+        flow.forEach_bodyBegin(forStatement, null, _Type('int'));
+        // Since a write to x occurs somewhere in the loop, x should no longer
+        // be considered unassigned.
+        expect(flow.isUnassigned(x), false);
+        flow.handleBreak(forStatement);
+        flow.write(x, _Type('int'));
+        flow.forEach_end();
+        // Even though the write to x is unreachable (since it occurs after a
+        // break), x should still be considered "possibly assigned" because of
+        // the conservative join done at the top of the loop.
+        expect(flow.isUnassigned(x), false);
+      });
+    });
+
     test('forEach_end() restores state before loop', () {
       var h = _Harness();
       var x = h.addVar('x', 'int?');
@@ -885,10 +1008,14 @@ main() {
       h.assignedVariables((vars) => vars.write(x));
       h.run((flow) {
         h.declare(x, initialized: true);
-        flow.ifNullExpression_rightBegin(h.variableRead(x)());
+        var rhsIsReachable = flow.ifNullExpression_rightBegin(
+            h.variableRead(x)(), _Type('int?'));
+        expect(rhsIsReachable, true);
+        expect(flow.isReachable, true);
         flow.write(x, _Type('int'));
         expect(flow.promotedType(x).type, 'int');
         flow.ifNullExpression_end();
+        expect(flow.isReachable, true);
         expect(flow.promotedType(x).type, 'int');
       });
     });
@@ -898,10 +1025,14 @@ main() {
       var x = h.addVar('x', 'int?');
       h.run((flow) {
         h.declare(x, initialized: true);
-        flow.ifNullExpression_rightBegin(h.variableRead(x)());
+        var rhsIsReachable = flow.ifNullExpression_rightBegin(
+            h.variableRead(x)(), _Type('int?'));
+        expect(rhsIsReachable, true);
+        expect(flow.isReachable, true);
         h.promote(x, 'int');
         expect(flow.promotedType(x).type, 'int');
         flow.ifNullExpression_end();
+        expect(flow.isReachable, true);
         expect(flow.promotedType(x).type, 'int');
       });
     });
@@ -911,11 +1042,40 @@ main() {
       var x = h.addVar('x', 'int?');
       h.run((flow) {
         h.declare(x, initialized: true);
-        flow.ifNullExpression_rightBegin(h.expr());
+        var rhsIsReachable =
+            flow.ifNullExpression_rightBegin(h.expr(), _Type('int?'));
+        expect(rhsIsReachable, true);
+        expect(flow.isReachable, true);
         h.promote(x, 'int');
         expect(flow.promotedType(x).type, 'int');
         flow.ifNullExpression_end();
+        expect(flow.isReachable, true);
         expect(flow.promotedType(x), null);
+      });
+    });
+
+    test('ifNullExpression detects when RHS is unreachable', () {
+      var h = _Harness();
+      h.run((flow) {
+        var rhsIsReachable =
+            flow.ifNullExpression_rightBegin(h.expr(), _Type('int'));
+        expect(rhsIsReachable, false);
+        expect(flow.isReachable, false);
+        flow.ifNullExpression_end();
+        expect(flow.isReachable, true);
+      });
+    });
+
+    test('ifNullExpression determines reachability correctly for `Null` type',
+        () {
+      var h = _Harness();
+      h.run((flow) {
+        var rhsIsReachable =
+            flow.ifNullExpression_rightBegin(h.expr(), _Type('Null'));
+        expect(rhsIsReachable, true);
+        expect(flow.isReachable, true);
+        flow.ifNullExpression_end();
+        expect(flow.isReachable, true);
       });
     });
 
@@ -932,11 +1092,12 @@ main() {
     });
 
     void _checkIs(
-      String declaredType,
-      String tryPromoteType,
-      String expectedPromotedTypeThen,
-      String expectedPromotedTypeElse,
-    ) {
+        String declaredType,
+        String tryPromoteType,
+        String expectedPromotedTypeThen,
+        String expectedPromotedTypeElse,
+        bool expectedFailureReachable,
+        {bool inverted = false}) {
       var h = _Harness();
       var x = h.addVar('x', declaredType);
       h.run((flow) {
@@ -944,14 +1105,18 @@ main() {
         var read = _Expression();
         flow.variableRead(read, x);
         var expr = _Expression();
-        flow.isExpression_end(expr, read, false, _Type(tryPromoteType));
+        var failureReachable =
+            flow.isExpression_end(expr, read, inverted, _Type(tryPromoteType));
+        expect(failureReachable, expectedFailureReachable);
         flow.ifStatement_thenBegin(expr);
+        expect(flow.isReachable, inverted ? expectedFailureReachable : true);
         if (expectedPromotedTypeThen == null) {
           expect(flow.promotedType(x), isNull);
         } else {
           expect(flow.promotedType(x).type, expectedPromotedTypeThen);
         }
         flow.ifStatement_elseBegin();
+        expect(flow.isReachable, inverted ? true : expectedFailureReachable);
         if (expectedPromotedTypeElse == null) {
           expect(flow.promotedType(x), isNull);
         } else {
@@ -962,15 +1127,61 @@ main() {
     }
 
     test('isExpression_end promotes to a subtype', () {
-      _checkIs('int?', 'int', 'int', 'Never?');
+      _checkIs('int?', 'int', 'int', 'Never?', true);
+    });
+
+    test('isExpression_end promotes to a subtype, inverted', () {
+      _checkIs('int?', 'int', 'Never?', 'int', true, inverted: true);
     });
 
     test('isExpression_end does not promote to a supertype', () {
-      _checkIs('int', 'int?', null, 'Never');
+      _checkIs('int', 'int?', null, 'Never', false);
+    });
+
+    test('isExpression_end does not promote to a supertype, inverted', () {
+      _checkIs('int', 'int?', 'Never', null, false, inverted: true);
     });
 
     test('isExpression_end does not promote to an unrelated type', () {
-      _checkIs('int', 'String', null, null);
+      _checkIs('int', 'String', null, null, true);
+    });
+
+    test('isExpression_end does not promote to an unrelated type, inverted',
+        () {
+      _checkIs('int', 'String', null, null, true, inverted: true);
+    });
+
+    test('isExpression_end does nothing if applied to a non-variable', () {
+      var h = _Harness();
+      h.run((flow) {
+        var subExpr = _Expression();
+        var expr = _Expression();
+        var failureReachable =
+            flow.isExpression_end(expr, subExpr, false, _Type('int'));
+        expect(failureReachable, true);
+        flow.ifStatement_thenBegin(expr);
+        expect(flow.isReachable, true);
+        flow.ifStatement_elseBegin();
+        expect(flow.isReachable, true);
+        flow.ifStatement_end(true);
+      });
+    });
+
+    test('isExpression_end does nothing if applied to a non-variable, inverted',
+        () {
+      var h = _Harness();
+      h.run((flow) {
+        var subExpr = _Expression();
+        var expr = _Expression();
+        var failureReachable =
+            flow.isExpression_end(expr, subExpr, true, _Type('int'));
+        expect(failureReachable, true);
+        flow.ifStatement_thenBegin(expr);
+        expect(flow.isReachable, true);
+        flow.ifStatement_elseBegin();
+        expect(flow.isReachable, true);
+        flow.ifStatement_end(true);
+      });
     });
 
     test('isExpression_end() does not promote write-captured vars', () {
@@ -1153,7 +1364,10 @@ main() {
         h.declare(x, initialized: true);
         var varExpr = _Expression();
         flow.variableRead(varExpr, x);
-        flow.nullAwareAccess_rightBegin(varExpr);
+        var shortIsReachable =
+            flow.nullAwareAccess_rightBegin(varExpr, _Type('int?'));
+        expect(shortIsReachable, true);
+        expect(flow.isReachable, true);
         expect(flow.promotedType(x).type, 'int');
         flow.nullAwareAccess_end();
         expect(flow.promotedType(x), isNull);
@@ -1167,7 +1381,10 @@ main() {
         h.declare(x, initialized: true);
         var varExpr = _Expression();
         flow.variableRead(varExpr, x);
-        flow.nullAwareAccess_rightBegin(null);
+        var shortIsReachable =
+            flow.nullAwareAccess_rightBegin(null, _Type('int?'));
+        expect(shortIsReachable, true);
+        expect(flow.isReachable, true);
         expect(flow.promotedType(x), isNull);
         flow.nullAwareAccess_end();
       });
@@ -1181,12 +1398,33 @@ main() {
         h.declare(x, initialized: true);
         h.promote(x, 'int');
         var lhs = _Expression();
-        flow.nullAwareAccess_rightBegin(lhs);
+        var shortIsReachable =
+            flow.nullAwareAccess_rightBegin(lhs, _Type('int'));
+        expect(shortIsReachable, false);
+        expect(flow.isReachable, true);
         expect(flow.promotedType(x).type, 'int');
         flow.write(x, _Type('int?'));
         expect(flow.promotedType(x), isNull);
         flow.nullAwareAccess_end();
         expect(flow.promotedType(x), isNull);
+      });
+    });
+
+    test('nullAwareAccess_end ignores shorting if target is non-nullable', () {
+      var h = _Harness();
+      var x = h.addVar('x', 'int?');
+      h.run((flow) {
+        h.declare(x, initialized: true);
+        var shortIsReachable =
+            flow.nullAwareAccess_rightBegin(_Expression(), _Type('int'));
+        expect(shortIsReachable, false);
+        expect(flow.isReachable, true);
+        h.promote(x, 'int');
+        expect(flow.promotedType(x).type, 'int');
+        flow.nullAwareAccess_end();
+        // `x` should still be promoted because the target was non-nullable, so
+        // the null shorting path was unreachable.
+        expect(flow.promotedType(x).type, 'int');
       });
     });
 
@@ -3168,6 +3406,47 @@ main() {
           w: same(intQModel)
         });
       });
+    });
+  });
+  group('inheritTested', () {
+    var x = _Var('x', _Type('Object?'));
+    var intType = _Type('int');
+    var stringType = _Type('String');
+    const emptyMap = const <_Var, VariableModel<_Var, _Type>>{};
+
+    VariableModel<_Var, _Type> model(List<_Type> typesOfInterest) =>
+        VariableModel<_Var, _Type>(null, typesOfInterest, true, false, false);
+
+    test('inherits types of interest from other', () {
+      var h = _Harness();
+      var m1 = FlowModel.withInfo(true, {
+        x: model([intType])
+      });
+      var m2 = FlowModel.withInfo(true, {
+        x: model([stringType])
+      });
+      expect(m1.inheritTested(h, m2).variableInfo[x].tested,
+          _matchOfInterestSet(['int', 'String']));
+    });
+
+    test('handles variable missing from other', () {
+      var h = _Harness();
+      var m1 = FlowModel.withInfo(true, {
+        x: model([intType])
+      });
+      var m2 = FlowModel.withInfo(true, emptyMap);
+      expect(m1.inheritTested(h, m2), same(m1));
+    });
+
+    test('returns identical model when no changes', () {
+      var h = _Harness();
+      var m1 = FlowModel.withInfo(true, {
+        x: model([intType])
+      });
+      var m2 = FlowModel.withInfo(true, {
+        x: model([intType])
+      });
+      expect(m1.inheritTested(h, m2), same(m1));
     });
   });
 }

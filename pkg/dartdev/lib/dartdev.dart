@@ -20,8 +20,9 @@ import 'src/commands/create.dart';
 import 'src/commands/fix.dart';
 import 'src/commands/pub.dart';
 import 'src/commands/run.dart';
-import 'src/commands/test.dart' hide Runtime;
+import 'src/commands/test.dart';
 import 'src/core.dart';
+import 'src/events.dart';
 import 'src/experiments.dart';
 import 'src/sdk.dart';
 import 'src/utils.dart';
@@ -35,10 +36,6 @@ Future<void> runDartdev(List<String> args, SendPort port) async {
   final stopwatch = Stopwatch();
   int result;
 
-  // The Analytics instance used to report information back to Google Analytics,
-  // see lib/src/analytics.dart.
-  Analytics analytics;
-
   // The exit code for the dartdev process, null indicates that it has not yet
   // been set yet. The value is set in the catch and finally blocks below.
   int exitCode;
@@ -47,7 +44,9 @@ Future<void> runDartdev(List<String> args, SendPort port) async {
   Object exception;
   StackTrace stackTrace;
 
-  analytics =
+  // The Analytics instance used to report information back to Google Analytics,
+  // see lib/src/analytics.dart.
+  Analytics analytics =
       createAnalyticsInstance(args.contains('--disable-dartdev-analytics'));
 
   // If we have not printed the analyticsNoticeOnFirstRunMessage to stdout,
@@ -81,15 +80,23 @@ Future<void> runDartdev(List<String> args, SendPort port) async {
 
   // --launch-dds is provided by the VM if the VM service is to be enabled. In
   // that case, we need to launch DDS as well.
-  // TODO(bkonyi): add support for pub run (#42726)
-  if (args.contains('--launch-dds')) {
+  final launchDdsArg = args.singleWhere(
+    (element) => element.startsWith('--launch-dds'),
+    orElse: () => null,
+  );
+  if (launchDdsArg != null) {
     RunCommand.launchDds = true;
+    final ddsUrl = (launchDdsArg.split('=')[1]).split(':');
+    RunCommand.ddsHost = ddsUrl[0];
+    RunCommand.ddsPort = ddsUrl[1];
   }
+
   String commandName;
 
   try {
     stopwatch.start();
     final runner = DartdevRunner(args);
+
     // Run can't be called with the '--disable-dartdev-analytics' flag, remove
     // it if it is contained in args.
     if (args.contains('--disable-dartdev-analytics')) {
@@ -98,8 +105,8 @@ Future<void> runDartdev(List<String> args, SendPort port) async {
 
     // Run also can't be called with '--launch-dds', remove it if it's
     // contained in args.
-    if (args.contains('--launch-dds')) {
-      args = List.from(args)..remove('--launch-dds');
+    if (launchDdsArg != null) {
+      args = List.from(args)..remove(launchDdsArg);
     }
 
     // These flags have a format that can't be handled by package:args, so
@@ -112,20 +119,23 @@ Future<void> runDartdev(List<String> args, SendPort port) async {
         )
         .toList();
 
-    // Before calling to run, send the first ping to analytics to have the first
-    // ping, as well as the command itself, running in parallel.
-    if (analytics.enabled) {
-      commandName = getCommandStr(args, runner.commands.keys.toList());
-      // ignore: unawaited_futures
-      analytics.sendEvent(eventCategory, commandName);
-    }
-
     // If ... help pub ... is in the args list, remove 'help', and add '--help'
     // to the end of the list.  This will make it possible to use the help
     // command to access subcommands of pub such as `dart help pub publish`, see
     // https://github.com/dart-lang/sdk/issues/42965
     if (PubUtils.shouldModifyArgs(args, runner.commands.keys.toList())) {
       args = PubUtils.modifyArgs(args);
+    }
+
+    // For the commands format and migrate, dartdev itself sends the
+    // sendScreenView notification to analytics, for all other
+    // dartdev commands (instances of DartdevCommand) the commands send this
+    // to analytics.
+    commandName = ArgParserUtils.getCommandStr(args);
+    if (analytics.enabled &&
+        (commandName == formatCmdName || commandName == migrateCmdName)) {
+      // ignore: unawaited_futures
+      analytics.sendScreenView(commandName);
     }
 
     // Finally, call the runner to execute the command, see DartdevRunner.
@@ -150,7 +160,22 @@ Future<void> runDartdev(List<String> args, SendPort port) async {
 
     // Send analytics before exiting
     if (analytics.enabled) {
-      analytics.setSessionValue(exitCodeParam, exitCode);
+      // For commands that are not DartdevCommand instances, we manually create
+      // and send the UsageEvent from here:
+      if (commandName == formatCmdName) {
+        // ignore: unawaited_futures
+        FormatUsageEvent(
+          exitCode: exitCode,
+          args: args,
+        ).send(analyticsInstance);
+      } else if (commandName == migrateCmdName) {
+        // ignore: unawaited_futures
+        MigrateUsageEvent(
+          exitCode: exitCode,
+          args: args,
+        ).send(analyticsInstance);
+      }
+
       // ignore: unawaited_futures
       analytics.sendTiming(commandName, stopwatch.elapsedMilliseconds,
           category: 'commands');

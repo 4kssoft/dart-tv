@@ -85,7 +85,7 @@ class FlowAnalysisHelper {
     if (flow == null) return null;
 
     if (node.operator.type == TokenType.QUESTION_QUESTION_EQ) {
-      flow.ifNullExpression_rightBegin(node.leftHandSide);
+      flow.ifNullExpression_rightBegin(node.leftHandSide, node.readType);
     }
   }
 
@@ -576,7 +576,6 @@ class _AssignedVariablesVisitor extends RecursiveAstVisitor<void> {
       } else if (forLoopParts is ForEachPartsWithDeclaration) {
         var variable = forLoopParts.loopVariable.declaredElement;
         assignedVariables.declare(variable);
-        assignedVariables.write(variable);
       } else {
         throw StateError('Unrecognized for loop parts');
       }
