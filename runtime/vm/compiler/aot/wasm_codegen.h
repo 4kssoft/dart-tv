@@ -15,19 +15,6 @@ namespace dart {
 // Forward declarations.
 class Precompiler;
 
-// Lightweight std::pair - is it better to do something like this?
-// I see some other std::pairs in the VM anyway.
-/*template <typename K, typename V>
-struct KV {
-  KV(K _k, V _v) : k(_k), v(_v) {}
-  K k;
-  V v;
-};
-template <typename K, typename V>
-KV<K, V> make_kv(K k, V v) {
-  return KV<K, V>(k, v);
-}*/
-
 struct ClassToWasmTrait {
   // Typedefs needed for the DirectChainedHashMap template.
   typedef const Class* Key;  // Pointer to constant since in some cases
@@ -60,10 +47,7 @@ struct FunctionToWasmTrait {
 
 class WasmCodegen : public ZoneAllocated {
  public:
-  WasmCodegen(Precompiler* precompiler,
-              Zone* zone,
-              uint8_t** binary_output_buffer,
-              ReAlloc realloc);
+  WasmCodegen(Precompiler* precompiler, Zone* zone);
 
   // Will be used to test new features of the WasmModuleBuilder.
   void Demo();
@@ -71,12 +55,14 @@ class WasmCodegen : public ZoneAllocated {
   void HoistClassesFromLibrary(const Library& lib);
   void HoistFunctionsFromLibrary(const Library& lib);
 
-  bool IsClassHoisted(const Class& klass);
-  bool IsFunctionHoisted(const Function& function);
+  wasm::StructType* GetWasmClass(const Class& klass);
+  wasm::Function* GetWasmFunction(const Function& function);
 
-  wasm::WasmModuleBuilder* module_builder() { return &module_builder_; }
+  SExpression* Serialize(Zone* zone);
+  void OutputBinary(WriteStream* stream);
 
  private:
+  void HoistClass(const Class& klass);
   void HoistFunction(const Function& function);
   wasm::FuncType* MakeSignature(const Function& function);
 

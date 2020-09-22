@@ -7,27 +7,13 @@
 #define Z (zone_)
 #define M (module_builder_)
 
-#if defined(_MSC_VER)
-#define WASM_TRACE(format, ...)                                                \
-  if (FLAG_trace_wasm_compilation) {                                           \
-    THR_Print(format, __VA_ARGS__);                                            \
-  }
-#else
-#define WASM_TRACE(format, ...)                                                \
-  if (FLAG_trace_wasm_compilation) {                                           \
-    THR_Print(format, ##__VA_ARGS__);                                          \
-  }
-#endif
-
 namespace dart {
+namespace {
+using ::wasm::WasmTrace;
+}  // namespace
 
-WasmCodegen::WasmCodegen(Precompiler* precompiler,
-                         Zone* zone,
-                         uint8_t** binary_output_buffer,
-                         ReAlloc realloc)
-    : precompiler_(precompiler),
-      zone_(zone),
-      module_builder_(zone, binary_output_buffer, realloc) {}
+WasmCodegen::WasmCodegen(Precompiler* precompiler, Zone* zone)
+    : precompiler_(precompiler), zone_(zone), module_builder_(zone) {}
 
 void WasmCodegen::Demo() {
   // Make a Wasm struct type {i32, mut i64}.
@@ -48,22 +34,46 @@ void WasmCodegen::Demo() {
   // Note: Parameters are *not* checked against func_type.
   // So, this function is not well-formed, but it doesn't matter
   // for testing purposes.
-  fct->AddLocal(wasm::Local::Kind::kParam, M.i32(),
-                "x");  // (param $x i32)
+  // fct->AddLocal(wasm::Local::Kind::kParam, M.i32(),
+  //               "x");  // (param $x i32)
+
   fct->AddLocal(wasm::Local::Kind::kLocal,
                 M.MakeRefType(
                     /*nullable =*/true, M.MakeHeapType(str_type)),
-                "y");  // (local $y (ref str_type)).
-  fct->AddLocal(wasm::Local::Kind::kLocal, M.anyref(),
-                "z");  // (local $z anyref).
-  fct->AddLocal(wasm::Local::Kind::kLocal, M.i31ref(),
-                "t");  // (local $t i31ref).
+                "y1");  // (local $y (ref null str_type)).
+
+  // Note: Non-nullable reference local variables crash V8.
+  // Bug reported to jkummerow.
+  // fct->AddLocal(wasm::Local::Kind::kLocal,
+  //               M.MakeRefType(
+  //                   /*nullable =*/false, M.MakeHeapType(str_type)),
+  //               "y2");  // (local $y (ref str_type)).
+
+  // Note: V8 doesn't support any/anyref yet.
+  // fct->AddLocal(wasm::Local::Kind::kLocal, M.anyref(),
+  //               "t0");  // (local $t1 anyref).
+
+  // Tests serialization/binary output for reference types.
+  fct->AddLocal(wasm::Local::Kind::kLocal, M.eqref(),
+                "t1");  // (local $t1 eqref).
+  // fct->AddLocal(wasm::Local::Kind::kLocal, M.i31ref(),
+  //               "t2");  // (local $t2 i31ref).
+  // fct->AddLocal(wasm::Local::Kind::kLocal,
+  //               M.MakeRefType(/*nullable = */ false, M.eq()),
+  //               "q1");  // (local $q1 (ref eq)).
+  fct->AddLocal(wasm::Local::Kind::kLocal, M.funcref(),
+                "t2");  // (local $t2 funcref).
+  fct->AddLocal(wasm::Local::Kind::kLocal, M.externref(),
+                "t3");  // (local $t3 externref).
+  fct->AddLocal(wasm::Local::Kind::kLocal,
+                M.MakeRefType(/*nullable = */ true, M.i31()),
+                "t4");  // (local $t4 (ref null i31)).
 
   // Add instructions to this function: compute 45 + 49.
-  wasm::BasicBlock* const block = fct->AddBlock(23);
-  block->instructions()->AddConstant(45);
-  block->instructions()->AddConstant(49);
-  block->instructions()->AddInt32Add();
+  wasm::InstructionList* const instrs = fct->MakeNewBody();
+  instrs->AddConstant(45);
+  instrs->AddConstant(49);
+  instrs->AddInt32Add();
 }
 
 void WasmCodegen::HoistClassesFromLibrary(const Library& lib) {
@@ -77,10 +87,9 @@ void WasmCodegen::HoistClassesFromLibrary(const Library& lib) {
       continue;
     }
     if (entry.IsClass()) {
-      WASM_TRACE("Hoisting CLASS: %s to Wasm module builder\n",
-                 entry.ToCString());
-      class_to_wasm_struct_.Insert(std::make_pair(
-          &Class::ZoneHandle(Z, Class::Cast(entry).raw()), M.MakeStructType()));
+      WasmTrace("Hoisting CLASS: %s to Wasm module builder\n",
+                entry.ToCString());
+      HoistClass(Class::Cast(entry));
     }
   }
 }
@@ -107,31 +116,53 @@ void WasmCodegen::HoistFunctionsFromLibrary(const Library& lib) {
         if (function.IsNull()) {
           continue;
         }
-        WASM_TRACE("Hoisting METHOD: %s to Wasm module builder\n",
-                   function.ToCString());
+        WasmTrace("Hoisting METHOD: %s to Wasm module builder\n",
+                  function.ToCString());
         HoistFunction(function);
       }
     } else if (entry.IsFunction()) {
       function ^= entry.raw();
-      WASM_TRACE("Hoisting FUNCTION: %s to Wasm module builder\n",
-                 function.ToCString());
+      WasmTrace("Hoisting FUNCTION: %s to Wasm module builder\n",
+                function.ToCString());
       HoistFunction(function);
     }
   }
 }
 
-bool WasmCodegen::IsClassHoisted(const Class& klass) {
-  return class_to_wasm_struct_.HasKey(&klass);
+wasm::StructType* WasmCodegen::GetWasmClass(const Class& klass) {
+  return class_to_wasm_struct_.LookupValue(&klass);
 }
 
-bool WasmCodegen::IsFunctionHoisted(const Function& function) {
-  return function_to_wasm_function_.HasKey(&function);
+wasm::Function* WasmCodegen::GetWasmFunction(const Function& function) {
+  return function_to_wasm_function_.LookupValue(&function);
+}
+
+SExpression* WasmCodegen::Serialize(Zone* zone) {
+  return module_builder_.Serialize(zone);
+}
+
+void WasmCodegen::OutputBinary(WriteStream* stream) {
+  module_builder_.OutputBinary(stream);
+}
+
+void WasmCodegen::HoistClass(const Class& klass) {
+  wasm::StructType* wasm_struct = M.MakeStructType();
+  wasm_struct->AddField(M.i64(), /*mut =*/false);  // For class id.
+  class_to_wasm_struct_.Insert(
+      std::make_pair(&Class::ZoneHandle(Z, klass.raw()), wasm_struct));
 }
 
 void WasmCodegen::HoistFunction(const Function& function) {
   wasm::FuncType* signature = MakeSignature(function);
   wasm::Function* wasm_function = M.AddFunction(
       String::ZoneHandle(Z, function.name()).ToCString(), signature);
+
+  // TODO(andreicostin): Normally, we would leave hoisted functions bodyless
+  // until the Wasm compiler pass compiles a body for them, but for demo
+  // purposes, we'll just create a demo body for them which is consistent
+  // with the dummy signature defined below ([] -> [i32]).
+  wasm_function->MakeNewBody()->AddConstant(100);
+
   function_to_wasm_function_.Insert(
       std::make_pair(&Function::ZoneHandle(Z, function.raw()), wasm_function));
 }

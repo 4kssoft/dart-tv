@@ -21,21 +21,10 @@
 #if defined(DART_PRECOMPILER)
 #include "vm/compiler/aot/aot_call_specializer.h"
 #include "vm/compiler/aot/precompiler.h"
+#include "vm/compiler/aot/wasm_codegen.h"
 #include "vm/compiler/aot/wasm_translator.h"
 #endif
 #include "vm/timeline.h"
-
-#if defined(_MSC_VER)
-#define WASM_TRACE(format, ...)                                                \
-  if (FLAG_trace_wasm_compilation) {                                           \
-    THR_Print(format, __VA_ARGS__);                                            \
-  }
-#else
-#define WASM_TRACE(format, ...)                                                \
-  if (FLAG_trace_wasm_compilation) {                                           \
-    THR_Print(format, ##__VA_ARGS__);                                          \
-  }
-#endif
 
 #define COMPILER_PASS_REPEAT(Name, Body)                                       \
   class CompilerPass_##Name : public CompilerPass {                            \
@@ -589,6 +578,8 @@ COMPILER_PASS(RoundTripSerialization, {
 
 #if defined(DART_PRECOMPILER)
 COMPILER_PASS(CompileToWasm, {
+  using ::wasm::WasmTrace;
+
   Precompiler* const precompiler = state->precompiler;
   if (precompiler == nullptr) return false;
 
@@ -600,14 +591,17 @@ COMPILER_PASS(CompileToWasm, {
   FlowGraph* const flow_graph = state->flow_graph();
   const Function& function = flow_graph->function();
 
-  if (!codegen->IsFunctionHoisted(function)) {
-    return false;
+  if (auto wasm_function = codegen->GetWasmFunction(function)) {
+    wasm::WasmTrace("Compiling function %s to Wasm\n",
+                    String::Handle(function.name()).ToCString());
+    wasm::InstructionList* instrs = wasm_function->MakeNewBody();
+    USE(instrs);
+
+    // Ok since right now functions have i32 return value.
+    instrs->AddConstant(23);
+
+    // TODO(andreicostin): Implement the flowgraph translation logic.
   }
-
-  WASM_TRACE("Compiling function %s to Wasm\n",
-             String::Handle(function.name()).ToCString());
-
-  // TODO(andreicostin): Implement the flowgraph translation logic.
 })
 #endif
 

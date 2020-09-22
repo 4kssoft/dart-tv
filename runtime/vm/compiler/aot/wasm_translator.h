@@ -1,20 +1,16 @@
-// Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2020, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 #ifndef RUNTIME_VM_COMPILER_AOT_WASM_TRANSLATOR_H_
 #define RUNTIME_VM_COMPILER_AOT_WASM_TRANSLATOR_H_
 
+#include "vm/compiler/assembler/assembler_wasm.h"
 #include "vm/compiler/backend/flow_graph.h"
 #include "vm/compiler/backend/il.h"
 #include "vm/growable_array.h"
 
-using dart::BlockEntryInstr;
-using dart::BranchInstr;
-using dart::Definition;
-using dart::GotoInstr;
-using dart::JoinEntryInstr;
-using dart::TargetEntryInstr;
+namespace dart {
 
 class WasmTranslator : public dart::FlowGraphVisitor {
  public:
@@ -73,5 +69,7 @@ class WasmTranslator : public dart::FlowGraphVisitor {
   // Did the transformation fail because the graph is not reducible?
   bool irreducible_;
 };
+
+}  // namespace dart
 
 #endif  // RUNTIME_VM_COMPILER_AOT_WASM_TRANSLATOR_H_

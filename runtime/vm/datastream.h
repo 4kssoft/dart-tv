@@ -277,6 +277,8 @@ class WriteStreamBase : public B {
 
   uint8_t* buffer() const { return *buffer_; }
   void set_buffer(uint8_t* value) { *buffer_ = value; }
+
+  ReAlloc alloc() const { return alloc_; }
   intptr_t bytes_written() const { return current_ - *buffer_; }
 
   intptr_t Position() const { return current_ - *buffer_; }

@@ -234,9 +234,6 @@ class Precompiler : public ValueObject {
   }
 
   void* il_serialization_stream() const { return il_serialization_stream_; }
-  uint8_t* wasm_binary_output_buffer() const {
-    return wasm_binary_output_buffer_;
-  }
 
   static Precompiler* Instance() { return singleton_; }
 
@@ -387,7 +384,6 @@ class Precompiler : public ValueObject {
 
   bool get_runtime_type_is_unique_;
   void* il_serialization_stream_;
-  uint8_t* wasm_binary_output_buffer_;
 
   Phase phase_ = Phase::kPreparation;
   PrecompilerTracer* tracer_ = nullptr;

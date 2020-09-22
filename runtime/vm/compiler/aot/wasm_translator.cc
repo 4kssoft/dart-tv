@@ -1,8 +1,10 @@
-// Copyright (c) 2018, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2020, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 #include "vm/compiler/aot/wasm_translator.h"
+
+namespace dart {
 
 void WasmTranslator::PrepareBlocks() {
   // Find start positions for Wasm blocks.
@@ -245,3 +247,5 @@ void WasmTranslator::EndWasmLoop(BlockEntryInstr* source) {
   EmitWasmBranch(0);
   // TODO(andreicostin): End current Wasm loop.
 }
+
+}  // namespace dart
