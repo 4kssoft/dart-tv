@@ -29,10 +29,21 @@ void WasmTrace(const char* format, ...) PRINTF_ATTRIBUTE(1, 2);
   M(Instruction)                                                               \
   M(LocalGet)                                                                  \
   M(LocalSet)                                                                  \
+  M(GlobalGet)                                                                 \
   M(Int32Add)                                                                  \
   M(Constant)                                                                  \
+  M(StructuredInstr)                                                           \
+  M(Block)                                                                     \
+  M(Loop)                                                                      \
   M(If)                                                                        \
+  M(Br)                                                                        \
+  M(RttCanon)                                                                  \
+  M(RttSub)                                                                    \
+  M(StructGet)                                                                 \
+  M(StructGet)                                                                 \
+  M(StructNewWithRtt)                                                          \
   M(Local)                                                                     \
+  M(Global)                                                                    \
   M(InstructionList)                                                           \
   M(Function)                                                                  \
   M(WasmModuleBuilder)
@@ -144,6 +155,9 @@ class Rtt : public ValueType {
   dart::SExpression* Serialize(dart::Zone* zone) override;
   void OutputBinary(dart::WriteStream* stream) override;
 
+  intptr_t depth() const { return depth_; }
+  HeapType* heap_type() const { return heap_type_; }
+
  private:
   Rtt(intptr_t depth, HeapType* heap_type)
       : depth_(depth), heap_type_(heap_type) {}
@@ -151,6 +165,7 @@ class Rtt : public ValueType {
   const intptr_t depth_;
   HeapType* const heap_type_;
 
+  friend class WasmModuleBuilder;  // For private constructor.
   DISALLOW_COPY_AND_ASSIGN(Rtt);
 };
 
@@ -161,18 +176,24 @@ class Field : public dart::ZoneAllocated {
   dart::SExpression* Serialize(dart::Zone* zone);
   void OutputBinary(dart::WriteStream* stream);
 
+  Field(const Field& field)
+      : struct_type_(field.struct_type_),
+        field_type_(field.field_type_),
+        index_(field.index_) {}
+
   StructType* struct_type() const { return struct_type_; }
+
+  void set_struct_type_(StructType* struct_type) { struct_type_ = struct_type; }
 
  private:
   Field(StructType* struct_type, FieldType* field_type, uint32_t index)
       : struct_type_(struct_type), field_type_(field_type), index_(index) {}
 
-  StructType* const struct_type_;
+  StructType* struct_type_;
   FieldType* const field_type_;
   const uint32_t index_;
 
   friend class StructType;  // For private constructor.
-  DISALLOW_COPY_AND_ASSIGN(Field);
 };
 
 // Class for Wasm field types. Fields are used inside both struct and
@@ -267,9 +288,15 @@ class StructType : public DefType {
   dart::SExpression* Serialize(dart::Zone* zone) override;
   void OutputBinary(dart::WriteStream* stream) override;
 
+  // Copy fields of struct to a given destination struct. The enclosing
+  // struct of the copied fields is set to point to dest.
+  void CopyFieldsTo(StructType* dest);
+
   Field* AddField(FieldType* field_type);
   Field* AddField(ValueType* value_type, bool mut);
   Field* AddField(FieldType::PackedType packed_type, bool mut);
+
+  dart::GrowableArray<Field*>& fields() { return fields_; }
 
  private:
   StructType(dart::Zone* zone, int index);
@@ -340,6 +367,21 @@ class LocalSet : public Instruction {
   DISALLOW_COPY_AND_ASSIGN(LocalSet);
 };
 
+// Wasm global.get instruction.
+class GlobalGet : public Instruction {
+ public:
+  dart::SExpression* Serialize(dart::Zone* zone) override;
+  void OutputBinary(dart::WriteStream* stream) override;
+
+ private:
+  GlobalGet(Global* global) : global_(global) {}
+
+  Global* const global_;
+
+  friend InstructionList;  // For private constructor.
+  DISALLOW_COPY_AND_ASSIGN(GlobalGet);
+};
+
 // Wasm int32.add instruction.
 // TODO(andreicostin): Generalize this for other operations and types.
 class Int32Add : public Instruction {
@@ -370,13 +412,60 @@ class Constant : public Instruction {
   DISALLOW_COPY_AND_ASSIGN(Constant);
 };
 
+// Abstract base class for Wasm block, loop and if instructions.
+class StructuredInstr : public Instruction {
+ public:
+  virtual dart::SExpression* Serialize(dart::Zone* zone) = 0;
+  virtual void OutputBinary(dart::WriteStream* stream) = 0;
+
+  virtual ~StructuredInstr() = default;
+
+ protected:
+  explicit StructuredInstr(FuncType* const block_type)
+      : block_type_(block_type) {}
+
+  FuncType* const block_type_;
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(StructuredInstr);
+};
+
+// Wasm block construct.
+class Block : public StructuredInstr {
+ public:
+  dart::SExpression* Serialize(dart::Zone* zone) override;
+  void OutputBinary(dart::WriteStream* stream) override;
+
+ private:
+  Block(FuncType* const block_type, dart::Zone* zone);
+
+  InstructionList* const body_;
+
+  friend InstructionList;  // For private constructor.
+  DISALLOW_COPY_AND_ASSIGN(Block);
+};
+
+// Wasm loop construct.
+class Loop : public StructuredInstr {
+ public:
+  dart::SExpression* Serialize(dart::Zone* zone) override;
+  void OutputBinary(dart::WriteStream* stream) override;
+
+ private:
+  Loop(FuncType* const block_type, dart::Zone* zone);
+
+  InstructionList* const body_;
+
+  friend InstructionList;  // For private constructor.
+  DISALLOW_COPY_AND_ASSIGN(Loop);
+};
+
 // Wasm if-then-else construct.
-// TODO(andreicostin): Add result type. The result type constrains possible
-// combinations of then/else branches by requiring that they have the same
-// type; i.e. consume the same number of arguments of the same types from the
-// operand stack and likewise push back the same number or values of the
-// same types.
-class If : public Instruction {
+// The block type constrains possible combinations of then/else branches by
+// requiring that they have the same type; i.e. consume the same number of
+// arguments of the same types from the operand stack and likewise push back
+// the same number or values of the same types.
+class If : public StructuredInstr {
  public:
   dart::SExpression* Serialize(dart::Zone* zone) override;
   void OutputBinary(dart::WriteStream* stream) override;
@@ -385,13 +474,119 @@ class If : public Instruction {
   InstructionList* otherwise() { return otherwise_; }
 
  private:
-  If(dart::Zone* zone);
+  If(FuncType* const block_type, dart::Zone* zone);
 
   InstructionList* const then_;
   InstructionList* const otherwise_;
 
   friend InstructionList;  // For private constructor.
   DISALLOW_COPY_AND_ASSIGN(If);
+};
+
+// Wasm br/br_if instructions.
+class Br : public Instruction {
+ public:
+  dart::SExpression* Serialize(dart::Zone* zone) override;
+  void OutputBinary(dart::WriteStream* stream) override;
+
+ private:
+  Br(bool is_if, const uint32_t label) : is_if_(is_if), label_(label) {}
+
+  const bool is_if_;  // true for br_if, false otherwise.
+  const uint32_t label_;
+
+  friend InstructionList;  // For private constructor.
+  DISALLOW_COPY_AND_ASSIGN(Br);
+};
+
+// Wasm GC extension rtt.canon instruction.
+class RttCanon : public Instruction {
+ public:
+  dart::SExpression* Serialize(dart::Zone* zone);
+  void OutputBinary(dart::WriteStream* stream);
+
+ private:
+  explicit RttCanon(HeapType* type) : type_(type) {}
+
+  HeapType* const type_;
+
+  friend InstructionList;  // For private constructor.
+  DISALLOW_COPY_AND_ASSIGN(RttCanon);
+};
+
+// Wasm GC extension rtt.sub instruction.
+class RttSub : public Instruction {
+ public:
+  dart::SExpression* Serialize(dart::Zone* zone);
+  void OutputBinary(dart::WriteStream* stream);
+
+ private:
+  RttSub(intptr_t depth, HeapType* type, HeapType* supertype)
+      : depth_(depth), type_(type), supertype_(supertype) {}
+
+  const intptr_t depth_;
+  HeapType* const type_;
+  HeapType* const supertype_;
+
+  friend InstructionList;  // For private constructor.
+  DISALLOW_COPY_AND_ASSIGN(RttSub);
+};
+
+// Wasm GC extension struct.get instruction.
+class StructGet : public Instruction {
+ public:
+  dart::SExpression* Serialize(dart::Zone* zone);
+  void OutputBinary(dart::WriteStream* stream);
+
+ private:
+  StructGet(StructType* struct_type, Field* field)
+      : struct_type_(struct_type), field_(field) {}
+
+  StructType* const struct_type_;
+  // This might be a field from a struct which struct_type inherits from.
+  // Due to structural prefix subtyping in Wasm, their <fieldidx> agree,
+  // meaning that they can be used interchangeably for output purposes.
+  Field* const field_;
+
+  friend InstructionList;  // For private constructor.
+  DISALLOW_COPY_AND_ASSIGN(StructGet);
+};
+
+// Wasm GC extension struct.set instruction.
+class StructSet : public Instruction {
+ public:
+  dart::SExpression* Serialize(dart::Zone* zone);
+  void OutputBinary(dart::WriteStream* stream);
+
+ private:
+  StructSet(StructType* struct_type, Field* field)
+      : struct_type_(struct_type), field_(field) {}
+
+  StructType* const struct_type_;
+  // This might be a field from a struct which struct_type inherits from.
+  // Due to structural prefix subtyping in Wasm, their <fieldidx> agree,
+  // meaning that they can be used interchangeably for output purposes.
+  Field* const field_;
+
+  friend InstructionList;  // For private constructor.
+  DISALLOW_COPY_AND_ASSIGN(StructSet);
+};
+
+// Wasm struct.new_with_rtt/new_default_with_rtt instructions.
+class StructNewWithRtt : public Instruction {
+ public:
+  dart::SExpression* Serialize(dart::Zone* zone);
+  void OutputBinary(dart::WriteStream* stream);
+
+ private:
+  StructNewWithRtt(StructType* struct_type, bool def)
+      : struct_type_(struct_type), def_(def) {}
+
+  StructType* const struct_type_;
+  const bool def_;
+
+  friend InstructionList;  // For private constructor.
+  DISALLOW_COPY_AND_ASSIGN(StructNewWithRtt);
 };
 
 // Wasm function locals: local and param declarations used in function
@@ -432,6 +627,28 @@ class Local : public dart::ZoneAllocated {
   DISALLOW_COPY_AND_ASSIGN(Local);
 };
 
+// Class for Wasm globals, which can be either mutable or immutable,
+// and are initialized by a constant initializer expression.
+class Global : public dart::ZoneAllocated {
+ public:
+  dart::SExpression* Serialize(dart::Zone* zone);
+  void OutputBinary(dart::WriteStream* stream);
+
+  InstructionList* init() const { return init_; }
+  uint32_t index() const { return index_; }
+
+ private:
+  Global(dart::Zone* zone, ValueType* type, bool mut, uint32_t index);
+
+  ValueType* const type_;
+  const bool mut_;
+  InstructionList* const init_;
+  uint32_t index_;
+
+  friend class WasmModuleBuilder;  // For private constructor.
+  DISALLOW_COPY_AND_ASSIGN(Global);
+};
+
 // Wasm instruction list.
 class InstructionList : public dart::ZoneAllocated {
  public:
@@ -439,14 +656,26 @@ class InstructionList : public dart::ZoneAllocated {
   void OutputBinary(dart::WriteStream* stream);
 
   // One method for creating each type of Wasm instruction.
-  // This abstracts away the need to pass parent pointers in
-  // the constructors, as well as the need to allocate the
+  // This abstracts away the need to allocate the
   // instructions in the correct zone.
   Instruction* AddLocalGet(Local* local);
   Instruction* AddLocalSet(Local* local);
+  Instruction* AddGlobalGet(Global* global);
   Instruction* AddInt32Add();
   Instruction* AddConstant(uint32_t value);
-  Instruction* AddIf();
+  Instruction* AddBlock(FuncType* block_type);
+  Instruction* AddLoop(FuncType* block_type);
+  Instruction* AddIf(FuncType* block_type);
+  Instruction* AddRttCanon(HeapType* type);
+  Instruction* AddRttSub(uint32_t depth, HeapType* type1, HeapType* type2);
+  Instruction* AddStructGet(StructType* struct_type, Field* field);
+  Instruction* AddStructSet(StructType* struct_type, Field* field);
+  Instruction* AddStructNewWithRtt(StructType* struct_type);
+  Instruction* AddStructNewDefaultWithRtt(StructType* struct_type);
+  Instruction* AddBr(uint32_t label);
+  Instruction* AddBrIf(uint32_t label);
+
+  dart::GrowableArray<Instruction*>& instructions() { return instructions_; }
 
  private:
   explicit InstructionList(dart::Zone* zone);
@@ -455,7 +684,10 @@ class InstructionList : public dart::ZoneAllocated {
   dart::GrowableArray<Instruction*> instructions_;
 
   friend class Function;  // For private constructor.
+  friend class Block;     // For private constructor.
+  friend class Loop;      // For private constructor.
   friend class If;        // For private constructor.
+  friend class Global;    // For private constructor.
   DISALLOW_COPY_AND_ASSIGN(InstructionList);
 };
 
@@ -514,6 +746,12 @@ class WasmModuleBuilder : public dart::ValueObject {
   HeapType* MakeHeapType(DefType* def_type);
   // Wrap a heap type into a reference type.
   RefType* MakeRefType(bool nullable, HeapType* heap_type);
+  // Make a reference to a user-defined type.
+  RefType* MakeRefType(bool nullable, DefType* def_type);
+
+  // Convenience methods for defining the tree structure of rtts.
+  Global* MakeRttCanon(StructType* type);
+  Global* MakeRttChild(StructType* type, Global* parent_global);
 
   // Create defined types (push to the types_ array as a side effect).
   FuncType* MakeFuncType(ValueType* result_type);
@@ -522,6 +760,10 @@ class WasmModuleBuilder : public dart::ValueObject {
   ArrayType* MakeArrayType(ValueType* value_type, bool mut);
   ArrayType* MakeArrayType(FieldType::PackedType packed_type, bool mut);
 
+  // Create global definition.
+  Global* AddGlobal(ValueType* type, bool mut);
+
+  // Create function with the given name and function type.
   Function* AddFunction(const char* name, FuncType* type);
 
   // Builtin types.
@@ -549,6 +791,10 @@ class WasmModuleBuilder : public dart::ValueObject {
   // functions. Note that actual code for the functions resides in the
   // Code section.
   void OutputFunctionSection(dart::WriteStream* stream);
+  // Global section consists of a list of global variable definitions.
+  // Each global can be either mutable or immutable, and is initialized
+  // by a constant initializer expression.
+  void OutputGlobalSection(dart::WriteStream* stream);
   // Code section consists of a list with one entry per user-defined function.
   // Each entry consists of a description of the function locals (consisting
   // of the type for each local) and the contents of the function body.
@@ -573,6 +819,7 @@ class WasmModuleBuilder : public dart::ValueObject {
 
   dart::GrowableArray<DefType*> types_;
   dart::GrowableArray<Function*> functions_;
+  dart::GrowableArray<Global*> globals_;
 
   friend class PushBytecountFrontScope;  // For access to replacing the
                                          // current binary_output_stream_.

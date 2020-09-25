@@ -9,11 +9,20 @@
 
 namespace dart {
 namespace {
+using ::std::make_pair;
+using ::std::pair;
 using ::wasm::WasmTrace;
 }  // namespace
 
 WasmCodegen::WasmCodegen(Precompiler* precompiler, Zone* zone)
-    : precompiler_(precompiler), zone_(zone), module_builder_(zone) {}
+    : precompiler_(precompiler),
+      zone_(zone),
+      module_builder_(zone),
+      classes_(zone, 16),
+      class_to_wasm_class_info_(zone),
+      function_to_wasm_function_(zone),
+      field_to_wasm_field_(zone),
+      object_rtt_(nullptr) {}
 
 void WasmCodegen::Demo() {
   // Make a Wasm struct type {i32, mut i64}.
@@ -87,8 +96,6 @@ void WasmCodegen::HoistClassesFromLibrary(const Library& lib) {
       continue;
     }
     if (entry.IsClass()) {
-      WasmTrace("Hoisting CLASS: %s to Wasm module builder\n",
-                entry.ToCString());
       HoistClass(Class::Cast(entry));
     }
   }
@@ -129,12 +136,38 @@ void WasmCodegen::HoistFunctionsFromLibrary(const Library& lib) {
   }
 }
 
-wasm::StructType* WasmCodegen::GetWasmClass(const Class& klass) {
-  return class_to_wasm_struct_.LookupValue(&klass);
+void WasmCodegen::GenerateClassLayoutsAndRtts() {
+  HANDLESCOPE(Thread::Current());
+  for (intptr_t i = 0; i < classes_.length(); ++i) {
+    const Class& klass = *classes_.At(i);
+    GenerateClassLayoutAndRtt(klass);
+  }
+}
+
+void WasmCodegen::HoistBuiltinClasses() {
+  // Make an "Object" class.
+  HoistClass(Class::Handle(Type::Handle(Type::ObjectType()).type_class()));
+  // Make an "int" class.
+  HoistClass(Class::Handle(Type::Handle(Type::IntType()).type_class()));
+  // Make a "String" class.
+  HoistClass(Class::Handle(Type::Handle(Type::StringType()).type_class()));
+}
+
+WasmClassInfo& WasmCodegen::GetWasmClassInfo(const Class& klass) {
+  pair<const Class*, WasmClassInfo>* const pair =
+      class_to_wasm_class_info_.Lookup(&klass);
+  // At this point all classes should have been hoisted.
+  // If this is not true, exit with an error even in non-debug builds.
+  RELEASE_ASSERT(pair != nullptr);
+  return pair->second;
 }
 
 wasm::Function* WasmCodegen::GetWasmFunction(const Function& function) {
   return function_to_wasm_function_.LookupValue(&function);
+}
+
+wasm::Field* WasmCodegen::GetWasmField(const Field& field) {
+  return field_to_wasm_field_.LookupValue(&field);
 }
 
 SExpression* WasmCodegen::Serialize(Zone* zone) {
@@ -146,10 +179,13 @@ void WasmCodegen::OutputBinary(WriteStream* stream) {
 }
 
 void WasmCodegen::HoistClass(const Class& klass) {
+  WasmTrace("Hoisting CLASS: %s to Wasm module builder, with cid = %" Pd "\n",
+            klass.ToCString(), klass.id());
   wasm::StructType* wasm_struct = M.MakeStructType();
-  wasm_struct->AddField(M.i64(), /*mut =*/false);  // For class id.
-  class_to_wasm_struct_.Insert(
-      std::make_pair(&Class::ZoneHandle(Z, klass.raw()), wasm_struct));
+  const Class& persistent_class = Class::ZoneHandle(Z, klass.raw());
+  classes_.Add(&persistent_class);
+  class_to_wasm_class_info_.Insert(
+      make_pair(&persistent_class, WasmClassInfo(wasm_struct, nullptr)));
 }
 
 void WasmCodegen::HoistFunction(const Function& function) {
@@ -164,13 +200,133 @@ void WasmCodegen::HoistFunction(const Function& function) {
   wasm_function->MakeNewBody()->AddConstant(100);
 
   function_to_wasm_function_.Insert(
-      std::make_pair(&Function::ZoneHandle(Z, function.raw()), wasm_function));
+      make_pair(&Function::ZoneHandle(Z, function.raw()), wasm_function));
+}
+
+void WasmCodegen::GenerateClassLayoutAndRtt(const Class& klass) {
+  if (klass.IsNull()) {
+    FATAL("GenerateClassLayoutAndRtt called with Null class");
+  }
+  WasmTrace("GenerateClassLayoutAndRtt reached class %s, with cid = %" Pd "\n",
+            klass.ToCString(), klass.id());
+
+  WasmClassInfo& wasm_class_info = GetWasmClassInfo(klass);
+  wasm::StructType* const wasm_struct = wasm_class_info.struct_type_;
+  wasm::Global*& wasm_rtt = wasm_class_info.rtt_definition_;
+
+  // Memoization - if class has already had its layout generated, exit.
+  if (!wasm_struct->fields().is_empty()) {
+    return;
+  }
+
+  // Rtts shouldn't have been allocated before the struct
+  // layout has been computed.
+  RELEASE_ASSERT(wasm_rtt == nullptr);
+
+  WasmTrace("Generating Wasm layout and rtt for class %s, with cid = %" Pd "\n",
+            klass.ToCString(), klass.id());
+
+  // Special handling for root class "Object".
+  if (klass.IsObjectClass()) {
+    // For class id.
+    wasm_struct->AddField(M.i64(), /*mut =*/true);
+    // Rtt - root of class hierarchy.
+    RELEASE_ASSERT(wasm_struct != nullptr);  // todo remove.
+    object_rtt_ = M.MakeRttCanon(wasm_struct);
+    wasm_rtt = object_rtt_;
+    return;
+  }
+  // Special handling for integers. In the future integers will translated
+  // into either this struct (when boxed) or i64 (when unboxed).
+  if (IsIntegerClass(klass)) {
+    // For class id.
+    wasm_struct->AddField(M.i64(), /*mut =*/true);
+    // Contained integer.
+    wasm_struct->AddField(M.i64(), /*mut =*/true);
+    // Rtt - hardcode parent to be "Object", despite the real
+    // parent being "Num".
+    wasm_rtt = M.MakeRttChild(wasm_struct, object_rtt_);
+    return;
+  }
+  // Special handling for Strings. Largely unimplemented for now.
+  if (IsStringClass(klass)) {
+    // For class id.
+    wasm_struct->AddField(M.i64(), /*mut =*/true);
+    // Rtt - parent is "Object".
+    wasm_rtt = M.MakeRttChild(wasm_struct, object_rtt_);
+    return;
+  }
+
+  const Class& parent_class = Class::Handle(klass.SuperClass());
+
+  // Ensure that the parent class has had its layout and rtt generated
+  // before continuing.
+  GenerateClassLayoutAndRtt(parent_class);
+
+  // Get parent struct and rtt.
+  WasmClassInfo& parent_wasm_class_info = GetWasmClassInfo(parent_class);
+  wasm::StructType* const parent_wasm_struct =
+      parent_wasm_class_info.struct_type_;
+  // Parent struct should have been allocated.
+  if (parent_wasm_struct == nullptr) {
+    FATAL1("parent_wasm_struct missing for parent class %s",
+           parent_class.ToCString());
+  }
+  wasm::Global* const parent_wasm_rtt = parent_wasm_class_info.rtt_definition_;
+  // Parent rtt should have been allocated.
+  if (parent_wasm_rtt == nullptr) {
+    FATAL1("parent_wasm_rtt missing for parent class %s",
+           parent_class.ToCString());
+  }
+
+  // Allocate rtt.
+  wasm_rtt = M.MakeRttChild(wasm_struct, parent_wasm_rtt);
+
+  // Allocate struct layout.
+  parent_wasm_struct->CopyFieldsTo(wasm_struct);
+  const Array& fields = Array::Handle(klass.fields());
+  Field& field = Field::Handle();
+  Type& type = Type::Handle();
+  Class& type_class = Class::Handle();
+  for (intptr_t i = 0; i < fields.Length(); ++i) {
+    field ^= fields.At(i);
+    type ^= field.type();
+    type_class = type.type_class();
+
+    WasmTrace("--> Processing field %s\n", field.ToCString());
+
+    wasm::StructType* const field_wasm_struct =
+        GetWasmClassInfo(type_class).struct_type_;
+    // At this point all classes which appear as fileds should have been
+    // hoisted. If this is not true, exit with an error even in non-debug
+    // builds.
+    if (field_wasm_struct == nullptr) {
+      FATAL1("field_wasm_struct missing for %s", field.ToCString());
+    }
+
+    wasm::Field* const wasm_field = wasm_struct->AddField(
+        M.MakeRefType(/*nullable =*/true, field_wasm_struct),
+        /*mut =*/true);
+
+    field_to_wasm_field_.Insert(
+        make_pair(&Field::ZoneHandle(Z, field.raw()), wasm_field));
+  }
 }
 
 wasm::FuncType* WasmCodegen::MakeSignature(const Function& function) {
   // TODO(andreicostin): Implement the logic, making sure not to
   // create duplicated function types, for efficiency.
   return M.MakeFuncType(M.i32());  // Placeholder: [] -> [i32]
+}
+
+bool WasmCodegen::IsIntegerClass(const Class& klass) {
+  return klass.raw() == Type::Handle(Type::IntType()).type_class() ||
+         IsIntegerClassId(klass.id());
+}
+
+bool WasmCodegen::IsStringClass(const Class& klass) {
+  return klass.raw() == Type::Handle(Type::StringType()).type_class() ||
+         IsStringClassId(klass.id());
 }
 
 }  // namespace dart

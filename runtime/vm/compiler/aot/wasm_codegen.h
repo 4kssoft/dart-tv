@@ -15,11 +15,32 @@ namespace dart {
 // Forward declarations.
 class Precompiler;
 
+struct WasmClassInfo {
+  WasmClassInfo() : struct_type_(nullptr), rtt_definition_(nullptr) {}
+  WasmClassInfo(wasm::StructType* struct_type, wasm::Global* rtt_definition)
+      : struct_type_(struct_type), rtt_definition_(rtt_definition) {}
+
+  // Unforunately, this implicitly needs to be defined for all classes which
+  // act as Value components in the Trait of a DirectChainedHashMap
+  // template instance.
+  bool operator==(const WasmClassInfo& that) {
+    return struct_type_ == that.struct_type_ &&
+           rtt_definition_ == that.rtt_definition_;
+  }
+  bool operator!=(const WasmClassInfo& that) {
+    return struct_type_ != that.struct_type_ ||
+           rtt_definition_ != that.rtt_definition_;
+  }
+
+  wasm::StructType* struct_type_;
+  wasm::Global* rtt_definition_;
+};
+
 struct ClassToWasmTrait {
   // Typedefs needed for the DirectChainedHashMap template.
   typedef const Class* Key;  // Pointer to constant since in some cases
                              // we only have access to const handles.
-  typedef wasm::StructType* Value;
+  typedef WasmClassInfo Value;
   typedef std::pair<Key, Value> Pair;
 
   static Key KeyOf(Pair kv) { return kv.first; }
@@ -45,6 +66,27 @@ struct FunctionToWasmTrait {
   }
 };
 
+struct FieldToWasmTrait {
+  // Typedefs needed for the DirectChainedHashMap template.
+  typedef const Field* Key;  // Pointer to constant since in some cases
+                             // we only have access to const handles.
+  typedef wasm::Field* Value;
+  typedef std::pair<Key, Value> Pair;
+
+  static Key KeyOf(Pair kv) { return kv.first; }
+  static Value ValueOf(Pair kv) { return kv.second; }
+  static intptr_t Hashcode(Key key) {
+    const TokenPosition token_pos = key->token_pos();
+    if (token_pos.IsReal()) {
+      return token_pos.value();
+    }
+    return key->binary_declaration_offset();
+  }
+  static bool IsKeyEqual(Pair kv, Key key) {
+    return kv.first->raw() == key->raw();
+  }
+};
+
 class WasmCodegen : public ZoneAllocated {
  public:
   WasmCodegen(Precompiler* precompiler, Zone* zone);
@@ -54,9 +96,12 @@ class WasmCodegen : public ZoneAllocated {
 
   void HoistClassesFromLibrary(const Library& lib);
   void HoistFunctionsFromLibrary(const Library& lib);
+  void HoistBuiltinClasses();
+  void GenerateClassLayoutsAndRtts();
 
-  wasm::StructType* GetWasmClass(const Class& klass);
+  WasmClassInfo& GetWasmClassInfo(const Class& klass);
   wasm::Function* GetWasmFunction(const Function& function);
+  wasm::Field* GetWasmField(const Field& field);
 
   SExpression* Serialize(Zone* zone);
   void OutputBinary(WriteStream* stream);
@@ -64,14 +109,33 @@ class WasmCodegen : public ZoneAllocated {
  private:
   void HoistClass(const Class& klass);
   void HoistFunction(const Function& function);
+  void GenerateClassLayoutAndRtt(const Class& klass);
   wasm::FuncType* MakeSignature(const Function& function);
+
+  // Helpers for identifying primitive classes.
+  // Check if class represents the 'int' class.
+  static bool IsIntegerClass(const Class& klass);
+  // Check if class represents the 'String' class.
+  static bool IsStringClass(const Class& klass);
 
   Precompiler* const precompiler_;
   Zone* const zone_;
   wasm::WasmModuleBuilder module_builder_;
 
-  DirectChainedHashMap<ClassToWasmTrait> class_to_wasm_struct_;
+  // List of hoisted classes.
+  GrowableArray<const Class*> classes_;
+  // Dart classes are mapped to Wasm structs and rtts.
+  DirectChainedHashMap<ClassToWasmTrait> class_to_wasm_class_info_;
+  // Dart functions are mapped to Wasm functions.
   DirectChainedHashMap<FunctionToWasmTrait> function_to_wasm_function_;
+  // Dart fields are mapped to Wasm struct fields, as follows. First,
+  // observe that in Dart fields are not duplicated when a class inherits
+  // from another, unlike in Wasm. As a result, a Dart field is mapped
+  // to the Wasm field of the class in which occurs originally.
+  DirectChainedHashMap<FieldToWasmTrait> field_to_wasm_field_;
+
+  // Global rtt definition for the primitive classes "Object".
+  wasm::Global* object_rtt_;
 
   DISALLOW_COPY_AND_ASSIGN(WasmCodegen);
 };

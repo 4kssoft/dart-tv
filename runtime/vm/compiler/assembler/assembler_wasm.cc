@@ -261,7 +261,11 @@ void Rtt::OutputBinary(WriteStream* stream) {
 }
 
 SExpression* Field::Serialize(Zone* zone) {
-  return field_type_->Serialize(zone);
+  const auto sexp = new (zone) SExpList(zone);
+  sexp->Add(field_type_->Serialize(zone));
+  sexp->Add(new (zone) SExpSymbol("fieldidx ="));
+  sexp->Add(new (zone) SExpInteger(index_));
+  return sexp;
 }
 
 void Field::OutputBinary(WriteStream* stream) {
@@ -372,6 +376,14 @@ void StructType::OutputBinary(WriteStream* stream) {
   }
 }
 
+void StructType::CopyFieldsTo(StructType* dest) {
+  dart::GrowableArray<Field*>& dest_fields = dest->fields();
+  for (intptr_t i = 0; i < fields_.length(); ++i) {
+    dest_fields.Add(new (zone_) Field(*fields_.At(i)));
+    dest_fields.Last()->set_struct_type_(dest);
+  }
+}
+
 SExpression* ArrayType::Serialize(Zone* zone) {
   const auto sexp = new (zone) SExpList(zone);
   sexp->Add(new (zone) SExpSymbol("array"));
@@ -402,8 +414,8 @@ SExpression* LocalGet::Serialize(Zone* zone) {
 }
 
 void LocalGet::OutputBinary(WriteStream* stream) {
-  // TODO(andreicostin): Write the logic.
-  UNIMPLEMENTED();
+  WRITE_BYTE(0x20);
+  WRITE_UNSIGNED(local_->index());
 }
 
 SExpression* LocalSet::Serialize(Zone* zone) {
@@ -412,8 +424,18 @@ SExpression* LocalSet::Serialize(Zone* zone) {
 }
 
 void LocalSet::OutputBinary(WriteStream* stream) {
-  // TODO(andreicostin): Write the logic.
-  UNIMPLEMENTED();
+  WRITE_BYTE(0x21);
+  WRITE_UNSIGNED(local_->index());
+}
+
+SExpression* GlobalGet::Serialize(Zone* zone) {
+  return new (zone)
+      SExpSymbol(OS::SCreate(zone, "global.get $%" Pu32, global_->index()));
+}
+
+void GlobalGet::OutputBinary(WriteStream* stream) {
+  WRITE_BYTE(0x23);
+  WRITE_UNSIGNED(global_->index());
 }
 
 SExpression* Int32Add::Serialize(Zone* zone) {
@@ -434,12 +456,73 @@ void Constant::OutputBinary(WriteStream* stream) {
   WRITE_UNSIGNED(value_);
 }
 
-If::If(Zone* zone)
-    : then_(new (zone) InstructionList(zone)),
+Block::Block(FuncType* const block_type, dart::Zone* zone)
+    : StructuredInstr(block_type), body_(new (zone) InstructionList(zone)) {}
+
+SExpression* Block::Serialize(Zone* zone) {
+  // Serialize result type.
+  const auto sexp_type = new (zone) SExpList(zone);
+  sexp_type->Add(new SExpSymbol("block_type = "));
+  sexp_type->Add(block_type_->Serialize(zone));
+
+  // Serialize body.
+  const auto sexp_body = new (zone) SExpList(zone);
+  sexp_body->Add(body_->Serialize(zone));
+
+  // Produce final SExpression.
+  const auto sexp = new (zone) SExpList(zone);
+  sexp->Add(new SExpSymbol("block"));
+  sexp->Add(sexp_type);
+  sexp->Add(sexp_body);
+  return sexp;
+}
+
+void Block::OutputBinary(WriteStream* stream) {
+  WRITE_BYTE(0x02);
+  WRITE_SIGNED(block_type_->index());
+  body_->OutputBinary(stream);
+  WRITE_BYTE(0x0B);
+}
+
+Loop::Loop(FuncType* const block_type, dart::Zone* zone)
+    : StructuredInstr(block_type), body_(new (zone) InstructionList(zone)) {}
+
+SExpression* Loop::Serialize(Zone* zone) {
+  // Serialize result type.
+  const auto sexp_type = new (zone) SExpList(zone);
+  sexp_type->Add(new SExpSymbol("block_type = "));
+  sexp_type->Add(block_type_->Serialize(zone));
+
+  // Serialize body.
+  const auto sexp_body = new (zone) SExpList(zone);
+  sexp_body->Add(body_->Serialize(zone));
+
+  // Produce final SExpression.
+  const auto sexp = new (zone) SExpList(zone);
+  sexp->Add(new SExpSymbol("loop"));
+  sexp->Add(sexp_type);
+  sexp->Add(sexp_body);
+  return sexp;
+}
+
+void Loop::OutputBinary(WriteStream* stream) {
+  WRITE_BYTE(0x03);
+  WRITE_SIGNED(block_type_->index());
+  body_->OutputBinary(stream);
+  WRITE_BYTE(0x0B);
+}
+
+If::If(FuncType* const block_type, dart::Zone* zone)
+    : StructuredInstr(block_type),
+      then_(new (zone) InstructionList(zone)),
       otherwise_(new (zone) InstructionList(zone)) {}
 
-// TODO(andreicostin): Add and serialize result type.
 SExpression* If::Serialize(Zone* zone) {
+  // Serialize result type.
+  const auto sexp_type = new (zone) SExpList(zone);
+  sexp_type->Add(new SExpSymbol("block_type = "));
+  sexp_type->Add(block_type_->Serialize(zone));
+
   // Serialize then branch.
   const auto sexp_then = new (zone) SExpList(zone);
   sexp_then->Add(new SExpSymbol("then"));
@@ -453,14 +536,119 @@ SExpression* If::Serialize(Zone* zone) {
   // Produce final SExpression.
   const auto sexp = new (zone) SExpList(zone);
   sexp->Add(new SExpSymbol("if"));
+  sexp->Add(sexp_type);
   sexp->Add(sexp_then);
   sexp->Add(sexp_otherwise);
   return sexp;
 }
 
 void If::OutputBinary(WriteStream* stream) {
-  // TODO(andreicostin): Write the logic.
-  UNIMPLEMENTED();
+  WRITE_BYTE(0x04);
+  WRITE_SIGNED(block_type_->index());
+  then_->OutputBinary(stream);
+  if (!otherwise_->instructions().is_empty()) {
+    WRITE_BYTE(0x05);
+    otherwise_->OutputBinary(stream);
+  }
+  WRITE_BYTE(0x0B);
+}
+
+SExpression* Br::Serialize(Zone* zone) {
+  if (is_if_) {
+    return new (zone) SExpSymbol(OS::SCreate(zone, "br_if %" Pu32, label_));
+  } else {
+    return new (zone) SExpSymbol(OS::SCreate(zone, "br %" Pu32, label_));
+  }
+}
+
+void Br::OutputBinary(WriteStream* stream) {
+  if (is_if_) {
+    WRITE_BYTE(0x0D);
+  } else {
+    WRITE_BYTE(0x0C);
+  }
+  WRITE_UNSIGNED(label_);
+}
+
+SExpression* RttCanon::Serialize(Zone* zone) {
+  const auto sexp = new (zone) SExpList(zone);
+  sexp->Add(new (zone) SExpSymbol("rtt.canon"));
+  sexp->Add(type_->Serialize(zone));
+  return sexp;
+}
+
+void RttCanon::OutputBinary(WriteStream* stream) {
+  WRITE_BYTE(0xFB);
+  WRITE_BYTE(0x30);
+  type_->OutputBinary(stream);
+}
+
+SExpression* RttSub::Serialize(Zone* zone) {
+  const auto sexp = new (zone) SExpList(zone);
+  sexp->Add(new (zone) SExpSymbol("rtt.sub"));
+  sexp->Add(new (zone) SExpInteger(depth_));
+  sexp->Add(type_->Serialize(zone));
+  sexp->Add(supertype_->Serialize(zone));
+  return sexp;
+}
+
+void RttSub::OutputBinary(WriteStream* stream) {
+  WRITE_BYTE(0xFB);
+  WRITE_BYTE(0x31);
+  WRITE_UNSIGNED(depth_);
+  type_->OutputBinary(stream);
+  supertype_->OutputBinary(stream);
+}
+
+SExpression* StructGet::Serialize(Zone* zone) {
+  const auto sexp = new (zone) SExpList(zone);
+  sexp->Add(new (zone) SExpSymbol("struct.get"));
+  sexp->Add(struct_type_->Serialize(zone));
+  sexp->Add(field_->Serialize(zone));
+  return sexp;
+}
+
+void StructGet::OutputBinary(WriteStream* stream) {
+  WRITE_BYTE(0xFB);
+  WRITE_BYTE(0x03);
+  struct_type_->OutputBinary(stream);
+  field_->OutputBinary(stream);
+}
+
+SExpression* StructSet::Serialize(Zone* zone) {
+  const auto sexp = new (zone) SExpList(zone);
+  sexp->Add(new (zone) SExpSymbol("struct.set"));
+  sexp->Add(struct_type_->Serialize(zone));
+  sexp->Add(field_->Serialize(zone));
+  return sexp;
+}
+
+void StructSet::OutputBinary(WriteStream* stream) {
+  WRITE_BYTE(0xFB);
+  WRITE_BYTE(0x06);
+  struct_type_->OutputBinary(stream);
+  field_->OutputBinary(stream);
+}
+
+SExpression* StructNewWithRtt::Serialize(Zone* zone) {
+  const auto sexp = new (zone) SExpList(zone);
+  if (def_) {
+    sexp->Add(new (zone) SExpSymbol("struct.new_default_with_rtt"));
+  } else {
+    sexp->Add(new (zone) SExpSymbol("struct.new_with_rtt"));
+  }
+  sexp->Add(struct_type_->Serialize(zone));
+  return sexp;
+}
+
+void StructNewWithRtt::OutputBinary(WriteStream* stream) {
+  WRITE_BYTE(0xFB);
+  if (def_) {
+    WRITE_BYTE(0x02);
+  } else {
+    WRITE_BYTE(0x01);
+  }
+  struct_type_->OutputBinary(stream);
 }
 
 SExpression* Local::Serialize(Zone* zone) {
@@ -483,8 +671,37 @@ SExpression* Local::Serialize(Zone* zone) {
 }
 
 void Local::OutputBinary(WriteStream* stream) {
-  // TODO(andreicostin): Write the logic.
-  UNIMPLEMENTED();
+  type_->OutputBinary(stream);
+}
+
+Global::Global(dart::Zone* zone, ValueType* type, bool mut, uint32_t index)
+    : type_(type),
+      mut_(mut),
+      init_(new (zone) InstructionList(zone)),
+      index_(index) {}
+
+dart::SExpression* Global::Serialize(dart::Zone* zone) {
+  const auto sexp = new (zone) SExpList(zone);
+  sexp->Add(new (zone) SExpSymbol("global"));
+  sexp->Add(type_->Serialize(zone));
+  if (mut_) {
+    sexp->Add(new (zone) SExpSymbol("var"));
+  } else {
+    sexp->Add(new (zone) SExpSymbol("const"));
+  }
+  sexp->Add(init_->Serialize(zone));
+  return sexp;
+}
+
+void Global::OutputBinary(dart::WriteStream* stream) {
+  type_->OutputBinary(stream);
+  if (mut_) {
+    WRITE_BYTE(0x01);
+  } else {
+    WRITE_BYTE(0x00);
+  }
+  init_->OutputBinary(stream);
+  WRITE_BYTE(0x0B);
 }
 
 InstructionList::InstructionList(Zone* zone)
@@ -514,6 +731,11 @@ Instruction* InstructionList::AddLocalSet(Local* local) {
   return instructions_.Last();
 }
 
+Instruction* InstructionList::AddGlobalGet(Global* global) {
+  instructions_.Add(new (zone_) GlobalGet(global));
+  return instructions_.Last();
+}
+
 Instruction* InstructionList::AddInt32Add() {
   instructions_.Add(new (zone_) Int32Add());
   return instructions_.Last();
@@ -524,8 +746,63 @@ Instruction* InstructionList::AddConstant(uint32_t value) {
   return instructions_.Last();
 }
 
-Instruction* InstructionList::AddIf() {
-  instructions_.Add(new (zone_) If(zone_));
+Instruction* InstructionList::AddBlock(FuncType* block_type) {
+  instructions_.Add(new (zone_) Block(block_type, zone_));
+  return instructions_.Last();
+}
+
+Instruction* InstructionList::AddLoop(FuncType* block_type) {
+  instructions_.Add(new (zone_) Loop(block_type, zone_));
+  return instructions_.Last();
+}
+
+Instruction* InstructionList::AddIf(FuncType* block_type) {
+  instructions_.Add(new (zone_) If(block_type, zone_));
+  return instructions_.Last();
+}
+
+Instruction* InstructionList::AddRttCanon(HeapType* type) {
+  instructions_.Add(new (zone_) RttCanon(type));
+  return instructions_.Last();
+}
+
+Instruction* InstructionList::AddRttSub(uint32_t depth,
+                                        HeapType* type1,
+                                        HeapType* type2) {
+  instructions_.Add(new (zone_) RttSub(depth, type1, type2));
+  return instructions_.Last();
+}
+
+Instruction* InstructionList::AddStructGet(StructType* struct_type,
+                                           Field* field) {
+  instructions_.Add(new (zone_) StructGet(struct_type, field));
+  return instructions_.Last();
+}
+
+Instruction* InstructionList::AddStructSet(StructType* struct_type,
+                                           Field* field) {
+  instructions_.Add(new (zone_) StructSet(struct_type, field));
+  return instructions_.Last();
+}
+
+Instruction* InstructionList::AddStructNewWithRtt(StructType* struct_type) {
+  instructions_.Add(new (zone_) StructNewWithRtt(struct_type, /*def =*/false));
+  return instructions_.Last();
+}
+
+Instruction* InstructionList::AddStructNewDefaultWithRtt(
+    StructType* struct_type) {
+  instructions_.Add(new (zone_) StructNewWithRtt(struct_type, /*def =*/true));
+  return instructions_.Last();
+}
+
+Instruction* InstructionList::AddBr(uint32_t label) {
+  instructions_.Add(new (zone_) Br(/*is_if =*/false, label));
+  return instructions_.Last();
+}
+
+Instruction* InstructionList::AddBrIf(uint32_t label) {
+  instructions_.Add(new (zone_) Br(/*is_if =*/true, label));
   return instructions_.Last();
 }
 
@@ -570,7 +847,7 @@ void Function::OutputBinary(WriteStream* stream) {
     WRITE_BYTE(1);  // One local description follows. Wasm permits
                     // compressing multiple consecutive identical locals
                     // into one. We choose not to use this feature.
-    local->type_->OutputBinary(stream);
+    local->OutputBinary(stream);
   }
   // Then, output the function body.
   if (body_ != nullptr) {
@@ -638,7 +915,11 @@ SExpression* WasmModuleBuilder::Serialize(Zone* zone) {
     sexp_type->Add(def_type->Serialize(zone));
     sexp->Add(sexp_type);
   }
-  // Functions section.
+  // Global section.
+  for (Global* global : globals_) {
+    sexp->Add(global->Serialize(zone));
+  }
+  // Function + Code sections.
   // Note that in Wasm Binary Format function bodies would
   // be stored separately, in the code section.
   for (Function* fct : functions_) {
@@ -664,6 +945,16 @@ void WasmModuleBuilder::OutputFunctionSection(WriteStream* stream) {
   WRITE_UNSIGNED(functions_.length());
   for (Function* function : functions_) {
     WRITE_UNSIGNED(function->type()->index());
+  }
+}
+
+void WasmModuleBuilder::OutputGlobalSection(dart::WriteStream* stream) {
+  // Code section has index 6.
+  WRITE_BYTE(6);
+  WRITE_BYTECOUNT();
+  WRITE_UNSIGNED(globals_.length());
+  for (Global* global : globals_) {
+    global->OutputBinary(stream);
   }
 }
 
@@ -695,6 +986,7 @@ void WasmModuleBuilder::OutputBinary(WriteStream* stream) {
   // Sections come in ascending order of their indices.
   OutputTypeSection(stream);
   OutputFunctionSection(stream);
+  OutputGlobalSection(stream);
   OutputCodeSection(stream);
 }
 
@@ -730,6 +1022,37 @@ RefType* WasmModuleBuilder::MakeRefType(bool nullable, HeapType* heap_type) {
   return new (zone_) RefType(nullable, heap_type);
 }
 
+RefType* WasmModuleBuilder::MakeRefType(bool nullable, DefType* def_type) {
+  return MakeRefType(nullable, MakeHeapType(def_type));
+}
+
+Global* WasmModuleBuilder::MakeRttCanon(StructType* type) {
+  HeapType* heap_type = MakeHeapType(type);
+  Rtt* const rtt = new (zone_) Rtt(1, heap_type);
+  Global* const global = AddGlobal(rtt, /*mut =*/true);
+  global->init()->AddRttCanon(heap_type);
+  return global;
+}
+
+Global* WasmModuleBuilder::MakeRttChild(StructType* type,
+                                        Global* parent_global) {
+  // Currently V8 (and it seems also the GC spec) doesn't support using
+  // globals in global initializer expressions, which is the only way
+  // to specify the static inheritance tree in an efficient manner.
+  // As discussed with V8, they will soon drop this requirement for us
+  // in V8, so that we can uncomment the lines below.
+  return MakeRttCanon(type);
+
+  // Rtt* const parent_rtt = reinterpret_cast<Rtt*>(parent_global->type_);
+  // HeapType* heap_type = MakeHeapType(type);
+  // const intptr_t rtt_depth = 1 + parent_rtt->depth();
+  // Rtt* const rtt = new (zone_) Rtt(rtt_depth, heap_type);
+  // Global* const global = AddGlobal(rtt, /*mut =*/true);
+  // global->init()->AddGlobalGet(parent_global);
+  // global->init()->AddRttSub(rtt_depth, heap_type, parent_rtt->heap_type());
+  // return global;
+}
+
 FuncType* WasmModuleBuilder::MakeFuncType(ValueType* result_type) {
   const auto fct_type =
       new (zone_) FuncType(zone_, types_.length(), result_type);
@@ -741,6 +1064,12 @@ StructType* WasmModuleBuilder::MakeStructType() {
   const auto str_type = new (zone_) StructType(zone_, types_.length());
   types_.Add(str_type);
   return str_type;
+}
+
+Global* WasmModuleBuilder::AddGlobal(ValueType* type, bool mut) {
+  Global* global = new (zone_) Global(zone_, type, mut, globals_.length());
+  globals_.Add(global);
+  return global;
 }
 
 Function* WasmModuleBuilder::AddFunction(const char* name, FuncType* type) {

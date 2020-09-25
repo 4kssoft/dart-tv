@@ -3850,7 +3850,7 @@ class Function : public Object {
   FINAL_HEAP_OBJECT_IMPLEMENTATION(Function, Object);
   friend class Class;
   friend class SnapshotWriter;
-  friend class Parser;  // For set_eval_script.
+  friend class Parser;          // For set_eval_script.
   friend class ProgramVisitor;  // For set_parameter_names.
   // FunctionLayout::VisitFunctionPointers accesses the private constructor of
   // Function.

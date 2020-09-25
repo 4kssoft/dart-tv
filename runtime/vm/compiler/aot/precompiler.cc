@@ -235,8 +235,10 @@ void Precompiler::WasmHoistRootLibrary() {
     const Library& root_lib =
         Library::Handle(Z, I->object_store()->root_library());
     USE(root_lib);
+    wasm_codegen_->HoistBuiltinClasses();
     wasm_codegen_->HoistClassesFromLibrary(root_lib);
     wasm_codegen_->HoistFunctionsFromLibrary(root_lib);
+    wasm_codegen_->GenerateClassLayoutsAndRtts();
   }
 }
 
