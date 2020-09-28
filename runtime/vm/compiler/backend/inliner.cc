@@ -854,7 +854,9 @@ class CallSiteInliner : public ValueObject {
       inlining_call_sites_ = call_sites_temp;
       collected_call_sites_->Clear();
       // Inline call sites at the current depth.
-      bool inlined_instance = InlineInstanceCalls();
+      // Polymorphic inlining is disabled in the Dart-to-Wasm prototype.
+      // bool inlined_instance = InlineInstanceCalls();
+      bool inlined_instance = false;
       bool inlined_statics = InlineStaticCalls();
       bool inlined_closures = InlineClosureCalls();
       if (inlined_instance || inlined_statics || inlined_closures) {
