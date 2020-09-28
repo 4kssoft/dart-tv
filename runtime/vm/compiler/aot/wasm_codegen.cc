@@ -22,6 +22,7 @@ WasmCodegen::WasmCodegen(Precompiler* precompiler, Zone* zone)
       class_to_wasm_class_info_(zone),
       function_to_wasm_function_(zone),
       field_to_wasm_field_(zone),
+      print_i64_func_(nullptr),
       object_rtt_(nullptr) {}
 
 void WasmCodegen::Demo() {
@@ -80,9 +81,15 @@ void WasmCodegen::Demo() {
 
   // Add instructions to this function: compute 45 + 49.
   wasm::InstructionList* const instrs = fct->MakeNewBody();
-  instrs->AddConstant(45);
-  instrs->AddConstant(49);
+  instrs->AddI32Constant(45);
+  instrs->AddI32Constant(49);
   instrs->AddInt32Add();
+}
+
+void WasmCodegen::HoistDefaultImports() {
+  wasm::FuncType* signature = M.MakeFuncType(nullptr);
+  signature->AddParam(M.i64());
+  print_i64_func_ = M.AddImportedFunction("console", "log", signature);
 }
 
 void WasmCodegen::HoistClassesFromLibrary(const Library& lib) {
@@ -190,14 +197,22 @@ void WasmCodegen::HoistClass(const Class& klass) {
 
 void WasmCodegen::HoistFunction(const Function& function) {
   wasm::FuncType* signature = MakeSignature(function);
-  wasm::Function* wasm_function = M.AddFunction(
-      String::ZoneHandle(Z, function.name()).ToCString(), signature);
+  const String& function_name = String::ZoneHandle(Z, function.name());
+  wasm::Function* wasm_function =
+      M.AddFunction(function_name.ToCString(), signature);
+
+  if (strcmp(function_name.ToCString(), "main") == 0) {
+    if (M.start_function() != nullptr) {
+      FATAL("Multiple main functions detected");
+    }
+    M.set_start_function(wasm_function);
+  }
 
   // TODO(andreicostin): Normally, we would leave hoisted functions bodyless
   // until the Wasm compiler pass compiles a body for them, but for demo
   // purposes, we'll just create a demo body for them which is consistent
   // with the dummy signature defined below ([] -> [i32]).
-  wasm_function->MakeNewBody()->AddConstant(100);
+  wasm_function->MakeNewBody()->AddI32Constant(100);
 
   function_to_wasm_function_.Insert(
       make_pair(&Function::ZoneHandle(Z, function.raw()), wasm_function));
@@ -314,6 +329,10 @@ void WasmCodegen::GenerateClassLayoutAndRtt(const Class& klass) {
 }
 
 wasm::FuncType* WasmCodegen::MakeSignature(const Function& function) {
+  // TODO(andreicostin): This shouldn't be explicit in the final version.
+  if (strcmp(String::Handle(function.name()).ToCString(), "main") == 0) {
+    return M.MakeFuncType(nullptr);
+  }
   // TODO(andreicostin): Implement the logic, making sure not to
   // create duplicated function types, for efficiency.
   return M.MakeFuncType(M.i32());  // Placeholder: [] -> [i32]

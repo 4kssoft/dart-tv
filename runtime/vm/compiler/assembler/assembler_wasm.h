@@ -42,6 +42,8 @@ void WasmTrace(const char* format, ...) PRINTF_ATTRIBUTE(1, 2);
   M(StructGet)                                                                 \
   M(StructGet)                                                                 \
   M(StructNewWithRtt)                                                          \
+  M(Call)                                                                      \
+  M(CallIndirect)                                                              \
   M(Local)                                                                     \
   M(Global)                                                                    \
   M(InstructionList)                                                           \
@@ -396,20 +398,22 @@ class Int32Add : public Instruction {
   DISALLOW_COPY_AND_ASSIGN(Int32Add);
 };
 
-// Wasm i32.const instruction.
-// TODO(andreicostin): Generalize this for other types.
-class Constant : public Instruction {
+// Wasm i{32/64}.const instruction.
+class IntConstant : public Instruction {
  public:
   dart::SExpression* Serialize(dart::Zone* zone) override;
   void OutputBinary(dart::WriteStream* stream) override;
 
  private:
-  Constant(uint32_t value) : value_(value) {}
+  enum class Kind { kI32, kI64 };
 
-  uint32_t value_;
+  IntConstant(Kind kind, uint64_t value) : kind_(kind), value_(value) {}
+
+  const Kind kind_;
+  const uint64_t value_;
 
   friend InstructionList;  // For private constructor.
-  DISALLOW_COPY_AND_ASSIGN(Constant);
+  DISALLOW_COPY_AND_ASSIGN(IntConstant);
 };
 
 // Abstract base class for Wasm block, loop and if instructions.
@@ -589,6 +593,36 @@ class StructNewWithRtt : public Instruction {
   DISALLOW_COPY_AND_ASSIGN(StructNewWithRtt);
 };
 
+// Wasm call instruction.
+class Call : public Instruction {
+ public:
+  dart::SExpression* Serialize(dart::Zone* zone);
+  void OutputBinary(dart::WriteStream* stream);
+
+ private:
+  Call(Function* function) : function_(function) {}
+
+  Function* const function_;
+
+  friend InstructionList;  // For private constructor.
+  DISALLOW_COPY_AND_ASSIGN(Call);
+};
+
+// Wasm call indirect instruction.
+class CallIndirect : public Instruction {
+ public:
+  dart::SExpression* Serialize(dart::Zone* zone);
+  void OutputBinary(dart::WriteStream* stream);
+
+ private:
+  CallIndirect(FuncType* func_type) : func_type_(func_type) {}
+
+  FuncType* const func_type_;
+
+  friend InstructionList;  // For private constructor.
+  DISALLOW_COPY_AND_ASSIGN(CallIndirect);
+};
+
 // Wasm function locals: local and param declarations used in function
 // definitions. The two concepts have not been separated because in Wasm
 // parameters and locals share the same indexing space of their containing
@@ -662,7 +696,8 @@ class InstructionList : public dart::ZoneAllocated {
   Instruction* AddLocalSet(Local* local);
   Instruction* AddGlobalGet(Global* global);
   Instruction* AddInt32Add();
-  Instruction* AddConstant(uint32_t value);
+  Instruction* AddI32Constant(uint32_t value);
+  Instruction* AddI64Constant(uint64_t value);
   Instruction* AddBlock(FuncType* block_type);
   Instruction* AddLoop(FuncType* block_type);
   Instruction* AddIf(FuncType* block_type);
@@ -672,6 +707,8 @@ class InstructionList : public dart::ZoneAllocated {
   Instruction* AddStructSet(StructType* struct_type, Field* field);
   Instruction* AddStructNewWithRtt(StructType* struct_type);
   Instruction* AddStructNewDefaultWithRtt(StructType* struct_type);
+  Instruction* AddCall(Function* function);
+  Instruction* AddCallIndirect(FuncType* function_type);
   Instruction* AddBr(uint32_t label);
   Instruction* AddBrIf(uint32_t label);
 
@@ -692,6 +729,10 @@ class InstructionList : public dart::ZoneAllocated {
 };
 
 // Wasm function. Its body is represented as an InstructionList.
+// When imported_module_name_ is not null the function is imported from JS.
+// In that case, the function is also body-less and will not be part of binary
+// or serialization output. Imported functions need to precede all other
+// functions, as per the Wasm specification.
 class Function : public dart::ZoneAllocated {
  public:
   dart::SExpression* Serialize(dart::Zone* zone);
@@ -710,11 +751,17 @@ class Function : public dart::ZoneAllocated {
   uint32_t index() const { return index_; }
   FuncType* type() const { return type_; }
   InstructionList* body() const { return body_; }
+  bool IsImported() const { return imported_module_name_ != nullptr; }
 
  private:
-  Function(dart::Zone* zone, const char* name, uint32_t index, FuncType* type);
+  Function(dart::Zone* zone,
+           const char* module_name,
+           const char* name,
+           uint32_t index,
+           FuncType* type);
 
   dart::Zone* const zone_;
+  const char* imported_module_name_;
   const char* name_;
   const uint32_t index_;
   FuncType* const type_;
@@ -766,6 +813,15 @@ class WasmModuleBuilder : public dart::ValueObject {
   // Create function with the given name and function type.
   Function* AddFunction(const char* name, FuncType* type);
 
+  // Create an imported function with the given name, module name and
+  // function type.
+  Function* AddImportedFunction(const char* module_name,
+                                const char* name,
+                                FuncType* type);
+
+  Function* start_function() const { return start_function_; }
+  void set_start_function(Function* function) { start_function_ = function; }
+
   // Builtin types.
   NumType* i32() { return &i32_; }
   NumType* i64() { return &i64_; }
@@ -787,6 +843,9 @@ class WasmModuleBuilder : public dart::ValueObject {
  private:
   // Type section consists of a list of user-defined type definitions.
   void OutputTypeSection(dart::WriteStream* stream);
+  // Import section consists of a list of imported functions, tables, memories,
+  // and globals.
+  void OutputImportSection(dart::WriteStream* stream);
   // Function section consists of a list of the types of all user-defined
   // functions. Note that actual code for the functions resides in the
   // Code section.
@@ -795,6 +854,8 @@ class WasmModuleBuilder : public dart::ValueObject {
   // Each global can be either mutable or immutable, and is initialized
   // by a constant initializer expression.
   void OutputGlobalSection(dart::WriteStream* stream);
+  // Start section consists of the index of the start function, if any.
+  void OutputStartSection(dart::WriteStream* stream);
   // Code section consists of a list with one entry per user-defined function.
   // Each entry consists of a description of the function locals (consisting
   // of the type for each local) and the contents of the function body.
@@ -814,6 +875,10 @@ class WasmModuleBuilder : public dart::ValueObject {
   RefType anyref_;     // Type alias: anyref = (ref null any).
   RefType eqref_;      // Type alias: eqref = (ref null eq).
   RefType i31ref_;     // Type alias: i31ref = (ref i31).
+
+  Function* start_function_;
+  intptr_t num_imported_functions_;
+  intptr_t num_non_imported_functions_;
 
   dart::Zone* const zone_;
 

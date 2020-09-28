@@ -89,6 +89,10 @@ class PushBytecountFrontScope : public ValueObject {
 #define WRITE_BYTE(m) stream->WriteFixed(static_cast<uint8_t>(m))
 #define WRITE_UNSIGNED(m) stream->WriteUnsigned(m)
 #define WRITE_SIGNED(m) stream->Write(m)
+// Note: in general, this should be UTF8-compliant, but for our purposes
+// here we do not need the non ASCII-cases, so this implementation
+// of WRITE_STRING works for the time being.
+#define WRITE_STRING(m) stream->WriteBytes(m, strlen(m));
 
 // It is not permitted to have two occurences of this macro in the same
 // enclosing scope. This is enforced by a variable name clash if this is
@@ -334,10 +338,12 @@ SExpression* FuncType::Serialize(Zone* zone) {
     sexp->Add(atom);
   }
   // Add "result" atom.
-  const auto atom = new (zone) SExpList(zone);
-  atom->Add(new (zone) SExpSymbol("result"));
-  atom->Add(result_type_->Serialize(zone));
-  sexp->Add(atom);
+  if (result_type_ != nullptr) {
+    const auto atom = new (zone) SExpList(zone);
+    atom->Add(new (zone) SExpSymbol("result"));
+    atom->Add(result_type_->Serialize(zone));
+    sexp->Add(atom);
+  }
   return sexp;
 }
 
@@ -348,8 +354,12 @@ void FuncType::OutputBinary(WriteStream* stream) {
     type->OutputBinary(stream);
   }
   // We do not use multiple function return values in our implementation.
-  WRITE_BYTE(1);
-  result_type_->OutputBinary(stream);
+  if (result_type_ != nullptr) {
+    WRITE_BYTE(1);
+    result_type_->OutputBinary(stream);
+  } else {
+    WRITE_BYTE(0);
+  }
 }
 
 void FuncType::AddParam(ValueType* param_type) {
@@ -446,14 +456,32 @@ void Int32Add::OutputBinary(WriteStream* stream) {
   WRITE_BYTE(0x6A);
 }
 
-SExpression* Constant::Serialize(Zone* zone) {
-  return new (zone) SExpSymbol(OS::SCreate(zone, "i32.const %" Pu32, value_));
+SExpression* IntConstant::Serialize(Zone* zone) {
+  switch (kind_) {
+    case Kind::kI32:
+      return new (zone) SExpSymbol(
+          OS::SCreate(zone, "i32.const %" Pu32, static_cast<uint32_t>(value_)));
+    case Kind::kI64:
+      return new (zone)
+          SExpSymbol(OS::SCreate(zone, "i64.const %" Pu64, value_));
+    default:
+      UNREACHABLE();
+  }
 }
 
-void Constant::OutputBinary(WriteStream* stream) {
-  // i32.const
-  WRITE_BYTE(0x41);
-  WRITE_UNSIGNED(value_);
+void IntConstant::OutputBinary(WriteStream* stream) {
+  switch (kind_) {
+    case Kind::kI32:
+      WRITE_BYTE(0x41);
+      WRITE_SIGNED(static_cast<int32_t>(value_));
+      break;
+    case Kind::kI64:
+      WRITE_BYTE(0x42);
+      WRITE_SIGNED(static_cast<int64_t>(value_));
+      break;
+    default:
+      UNREACHABLE();
+  }
 }
 
 Block::Block(FuncType* const block_type, dart::Zone* zone)
@@ -651,6 +679,31 @@ void StructNewWithRtt::OutputBinary(WriteStream* stream) {
   struct_type_->OutputBinary(stream);
 }
 
+SExpression* Call::Serialize(Zone* zone) {
+  const auto sexp = new (zone) SExpList(zone);
+  sexp->Add(new (zone) SExpSymbol("call"));
+  sexp->Add(new (zone) SExpInteger(function_->index()));
+  return sexp;
+}
+
+void Call::OutputBinary(WriteStream* stream) {
+  WRITE_BYTE(0x10);
+  WRITE_UNSIGNED(function_->index());
+}
+
+SExpression* CallIndirect::Serialize(Zone* zone) {
+  const auto sexp = new (zone) SExpList(zone);
+  sexp->Add(new (zone) SExpSymbol("call_indirect"));
+  sexp->Add(new (zone) SExpInteger(func_type_->index()));
+  return sexp;
+}
+
+void CallIndirect::OutputBinary(WriteStream* stream) {
+  WRITE_BYTE(0x11);
+  WRITE_UNSIGNED(func_type_->index());
+  WRITE_BYTE(0x00);
+}
+
 SExpression* Local::Serialize(Zone* zone) {
   const auto sexp = new (zone) SExpList(zone);
   switch (kind_) {
@@ -741,8 +794,13 @@ Instruction* InstructionList::AddInt32Add() {
   return instructions_.Last();
 }
 
-Instruction* InstructionList::AddConstant(uint32_t value) {
-  instructions_.Add(new (zone_) Constant(value));
+Instruction* InstructionList::AddI32Constant(uint32_t value) {
+  instructions_.Add(new (zone_) IntConstant(IntConstant::Kind::kI32, value));
+  return instructions_.Last();
+}
+
+Instruction* InstructionList::AddI64Constant(uint64_t value) {
+  instructions_.Add(new (zone_) IntConstant(IntConstant::Kind::kI64, value));
   return instructions_.Last();
 }
 
@@ -790,6 +848,16 @@ Instruction* InstructionList::AddStructNewWithRtt(StructType* struct_type) {
   return instructions_.Last();
 }
 
+Instruction* InstructionList::AddCall(Function* function) {
+  instructions_.Add(new (zone_) Call(function));
+  return instructions_.Last();
+}
+
+Instruction* InstructionList::AddCallIndirect(FuncType* function_type) {
+  instructions_.Add(new (zone_) CallIndirect(function_type));
+  return instructions_.Last();
+}
+
 Instruction* InstructionList::AddStructNewDefaultWithRtt(
     StructType* struct_type) {
   instructions_.Add(new (zone_) StructNewWithRtt(struct_type, /*def =*/true));
@@ -806,8 +874,13 @@ Instruction* InstructionList::AddBrIf(uint32_t label) {
   return instructions_.Last();
 }
 
-Function::Function(Zone* zone, const char* name, uint32_t index, FuncType* type)
+Function::Function(Zone* zone,
+                   const char* module_name,
+                   const char* name,
+                   uint32_t index,
+                   FuncType* type)
     : zone_(zone),
+      imported_module_name_(module_name),
       name_(name),
       index_(index),
       type_(type),
@@ -817,6 +890,10 @@ Function::Function(Zone* zone, const char* name, uint32_t index, FuncType* type)
 SExpression* Function::Serialize(Zone* zone) {
   const auto sexp = new (zone) SExpList(zone);
   sexp->Add(new (zone) SExpSymbol("func"));
+  if (imported_module_name_ != nullptr) {
+    sexp->Add(new (zone) SExpSymbol(
+        OS::SCreate(zone, "(imported) $%s", imported_module_name_)));
+  }
   if (strcmp(name_, "") != 0) {
     sexp->Add(new (zone) SExpSymbol(OS::SCreate(zone, "$%s", name_)));
   }
@@ -841,6 +918,9 @@ SExpression* Function::Serialize(Zone* zone) {
 }
 
 void Function::OutputBinary(WriteStream* stream) {
+  if (IsImported()) {
+    FATAL("Imported functions should never be output explicitly");
+  }
   // First, output the locals.
   WRITE_UNSIGNED(locals_.length());
   for (Local* local : locals_) {
@@ -901,6 +981,9 @@ WasmModuleBuilder::WasmModuleBuilder(Zone* zone)
       anyref_(/*nullable =*/true, &any_),
       eqref_(/*nullable =*/true, &eq_),
       i31ref_(/*nullable =*/false, &i31_),
+      start_function_(nullptr),
+      num_imported_functions_(0),
+      num_non_imported_functions_(0),
       zone_(zone),
       types_(zone, 16),
       functions_(zone, 16) {}
@@ -938,17 +1021,38 @@ void WasmModuleBuilder::OutputTypeSection(WriteStream* stream) {
   }
 }
 
+void WasmModuleBuilder::OutputImportSection(WriteStream* stream) {
+  // Type section has index 2.
+  WRITE_BYTE(2);
+  WRITE_BYTECOUNT();
+  WRITE_UNSIGNED(num_imported_functions_);
+  for (Function* function : functions_) {
+    if (function->IsImported()) {
+      // Output toplevel namespace name.
+      WRITE_UNSIGNED(strlen(function->imported_module_name_));
+      WRITE_STRING(function->imported_module_name_);
+      // Output imported function name.
+      WRITE_UNSIGNED(strlen(function->name_));
+      WRITE_STRING(function->name_);
+      WRITE_BYTE(0x00);  // Prefix for imported functions.
+      WRITE_UNSIGNED(function->type()->index());
+    }
+  }
+}
+
 void WasmModuleBuilder::OutputFunctionSection(WriteStream* stream) {
   // Function section has index 3.
   WRITE_BYTE(3);
   WRITE_BYTECOUNT();
-  WRITE_UNSIGNED(functions_.length());
+  WRITE_UNSIGNED(num_non_imported_functions_);
   for (Function* function : functions_) {
-    WRITE_UNSIGNED(function->type()->index());
+    if (!function->IsImported()) {
+      WRITE_UNSIGNED(function->type()->index());
+    }
   }
 }
 
-void WasmModuleBuilder::OutputGlobalSection(dart::WriteStream* stream) {
+void WasmModuleBuilder::OutputGlobalSection(WriteStream* stream) {
   // Code section has index 6.
   WRITE_BYTE(6);
   WRITE_BYTECOUNT();
@@ -958,16 +1062,27 @@ void WasmModuleBuilder::OutputGlobalSection(dart::WriteStream* stream) {
   }
 }
 
+void WasmModuleBuilder::OutputStartSection(WriteStream* stream) {
+  if (start_function_ != nullptr) {
+    // Start section has index 8.
+    WRITE_BYTE(8);
+    WRITE_BYTECOUNT();
+    WRITE_UNSIGNED(start_function_->index());
+  }
+}
+
 void WasmModuleBuilder::OutputCodeSection(WriteStream* stream) {
   // Code section has index 10.
   WRITE_BYTE(10);
   WRITE_BYTECOUNT();
-  WRITE_UNSIGNED(functions_.length());
+  WRITE_UNSIGNED(num_non_imported_functions_);
   for (Function* function : functions_) {
-    // The code of each function is preceded by its bytecount to allow
-    // the embedder to lazily compile functions.
-    WRITE_BYTECOUNT();
-    function->OutputBinary(stream);
+    if (!function->IsImported()) {
+      // The code of each function is preceded by its bytecount to allow
+      // the embedder to lazily compile functions.
+      WRITE_BYTECOUNT();
+      function->OutputBinary(stream);
+    }
   }
 }
 
@@ -985,8 +1100,10 @@ void WasmModuleBuilder::OutputBinary(WriteStream* stream) {
   WRITE_BYTE(0x00);
   // Sections come in ascending order of their indices.
   OutputTypeSection(stream);
+  OutputImportSection(stream);
   OutputFunctionSection(stream);
   OutputGlobalSection(stream);
+  OutputStartSection(stream);
   OutputCodeSection(stream);
 }
 
@@ -1073,7 +1190,21 @@ Global* WasmModuleBuilder::AddGlobal(ValueType* type, bool mut) {
 }
 
 Function* WasmModuleBuilder::AddFunction(const char* name, FuncType* type) {
-  functions_.Add(new (zone_) Function(zone_, name, functions_.length(), type));
+  ++num_non_imported_functions_;
+  functions_.Add(new (zone_) Function(zone_, /*module_name=*/nullptr, name,
+                                      functions_.length(), type));
+  return functions_.Last();
+}
+
+Function* WasmModuleBuilder::AddImportedFunction(const char* module_name,
+                                                 const char* name,
+                                                 FuncType* type) {
+  if (!functions_.is_empty() && !functions_.Last()->IsImported()) {
+    FATAL("Wasm imported functions need to precede all other functions");
+  }
+  ++num_imported_functions_;
+  functions_.Add(new (zone_) Function(zone_, module_name, name,
+                                      functions_.length(), type));
   return functions_.Last();
 }
 

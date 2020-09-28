@@ -597,8 +597,13 @@ COMPILER_PASS(CompileToWasm, {
     wasm::InstructionList* instrs = wasm_function->MakeNewBody();
     USE(instrs);
 
-    // Ok since right now functions have i32 return value.
-    instrs->AddConstant(23);
+    // TODO(andreicostin): This will not stay in the final version.
+    if (wasm_function != codegen->module_builder()->start_function()) {
+      instrs->AddI32Constant(23);
+    } else {
+      instrs->AddI64Constant(49);
+      instrs->AddCall(codegen->print_i64_func());
+    }
 
     // TODO(andreicostin): Implement the flowgraph translation logic.
   }

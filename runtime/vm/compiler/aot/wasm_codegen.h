@@ -94,7 +94,11 @@ class WasmCodegen : public ZoneAllocated {
   // Will be used to test new features of the WasmModuleBuilder.
   void Demo();
 
+  // Imports console.log from JS for printing integers.
+  void HoistDefaultImports();
   void HoistClassesFromLibrary(const Library& lib);
+  // Additionally sets the start function to be "main". Fails with an error
+  // if multiple "main" functions have been hoisted.
   void HoistFunctionsFromLibrary(const Library& lib);
   void HoistBuiltinClasses();
   void GenerateClassLayoutsAndRtts();
@@ -105,6 +109,10 @@ class WasmCodegen : public ZoneAllocated {
 
   SExpression* Serialize(Zone* zone);
   void OutputBinary(WriteStream* stream);
+
+  wasm::WasmModuleBuilder* module_builder() { return &module_builder_; }
+
+  wasm::Function* print_i64_func() const { return print_i64_func_; }
 
  private:
   void HoistClass(const Class& klass);
@@ -134,6 +142,8 @@ class WasmCodegen : public ZoneAllocated {
   // to the Wasm field of the class in which occurs originally.
   DirectChainedHashMap<FieldToWasmTrait> field_to_wasm_field_;
 
+  // console.log(i64) imported from JS.
+  wasm::Function* print_i64_func_;
   // Global rtt definition for the primitive classes "Object".
   wasm::Global* object_rtt_;
 
