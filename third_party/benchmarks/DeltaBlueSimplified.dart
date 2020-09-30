@@ -647,6 +647,7 @@ void chainTest(int n) {
       errorChainTestFailed(i, last.value);
     }
   }
+  log(last.value);
 }
 
 /**
@@ -670,8 +671,10 @@ void projectionTest(int n) {
     new ScaleConstraint(planner, src, scale, offset, dst, REQUIRED);
   }
   change(planner, src, 17);
+  log(dst.value);
   if (dst.value != 1170) errorProjectionFailed(1);
   change(planner, dst, 1050);
+  log(src.value);
   if (src.value != 5) errorProjectionFailed(2);
   change(planner, scale, 5);
   int expected = (n - 2) * 5 + 1000;
@@ -679,12 +682,14 @@ void projectionTest(int n) {
     if (vars.pop().value != expected) errorProjectionFailed(3);
     expected -= 5;
   }
+  log(expected);
   change(planner, offset, 2000);
   expected = (n - 2) * 5 + 2000;
   for (var vars = dests.clone()..pop(); !vars.isEmpty;) {
     if (vars.pop().value != expected) errorProjectionFailed(4);
     expected -= 5;
   }
+  log(expected);
 }
 
 void change(Planner planner, Variable v, int newValue) {
@@ -789,27 +794,37 @@ class ConstraintListIterator {
   void advance() => currentElement = currentElement.next;
 }
 
+// This function is called a few times during successful execution to output
+// some numbers. The values can then be checked to verify the execution.
+
+void log(int x) {
+  print(x);
+}
+
 // If an error occurs, one of the following functions is called instead of the
 // usual printing. These should be implemented to signal the error in an
 // appropriate way.
 
-@pragma("vm:never-inline")
 void errorRequiredConstraint() {
   // Could not satisfy a required constraint!
+  print(-1);
 }
 
-@pragma("vm:never-inline")
 void errorCycleEncountered() {
   // Cycle encountered.
+  print(-2);
 }
 
-@pragma("vm:never-inline")
 void errorChainTestFailed(int a, int b) {
   // Chain test failed:
   // Expected last value to be $a but it was $b.
+  print(-3);
+  print(a);
+  print(b);
 }
 
-@pragma("vm:never-inline")
 void errorProjectionFailed(int n) {
   // Projection $n failed.
+  print(-4);
+  print(n);
 }
