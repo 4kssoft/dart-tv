@@ -9,6 +9,7 @@
 namespace wasm {
 namespace {
 using ::dart::FLAG_trace_wasm_compilation;  // For use in WasmTrace.
+using ::dart::GrowableArray;
 using ::dart::Log;                          // For use in WasmTrace.
 using ::dart::OS;
 using ::dart::ReAlloc;
@@ -324,8 +325,8 @@ void FieldType::OutputBinary(WriteStream* stream) {
   }
 }
 
-FuncType::FuncType(Zone* zone, int index, ValueType* result_type)
-    : DefType(zone, index), param_types_(zone, 16), result_type_(result_type) {}
+FuncType::FuncType(Zone* zone, int index)
+    : DefType(zone, index), param_types_(zone, 16), result_types_(zone, 16) {}
 
 SExpression* FuncType::Serialize(Zone* zone) {
   const auto sexp = new (zone) SExpList(zone);
@@ -337,11 +338,11 @@ SExpression* FuncType::Serialize(Zone* zone) {
     atom->Add(param_type->Serialize(zone));
     sexp->Add(atom);
   }
-  // Add "result" atom.
-  if (result_type_ != nullptr) {
+  // Add "result" atoms.
+  for (ValueType* result_type : result_types_) {
     const auto atom = new (zone) SExpList(zone);
     atom->Add(new (zone) SExpSymbol("result"));
-    atom->Add(result_type_->Serialize(zone));
+    atom->Add(result_type->Serialize(zone));
     sexp->Add(atom);
   }
   return sexp;
@@ -353,17 +354,18 @@ void FuncType::OutputBinary(WriteStream* stream) {
   for (ValueType* type : param_types_) {
     type->OutputBinary(stream);
   }
-  // We do not use multiple function return values in our implementation.
-  if (result_type_ != nullptr) {
-    WRITE_BYTE(1);
-    result_type_->OutputBinary(stream);
-  } else {
-    WRITE_BYTE(0);
+  WRITE_UNSIGNED(result_types_.length());
+  for (ValueType* type : result_types_) {
+    type->OutputBinary(stream);
   }
 }
 
 void FuncType::AddParam(ValueType* param_type) {
   param_types_.Add(param_type);
+}
+
+void FuncType::AddResult(ValueType* result_type) {
+  result_types_.Add(result_type);
 }
 
 StructType::StructType(Zone* zone, int index)
@@ -387,7 +389,7 @@ void StructType::OutputBinary(WriteStream* stream) {
 }
 
 void StructType::CopyFieldsTo(StructType* dest) {
-  dart::GrowableArray<Field*>& dest_fields = dest->fields();
+  GrowableArray<Field*>& dest_fields = dest->fields();
   for (intptr_t i = 0; i < fields_.length(); ++i) {
     dest_fields.Add(new (zone_) Field(*fields_.At(i)));
     dest_fields.Last()->set_struct_type_(dest);
@@ -420,7 +422,7 @@ Field* StructType::AddField(FieldType::PackedType packed_type, bool mut) {
 
 SExpression* LocalGet::Serialize(Zone* zone) {
   return new (zone)
-      SExpSymbol(OS::SCreate(zone, "local.get $%s", local_->name()));
+      SExpSymbol(OS::SCreate(zone, "local.get %" Pu32, local_->index()));
 }
 
 void LocalGet::OutputBinary(WriteStream* stream) {
@@ -430,7 +432,7 @@ void LocalGet::OutputBinary(WriteStream* stream) {
 
 SExpression* LocalSet::Serialize(Zone* zone) {
   return new (zone)
-      SExpSymbol(OS::SCreate(zone, "local.set $%s", local_->name()));
+      SExpSymbol(OS::SCreate(zone, "local.set %" Pu32, local_->index()));
 }
 
 void LocalSet::OutputBinary(WriteStream* stream) {
@@ -440,7 +442,7 @@ void LocalSet::OutputBinary(WriteStream* stream) {
 
 SExpression* GlobalGet::Serialize(Zone* zone) {
   return new (zone)
-      SExpSymbol(OS::SCreate(zone, "global.get $%" Pu32, global_->index()));
+      SExpSymbol(OS::SCreate(zone, "global.get %" Pu32, global_->index()));
 }
 
 void GlobalGet::OutputBinary(WriteStream* stream) {
@@ -448,12 +450,128 @@ void GlobalGet::OutputBinary(WriteStream* stream) {
   WRITE_UNSIGNED(global_->index());
 }
 
-SExpression* Int32Add::Serialize(Zone* zone) {
-  return new (zone) SExpSymbol("i32.add");
+SExpression* IntOp::Serialize(Zone* zone) {
+  uint32_t bits = 0;
+  switch (int_kind_) {
+    case IntegerKind::kI32:
+      bits = 32;
+      break;
+    case IntegerKind::kI64:
+      bits = 64;
+      break;
+    default:
+      UNREACHABLE();
+  }
+  switch (op_kind_) {
+    case OpKind::kAdd:
+      return new (zone) SExpSymbol(OS::SCreate(zone, "i%" Pu32 ".add", bits));
+    case OpKind::kSub:
+      return new (zone) SExpSymbol(OS::SCreate(zone, "i%" Pu32 ".sub", bits));
+    case OpKind::kMult:
+      return new (zone) SExpSymbol(OS::SCreate(zone, "i%" Pu32 ".mul", bits));
+    case OpKind::kDiv:
+      return new (zone) SExpSymbol(OS::SCreate(zone, "i%" Pu32 ".div_s", bits));
+    case OpKind::kMod:
+      return new (zone) SExpSymbol(OS::SCreate(zone, "i%" Pu32 ".mod_s", bits));
+
+    case OpKind::kAnd:
+      return new (zone) SExpSymbol(OS::SCreate(zone, "i%" Pu32 ".and", bits));
+    case OpKind::kOr:
+      return new (zone) SExpSymbol(OS::SCreate(zone, "i%" Pu32 ".or", bits));
+    case OpKind::kXor:
+      return new (zone) SExpSymbol(OS::SCreate(zone, "i%" Pu32 ".xor", bits));
+
+    case OpKind::kEq:
+      return new (zone) SExpSymbol(OS::SCreate(zone, "i%" Pu32 ".eq", bits));
+    case OpKind::kNeq:
+      return new (zone) SExpSymbol(OS::SCreate(zone, "i%" Pu32 ".ne", bits));
+    case OpKind::kLt:
+      return new (zone) SExpSymbol(OS::SCreate(zone, "i%" Pu32 ".lt_s", bits));
+    case OpKind::kGt:
+      return new (zone) SExpSymbol(OS::SCreate(zone, "i%" Pu32 ".gt_s", bits));
+    case OpKind::kLe:
+      return new (zone) SExpSymbol(OS::SCreate(zone, "i%" Pu32 ".le_s", bits));
+    case OpKind::kGe:
+      return new (zone) SExpSymbol(OS::SCreate(zone, "i%" Pu32 ".ge_s", bits));
+    default:
+      UNREACHABLE();
+  }
 }
 
-void Int32Add::OutputBinary(WriteStream* stream) {
-  WRITE_BYTE(0x6A);
+void IntOp::OutputBinary(WriteStream* stream) {
+  uint32_t offset_arithmetic = 0;
+  uint32_t offset_relational = 0;
+  if (int_kind_ == IntegerKind::kI64) {
+    offset_arithmetic = 0x7C - 0x6A;
+    offset_relational = 0x51 - 0x46;
+  }
+  switch (op_kind_) {
+    case OpKind::kAdd:
+      WRITE_BYTE(0x6A + offset_arithmetic);
+      break;
+    case OpKind::kSub:
+      WRITE_BYTE(0x6B + offset_arithmetic);
+      break;
+    case OpKind::kMult:
+      WRITE_BYTE(0x6C + offset_arithmetic);
+      break;
+    case OpKind::kDiv:
+      WRITE_BYTE(0x6D + offset_arithmetic);
+      break;
+    case OpKind::kMod:
+      WRITE_BYTE(0x6F + offset_arithmetic);
+      break;
+
+    case OpKind::kAnd:
+      WRITE_BYTE(0x71 + offset_arithmetic);
+      break;
+    case OpKind::kOr:
+      WRITE_BYTE(0x72 + offset_arithmetic);
+      break;
+    case OpKind::kXor:
+      WRITE_BYTE(0x73 + offset_arithmetic);
+      break;
+
+    case OpKind::kEq:
+      WRITE_BYTE(0x46 + offset_relational);
+      break;
+    case OpKind::kNeq:
+      WRITE_BYTE(0x47 + offset_relational);
+      break;
+    case OpKind::kLt:
+      WRITE_BYTE(0x48 + offset_relational);
+      break;
+    case OpKind::kGt:
+      WRITE_BYTE(0x4A + offset_relational);
+      break;
+    case OpKind::kLe:
+      WRITE_BYTE(0x4C + offset_relational);
+      break;
+    case OpKind::kGe:
+      WRITE_BYTE(0x4E + offset_relational);
+      break;
+    default:
+      UNREACHABLE();
+  }
+}
+
+IntOp::OpKind IntOp::NegateOpKind(OpKind op_kind) {
+  switch (op_kind) {
+    case OpKind::kEq:
+      return OpKind::kNeq;
+    case OpKind::kNeq:
+      return OpKind::kEq;
+    case OpKind::kLt:
+      return OpKind::kGe;
+    case OpKind::kGt:
+      return OpKind::kLe;
+    case OpKind::kLe:
+      return OpKind::kGt;
+    case OpKind::kGe:
+      return OpKind::kLt;
+    default:
+      FATAL("Operator can not be negated");
+  }
 }
 
 SExpression* IntConstant::Serialize(Zone* zone) {
@@ -484,13 +602,13 @@ void IntConstant::OutputBinary(WriteStream* stream) {
   }
 }
 
-Block::Block(FuncType* const block_type, dart::Zone* zone)
+Block::Block(FuncType* const block_type, Zone* zone)
     : StructuredInstr(block_type), body_(new (zone) InstructionList(zone)) {}
 
 SExpression* Block::Serialize(Zone* zone) {
   // Serialize result type.
   const auto sexp_type = new (zone) SExpList(zone);
-  sexp_type->Add(new SExpSymbol("block_type = "));
+  sexp_type->Add(new SExpSymbol("block_type ="));
   sexp_type->Add(block_type_->Serialize(zone));
 
   // Serialize body.
@@ -512,13 +630,13 @@ void Block::OutputBinary(WriteStream* stream) {
   WRITE_BYTE(0x0B);
 }
 
-Loop::Loop(FuncType* const block_type, dart::Zone* zone)
+Loop::Loop(FuncType* const block_type, Zone* zone)
     : StructuredInstr(block_type), body_(new (zone) InstructionList(zone)) {}
 
 SExpression* Loop::Serialize(Zone* zone) {
   // Serialize result type.
   const auto sexp_type = new (zone) SExpList(zone);
-  sexp_type->Add(new SExpSymbol("block_type = "));
+  sexp_type->Add(new SExpSymbol("block_type ="));
   sexp_type->Add(block_type_->Serialize(zone));
 
   // Serialize body.
@@ -540,7 +658,7 @@ void Loop::OutputBinary(WriteStream* stream) {
   WRITE_BYTE(0x0B);
 }
 
-If::If(FuncType* const block_type, dart::Zone* zone)
+If::If(FuncType* const block_type, Zone* zone)
     : StructuredInstr(block_type),
       then_(new (zone) InstructionList(zone)),
       otherwise_(new (zone) InstructionList(zone)) {}
@@ -548,7 +666,7 @@ If::If(FuncType* const block_type, dart::Zone* zone)
 SExpression* If::Serialize(Zone* zone) {
   // Serialize result type.
   const auto sexp_type = new (zone) SExpList(zone);
-  sexp_type->Add(new SExpSymbol("block_type = "));
+  sexp_type->Add(new SExpSymbol("block_type ="));
   sexp_type->Add(block_type_->Serialize(zone));
 
   // Serialize then branch.
@@ -704,6 +822,25 @@ void CallIndirect::OutputBinary(WriteStream* stream) {
   WRITE_BYTE(0x00);
 }
 
+SExpression* Return::Serialize(Zone* zone) {
+  return new (zone) SExpSymbol("return");
+}
+void Return::OutputBinary(WriteStream* stream) {
+  WRITE_BYTE(0x0F);
+}
+
+SExpression* RefNull::Serialize(Zone* zone) {
+  const auto sexp = new (zone) SExpList(zone);
+  sexp->Add(new (zone) SExpSymbol("ref.null"));
+  sexp->Add(type_->Serialize(zone));
+  return sexp;
+}
+
+void RefNull::OutputBinary(WriteStream* stream) {
+  WRITE_BYTE(0xD0);
+  type_->OutputBinary(stream);
+}
+
 SExpression* Local::Serialize(Zone* zone) {
   const auto sexp = new (zone) SExpList(zone);
   switch (kind_) {
@@ -727,13 +864,13 @@ void Local::OutputBinary(WriteStream* stream) {
   type_->OutputBinary(stream);
 }
 
-Global::Global(dart::Zone* zone, ValueType* type, bool mut, uint32_t index)
+Global::Global(Zone* zone, ValueType* type, bool mut, uint32_t index)
     : type_(type),
       mut_(mut),
       init_(new (zone) InstructionList(zone)),
       index_(index) {}
 
-dart::SExpression* Global::Serialize(dart::Zone* zone) {
+SExpression* Global::Serialize(Zone* zone) {
   const auto sexp = new (zone) SExpList(zone);
   sexp->Add(new (zone) SExpSymbol("global"));
   sexp->Add(type_->Serialize(zone));
@@ -746,7 +883,7 @@ dart::SExpression* Global::Serialize(dart::Zone* zone) {
   return sexp;
 }
 
-void Global::OutputBinary(dart::WriteStream* stream) {
+void Global::OutputBinary(WriteStream* stream) {
   type_->OutputBinary(stream);
   if (mut_) {
     WRITE_BYTE(0x01);
@@ -774,104 +911,141 @@ void InstructionList::OutputBinary(WriteStream* stream) {
   }
 }
 
-Instruction* InstructionList::AddLocalGet(Local* local) {
-  instructions_.Add(new (zone_) LocalGet(local));
-  return instructions_.Last();
+LocalGet* InstructionList::AddLocalGet(Local* local) {
+  LocalGet* const instr = new (zone_) LocalGet(local);
+  instructions_.Add(instr);
+  return instr;
 }
 
-Instruction* InstructionList::AddLocalSet(Local* local) {
-  instructions_.Add(new (zone_) LocalSet(local));
-  return instructions_.Last();
+LocalSet* InstructionList::AddLocalSet(Local* local) {
+  LocalSet* const instr = new (zone_) LocalSet(local);
+  instructions_.Add(instr);
+  return instr;
 }
 
-Instruction* InstructionList::AddGlobalGet(Global* global) {
-  instructions_.Add(new (zone_) GlobalGet(global));
-  return instructions_.Last();
+GlobalGet* InstructionList::AddGlobalGet(Global* global) {
+  GlobalGet* const instr = new (zone_) GlobalGet(global);
+  instructions_.Add(instr);
+  return instr;
 }
 
-Instruction* InstructionList::AddInt32Add() {
-  instructions_.Add(new (zone_) Int32Add());
-  return instructions_.Last();
+IntOp* InstructionList::AddIntOp(IntOp::IntegerKind integer_kind,
+                                 IntOp::OpKind op_kind) {
+  IntOp* const instr = new (zone_) IntOp(integer_kind, op_kind);
+  instructions_.Add(instr);
+  return instr;
 }
 
-Instruction* InstructionList::AddI32Constant(uint32_t value) {
-  instructions_.Add(new (zone_) IntConstant(IntConstant::Kind::kI32, value));
-  return instructions_.Last();
+IntConstant* InstructionList::AddI32Constant(uint32_t value) {
+  IntConstant* const instr =
+      new (zone_) IntConstant(IntConstant::Kind::kI32, value);
+  instructions_.Add(instr);
+  return instr;
 }
 
-Instruction* InstructionList::AddI64Constant(uint64_t value) {
-  instructions_.Add(new (zone_) IntConstant(IntConstant::Kind::kI64, value));
-  return instructions_.Last();
+IntConstant* InstructionList::AddI64Constant(uint64_t value) {
+  IntConstant* const instr =
+      new (zone_) IntConstant(IntConstant::Kind::kI64, value);
+  instructions_.Add(instr);
+  return instr;
 }
 
-Instruction* InstructionList::AddBlock(FuncType* block_type) {
-  instructions_.Add(new (zone_) Block(block_type, zone_));
-  return instructions_.Last();
+Block* InstructionList::AddBlock(FuncType* block_type) {
+  Block* const instr = new (zone_) Block(block_type, zone_);
+  instructions_.Add(instr);
+  return instr;
 }
 
-Instruction* InstructionList::AddLoop(FuncType* block_type) {
-  instructions_.Add(new (zone_) Loop(block_type, zone_));
-  return instructions_.Last();
+Loop* InstructionList::AddLoop(FuncType* block_type) {
+  Loop* const instr = new (zone_) Loop(block_type, zone_);
+  instructions_.Add(instr);
+  return instr;
 }
 
-Instruction* InstructionList::AddIf(FuncType* block_type) {
-  instructions_.Add(new (zone_) If(block_type, zone_));
-  return instructions_.Last();
+If* InstructionList::AddIf(FuncType* block_type) {
+  If* const instr = new (zone_) If(block_type, zone_);
+  instructions_.Add(instr);
+  return instr;
 }
 
-Instruction* InstructionList::AddRttCanon(HeapType* type) {
-  instructions_.Add(new (zone_) RttCanon(type));
-  return instructions_.Last();
+RttCanon* InstructionList::AddRttCanon(HeapType* type) {
+  RttCanon* const instr = new (zone_) RttCanon(type);
+  instructions_.Add(instr);
+  return instr;
 }
 
-Instruction* InstructionList::AddRttSub(uint32_t depth,
-                                        HeapType* type1,
-                                        HeapType* type2) {
-  instructions_.Add(new (zone_) RttSub(depth, type1, type2));
-  return instructions_.Last();
+RttSub* InstructionList::AddRttSub(uint32_t depth,
+                                   HeapType* type,
+                                   HeapType* supertype) {
+  RttSub* const instr = new (zone_) RttSub(depth, type, supertype);
+  instructions_.Add(instr);
+  return instr;
 }
 
-Instruction* InstructionList::AddStructGet(StructType* struct_type,
-                                           Field* field) {
-  instructions_.Add(new (zone_) StructGet(struct_type, field));
-  return instructions_.Last();
+StructGet* InstructionList::AddStructGet(StructType* struct_type,
+                                         Field* field) {
+  StructGet* const instr = new (zone_) StructGet(struct_type, field);
+  instructions_.Add(instr);
+  return instr;
 }
 
-Instruction* InstructionList::AddStructSet(StructType* struct_type,
-                                           Field* field) {
-  instructions_.Add(new (zone_) StructSet(struct_type, field));
-  return instructions_.Last();
+StructSet* InstructionList::AddStructSet(StructType* struct_type,
+                                         Field* field) {
+  StructSet* const instr = new (zone_) StructSet(struct_type, field);
+  instructions_.Add(instr);
+  return instr;
 }
 
-Instruction* InstructionList::AddStructNewWithRtt(StructType* struct_type) {
-  instructions_.Add(new (zone_) StructNewWithRtt(struct_type, /*def =*/false));
-  return instructions_.Last();
-}
-
-Instruction* InstructionList::AddCall(Function* function) {
-  instructions_.Add(new (zone_) Call(function));
-  return instructions_.Last();
-}
-
-Instruction* InstructionList::AddCallIndirect(FuncType* function_type) {
-  instructions_.Add(new (zone_) CallIndirect(function_type));
-  return instructions_.Last();
-}
-
-Instruction* InstructionList::AddStructNewDefaultWithRtt(
+StructNewWithRtt* InstructionList::AddStructNewWithRtt(
     StructType* struct_type) {
-  instructions_.Add(new (zone_) StructNewWithRtt(struct_type, /*def =*/true));
-  return instructions_.Last();
+  StructNewWithRtt* const instr =
+      new (zone_) StructNewWithRtt(struct_type, /*def =*/false);
+  instructions_.Add(instr);
+  return instr;
 }
 
-Instruction* InstructionList::AddBr(uint32_t label) {
-  instructions_.Add(new (zone_) Br(/*is_if =*/false, label));
-  return instructions_.Last();
+StructNewWithRtt* InstructionList::AddStructNewDefaultWithRtt(
+    StructType* struct_type) {
+  StructNewWithRtt* const instr =
+      new (zone_) StructNewWithRtt(struct_type, /*def =*/true);
+  instructions_.Add(instr);
+  return instr;
 }
 
-Instruction* InstructionList::AddBrIf(uint32_t label) {
-  instructions_.Add(new (zone_) Br(/*is_if =*/true, label));
-  return instructions_.Last();
+Call* InstructionList::AddCall(Function* function) {
+  Call* const instr = new (zone_) Call(function);
+  instructions_.Add(instr);
+  return instr;
+}
+
+CallIndirect* InstructionList::AddCallIndirect(FuncType* function_type) {
+  CallIndirect* const instr = new (zone_) CallIndirect(function_type);
+  instructions_.Add(instr);
+  return instr;
+}
+
+Return* InstructionList::AddReturn() {
+  Return* const instr = new (zone_) Return();
+  instructions_.Add(instr);
+  return instr;
+}
+
+Br* InstructionList::AddBr(uint32_t label) {
+  Br* const instr = new (zone_) Br(/*is_if =*/false, label);
+  instructions_.Add(instr);
+  return instr;
+}
+
+Br* InstructionList::AddBrIf(uint32_t label) {
+  Br* const instr = new (zone_) Br(/*is_if =*/true, label);
+  instructions_.Add(instr);
+  return instr;
+}
+
+RefNull* InstructionList::AddRefNull(HeapType* type) {
+  RefNull* const instr = new (zone_) RefNull(type);
+  instructions_.Add(instr);
+  return instr;
 }
 
 Function::Function(Zone* zone,
@@ -961,7 +1135,8 @@ Local* Function::GetLocalByIndex(int id) {
   return locals_[id];
 }
 
-InstructionList* Function::MakeNewBody() {
+InstructionList* Function::MakeNewBodyAndClearLocals() {
+  locals_.Clear();
   body_ = new (zone_) InstructionList(zone_);
   return body_;
 }
@@ -1170,9 +1345,8 @@ Global* WasmModuleBuilder::MakeRttChild(StructType* type,
   // return global;
 }
 
-FuncType* WasmModuleBuilder::MakeFuncType(ValueType* result_type) {
-  const auto fct_type =
-      new (zone_) FuncType(zone_, types_.length(), result_type);
+FuncType* WasmModuleBuilder::MakeFuncType() {
+  const auto fct_type = new (zone_) FuncType(zone_, types_.length());
   types_.Add(fct_type);
   return fct_type;
 }

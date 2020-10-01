@@ -5,7 +5,7 @@
 #ifndef RUNTIME_VM_COMPILER_AOT_WASM_CODEGEN_H_
 #define RUNTIME_VM_COMPILER_AOT_WASM_CODEGEN_H_
 
-#include "utility"
+#include <utility>
 #include "vm/compiler/aot/precompiler.h"
 #include "vm/compiler/assembler/assembler_wasm.h"
 #include "vm/object.h"
@@ -104,6 +104,8 @@ class WasmCodegen : public ZoneAllocated {
   void GenerateClassLayoutsAndRtts();
 
   WasmClassInfo& GetWasmClassInfo(const Class& klass);
+  wasm::ValueType* GetWasmType(const Class& type);
+  // Note: imported functions will not be found through this method.
   wasm::Function* GetWasmFunction(const Function& function);
   wasm::Field* GetWasmField(const Field& field);
 
@@ -114,17 +116,24 @@ class WasmCodegen : public ZoneAllocated {
 
   wasm::Function* print_i64_func() const { return print_i64_func_; }
 
- private:
-  void HoistClass(const Class& klass);
-  void HoistFunction(const Function& function);
-  void GenerateClassLayoutAndRtt(const Class& klass);
   wasm::FuncType* MakeSignature(const Function& function);
 
   // Helpers for identifying primitive classes.
   // Check if class represents the 'int' class.
   static bool IsIntegerClass(const Class& klass);
+  // Check if class represents the 'bool' class.
+  static bool IsBoolClass(const Class& klass);
   // Check if class represents the 'String' class.
   static bool IsStringClass(const Class& klass);
+
+ private:
+  void HoistClass(const Class& klass);
+  void HoistFunction(const Function& function);
+  void GenerateClassLayoutAndRtt(const Class& klass);
+  // Before being compiled in the appropriate compiler pass, functions will
+  // possess a dummy signature and have a dummy body implementation.
+  // Namely, they will take no arguments and return a hardcoded constant.
+  wasm::FuncType* MakeDummySignature();
 
   Precompiler* const precompiler_;
   Zone* const zone_;
@@ -144,7 +153,9 @@ class WasmCodegen : public ZoneAllocated {
 
   // console.log(i64) imported from JS.
   wasm::Function* print_i64_func_;
-  // Global rtt definition for the primitive classes "Object".
+  // Wasm value type for the primitive class "Object".
+  wasm::ValueType* object_type_;
+  // Global rtt definition for the primitive class "Object".
   wasm::Global* object_rtt_;
 
   DISALLOW_COPY_AND_ASSIGN(WasmCodegen);

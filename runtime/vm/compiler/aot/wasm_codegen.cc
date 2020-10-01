@@ -23,6 +23,7 @@ WasmCodegen::WasmCodegen(Precompiler* precompiler, Zone* zone)
       function_to_wasm_function_(zone),
       field_to_wasm_field_(zone),
       print_i64_func_(nullptr),
+      object_type_(nullptr),
       object_rtt_(nullptr) {}
 
 void WasmCodegen::Demo() {
@@ -32,13 +33,15 @@ void WasmCodegen::Demo() {
   str_type->AddField(M.i64(), /*mut =*/true);
 
   // Make a Wasm function type [i64 f32 f64] -> [i32].
-  wasm::FuncType* const fct_type = M.MakeFuncType(M.i32());
+  wasm::FuncType* const fct_type = M.MakeFuncType();
   fct_type->AddParam(M.i64());
   fct_type->AddParam(M.f32());
   fct_type->AddParam(M.f64());
+  fct_type->AddResult(M.i32());
 
   // Make a Wasm function $fct, of type [i64 f32 f64] -> [i32].
   wasm::Function* const fct = M.AddFunction("fct", fct_type);
+  wasm::InstructionList* const instrs = fct->MakeNewBodyAndClearLocals();
 
   // Register four locals to this function.
   // Note: Parameters are *not* checked against func_type.
@@ -80,14 +83,13 @@ void WasmCodegen::Demo() {
                 "t4");  // (local $t4 (ref null i31)).
 
   // Add instructions to this function: compute 45 + 49.
-  wasm::InstructionList* const instrs = fct->MakeNewBody();
   instrs->AddI32Constant(45);
   instrs->AddI32Constant(49);
-  instrs->AddInt32Add();
+  instrs->AddIntOp(wasm::IntOp::IntegerKind::kI32, wasm::IntOp::OpKind::kAdd);
 }
 
 void WasmCodegen::HoistDefaultImports() {
-  wasm::FuncType* signature = M.MakeFuncType(nullptr);
+  wasm::FuncType* signature = M.MakeFuncType();
   signature->AddParam(M.i64());
   print_i64_func_ = M.AddImportedFunction("console", "log", signature);
 }
@@ -154,8 +156,6 @@ void WasmCodegen::GenerateClassLayoutsAndRtts() {
 void WasmCodegen::HoistBuiltinClasses() {
   // Make an "Object" class.
   HoistClass(Class::Handle(Type::Handle(Type::ObjectType()).type_class()));
-  // Make an "int" class.
-  HoistClass(Class::Handle(Type::Handle(Type::IntType()).type_class()));
   // Make a "String" class.
   HoistClass(Class::Handle(Type::Handle(Type::StringType()).type_class()));
 }
@@ -165,8 +165,30 @@ WasmClassInfo& WasmCodegen::GetWasmClassInfo(const Class& klass) {
       class_to_wasm_class_info_.Lookup(&klass);
   // At this point all classes should have been hoisted.
   // If this is not true, exit with an error even in non-debug builds.
-  RELEASE_ASSERT(pair != nullptr);
+  if (pair == nullptr) {
+    FATAL1("WasmCodegen::GetWasmClassInfo called on non-hoisted class %s",
+           klass.ToCString());
+  }
   return pair->second;
+}
+
+wasm::ValueType* WasmCodegen::GetWasmType(const Class& klass) {
+  // Integers and booleans are always unboxed in this implementation.
+  if (IsIntegerClass(klass)) {
+    return M.i64();
+  }
+  if (IsBoolClass(klass)) {
+    return M.i32();
+  }
+
+  wasm::StructType* const wasm_struct = GetWasmClassInfo(klass).struct_type_;
+  // At this point all classes which appear as fields should have been
+  // hoisted. If this is not true, exit with an error even in non-debug
+  // builds.
+  if (wasm_struct == nullptr) {
+    FATAL1("missing for %s", klass.ToCString());
+  }
+  return M.MakeRefType(/*nullable =*/true, wasm_struct);
 }
 
 wasm::Function* WasmCodegen::GetWasmFunction(const Function& function) {
@@ -196,7 +218,7 @@ void WasmCodegen::HoistClass(const Class& klass) {
 }
 
 void WasmCodegen::HoistFunction(const Function& function) {
-  wasm::FuncType* signature = MakeSignature(function);
+  wasm::FuncType* signature = MakeDummySignature();
   const String& function_name = String::ZoneHandle(Z, function.name());
   wasm::Function* wasm_function =
       M.AddFunction(function_name.ToCString(), signature);
@@ -211,8 +233,8 @@ void WasmCodegen::HoistFunction(const Function& function) {
   // TODO(andreicostin): Normally, we would leave hoisted functions bodyless
   // until the Wasm compiler pass compiles a body for them, but for demo
   // purposes, we'll just create a demo body for them which is consistent
-  // with the dummy signature defined below ([] -> [i32]).
-  wasm_function->MakeNewBody()->AddI32Constant(100);
+  // with the dummy signature defined below ([] -> [i64]).
+  wasm_function->MakeNewBodyAndClearLocals()->AddI64Constant(100);
 
   function_to_wasm_function_.Insert(
       make_pair(&Function::ZoneHandle(Z, function.raw()), wasm_function));
@@ -243,24 +265,12 @@ void WasmCodegen::GenerateClassLayoutAndRtt(const Class& klass) {
 
   // Special handling for root class "Object".
   if (klass.IsObjectClass()) {
+    object_type_ = M.MakeRefType(/*nullable =*/true, wasm_struct);
     // For class id.
     wasm_struct->AddField(M.i64(), /*mut =*/true);
     // Rtt - root of class hierarchy.
-    RELEASE_ASSERT(wasm_struct != nullptr);  // todo remove.
     object_rtt_ = M.MakeRttCanon(wasm_struct);
     wasm_rtt = object_rtt_;
-    return;
-  }
-  // Special handling for integers. In the future integers will translated
-  // into either this struct (when boxed) or i64 (when unboxed).
-  if (IsIntegerClass(klass)) {
-    // For class id.
-    wasm_struct->AddField(M.i64(), /*mut =*/true);
-    // Contained integer.
-    wasm_struct->AddField(M.i64(), /*mut =*/true);
-    // Rtt - hardcode parent to be "Object", despite the real
-    // parent being "Num".
-    wasm_rtt = M.MakeRttChild(wasm_struct, object_rtt_);
     return;
   }
   // Special handling for Strings. Largely unimplemented for now.
@@ -310,37 +320,67 @@ void WasmCodegen::GenerateClassLayoutAndRtt(const Class& klass) {
 
     WasmTrace("--> Processing field %s\n", field.ToCString());
 
-    wasm::StructType* const field_wasm_struct =
-        GetWasmClassInfo(type_class).struct_type_;
-    // At this point all classes which appear as fileds should have been
-    // hoisted. If this is not true, exit with an error even in non-debug
-    // builds.
-    if (field_wasm_struct == nullptr) {
-      FATAL1("field_wasm_struct missing for %s", field.ToCString());
-    }
-
-    wasm::Field* const wasm_field = wasm_struct->AddField(
-        M.MakeRefType(/*nullable =*/true, field_wasm_struct),
-        /*mut =*/true);
-
+    wasm::ValueType* const field_type = GetWasmType(type_class);
+    wasm::Field* const wasm_field = wasm_struct->AddField(field_type,
+                                                          /*mut =*/true);
     field_to_wasm_field_.Insert(
         make_pair(&Field::ZoneHandle(Z, field.raw()), wasm_field));
   }
 }
 
+wasm::FuncType* WasmCodegen::MakeDummySignature() {
+  wasm::FuncType* const func_type = M.MakeFuncType();
+  func_type->AddResult(M.i64());
+  return func_type;
+}
+
 wasm::FuncType* WasmCodegen::MakeSignature(const Function& function) {
-  // TODO(andreicostin): This shouldn't be explicit in the final version.
-  if (strcmp(String::Handle(function.name()).ToCString(), "main") == 0) {
-    return M.MakeFuncType(nullptr);
+  const intptr_t num_params = function.NumParameters();
+  const AbstractType& result_type =
+      AbstractType::Handle(function.result_type());
+  const Class& result_type_class = Class::Handle(result_type.type_class());
+  const String& function_name = String::Handle(function.name());
+  wasm::FuncType* const func_type = M.MakeFuncType();
+  // The main function should have signature "void main()" in our implementation.
+  if (strcmp(function_name.ToCString(), "main") == 0) {
+    if (num_params > 0 || !result_type.IsVoidType()) {
+      FATAL("Dart main function should have signature void main()");
+    }
+    return func_type;
   }
-  // TODO(andreicostin): Implement the logic, making sure not to
-  // create duplicated function types, for efficiency.
-  return M.MakeFuncType(M.i32());  // Placeholder: [] -> [i32]
+
+  // Translate function arguments.
+  Type& type = Type::Handle();
+  Class& type_class = Class::Handle();
+  for (intptr_t i = 0; i < num_params; ++i) {
+    type ^= function.ParameterTypeAt(i);
+    type_class ^= type.type_class();
+    if (function.HasThisParameter() && i == 0) {
+      // Due to Wasm requiring a type for call_indirect which is at least
+      // as general as all possible receiver function types at an instance call
+      // site, we choose (for simplicity) to not specialize the type of the
+      // "this" argument, but rather downcast in the prelude of each function.
+      func_type->AddParam(object_type_);
+    } else {
+      func_type->AddParam(GetWasmType(type_class));
+    }
+  }
+  // Translate return value.
+  // A Dart return value of "Void" should translate
+  // into no return value in Wasm.
+  if (!result_type_class.IsVoidClass()) {
+    func_type->AddResult(GetWasmType(result_type_class));
+  }
+  return func_type;
 }
 
 bool WasmCodegen::IsIntegerClass(const Class& klass) {
   return klass.raw() == Type::Handle(Type::IntType()).type_class() ||
          IsIntegerClassId(klass.id());
+}
+
+bool WasmCodegen::IsBoolClass(const Class& klass) {
+  return klass.raw() == Type::Handle(Type::BoolType()).type_class();
 }
 
 bool WasmCodegen::IsStringClass(const Class& klass) {

@@ -5,6 +5,7 @@
 part of dart.core;
 
 /// Prints a string representation of the object to the console.
+@pragma("vm:never-inline")
 void print(Object? object) {
   String line = object.toString();
   var toZone = printToZone;

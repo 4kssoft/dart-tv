@@ -594,18 +594,18 @@ COMPILER_PASS(CompileToWasm, {
   if (auto wasm_function = codegen->GetWasmFunction(function)) {
     wasm::WasmTrace("Compiling function %s to Wasm\n",
                     String::Handle(function.name()).ToCString());
-    wasm::InstructionList* instrs = wasm_function->MakeNewBody();
-    USE(instrs);
 
-    // TODO(andreicostin): This will not stay in the final version.
-    if (wasm_function != codegen->module_builder()->start_function()) {
-      instrs->AddI32Constant(23);
-    } else {
-      instrs->AddI64Constant(49);
-      instrs->AddCall(codegen->print_i64_func());
+    // Functions get their true type only when compiled for the first time.
+    wasm_function->set_type(codegen->MakeSignature(function));
+    WasmTranslator wasm_translator(flow_graph, codegen, function,
+                                   wasm_function);
+    wasm_translator.Translate();
+
+    // Block translation will fail on irreducible CFGs, so we need to
+    // promptly fail compilation in that case.
+    if (wasm_translator.irreducible()) {
+      FATAL1("Irreducible flowgraph for function %s", function.ToCString());
     }
-
-    // TODO(andreicostin): Implement the flowgraph translation logic.
   }
 })
 #endif

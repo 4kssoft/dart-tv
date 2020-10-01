@@ -4,7 +4,13 @@
 
 #include "vm/compiler/aot/wasm_translator.h"
 
+#define C (codegen_)
+#define M (C->module_builder())
+
 namespace dart {
+namespace {
+using ::wasm::WasmTrace;
+}  // namespace
 
 void WasmTranslator::PrepareBlocks() {
   // Find start positions for Wasm blocks.
@@ -14,8 +20,8 @@ void WasmTranslator::PrepareBlocks() {
   // such that they can each be ended at their target block.
   // Wasm blocks for forward edges with targets outside of all loops are
   // started immediately at the start of the body.
-  dart::GrowableArray<BlockEntryInstr*> forward_stack;
-  for (dart::BlockIterator block_it = flow_graph_->postorder_iterator();
+  GrowableArray<BlockEntryInstr*> forward_stack;
+  for (BlockIterator block_it = flow_graph_->postorder_iterator();
        !block_it.Done(); block_it.Advance()) {
     BlockEntryInstr* const block = block_it.Current();
     intptr_t block_number = block->postorder_number();
@@ -126,10 +132,105 @@ void WasmTranslator::VisitBranch(BranchInstr* instr) {
     target = instr->true_successor();
     negated = false;
   }
-  // TODO(andreicostin): Emit code for computing the result of
-  // instr->comparison() and negate it if negate is true.
-  // Push the resulting condition on the stack as an i32.
+  PushEvalCondition(instr->comparison(), negated);
   EmitWasmBranchIf(GetLabelForTarget(target));
+}
+
+void WasmTranslator::VisitBinaryIntegerOp(BinaryIntegerOpInstr* instr) {
+  if (instr->InputCount() != 2) {
+    FATAL("Unexpected IL input count for comparison.");
+  }
+  wasm::IntOp::OpKind op_kind;
+  switch (instr->op_kind()) {
+    case Token::Kind::kADD:
+      op_kind = wasm::IntOp::OpKind::kAdd;
+      break;
+    case Token::Kind::kSUB:
+      op_kind = wasm::IntOp::OpKind::kSub;
+      break;
+    case Token::Kind::kMUL:
+      op_kind = wasm::IntOp::OpKind::kMult;
+      break;
+    case Token::Kind::kTRUNCDIV:
+      op_kind = wasm::IntOp::OpKind::kDiv;
+      break;
+    case Token::Kind::kMOD:
+      op_kind = wasm::IntOp::OpKind::kMod;
+      break;
+    case Token::Kind::kBIT_AND:
+      op_kind = wasm::IntOp::OpKind::kAnd;
+      break;
+    case Token::Kind::kBIT_OR:
+      op_kind = wasm::IntOp::OpKind::kOr;
+      break;
+    case Token::Kind::kBIT_XOR:
+      op_kind = wasm::IntOp::OpKind::kXor;
+      break;
+    default:
+      FATAL("BinaryIntegerOp with unexpected token kind.");
+  }
+  PushValue(instr->InputAt(0)->definition());
+  PushValue(instr->InputAt(1)->definition());
+  wasm_scope_->AddIntOp(wasm::IntOp::IntegerKind::kI64, op_kind);
+  PopValue(instr);
+}
+
+void WasmTranslator::VisitBinaryInt32Op(BinaryInt32OpInstr* instr) {
+  VisitBinaryIntegerOp(instr);
+}
+
+void WasmTranslator::VisitBinaryInt64Op(BinaryInt64OpInstr* instr) {
+  VisitBinaryIntegerOp(instr);
+}
+
+void WasmTranslator::VisitBinaryUint32Op(BinaryUint32OpInstr* instr) {
+  // TODO(andreicostin): This needs to use the unsigned operation kinds.
+  // It will be correct in all cases which don't use overflow explicitly.
+  VisitBinaryIntegerOp(instr);
+}
+
+void WasmTranslator::VisitStaticCall(StaticCallInstr* instr) {
+  const intptr_t num_params = instr->ArgumentCount();
+  const Function& function = instr->function();
+  wasm::Function* wasm_function = C->GetWasmFunction(function);
+  if (wasm_function == nullptr) {
+    // If the function has not been found, check if it's the print function.
+    const AbstractType& result_type =
+        AbstractType::Handle(function.result_type());
+    const String& function_name = String::Handle(function.name());
+    if (strcmp(function_name.ToCString(), "print") == 0) {
+      // TODO(andreicostin): Currently missing the check that the
+      // first type argument is Object.
+      if (num_params != 1 || !result_type.IsVoidType()) {
+        FATAL(
+            "Dart print function should have signature void print(Object arg)");
+      }
+      wasm_function = C->print_i64_func();
+    } else {
+      FATAL1("Codegen could not find function to call: %s",
+             function.ToCString());
+    }
+  }
+  ASSERT(instr->type_args_len() == 0);
+  for (intptr_t i = 0; i < num_params; ++i) {
+    PushValue(instr->ArgumentValueAt(i)->definition());
+  }
+  wasm_scope_->AddCall(wasm_function);
+  // Note that checking the return value of wasm_function is not an option here
+  // since wasm_function might still have the dummy signature if it hasn't been
+  // compiled yet.
+  if (!AbstractType::Handle(function.result_type()).IsVoidType()) {
+    PopValue(instr);
+  }
+}
+
+void WasmTranslator::VisitReturn(ReturnInstr* instr) {
+  // Push return value to Wasm operand stack, unless
+  // the current function returns void.
+  if (!AbstractType::Handle(function_.result_type()).IsVoidType()) {
+    PushValue(instr->value()->definition());
+  }
+  wasm_scope_->AddReturn();
 }
 
 intptr_t WasmTranslator::GetFallthroughPredecessorIndex(
@@ -182,26 +283,161 @@ void WasmTranslator::PopPhiValues(JoinEntryInstr* join) {
   }
 }
 
-void WasmTranslator::PushValue(Definition* def) {
-  // TODO(andreicostin): Push local correponding to def on Wasm stack.
+wasm::ValueType* WasmTranslator::GetWasmType(Definition* def) {
+  // Get definition type.
+  const Class& klass =
+      Class::Handle(def->Type()->ToAbstractType()->type_class());
+  return C->GetWasmType(klass);
 }
 
+wasm::Local* WasmTranslator::GetWasmLocal(Definition* def) {
+  wasm::Local* wasm_local = def_to_wasm_local_.LookupValue(def);
+  if (wasm_local == nullptr) {
+    wasm_local =
+        wasm_function_->AddLocal(wasm::Local::Kind::kLocal, GetWasmType(def),
+                                 OS::SCreate(codegen_->module_builder()->zone(),
+                                             "v%" Pd, def->ssa_temp_index()));
+    def_to_wasm_local_.Insert({def, wasm_local});
+  }
+  return wasm_local;
+}
+
+void WasmTranslator::PushValue(Definition* def) {
+  // Optimization: for constant definitions, just push the
+  // corresponding constant straight away.
+  if (auto const_instr = def->AsConstant()) {
+    // IL instruction is t <- Constant(...).
+    const Object& value = const_instr->value();
+    // Hmm, let's see what we do for nulls.
+    /*if (value.IsNull()) {
+      // t <- Constant(null)
+      wasm_scope_->AddRefNull(M->MakeHeapType(GetWasmType(def)));  // ref.null
+    }*/
+    if (value.IsInteger()) {
+      // Treats both Constant and UnboxedConstant instructions.
+      int64_t int_value = Integer::GetInt64Value(Integer::Cast(value).raw());
+      wasm_scope_->AddI64Constant(int_value);
+    } else {
+      FATAL("Only integer constants are supported.");
+    }
+    // Constants of type objects?
+  } else if (auto box_integer = def->AsBoxInt64()) {
+    // A nop.
+    PushValue(box_integer->value()->definition());
+  } else if (auto unbox_integer = def->AsUnboxInt64()) {
+    // A nop.
+    PushValue(unbox_integer->value()->definition());
+  } else if (auto int_conv = def->AsIntConverter()) {
+    // A nop.
+    PushValue(int_conv->value()->definition());
+  } else if (auto param = def->AsParameter()) {
+    const intptr_t param_index = param->index();
+    if (param_index == 0 && function_.HasThisParameter()) {
+      // TODO(andreicostin): Implement logic for the "This" parameter.
+      UNIMPLEMENTED();
+    } else {
+      wasm_scope_->AddLocalGet(wasm_function_->GetLocalByIndex(param_index));
+    }
+  } else {
+    // For box integer just use the same one possibly.
+    wasm_scope_->AddLocalGet(GetWasmLocal(def));
+  }
+}
+
+// Emit Wasm local.get instruction to pop value from the Wasm operand stack
+// into the Wasm local corresponding to a definition.
 void WasmTranslator::PopValue(Definition* def) {
-  // TODO(andreicostin): Pop local correponding to def from Wasm stack.
+  if (!def->HasSSATemp()) {
+    FATAL1("Only definitions with an SSA temp can be popped %s",
+           def->ToCString());
+  }
+  wasm_scope_->AddLocalSet(GetWasmLocal(def));
 }
 
 void WasmTranslator::EmitWasmBranch(intptr_t label) {
-  // TODO(andreicostin): Emit br Wasm instruction with the given label index.
+  // Note that in Wasm labels are uint32_t, but this should not matter
+  // for small programs.
+  wasm_scope_->AddBr(label);
 }
 
 void WasmTranslator::EmitWasmBranchIf(intptr_t label) {
-  // TODO(andreicostin): Emit br_if Wasm instruction with the given label index.
+  // Note that in Wasm labels are uint32_t, but this should not matter
+  // for small programs.
+  wasm_scope_->AddBrIf(label);
+}
+
+void WasmTranslator::PushEvalCondition(ComparisonInstr* comp, bool negated) {
+  if (comp->InputCount() != 2) {
+    FATAL("Unexpected IL input count for comparison.");
+  }
+  // The three integer cases.
+  if (comp->IsRelationalOp() || comp->IsEqualityCompare() ||
+      (comp->IsStrictCompare() &&
+       IsIntegerValue(
+           comp->left()))) {  // RelationalOp >= <= < >, EqualityCompare == !=,
+                              // Integer StrictCompare ===, !==
+    wasm::IntOp::OpKind op_kind;
+    switch (comp->kind()) {
+      case Token::Kind::kLT:
+        op_kind = wasm::IntOp::OpKind::kLt;
+        break;
+      case Token::Kind::kGT:
+        op_kind = wasm::IntOp::OpKind::kGt;
+        break;
+      case Token::Kind::kLTE:
+        op_kind = wasm::IntOp::OpKind::kLe;
+        break;
+      case Token::Kind::kGTE:
+        op_kind = wasm::IntOp::OpKind::kGe;
+        break;
+      case Token::Kind::kEQ:
+      case Token::Kind::kEQ_STRICT:
+        op_kind = wasm::IntOp::OpKind::kEq;
+        break;
+      case Token::Kind::kNE:
+      case Token::Kind::kNE_STRICT:
+        op_kind = wasm::IntOp::OpKind::kNeq;
+        break;
+      default:
+        FATAL(
+            "Relational/Equality/Strict Integer comparison operator with "
+            "unexpected token "
+            "kind.");
+    }
+    if (negated) {
+      op_kind = wasm::IntOp::NegateOpKind(op_kind);
+    }
+    PushValue(comp->left()->definition());
+    PushValue(comp->right()->definition());
+    wasm_scope_->AddIntOp(wasm::IntOp::IntegerKind::kI64, op_kind);
+  } else if (auto strict_comp_op =
+                 comp->AsStrictCompare()) {  // General StrictCompare === !==
+    // TODO(askesc): Figure out the details.
+    UNIMPLEMENTED();
+  }
 }
 
 void WasmTranslator::StartWasmBlock(BlockEntryInstr* target) {
+  // Start Wasm block with output types matching the phi nodes of target.
   scope_stack_.Add(target);
-  // TODO(andreicostin): Start Wasm block with output types matching the phi
-  // nodes of target.
+  wasm::FuncType* block_type = M->MakeFuncType();
+  if (auto join = target->AsJoinEntry()) {
+    if (join->phis() != nullptr) {
+      for (intptr_t i = 0; i < join->phis()->length(); i++) {
+        block_type->AddResult(GetWasmType(join->phis()->At(i)));
+      }
+    }
+  }
+  enclosing_wasm_scopes_stack_.Add(wasm_scope_);
+  wasm_scope_ = wasm_scope_->AddBlock(block_type)->body();
+}
+
+void WasmTranslator::EndWasmScope() {
+  if (enclosing_wasm_scopes_stack_.is_empty()) {
+    wasm_scope_ = nullptr;
+  } else {
+    wasm_scope_ = enclosing_wasm_scopes_stack_.RemoveLast();
+  }
 }
 
 void WasmTranslator::EndWasmBlock(bool pop_phi_values) {
@@ -213,7 +449,8 @@ void WasmTranslator::EndWasmBlock(bool pop_phi_values) {
       PushPhiValues(join, pred_index);
     }
   }
-  // TODO(andreicostin): End current Wasm block.
+  // End current Wasm block.
+  EndWasmScope();
   if (pop_phi_values) {
     if (auto join = target->AsJoinEntry()) {
       PopPhiValues(join);
@@ -228,9 +465,16 @@ void WasmTranslator::StartWasmLoop(bool push_phi_values) {
     ASSERT(pred_index != -1);
     PushPhiValues(target, pred_index);
   }
+  // Start Wasm loop with input types matching the phi nodes of target.
   scope_stack_.Add(target);
-  // TODO(andreicostin): Start Wasm loop with input types matching the phi
-  // nodes of target.
+  wasm::FuncType* block_type = M->MakeFuncType();
+  if (target->phis() != nullptr) {
+    for (intptr_t i = 0; i < target->phis()->length(); i++) {
+      block_type->AddParam(GetWasmType(target->phis()->At(i)));
+    }
+  }
+  enclosing_wasm_scopes_stack_.Add(wasm_scope_);
+  wasm_scope_ = wasm_scope_->AddLoop(block_type)->body();
   PopPhiValues(target);
   // Start all Wasm blocks corresponding to forward edges with targets inside
   // this loop.
@@ -245,7 +489,8 @@ void WasmTranslator::EndWasmLoop(BlockEntryInstr* source) {
   PushPhiValues(target, GetSourcePredecessorIndex(target, source));
   // Branch to label index 0 (since the loop is currently the innermost scope).
   EmitWasmBranch(0);
-  // TODO(andreicostin): End current Wasm loop.
+  // End current Wasm loop.
+  EndWasmScope();
 }
 
 }  // namespace dart
