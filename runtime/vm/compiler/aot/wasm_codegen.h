@@ -96,12 +96,16 @@ class WasmCodegen : public ZoneAllocated {
 
   // Imports console.log from JS for printing integers.
   void HoistDefaultImports();
+  void HoistBuiltinClasses();
   void HoistClassesFromLibrary(const Library& lib);
   // Additionally sets the start function to be "main". Fails with an error
   // if multiple "main" functions have been hoisted.
   void HoistFunctionsFromLibrary(const Library& lib);
-  void HoistBuiltinClasses();
   void GenerateClassLayoutsAndRtts();
+  // Note that, while code generation for the dispatch table initializers is
+  // not known to be faulty, simple cases of such dynamic dispatch are working,
+  // whereas more complex usage still fail for an as of yet unknown reason.
+  void GenerateWasmDispatchTable(const Array& code_array);
 
   WasmClassInfo& GetWasmClassInfo(const Class& klass);
   wasm::ValueType* GetWasmType(const Class& type);
@@ -125,6 +129,11 @@ class WasmCodegen : public ZoneAllocated {
   static bool IsBoolClass(const Class& klass);
   // Check if class represents the 'String' class.
   static bool IsStringClass(const Class& klass);
+
+  static wasm::Field* GetClassidField(wasm::StructType* wasm_struct) {
+    ASSERT(wasm_struct->fields().length() > 0);
+    return wasm_struct->fields().At(0);
+  }
 
  private:
   void HoistClass(const Class& klass);

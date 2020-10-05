@@ -94,6 +94,13 @@ void WasmCodegen::HoistDefaultImports() {
   print_i64_func_ = M.AddImportedFunction("console", "log", signature);
 }
 
+void WasmCodegen::HoistBuiltinClasses() {
+  // Make an "Object" class.
+  HoistClass(Class::Handle(Type::Handle(Type::ObjectType()).type_class()));
+  // Make a "String" class.
+  HoistClass(Class::Handle(Type::Handle(Type::StringType()).type_class()));
+}
+
 void WasmCodegen::HoistClassesFromLibrary(const Library& lib) {
   HANDLESCOPE(Thread::Current());
   const Array& dict = Array::Handle(lib.dictionary());
@@ -145,19 +152,42 @@ void WasmCodegen::HoistFunctionsFromLibrary(const Library& lib) {
   }
 }
 
+void WasmCodegen::GenerateWasmDispatchTable(const Array& code_array) {
+  HANDLESCOPE(Thread::Current());
+
+  // Add table to module.
+  M.AddFunctionsTable(code_array.Length(), code_array.Length());
+
+  // Iterate through elements in dispatch table and initialize the Wasm table.
+  auto& code = Code::Handle();
+  auto& function = Function::Handle();
+  for (intptr_t i = 0; i < code_array.Length(); i++) {
+    code = Code::RawCast(code_array.At(i));
+    if (code.IsNull()) {
+      continue;
+    }
+    if (!code.IsFunctionCode()) {
+      continue;
+    }
+    function = code.function();
+
+    ASSERT(!function.IsNull());
+    wasm::Function* const wasm_function = GetWasmFunction(function);
+    if (wasm_function == nullptr) continue;
+
+    M.AddElemTableInitializer(i, wasm_function);
+    WasmTrace("Wasm dispatch table has function %" Pu32 " at position %" Pd
+              "\n",
+              wasm_function->index(), i);
+  }
+}
+
 void WasmCodegen::GenerateClassLayoutsAndRtts() {
   HANDLESCOPE(Thread::Current());
   for (intptr_t i = 0; i < classes_.length(); ++i) {
     const Class& klass = *classes_.At(i);
     GenerateClassLayoutAndRtt(klass);
   }
-}
-
-void WasmCodegen::HoistBuiltinClasses() {
-  // Make an "Object" class.
-  HoistClass(Class::Handle(Type::Handle(Type::ObjectType()).type_class()));
-  // Make a "String" class.
-  HoistClass(Class::Handle(Type::Handle(Type::StringType()).type_class()));
 }
 
 WasmClassInfo& WasmCodegen::GetWasmClassInfo(const Class& klass) {
@@ -267,7 +297,7 @@ void WasmCodegen::GenerateClassLayoutAndRtt(const Class& klass) {
   if (klass.IsObjectClass()) {
     object_type_ = M.MakeRefType(/*nullable =*/true, wasm_struct);
     // For class id.
-    wasm_struct->AddField(M.i64(), /*mut =*/true);
+    wasm_struct->AddField(M.i32(), /*mut =*/true);
     // Rtt - root of class hierarchy.
     object_rtt_ = M.MakeRttCanon(wasm_struct);
     wasm_rtt = object_rtt_;
@@ -276,7 +306,7 @@ void WasmCodegen::GenerateClassLayoutAndRtt(const Class& klass) {
   // Special handling for Strings. Largely unimplemented for now.
   if (IsStringClass(klass)) {
     // For class id.
-    wasm_struct->AddField(M.i64(), /*mut =*/true);
+    wasm_struct->AddField(M.i32(), /*mut =*/true);
     // Rtt - parent is "Object".
     wasm_rtt = M.MakeRttChild(wasm_struct, object_rtt_);
     return;
@@ -368,6 +398,8 @@ wasm::FuncType* WasmCodegen::MakeSignature(const Function& function) {
   // Translate return value.
   // A Dart return value of "Void" should translate
   // into no return value in Wasm.
+  WasmTrace("Return value WasmTrace for function %s has returned type %s",
+            function.ToCString(), result_type_class.ToCString());
   if (!result_type_class.IsVoidClass()) {
     func_type->AddResult(GetWasmType(result_type_class));
   }

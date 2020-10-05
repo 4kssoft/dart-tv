@@ -6,7 +6,6 @@
 // Implementation modified to not require arrays, but rather use base-n numbers.
 
 // Prints permutations of 0..n-1, one per line, represented as numbers in base n.
-//
 void perms(int n) {
     int a = 0, p = 0;
     for (int i = 0; i < n; ++i) {

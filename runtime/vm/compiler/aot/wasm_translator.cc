@@ -72,6 +72,16 @@ void WasmTranslator::PrepareBlocks() {
   }
 }
 
+void WasmTranslator::VisitFunctionEntry(FunctionEntryInstr* block) {
+  // Visit all Dart parameter definitions in the function entry block.
+  // This is required to prepare the mapping from parameters to locals
+  // appropriately.
+  GrowableArray<Definition*>& initial_defs = *block->initial_definitions();
+  for (intptr_t i = 0; i < initial_defs.length(); ++i) {
+    initial_defs.At(i)->Accept(this);
+  }
+}
+
 void WasmTranslator::VisitJoinEntry(JoinEntryInstr* block) {
   bool is_forward_target =
       !scope_stack_.is_empty() && scope_stack_.Last() == block;
@@ -138,7 +148,7 @@ void WasmTranslator::VisitBranch(BranchInstr* instr) {
 
 void WasmTranslator::VisitBinaryIntegerOp(BinaryIntegerOpInstr* instr) {
   if (instr->InputCount() != 2) {
-    FATAL("Unexpected IL input count for comparison.");
+    FATAL("Unexpected IL input count for binary operation.");
   }
   wasm::IntOp::OpKind op_kind;
   switch (instr->op_kind()) {
@@ -169,8 +179,10 @@ void WasmTranslator::VisitBinaryIntegerOp(BinaryIntegerOpInstr* instr) {
     default:
       FATAL("BinaryIntegerOp with unexpected token kind.");
   }
-  PushValue(instr->InputAt(0)->definition());
-  PushValue(instr->InputAt(1)->definition());
+  PushValue(instr->left()->definition(),
+            *instr->left()->Type()->ToAbstractType());
+  PushValue(instr->right()->definition(),
+            *instr->right()->Type()->ToAbstractType());
   wasm_scope_->AddIntOp(wasm::IntOp::IntegerKind::kI64, op_kind);
   PopValue(instr);
 }
@@ -187,6 +199,37 @@ void WasmTranslator::VisitBinaryUint32Op(BinaryUint32OpInstr* instr) {
   // TODO(andreicostin): This needs to use the unsigned operation kinds.
   // It will be correct in all cases which don't use overflow explicitly.
   VisitBinaryIntegerOp(instr);
+}
+
+void WasmTranslator::VisitParameter(ParameterInstr* instr) {
+  // If the parameter is not the This parameter of a method, then just map
+  // the parameter definition to the corresponding Wasm local of type kParam.
+  const intptr_t param_index = instr->index();
+  if (param_index > 0 || !function_.HasThisParameter()) {
+    def_to_wasm_local_.Insert(
+        {instr, wasm_function_->GetLocalByIndex(param_index)});
+    return;
+  }
+
+  // The This parameter is stored in a variable of Wasm type object.
+  // In order to properly use in a way compatible with the Dart IL,
+  // we first need to cast it down to its concrete type.
+  // To do this, we allocate an additional local of type kLocal with
+  // the concrete type.
+  wasm::Local* const wasm_local = GetWasmLocal(instr);
+
+  // Then, we store the downcasted version into the new local.
+  wasm::Local* const first_local = wasm_function_->GetLocalByIndex(0);
+  wasm_scope_->AddLocalGet(first_local);
+  // Detour: load rtt for the target class.
+  const Class& klass =
+      GetTypeClass(AbstractType::Handle(function_.ParameterTypeAt(0)));
+  wasm::Global* const rtt_definition =
+      C->GetWasmClassInfo(klass).rtt_definition_;
+  wasm_scope_->AddGlobalGet(rtt_definition);
+  wasm_scope_->AddRefCast(first_local->type()->AsRefType()->heap_type(),
+                          wasm_local->type()->AsRefType()->heap_type());
+  wasm_scope_->AddLocalSet(wasm_local);
 }
 
 void WasmTranslator::VisitStaticCall(StaticCallInstr* instr) {
@@ -213,24 +256,118 @@ void WasmTranslator::VisitStaticCall(StaticCallInstr* instr) {
   }
   ASSERT(instr->type_args_len() == 0);
   for (intptr_t i = 0; i < num_params; ++i) {
-    PushValue(instr->ArgumentValueAt(i)->definition());
+    PushValue(instr->ArgumentValueAt(i)->definition(),
+              AbstractType::Handle(function.ParameterTypeAt(i)));
   }
+
   wasm_scope_->AddCall(wasm_function);
+
   // Note that checking the return value of wasm_function is not an option here
   // since wasm_function might still have the dummy signature if it hasn't been
   // compiled yet.
   if (!AbstractType::Handle(function.result_type()).IsVoidType()) {
-    PopValue(instr);
+    if (instr->HasSSATemp()) {
+      PopValue(instr);
+    } else {
+      // Throw away value if it isn't to be stored.
+      wasm_scope_->AddDrop();
+    }
+  }
+}
+
+void WasmTranslator::VisitDispatchTableCall(DispatchTableCallInstr* instr) {
+  const Function& interface_target = instr->interface_target();
+  if (!interface_target.HasThisParameter()) {
+    FATAL("Dispatch table call interface target has no This parameter");
+  }
+
+  const intptr_t num_params = instr->ArgumentCount();
+  for (intptr_t i = 0; i < num_params; ++i) {
+    PushValue(instr->ArgumentValueAt(i)->definition(),
+              AbstractType::Handle(interface_target.ParameterTypeAt(i)));
+  }
+
+  // Index into the global dispatch table.
+  // TODO(andreicostin): Very rarely, this might be a constant object,
+  // accomodate for this case.
+  PushValue(instr->class_id()->definition(),
+            AbstractType::Handle(AbstractType::null()));
+  wasm_scope_->AddI32Constant(instr->selector()->offset);
+  wasm_scope_->AddIntOp(wasm::IntOp::IntegerKind::kI32,
+                        wasm::IntOp::OpKind::kAdd);
+  wasm_scope_->AddCallIndirect(C->MakeSignature(interface_target));
+
+  // Note that checking the return value of wasm_function is not an option here
+  // since wasm_function might still have the dummy signature if it hasn't been
+  // compiled yet.
+  if (!AbstractType::Handle(interface_target.result_type()).IsVoidType()) {
+    if (instr->HasSSATemp()) {
+      PopValue(instr);
+    } else {
+      // Throw away value if it isn't to be stored.
+      wasm_scope_->AddDrop();
+    }
   }
 }
 
 void WasmTranslator::VisitReturn(ReturnInstr* instr) {
   // Push return value to Wasm operand stack, unless
   // the current function returns void.
-  if (!AbstractType::Handle(function_.result_type()).IsVoidType()) {
-    PushValue(instr->value()->definition());
+  const AbstractType& result_type =
+      AbstractType::Handle(function_.result_type());
+  if (!result_type.IsVoidType()) {
+    PushValue(instr->value()->definition(), result_type);
   }
   wasm_scope_->AddReturn();
+}
+
+void WasmTranslator::VisitAllocateObject(AllocateObjectInstr* instr) {
+  const Class& klass = instr->cls();
+  const WasmClassInfo& wasm_class_info = C->GetWasmClassInfo(klass);
+  wasm::StructType* const wasm_struct = wasm_class_info.struct_type_;
+  wasm::Global* const wasm_rtt = wasm_class_info.rtt_definition_;
+  if (wasm_struct == nullptr || wasm_rtt == nullptr) {
+    FATAL("VisitAllocateObject missing wasm_struct or wasm_rtt");
+  }
+  // Allocate actual object.
+  wasm_scope_->AddGlobalGet(wasm_rtt);
+  wasm_scope_->AddStructNewDefaultWithRtt(wasm_struct);
+  PopValue(instr);
+  PushValue(instr, *instr->Type()->ToAbstractType());
+  // Set the class id. This should never be changed later on.
+  wasm::Field* const wasm_class_id_field = C->GetClassidField(wasm_struct);
+  WasmTrace("For class klass = %s I found id %" Pd "\n\n", klass.ToCString(),
+            klass.id());
+  wasm_scope_->AddI32Constant(klass.id());
+  wasm_scope_->AddStructSet(wasm_struct, wasm_class_id_field);
+}
+
+void WasmTranslator::VisitLoadField(LoadFieldInstr* instr) {
+  if (!instr->slot().IsDartField()) {
+    FATAL("Tried to load not a Dart field");
+  }
+  wasm::StructType* const wasm_struct =
+      C->GetWasmClassInfo(GetTypeClass(instr->instance())).struct_type_;
+  wasm::Field* const wasm_field = C->GetWasmField(instr->slot().field());
+  PushValue(instr->instance()->definition(),
+            *instr->instance()->definition()->Type()->ToAbstractType());
+  wasm_scope_->AddStructGet(wasm_struct, wasm_field);
+  PopValue(instr);
+}
+
+void WasmTranslator::VisitStoreInstanceField(StoreInstanceFieldInstr* instr) {
+  if (!instr->slot().IsDartField()) {
+    FATAL("Tried to store not a Dart field");
+  }
+  wasm::StructType* const wasm_struct =
+      C->GetWasmClassInfo(GetTypeClass(instr->instance())).struct_type_;
+  wasm::Field* const wasm_field = C->GetWasmField(instr->slot().field());
+
+  PushValue(instr->instance()->definition(),
+            *instr->instance()->definition()->Type()->ToAbstractType());
+  PushValue(instr->value()->definition(),
+            AbstractType::Handle(instr->slot().field().type()));
+  wasm_scope_->AddStructSet(wasm_struct, wasm_field);
 }
 
 intptr_t WasmTranslator::GetFallthroughPredecessorIndex(
@@ -269,7 +406,8 @@ intptr_t WasmTranslator::GetLabelForTarget(BlockEntryInstr* target) {
 void WasmTranslator::PushPhiValues(JoinEntryInstr* join, intptr_t pred_index) {
   if (join->phis() != nullptr) {
     for (intptr_t p = 0; p < join->phis()->length(); p++) {
-      PushValue(join->phis()->At(p)->InputAt(pred_index)->definition());
+      PushValue(join->phis()->At(p)->InputAt(pred_index)->definition(),
+                *join->phis()->At(p)->Type()->ToAbstractType());
     }
   }
 }
@@ -302,44 +440,74 @@ wasm::Local* WasmTranslator::GetWasmLocal(Definition* def) {
   return wasm_local;
 }
 
-void WasmTranslator::PushValue(Definition* def) {
-  // Optimization: for constant definitions, just push the
-  // corresponding constant straight away.
+void WasmTranslator::PushValue(Definition* def, const AbstractType& type_hint) {
   if (auto const_instr = def->AsConstant()) {
-    // IL instruction is t <- Constant(...).
+    // Optimization: for constant definitions, just push the
+    // corresponding constant straight away.
     const Object& value = const_instr->value();
-    // Hmm, let's see what we do for nulls.
-    /*if (value.IsNull()) {
-      // t <- Constant(null)
-      wasm_scope_->AddRefNull(M->MakeHeapType(GetWasmType(def)));  // ref.null
-    }*/
-    if (value.IsInteger()) {
+    if (value.IsNull()) {
+      if (type_hint.IsNull()) {
+        FATAL("Type hint was Null when its value was not optional");
+      }
+      if (type_hint.IsNullType()) {
+        FATAL("Type hint of NullType passed when its value was not optional");
+      }
+      // For null integers and booleans, we'll just use the constant 0, instead.
+      if (WasmCodegen::IsIntegerClass(Class::Handle(type_hint.type_class()))) {
+        wasm_scope_->AddI64Constant(0);
+      } else if (WasmCodegen::IsBoolClass(
+                     Class::Handle(type_hint.type_class()))) {
+        wasm_scope_->AddI32Constant(0);
+      } else {
+        const Class& type_class_hint = GetTypeClass(type_hint);
+        wasm::StructType* const wasm_struct =
+            C->GetWasmClassInfo(type_class_hint).struct_type_;
+        wasm_scope_->AddRefNull(M->MakeHeapType(wasm_struct));
+      }
+    } else if (value.IsInteger()) {
       // Treats both Constant and UnboxedConstant instructions.
-      int64_t int_value = Integer::GetInt64Value(Integer::Cast(value).raw());
+      const int64_t int_value =
+          Integer::GetInt64Value(Integer::Cast(value).raw());
       wasm_scope_->AddI64Constant(int_value);
+    } else if (value.IsBool()) {
+      const bool bool_value = Bool::Cast(value).value();
+      wasm_scope_->AddI32Constant(bool_value);
     } else {
-      FATAL("Only integer constants are supported.");
+      // TODO(andreicostin): Constants of other object kinds.
+      FATAL2(
+          "Only integer, boolean and null constants are supported. Encountered "
+          "constant "
+          "%s of type %s",
+          value.ToCString(), GetTypeClass(def->Type()).ToCString());
     }
-    // Constants of type objects?
+  } else if (auto get_class_id_instr = def->AsLoadClassId()) {
+    const Class& klass = GetTypeClass(get_class_id_instr->object());
+    const WasmClassInfo& wasm_class_info = C->GetWasmClassInfo(klass);
+    wasm::StructType* const wasm_struct = wasm_class_info.struct_type_;
+    wasm::Field* const wasm_class_id_field = C->GetClassidField(wasm_struct);
+    if (auto def_const =
+            get_class_id_instr->object()->definition()->AsConstant()) {
+      if (def_const->value().IsNull()) {
+        FATAL("Attempted to load class id of constant Null");
+      }
+      // TODO(andreicostin): This will only rarely happen, since
+      // it will normally be optimized to a StaticCall.
+      UNIMPLEMENTED();
+    }
+    PushValue(
+        get_class_id_instr->object()->definition(),
+        *get_class_id_instr->object()->definition()->Type()->ToAbstractType());
+    wasm_scope_->AddStructGet(wasm_struct, wasm_class_id_field);
   } else if (auto box_integer = def->AsBoxInt64()) {
     // A nop.
-    PushValue(box_integer->value()->definition());
+    PushValue(box_integer->value()->definition(), type_hint);
   } else if (auto unbox_integer = def->AsUnboxInt64()) {
     // A nop.
-    PushValue(unbox_integer->value()->definition());
+    PushValue(unbox_integer->value()->definition(), type_hint);
   } else if (auto int_conv = def->AsIntConverter()) {
     // A nop.
-    PushValue(int_conv->value()->definition());
-  } else if (auto param = def->AsParameter()) {
-    const intptr_t param_index = param->index();
-    if (param_index == 0 && function_.HasThisParameter()) {
-      // TODO(andreicostin): Implement logic for the "This" parameter.
-      UNIMPLEMENTED();
-    } else {
-      wasm_scope_->AddLocalGet(wasm_function_->GetLocalByIndex(param_index));
-    }
+    PushValue(int_conv->value()->definition(), type_hint);
   } else {
-    // For box integer just use the same one possibly.
     wasm_scope_->AddLocalGet(GetWasmLocal(def));
   }
 }
@@ -407,8 +575,10 @@ void WasmTranslator::PushEvalCondition(ComparisonInstr* comp, bool negated) {
     if (negated) {
       op_kind = wasm::IntOp::NegateOpKind(op_kind);
     }
-    PushValue(comp->left()->definition());
-    PushValue(comp->right()->definition());
+    PushValue(comp->left()->definition(),
+              *comp->left()->Type()->ToAbstractType());
+    PushValue(comp->right()->definition(),
+              *comp->right()->Type()->ToAbstractType());
     wasm_scope_->AddIntOp(wasm::IntOp::IntegerKind::kI64, op_kind);
   } else if (auto strict_comp_op =
                  comp->AsStrictCompare()) {  // General StrictCompare === !==

@@ -440,11 +440,11 @@ void Precompiler::DoCompileAll() {
         tracer_ = nullptr;
       }
 
-      OutputWasm();
-
       TraceForRetainedFunctions();
       FinalizeDispatchTable();
       ReplaceFunctionStaticCallEntries();
+
+      OutputWasm();
 
       DropFunctions();
       DropFields();
@@ -1675,6 +1675,7 @@ void Precompiler::FinalizeDispatchTable() {
   // dropping functions, as we may clear references to Code objects.
   const auto& entries =
       Array::Handle(Z, dispatch_table_generator_->BuildCodeArray());
+  wasm_codegen_->GenerateWasmDispatchTable(entries);
   I->object_store()->set_dispatch_table_code_entries(entries);
   // Delete the dispatch table generator to ensure there's no attempt
   // to add new entries after this point.

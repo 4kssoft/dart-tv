@@ -27,4 +27,3 @@ var importObject = {
 var inst = new WebAssembly.Instance(module, importObject);
 
 console.log("Instantiated module!");
-

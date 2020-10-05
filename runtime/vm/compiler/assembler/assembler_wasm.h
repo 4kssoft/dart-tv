@@ -31,7 +31,8 @@ void WasmTrace(const char* format, ...) PRINTF_ATTRIBUTE(1, 2);
   M(LocalSet)                                                                  \
   M(GlobalGet)                                                                 \
   M(IntOp)                                                                     \
-  M(Constant)                                                                  \
+  M(IntConstant)                                                               \
+  M(Int32WrapInt64)                                                            \
   M(StructuredInstr)                                                           \
   M(Block)                                                                     \
   M(Loop)                                                                      \
@@ -40,12 +41,17 @@ void WasmTrace(const char* format, ...) PRINTF_ATTRIBUTE(1, 2);
   M(RttCanon)                                                                  \
   M(RttSub)                                                                    \
   M(StructGet)                                                                 \
-  M(StructGet)                                                                 \
+  M(StructSet)                                                                 \
   M(StructNewWithRtt)                                                          \
   M(Call)                                                                      \
   M(CallIndirect)                                                              \
+  M(Drop)                                                                      \
   M(Return)                                                                    \
   M(RefNull)                                                                   \
+  M(RefEq)                                                                     \
+  M(RefCast)                                                                   \
+  M(Table)                                                                     \
+  M(SingleElemSegment)                                                         \
   M(Local)                                                                     \
   M(Global)                                                                    \
   M(InstructionList)                                                           \
@@ -67,6 +73,8 @@ class ValueType : public dart::ZoneAllocated {
   virtual dart::SExpression* Serialize(dart::Zone* zone) = 0;
   virtual void OutputBinary(dart::WriteStream* stream) = 0;
   virtual ~ValueType() = default;
+
+  virtual RefType* AsRefType() { return nullptr; }
 
  protected:
   ValueType() {}
@@ -104,6 +112,9 @@ class RefType : public ValueType {
  public:
   dart::SExpression* Serialize(dart::Zone* zone) override;
   void OutputBinary(dart::WriteStream* stream) override;
+
+  RefType* AsRefType() override { return this; }
+  HeapType* heap_type() const { return heap_type_; }
 
  private:
   RefType(bool nullable, HeapType* heap_type)
@@ -186,8 +197,9 @@ class Field : public dart::ZoneAllocated {
         index_(field.index_) {}
 
   StructType* struct_type() const { return struct_type_; }
-
   void set_struct_type_(StructType* struct_type) { struct_type_ = struct_type; }
+
+  uint32_t index() const { return index_; }
 
  private:
   Field(StructType* struct_type, FieldType* field_type, uint32_t index)
@@ -453,6 +465,19 @@ class IntConstant : public Instruction {
   DISALLOW_COPY_AND_ASSIGN(IntConstant);
 };
 
+// Wasm i32.wrap_i64 instruction.
+class Int32WrapInt64 : public Instruction {
+ public:
+  dart::SExpression* Serialize(dart::Zone* zone) override;
+  void OutputBinary(dart::WriteStream* stream) override;
+
+ private:
+  Int32WrapInt64() {}
+
+  friend InstructionList;  // For private constructor.
+  DISALLOW_COPY_AND_ASSIGN(Int32WrapInt64);
+};
+
 // Abstract base class for Wasm block, loop and if instructions.
 class StructuredInstr : public Instruction {
  public:
@@ -570,12 +595,12 @@ class RttSub : public Instruction {
   void OutputBinary(dart::WriteStream* stream) override;
 
  private:
-  RttSub(intptr_t depth, HeapType* type, HeapType* supertype)
-      : depth_(depth), type_(type), supertype_(supertype) {}
+  RttSub(intptr_t depth, HeapType* supertype, HeapType* type)
+      : depth_(depth), supertype_(supertype), type_(type) {}
 
   const intptr_t depth_;
-  HeapType* const type_;
   HeapType* const supertype_;
+  HeapType* const type_;
 
   friend InstructionList;  // For private constructor.
   DISALLOW_COPY_AND_ASSIGN(RttSub);
@@ -668,6 +693,19 @@ class CallIndirect : public Instruction {
   DISALLOW_COPY_AND_ASSIGN(CallIndirect);
 };
 
+// Wasm drop instruction.
+class Drop : public Instruction {
+ public:
+  dart::SExpression* Serialize(dart::Zone* zone) override;
+  void OutputBinary(dart::WriteStream* stream) override;
+
+ private:
+  Drop() {}
+
+  friend InstructionList;  // For private constructor.
+  DISALLOW_COPY_AND_ASSIGN(Drop);
+};
+
 // Wasm return instruction.
 class Return : public Instruction {
  public:
@@ -696,6 +734,75 @@ class RefNull : public Instruction {
   DISALLOW_COPY_AND_ASSIGN(RefNull);
 };
 
+// Wasm GC extension ref.eq instruction.
+class RefEq : public Instruction {
+ public:
+  dart::SExpression* Serialize(dart::Zone* zone) override;
+  void OutputBinary(dart::WriteStream* stream) override;
+
+ private:
+  RefEq() {}
+
+  friend InstructionList;  // For private constructor.
+  DISALLOW_COPY_AND_ASSIGN(RefEq);
+};
+
+// Wasm GC extension ref.cast instruction.
+class RefCast : public Instruction {
+ public:
+  dart::SExpression* Serialize(dart::Zone* zone) override;
+  void OutputBinary(dart::WriteStream* stream) override;
+
+ private:
+  RefCast(HeapType* from_type, HeapType* to_type)
+      : from_type_(from_type), to_type_(to_type) {}
+
+  HeapType* const from_type_;
+  HeapType* const to_type_;
+
+  friend InstructionList;  // For private constructor.
+  DISALLOW_COPY_AND_ASSIGN(RefCast);
+};
+
+// Wasm Table.
+class Table : public dart::ZoneAllocated {
+  dart::SExpression* Serialize(dart::Zone* zone);
+  void OutputBinary(dart::WriteStream* stream);
+
+ private:
+  Table(uint32_t min_size, uint32_t max_size)
+      : min_size_(min_size), max_size_(max_size) {}
+
+  const uint32_t min_size_;
+  const uint32_t max_size_;  // In our implementation, we
+                             // require an explicit maximum size.
+
+  friend WasmModuleBuilder;  // For private constructor.
+  DISALLOW_COPY_AND_ASSIGN(Table);
+};
+
+// Wasm single element table initialization segment.
+class SingleElemSegment : public dart::ZoneAllocated {
+  dart::SExpression* Serialize(dart::Zone* zone);
+  void OutputBinary(dart::WriteStream* stream);
+
+ private:
+  SingleElemSegment(uint32_t offset, Function* function)
+      : offset_(offset), function_(function) {}
+
+  // In the current Wasm specification, there can only be one table.
+  // Table* const table_;
+  // The Wasm specification gives this as an initializer expression.
+  const uint32_t offset_;
+  // The Wasm specification allows initializing more than a single table
+  // position per segment. Our use case doesn't require this additional
+  // feature, and hence the prefix 'Single' in the name of this class.
+  Function* const function_;
+
+  friend WasmModuleBuilder;  // For private constructor.
+  DISALLOW_COPY_AND_ASSIGN(SingleElemSegment);
+};
+
 // Wasm function locals: local and param declarations used in function
 // definitions. The two concepts have not been separated because in Wasm
 // parameters and locals share the same indexing space of their containing
@@ -707,10 +814,11 @@ class Local : public dart::ZoneAllocated {
   dart::SExpression* Serialize(dart::Zone* zone);
   void OutputBinary(dart::WriteStream* stream);
 
+  Function* function() const { return function_; }
   const char* name() const { return name_; }
   uint32_t index() const { return index_; }
   Kind kind() const { return kind_; }
-  Function* function() const { return function_; }
+  ValueType* type() const { return type_; }
 
  private:
   Local(Function* function,
@@ -771,21 +879,25 @@ class InstructionList : public dart::ZoneAllocated {
   IntOp* AddIntOp(IntOp::IntegerKind integer_kind, IntOp::OpKind op_kind);
   IntConstant* AddI32Constant(uint32_t value);
   IntConstant* AddI64Constant(uint64_t value);
+  Int32WrapInt64* AddInt32WrapInt64();
   Block* AddBlock(FuncType* block_type);
   Loop* AddLoop(FuncType* block_type);
   If* AddIf(FuncType* block_type);
   RttCanon* AddRttCanon(HeapType* type);
-  RttSub* AddRttSub(uint32_t depth, HeapType* type, HeapType* supertype);
+  RttSub* AddRttSub(uint32_t depth, HeapType* supertype, HeapType* type);
   StructGet* AddStructGet(StructType* struct_type, Field* field);
   StructSet* AddStructSet(StructType* struct_type, Field* field);
   StructNewWithRtt* AddStructNewWithRtt(StructType* struct_type);
   StructNewWithRtt* AddStructNewDefaultWithRtt(StructType* struct_type);
   Call* AddCall(Function* function);
   CallIndirect* AddCallIndirect(FuncType* function_type);
+  Drop* AddDrop();
   Return* AddReturn();
   Br* AddBr(uint32_t label);
   Br* AddBrIf(uint32_t label);
   RefNull* AddRefNull(HeapType* type);
+  RefEq* AddRefEq();
+  RefCast* AddRefCast(HeapType* from_type, HeapType* to_type);
 
   dart::GrowableArray<Instruction*>& instructions() { return instructions_; }
 
@@ -898,6 +1010,14 @@ class WasmModuleBuilder : public dart::ValueObject {
   Function* start_function() const { return start_function_; }
   void set_start_function(Function* function) { start_function_ = function; }
 
+  // Create table in the table section. Can be called at most once per module.
+  Table* AddFunctionsTable(uint32_t min_size, uint32_t max_size);
+
+  // Set table value at the given offset to point to the given function.
+  // Requires the table to have been created beforehand.
+  SingleElemSegment* AddElemTableInitializer(uint32_t offset,
+                                             Function* function);
+
   // Builtin types.
   NumType* i32() { return &i32_; }
   NumType* i64() { return &i64_; }
@@ -926,12 +1046,17 @@ class WasmModuleBuilder : public dart::ValueObject {
   // functions. Note that actual code for the functions resides in the
   // Code section.
   void OutputFunctionSection(dart::WriteStream* stream);
+  // Table section declares the global function references table, if present.
+  // Its initialization is done in the Element section.
+  void OutputTableSection(dart::WriteStream* stream);
   // Global section consists of a list of global variable definitions.
   // Each global can be either mutable or immutable, and is initialized
   // by a constant initializer expression.
   void OutputGlobalSection(dart::WriteStream* stream);
   // Start section consists of the index of the start function, if any.
   void OutputStartSection(dart::WriteStream* stream);
+  // Element section consists of initializers for the Table section.
+  void OutputElementSection(dart::WriteStream* stream);
   // Code section consists of a list with one entry per user-defined function.
   // Each entry consists of a description of the function locals (consisting
   // of the type for each local) and the contents of the function body.
@@ -960,7 +1085,11 @@ class WasmModuleBuilder : public dart::ValueObject {
 
   dart::GrowableArray<DefType*> types_;
   dart::GrowableArray<Function*> functions_;
+  // The Wasm Core specification restricts the number of tables to at most one.
+  // (see https://webassembly.github.io/spec/core/syntax/types#table-types).
+  Table* table_;
   dart::GrowableArray<Global*> globals_;
+  dart::GrowableArray<SingleElemSegment*> elem_segments_;
 
   friend class PushBytecountFrontScope;  // For access to replacing the
                                          // current binary_output_stream_.

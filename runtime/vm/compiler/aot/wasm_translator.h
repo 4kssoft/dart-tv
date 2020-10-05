@@ -45,6 +45,7 @@ class WasmTranslator : public FlowGraphVisitor {
 
   bool irreducible() { return irreducible_; }
 
+  virtual void VisitFunctionEntry(FunctionEntryInstr* block);
   virtual void VisitJoinEntry(JoinEntryInstr* block);
   virtual void VisitTargetEntry(TargetEntryInstr* block);
   virtual void VisitGoto(GotoInstr* instr);
@@ -53,8 +54,13 @@ class WasmTranslator : public FlowGraphVisitor {
   virtual void VisitBinaryInt32Op(BinaryInt32OpInstr* instr);
   virtual void VisitBinaryInt64Op(BinaryInt64OpInstr* instr);
   virtual void VisitBinaryUint32Op(BinaryUint32OpInstr* instr);
+  virtual void VisitParameter(ParameterInstr* instr);
   virtual void VisitStaticCall(StaticCallInstr* instr);
+  virtual void VisitDispatchTableCall(DispatchTableCallInstr* instr);
   virtual void VisitReturn(ReturnInstr* instr);
+  virtual void VisitAllocateObject(AllocateObjectInstr* instr);
+  virtual void VisitLoadField(LoadFieldInstr* instr);
+  virtual void VisitStoreInstanceField(StoreInstanceFieldInstr* instr);
 
  private:
   // Traverse graph to find start locations of Wasm blocks.
@@ -68,7 +74,10 @@ class WasmTranslator : public FlowGraphVisitor {
   void PushPhiValues(JoinEntryInstr* join, intptr_t pred_index);
   void PopPhiValues(JoinEntryInstr* join);
 
-  void PushValue(Definition* def);
+  // The type hint helps in cases where it can not be determined otherwise
+  // (i.e. for pushing an appropriately-typed Wasm null value). Can be nullptr
+  // if the caller can guarantee that it is not needed.
+  void PushValue(Definition* def, const AbstractType& type_hint);
   void PopValue(Definition* def);
   void EmitWasmBranch(intptr_t label);
   void EmitWasmBranchIf(intptr_t label);
@@ -84,17 +93,23 @@ class WasmTranslator : public FlowGraphVisitor {
   void EndWasmLoop(BlockEntryInstr* source);
   void EndWasmScope();
 
-  // TODO(andreicostin): Comment these.
   wasm::ValueType* GetWasmType(Definition* def);
   wasm::Local* GetWasmLocal(Definition* def);
 
+  static Class& GetTypeClass(const AbstractType& type) {
+    return Class::Handle(type.type_class());
+  }
+  static Class& GetTypeClass(CompileType* type) {
+    return GetTypeClass(*type->ToAbstractType());
+  }
+  static Class& GetTypeClass(Value* value) {
+    return GetTypeClass(value->Type());
+  }
   static bool IsIntegerValue(Value* value) {
-    return WasmCodegen::IsIntegerClass(
-        Class::Handle(value->Type()->ToAbstractType()->type_class()));
+    return WasmCodegen::IsIntegerClass(GetTypeClass(value));
   }
   static bool IsBoolValue(Value* value) {
-    return WasmCodegen::IsBoolClass(
-        Class::Handle(value->Type()->ToAbstractType()->type_class()));
+    return WasmCodegen::IsBoolClass(GetTypeClass(value));
   }
 
   FlowGraph* const flow_graph_;
