@@ -54,6 +54,7 @@ class WasmTranslator : public FlowGraphVisitor {
   virtual void VisitBinaryInt32Op(BinaryInt32OpInstr* instr);
   virtual void VisitBinaryInt64Op(BinaryInt64OpInstr* instr);
   virtual void VisitBinaryUint32Op(BinaryUint32OpInstr* instr);
+  virtual void VisitBooleanNegate(BooleanNegateInstr* instr);
   virtual void VisitParameter(ParameterInstr* instr);
   virtual void VisitStaticCall(StaticCallInstr* instr);
   virtual void VisitDispatchTableCall(DispatchTableCallInstr* instr);
@@ -61,6 +62,9 @@ class WasmTranslator : public FlowGraphVisitor {
   virtual void VisitAllocateObject(AllocateObjectInstr* instr);
   virtual void VisitLoadField(LoadFieldInstr* instr);
   virtual void VisitStoreInstanceField(StoreInstanceFieldInstr* instr);
+  virtual void VisitEqualityCompare(EqualityCompareInstr* instr);
+  virtual void VisitStrictCompare(StrictCompareInstr* instr);
+  virtual void VisitRelationalOp(RelationalOpInstr* instr);
 
  private:
   // Traverse graph to find start locations of Wasm blocks.

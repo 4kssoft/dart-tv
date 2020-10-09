@@ -201,6 +201,15 @@ void WasmTranslator::VisitBinaryUint32Op(BinaryUint32OpInstr* instr) {
   VisitBinaryIntegerOp(instr);
 }
 
+void WasmTranslator::VisitBooleanNegate(BooleanNegateInstr* instr) {
+  PushValue(instr->value()->definition(),
+            AbstractType::Handle(AbstractType::null()));
+  wasm_scope_->AddI32Constant(1);
+  wasm_scope_->AddIntOp(wasm::IntOp::IntegerKind::kI32,
+                        wasm::IntOp::OpKind::kXor);
+  PopValue(instr);
+}
+
 void WasmTranslator::VisitParameter(ParameterInstr* instr) {
   // If the parameter is not the This parameter of a method, then just map
   // the parameter definition to the corresponding Wasm local of type kParam.
@@ -368,6 +377,21 @@ void WasmTranslator::VisitStoreInstanceField(StoreInstanceFieldInstr* instr) {
   PushValue(instr->value()->definition(),
             AbstractType::Handle(instr->slot().field().type()));
   wasm_scope_->AddStructSet(wasm_struct, wasm_field);
+}
+
+void WasmTranslator::VisitEqualityCompare(EqualityCompareInstr* instr) {
+  PushEvalCondition(instr, /*negated=*/false);
+  PopValue(instr);
+}
+
+void WasmTranslator::VisitStrictCompare(StrictCompareInstr* instr) {
+  PushEvalCondition(instr, /*negated=*/false);
+  PopValue(instr);
+}
+
+void WasmTranslator::VisitRelationalOp(RelationalOpInstr* instr) {
+  PushEvalCondition(instr, /*negated=*/false);
+  PopValue(instr);
 }
 
 intptr_t WasmTranslator::GetFallthroughPredecessorIndex(
@@ -582,8 +606,34 @@ void WasmTranslator::PushEvalCondition(ComparisonInstr* comp, bool negated) {
     wasm_scope_->AddIntOp(wasm::IntOp::IntegerKind::kI64, op_kind);
   } else if (auto strict_comp_op =
                  comp->AsStrictCompare()) {  // General StrictCompare === !==
-    // TODO(askesc): Figure out the details.
-    UNIMPLEMENTED();
+    negated ^= comp->kind() == Token::Kind::kNE_STRICT;
+    if (IsBoolValue(comp->right())) {
+      if (auto const_instr = comp->right()->definition()->AsConstant()) {
+        const Object& value = const_instr->value();
+        const bool bool_value = Bool::Cast(value).value();
+        negated ^= !bool_value;
+        PushValue(comp->left()->definition(),
+                  *comp->left()->Type()->ToAbstractType());
+      } else {
+        UNIMPLEMENTED();
+      }
+    } else {
+      // To support comparison with a null constant on the right-hand side, we
+      // use the type of the left-hand side as the type hint for both operands.
+      // Alternatively, we could allow null constants without type hint and use
+      // the Object type in that case (which should be fine for comparisons).
+      PushValue(comp->left()->definition(),
+                *comp->left()->Type()->ToAbstractType());
+      PushValue(comp->right()->definition(),
+                *comp->left()->Type()->ToAbstractType());
+      wasm_scope_->AddRefEq();
+    }
+
+    if (negated) {
+      wasm_scope_->AddI32Constant(1);
+      wasm_scope_->AddIntOp(wasm::IntOp::IntegerKind::kI32,
+                            wasm::IntOp::OpKind::kXor);
+    }
   }
 }
 

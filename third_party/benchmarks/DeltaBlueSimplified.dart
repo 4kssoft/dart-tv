@@ -37,7 +37,7 @@
  * implementation.
  */
 
-main() {
+void main() {
   new DeltaBlue().run();
 }
 
@@ -90,6 +90,7 @@ abstract class Constraint {
 
   Constraint(this.planner, this.strength);
 
+  @pragma("vm:never-inline")
   bool isSatisfied();
   void markUnsatisfied();
   void addToGraph();
@@ -114,7 +115,7 @@ abstract class Constraint {
    * there is one, or nil, if there isn't.
    * Assume: I am not already satisfied.
    */
-  Constraint satisfy(mark) {
+  Constraint satisfy(int mark) {
     chooseMethod(mark);
     if (!isSatisfied()) {
       if (strength == REQUIRED) {
@@ -170,6 +171,7 @@ abstract class UnaryConstraint extends Constraint {
   }
 
   /// Returns true if this constraint is satisfied in the current solution.
+  @pragma("vm:never-inline")
   bool isSatisfied() => satisfied;
 
   void markInputs(int mark) {
@@ -286,6 +288,7 @@ abstract class BinaryConstraint extends Constraint {
   }
 
   /// Answer true if this constraint is satisfied in the current solution.
+  @pragma("vm:never-inline")
   bool isSatisfied() => direction != NONE;
 
   /// Mark the input variable with the given mark.
@@ -423,7 +426,7 @@ class Variable {
   /// Removes all traces of c from this variable.
   void removeConstraint(Constraint c) {
     constraints.remove(c);
-    if (determinedBy == c) determinedBy = null;
+    if (identical(determinedBy, c)) determinedBy = null;
   }
 }
 
@@ -739,7 +742,7 @@ class ConstraintList {
     dummy.prev = dummy;
   }
 
-  bool get isEmpty => dummy.next == dummy;
+  bool get isEmpty => identical(dummy.next, dummy);
 
   void add(Constraint constraint) {
     ConstraintListElement element = new ConstraintListElement(constraint);
@@ -758,7 +761,7 @@ class ConstraintList {
 
   void remove(Constraint constraint) {
     for (var elem = dummy.next; elem != dummy; elem = elem.next) {
-      if (elem.value == constraint) {
+      if (identical(elem.value, constraint)) {
         elem.remove();
         return;
       }

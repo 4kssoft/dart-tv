@@ -3,6 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 #include "vm/compiler/aot/wasm_codegen.h"
+#include "vm/object_store.h"
 
 #define Z (zone_)
 #define M (module_builder_)
@@ -191,8 +192,13 @@ void WasmCodegen::GenerateClassLayoutsAndRtts() {
 }
 
 WasmClassInfo& WasmCodegen::GetWasmClassInfo(const Class& klass) {
+  // Treat dynamic as Object.
+  Class& klass2 = Class::Handle(klass.raw());
+  if (klass.IsDynamicClass()) {
+    klass2 = Thread::Current()->isolate()->object_store()->object_class();
+  }
   pair<const Class*, WasmClassInfo>* const pair =
-      class_to_wasm_class_info_.Lookup(&klass);
+      class_to_wasm_class_info_.Lookup(&klass2);
   // At this point all classes should have been hoisted.
   // If this is not true, exit with an error even in non-debug builds.
   if (pair == nullptr) {
